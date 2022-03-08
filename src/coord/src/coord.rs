@@ -3904,17 +3904,20 @@ impl Coordinator {
         &mut self,
         plan: AlterIndexEnablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.enable_index_ops(plan.id)?;
-
-        // If ops is not empty, index was disabled.
-        if !ops.is_empty() {
-            // An index lives on a specific compute instance.
-            let compute_instance = self
-                .catalog
-                .get_by_id(&plan.id)
-                .index()
-                .expect("planned on index")
-                .compute_instance;
+        let index = self
+            .catalog
+            .get_by_id(&plan.id)
+            .index()
+            .expect("cannot enable non-indexes");
+        if !index.enabled {
+            let compute_instance = index.compute_instance;
+            let ops = vec![catalog::Op::UpdateItem {
+                id: plan.id,
+                to_item: CatalogItem::Index(catalog::Index {
+                    enabled: true,
+                    ..index.clone()
+                }),
+            }];
             let df = self
                 .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
                     let df = builder
@@ -3925,7 +3928,6 @@ impl Coordinator {
                 .await?;
             self.ship_dataflow(df, compute_instance).await;
         }
-
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
