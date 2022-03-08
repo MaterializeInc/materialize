@@ -253,7 +253,7 @@ impl PostgresSourceReader {
 
             pin_mut!(reader);
             let mut mz_row = Row::default();
-            while let Ok(b) = reader.next().await.transpose()? {
+            while let Some(b) = reader.next().await.transpose()? {
                 let mut packer = mz_row.packer();
                 packer.push(relation_id);
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
