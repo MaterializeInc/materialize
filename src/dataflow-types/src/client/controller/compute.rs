@@ -277,7 +277,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
@@ -289,7 +289,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
-        self.allow_compaction(compaction_commands).await;
+        self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
     /// Initiate a peek request for the contents of `id` at `timestamp`.
@@ -338,16 +338,18 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
     /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    pub async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<T>)>) {
-        // The coordinator currently sends compaction commands for identifiers that do not exist.
-        // Until that changes, we need to be oblivious to errors, or risk not compacting anything.
-
-        // // Validate that the ids exist.
-        // self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+    pub async fn allow_compaction(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), ComputeError> {
+        // Validate that the ids exist.
+        self.as_ref()
+            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
         let policies = frontiers
             .into_iter()
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
         self.set_read_policy(policies.collect()).await;
+        Ok(())
     }
 
     /// Assigns a read policy to specific identifiers.
