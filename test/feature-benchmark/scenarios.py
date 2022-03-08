@@ -157,6 +157,8 @@ class Update(DML):
                 f"""
 > CREATE TABLE t1 (f1 BIGINT);
 
+> CREATE DEFAULT INDEX ON t1;
+
 > INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
 """
             ),
