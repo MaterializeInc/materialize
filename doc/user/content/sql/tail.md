@@ -461,3 +461,19 @@ COPY (TAIL most_tired_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 ```
 
 Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
+
+### Relating SNAPSHOT rows with their updates
+
+After all the rows from the `SNAPSHOT` have been transmitted, the updates will come as they occur,
+but how is it possible to know which row has been updated? <br/>
+
+| mz_timestamp | mz_progressed | mz_diff | Column 1 | .... | Column N |
+| ------------ | ------------- | ------- | -------- | ---- | -------- | --------------------------- |
+| 1            | false         | 1       | id1      |      | value1   |
+| 1            | false         | 1       | id2      |      | value2   |
+| 1            | false         | 1       | id3      |      | value3   | <- Last row from `SNAPSHOT` |
+| 2            | false         | -1      | id1      |      | value1   |
+| 2            | false         | 1       | id1      |      | value4   |
+
+If you already know your data, then any _column_ acting as a key will do the work but if the key is unknown, then using a `hash(columns_values)` could serve as your key. <br/><br/>
+Back to the example, _Column 1_ acts as the key to know from where the update comes from; in case this was unknown, hashing the values from _Column 1_ to _Column N_ should reveal the origin row.
