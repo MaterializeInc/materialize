@@ -279,7 +279,7 @@ pub struct Coordinator {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timeline: timeline::Timeline,
+    global_timeline: timeline::TimestampOracle,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -4496,7 +4496,7 @@ pub async fn serve(
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
                 metric_scraper,
-                global_timeline: timeline::Timeline::new(now()),
+                global_timeline: timeline::TimestampOracle::new(now()),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -5196,7 +5196,7 @@ mod timeline {
     ///
     /// At each time, writes happen and then reads happen, meaning that writes at a time are
     /// visible to exactly reads at that time or greater, and no other times.
-    enum TimelineState {
+    enum TimestampOracleState {
         /// The timeline is producing collection updates timestamped with the argument.
         Writing(mz_repr::Timestamp),
         /// The timeline is observing collections aot the time of the argument.
@@ -5207,16 +5207,16 @@ mod timeline {
     ///
     /// Specifically, all read timestamps will be greater or equal to all previously reported write timestamps,
     /// and strictly less than all subsequently emitted write timestamps.
-    pub struct Timeline {
-        state: TimelineState,
+    pub struct TimestampOracle {
+        state: TimestampOracleState,
         advance_to: Option<mz_repr::Timestamp>,
     }
 
-    impl Timeline {
+    impl TimestampOracle {
         /// Create a new timeline, starting at the indicated time.
         pub fn new(initially: mz_repr::Timestamp) -> Self {
             Self {
-                state: TimelineState::Writing(initially),
+                state: TimestampOracleState::Writing(initially),
                 advance_to: Some(initially),
             }
         }
@@ -5227,9 +5227,9 @@ mod timeline {
         /// and less than or equal to all subsequent values of `self.read_ts()`.
         pub fn write_ts(&mut self) -> mz_repr::Timestamp {
             match self.state {
-                TimelineState::Writing(ts) => ts,
-                TimelineState::Reading(ts) => {
-                    self.state = TimelineState::Writing(ts + 1);
+                TimestampOracleState::Writing(ts) => ts,
+                TimestampOracleState::Reading(ts) => {
+                    self.state = TimestampOracleState::Writing(ts + 1);
                     ts + 1
                 }
             }
@@ -5240,9 +5240,9 @@ mod timeline {
         /// and strictly less than all subsequent values of `self.write_ts()`.
         pub fn read_ts(&mut self) -> mz_repr::Timestamp {
             match self.state {
-                TimelineState::Reading(ts) => ts,
-                TimelineState::Writing(ts) => {
-                    self.state = TimelineState::Reading(ts);
+                TimestampOracleState::Reading(ts) => ts,
+                TimestampOracleState::Writing(ts) => {
+                    self.state = TimestampOracleState::Reading(ts);
                     self.advance_to = Some(ts + 1);
                     ts
                 }
@@ -5254,18 +5254,18 @@ mod timeline {
         /// resulting state will be `Writing(lower_bound)`.
         pub fn fast_forward(&mut self, lower_bound: mz_repr::Timestamp) {
             match self.state {
-                TimelineState::Writing(ts) => {
+                TimestampOracleState::Writing(ts) => {
                     if lower_bound > ts {
                         self.advance_to = Some(lower_bound);
-                        self.state = TimelineState::Writing(lower_bound);
+                        self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
-                TimelineState::Reading(ts) => {
+                TimestampOracleState::Reading(ts) => {
                     if lower_bound > ts {
                         // This may result in repetition in the case `lower_bound == ts + 1`.
                         // This is documented as fine, and concerned users can protect themselves.
                         self.advance_to = Some(lower_bound);
-                        self.state = TimelineState::Writing(lower_bound);
+                        self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
             }
