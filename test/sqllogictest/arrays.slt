@@ -66,6 +66,12 @@ NULL  NULL
 query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
+# Handle empty arrays as an input
+query T
+SELECT array_to_string('{}'::text[], '')
+----
+(empty)
+
 # Test ANY/SOME/ALL.
 
 query B

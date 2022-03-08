@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! ### NOTICE
+//!
+//! coordtest is currently ignored in our testing suite. If any other
+//! API change would force annoying refactoring of this file, it is ok to
+//! completely remove the coordtest directory.
+//!
 //! coordtest attempts to be a deterministic Coordinator tester using datadriven
 //! test files. Many parts of dataflow run in their own tokio task and we aren't
 //! able to observe their output until we bump a timestamp and see if new data

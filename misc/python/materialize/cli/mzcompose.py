@@ -264,12 +264,19 @@ class LintCommand(Command):
 
 class ListCompositionsCommand(Command):
     name = "list-compositions"
-    help = "list the directories that contain compositions"
+    help = "list the directories that contain compositions and their summaries"
 
     def run(cls, args: argparse.Namespace) -> None:
         repo = mzbuild.Repository.from_arguments(ROOT, args)
-        for name in sorted(repo.compositions):
-            print(name)
+        for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
+            print(os.path.relpath(path, repo.root))
+            composition = mzcompose.Composition(repo, name, munge_services=False)
+            if composition.description:
+                # Emit the first paragraph of the description.
+                for line in composition.description.split("\n"):
+                    if line.strip() == "":
+                        break
+                    print(f"  {line}")
 
 
 class ListWorkflowsCommand(Command):

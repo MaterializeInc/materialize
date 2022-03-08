@@ -15,6 +15,10 @@ CREATE TABLE x (a string, b int not null)
 query T multiline
 EXPLAIN PLAN FOR SELECT b*b*b, b*b FROM x
 ----
+Source materialize.public.x (u1):
+| Project (#1)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map (#1 * #1), (#2 * #1)
@@ -25,6 +29,10 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b*b*b, b*b+1 FROM x
 ----
+Source materialize.public.x (u1):
+| Project (#1)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map (#1 * #1), (#2 * #1), (#2 + 1)
@@ -39,6 +47,10 @@ EXPLAIN PLAN FOR SELECT
     a::json->'Field3'
 FROM x
 ----
+Source materialize.public.x (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map strtojsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")
@@ -54,6 +66,10 @@ EXPLAIN PLAN FOR SELECT
     a::json->'Field2'->'Quux'->'Zorb'
 FROM x
 ----
+Source materialize.public.x (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map strtojsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")
@@ -69,6 +85,10 @@ EXPLAIN PLAN FOR SELECT
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM x
 ----
+Source materialize.public.x (u1):
+| Project (#1)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map if (#1 = 0) then {0} else {(1 / #1)}, if (#1 != 0) then {(1 / #1)} else {0}
@@ -87,6 +107,10 @@ FROM
     (SELECT b/2 as b FROM x)
 
 ----
+Source materialize.public.x (u1):
+| Project (#1)
+
+Query:
 %0 =
 | Get materialize.public.x (u1)
 | Map (#1 / 2), if (#2 = 0) then {0} else {(1 / #2)}, if (#2 != 0) then {(1 / #2)} else {0}

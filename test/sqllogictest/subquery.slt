@@ -246,11 +246,18 @@ mode standard
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
+Source materialize.public.t1 (u9):
+| Project (#0)
+
+Source materialize.public.t2 (u10):
+| Project ()
+
+Query:
 %0 =
-| Get materialize.public.t1 (u17)
+| Get materialize.public.t1 (u9)
 
 %1 =
-| Get materialize.public.t2 (u19)
+| Get materialize.public.t2 (u10)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
@@ -264,15 +271,25 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
+Source materialize.public.t1 (u9):
+| Project (#0)
+
+Source materialize.public.t2 (u10):
+| Project ()
+
+Source materialize.public.t3 (u11):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t1 (u17)
+| Get materialize.public.t1 (u9)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t3 (u21)
+| Get materialize.public.t3 (u11)
 
 %2 =
-| Get materialize.public.t2 (u19)
+| Get materialize.public.t2 (u10)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
@@ -287,15 +304,25 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
+Source materialize.public.t1 (u9):
+| Project (#0)
+
+Source materialize.public.t2 (u10):
+| Project (#0)
+
+Source materialize.public.t3 (u11):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t1 (u17)
+| Get materialize.public.t1 (u9)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t3 (u21)
+| Get materialize.public.t3 (u11)
 
 %2 =
-| Get materialize.public.t2 (u19)
+| Get materialize.public.t2 (u10)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -322,13 +349,22 @@ SELECT age, ascii_num * 2 as result FROM (
   )
 )
 ----
+Source materialize.public.likes (u3):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Source materialize.public.age (u5):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.likes (u5)
+| Get materialize.public.likes (u3)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.age (u9)
+| Get materialize.public.age (u5)
 | Filter !(isnull(#0))
 
 %2 =
@@ -442,8 +478,15 @@ true
 query T multiline
 EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
+Source materialize.public.x (u13):
+| Project (#0)
+
+Source materialize.public.y (u14):
+| Project (#0)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | Distinct group=(#0)
 
 %1 =
@@ -451,7 +494,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.x (u25)
+| Get materialize.public.x (u13)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -463,7 +506,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | Project (#0)
 
 %4 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | ArrangeBy (#0)
 
 %5 =
@@ -491,8 +534,15 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
+Source materialize.public.x (u13):
+| Project (#0)
+
+Source materialize.public.y (u14):
+| Project (#0)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | Distinct group=(#0)
 
 %1 =
@@ -500,7 +550,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.x (u25)
+| Get materialize.public.x (u13)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -512,7 +562,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | Project (#0)
 
 %4 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | ArrangeBy (#0)
 
 %5 =
@@ -542,8 +592,15 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
+Source materialize.public.x (u13):
+| Project (#0)
+
+Source materialize.public.y (u14):
+| Project (#0)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | Distinct group=(#0)
 
 %1 =
@@ -551,7 +608,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.x (u25)
+| Get materialize.public.x (u13)
 
 %3 = Let l1 =
 | Join %1 %2
@@ -561,7 +618,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | ArrangeBy (#0)
 
 %5 =
@@ -683,8 +740,15 @@ WHERE a IN (9, 0)
   )
   GROUP BY TRUE;
 ----
+Source materialize.public.x (u13):
+| Project ()
+
+Source materialize.public.y (u14):
+| Project ()
+
+Query:
 %0 =
-| Get materialize.public.y (u27)
+| Get materialize.public.y (u14)
 | Project ()
 | Distinct group=()
 | Map 1

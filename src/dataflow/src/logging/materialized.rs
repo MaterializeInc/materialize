@@ -21,6 +21,7 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 use tracing::error;
+use uuid::Uuid;
 
 use super::{LogVariant, MaterializedLog};
 use crate::activator::RcActivator;
@@ -83,14 +84,14 @@ pub struct Peek {
     id: GlobalId,
     /// The logical timestamp requested.
     time: Timestamp,
-    /// The connection ID of the peek.
-    conn_id: u32,
+    /// The ID of the peek.
+    uuid: Uuid,
 }
 
 impl Peek {
     /// Create a new peek from its arguments.
-    pub fn new(id: GlobalId, time: Timestamp, conn_id: u32) -> Self {
-        Self { id, time, conn_id }
+    pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
+        Self { id, time, uuid }
     }
 }
 
@@ -240,13 +241,13 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
-                                let key = (worker, peek.conn_id);
+                                let key = (worker, peek.uuid);
                                 if is_install {
                                     peek_session.give(((peek, worker), time_ms, 1));
                                     if peek_stash.contains_key(&key) {
                                         error!(
                                             "peek already registered: \
-                                             worker={}, connection_id: {}",
+                                             worker={}, uuid: {}",
                                             worker, key.1,
                                         );
                                     }
@@ -263,7 +264,7 @@ pub fn construct<A: Allocate>(
                                     } else {
                                         error!(
                                             "peek not yet registered: \
-                                             worker={}, connection_id: {}",
+                                             worker={}, uuid: {}",
                                             worker, key.1,
                                         );
                                     }
@@ -323,7 +324,7 @@ pub fn construct<A: Allocate>(
         let peek_current = peek.as_collection().map({
             move |(peek, worker)| {
                 Row::pack_slice(&[
-                    Datum::String(&format!("{}", peek.conn_id)),
+                    Datum::Uuid(peek.uuid),
                     Datum::Int64(worker as i64),
                     Datum::String(&peek.id.to_string()),
                     Datum::Int64(peek.time as i64),

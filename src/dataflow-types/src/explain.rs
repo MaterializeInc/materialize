@@ -101,7 +101,7 @@ where
         let views = dataflow
             .objects_to_build
             .iter()
-            .map(|build_desc| (build_desc.id, &build_desc.view))
+            .map(|build_desc| (build_desc.id, &build_desc.plan))
             .collect::<Vec<_>>();
         Self {
             formatter,

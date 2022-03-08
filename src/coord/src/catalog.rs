@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -55,7 +55,7 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
@@ -105,6 +105,7 @@ pub struct Catalog {
     state: CatalogState,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
+    system_index_counter: u64,
     transient_revision: u64,
 }
 
@@ -156,67 +157,6 @@ impl CatalogState {
         &self.enabled_indexes
     }
 
-    /// Finds the nearest indexes that can satisfy the views or sources whose
-    /// identifiers are listed in `ids`.
-    ///
-    /// Returns the identifiers of all discovered indexes, and the identifiers of
-    /// the discovered unmaterialized sources required to satisfy ids. The returned list
-    /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
-        fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
-            matches!(
-                catalog.get_by_id(&id).item(),
-                CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_)
-            )
-        }
-
-        fn inner(
-            catalog: &CatalogState,
-            id: GlobalId,
-            indexes: &mut Vec<GlobalId>,
-            unmaterialized: &mut Vec<GlobalId>,
-        ) {
-            if !has_indexes(catalog, id) {
-                return;
-            }
-
-            // Include all indexes on an id so the dataflow builder can safely use any
-            // of them.
-            if !catalog.enabled_indexes[&id].is_empty() {
-                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
-                return;
-            }
-
-            match catalog.get_by_id(&id).item() {
-                view @ CatalogItem::View(_) => {
-                    // Unmaterialized view. Recursively search its dependencies.
-                    for id in view.uses() {
-                        inner(catalog, *id, indexes, unmaterialized)
-                    }
-                }
-                CatalogItem::Source(_) => {
-                    // Unmaterialized source. Record that we are missing at
-                    // least one index.
-                    unmaterialized.push(id);
-                }
-                CatalogItem::Table(_) => (),
-                _ => unreachable!(),
-            }
-        }
-
-        let mut indexes = vec![];
-        let mut unmaterialized = vec![];
-        for id in ids {
-            inner(self, *id, &mut indexes, &mut unmaterialized)
-        }
-        indexes.sort();
-        indexes.dedup();
-
-        unmaterialized.sort();
-        unmaterialized.dedup();
-        (indexes, unmaterialized)
-    }
-
     /// Computes the IDs of any indexes that transitively depend on this catalog
     /// entry.
     pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
@@ -241,9 +181,9 @@ impl CatalogState {
         match self.get_by_id(&id).item() {
             CatalogItem::Table(_) => true,
             item @ CatalogItem::View(_) => item.uses().iter().any(|id| self.uses_tables(*id)),
+            CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_) => false,
         }
@@ -253,7 +193,7 @@ impl CatalogState {
         &self.by_id[id]
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
+    fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
@@ -821,6 +761,7 @@ impl Catalog {
                 },
             },
             oid_counter: FIRST_USER_OID,
+            system_index_counter: FIRST_SYSTEM_INDEX_ID,
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
         };
@@ -906,9 +847,10 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
+                    let index_id = catalog.allocate_system_index_id()?;
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        log.index_id,
+                        index_id,
                         oid,
                         FullName {
                             database: DatabaseSpecifier::Ambient,
@@ -931,20 +873,12 @@ impl Catalog {
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
-                            enabled: catalog.index_enabled_by_default(&log.index_id),
+                            enabled: catalog.index_enabled_by_default(&index_id),
                         }),
                     );
                 }
 
                 Builtin::Table(table) => {
-                    let index_name = format!("{}_primary_idx", table.name);
-                    let index_columns = table.desc.typ().default_key();
-                    let index_sql = super::coord::index_sql(
-                        index_name.clone(),
-                        name.clone(),
-                        &table.desc,
-                        &index_columns,
-                    );
                     let oid = catalog.allocate_oid()?;
                     let persist_name = if table.persistent {
                         config
@@ -964,27 +898,6 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![],
                             persist_name,
-                        }),
-                    );
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        table.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name,
-                        },
-                        CatalogItem::Index(Index {
-                            on: table.id,
-                            keys: index_columns
-                                .iter()
-                                .map(|i| MirScalarExpr::Column(*i))
-                                .collect(),
-                            create_sql: index_sql,
-                            conn_id: None,
-                            depends_on: vec![table.id],
-                            enabled: catalog.index_enabled_by_default(&table.index_id),
                         }),
                     );
                 }
@@ -1214,8 +1127,17 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
+    }
+
+    fn allocate_system_index_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.system_index_counter;
+        if id == u64::max_value() {
+            return Err(Error::new(ErrorKind::IdExhaustion));
+        }
+        self.system_index_counter += 1;
+        Ok(GlobalId::System(id))
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -1369,10 +1291,6 @@ impl Catalog {
         self.state.get_by_id(id)
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
-        self.state.insert_item(id, oid, name, item)
-    }
-
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         self.state.get_by_oid(oid)
     }
@@ -1397,7 +1315,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
+    fn item_exists_in_temp_schemas(&self, conn_id: u32, item_name: &str) -> bool {
         self.state.temporary_schemas[&conn_id]
             .items
             .contains_key(item_name)
@@ -1420,7 +1338,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn get_schema(
+    pub fn get_schema(
         &self,
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
@@ -1506,15 +1424,6 @@ impl Catalog {
             // no-op
             CatalogItem::Index(index) if index.enabled => vec![],
             CatalogItem::Index(index) => {
-                if let CatalogItem::Table(_) = self.get_by_id(&index.on).item() {
-                    let default_idx_id = self
-                        .default_index_for(index.on)
-                        .expect("table must have default index");
-                    if id != default_idx_id {
-                        self.ensure_default_index_enabled(index.on)?;
-                    }
-                }
-
                 vec![Op::UpdateItem {
                     id,
                     to_item: CatalogItem::Index(Index {
@@ -1833,19 +1742,7 @@ impl Catalog {
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
-                    // Prevent dropping a table's default index unless the table
-                    // is being dropped too.
                     match entry.item() {
-                        CatalogItem::Index(Index { on, .. }) => {
-                            if self.get_by_id(on).is_table()
-                                && self.default_index_for(*on) == Some(id)
-                                && !drop_ids.contains(on)
-                            {
-                                return Err(CoordError::Catalog(Error::new(
-                                    ErrorKind::MandatoryTableIndex(entry.name().to_string()),
-                                )));
-                            }
-                        }
                         CatalogItem::Source(_) => {
                             tx.delete_timestamp_bindings(id)?;
                         }
@@ -2304,29 +2201,6 @@ impl Catalog {
         self.get_indexes_on(id).iter().min().cloned()
     }
 
-    /// Returns an error if the object's default index is disabled.
-    ///
-    /// Note that this function is really only meant to be used with tables.
-    ///
-    /// # Panics
-    /// Panics if the object identified with `id` does not have a default index.
-    pub fn ensure_default_index_enabled(&self, id: GlobalId) -> Result<(), Error> {
-        let default_idx_id = self
-            .default_index_for(id)
-            .expect("object must have default index");
-        if !self.is_index_enabled(&default_idx_id) {
-            return Err(Error::new(ErrorKind::DefaultIndexDisabled {
-                idx_on: self.get_by_id(&id).name().to_string(),
-                default_idx: self.get_by_id(&default_idx_id).name().to_string(),
-            }));
-        }
-        Ok(())
-    }
-
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
-        self.state.nearest_indexes(ids)
-    }
-
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         self.state.uses_tables(id)
     }
@@ -2346,69 +2220,6 @@ impl Catalog {
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.state.by_id.values()
-    }
-
-    /// Returns all tables, views, and sources in the same schemas as a set of
-    /// input ids. The indexes of all relations are included.
-    pub fn schema_adjacent_indexed_relations(
-        &self,
-        ids: &[GlobalId],
-        conn_id: u32,
-    ) -> Vec<GlobalId> {
-        // Find all relations referenced by the expression. Find their parent schemas
-        // and add all tables, views, and sources in those schemas to a set.
-        let mut relations: HashSet<GlobalId> = HashSet::new();
-        let mut schemas = HashSet::new();
-        let mut schema_ids = VecDeque::new();
-        for id in ids {
-            // Always add in the user-specified ids.
-            relations.insert(*id);
-            let entry = self.get_by_id(&id);
-            let name = entry.name();
-            schemas.insert((&name.database, &*name.schema));
-        }
-
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
-        let system_schemas = &[
-            (&DatabaseSpecifier::Ambient, MZ_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, PG_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, INFORMATION_SCHEMA),
-        ];
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
-            schemas.extend(system_schemas);
-        }
-
-        for (db, schema) in schemas {
-            if let Some(schema) = self.get_schema(db, schema, conn_id) {
-                schema_ids.extend(schema.items.values());
-                while let Some(id) = schema_ids.pop_front() {
-                    let entry = self.get_by_id(id);
-                    let ty = entry.item_type();
-                    match ty {
-                        SqlCatalogItemType::Table => {
-                            relations.insert(*id);
-                        }
-                        SqlCatalogItemType::View | SqlCatalogItemType::Source => {
-                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
-                            relations.extend(indexes);
-                            // Add in the view/source if fully materialized.
-                            if unmaterialized.is_empty() {
-                                relations.insert(*id);
-                                if let SqlCatalogItemType::View = ty {
-                                    // Add transitive items from views.
-                                    if let CatalogItem::View(view) = entry.item() {
-                                        schema_ids.extend(&view.depends_on);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        relations.into_iter().collect()
     }
 }
 

@@ -201,7 +201,7 @@ pub(crate) const ARBITRARY_QUANTIFIER: usize = 0b00000000
     | (QuantifierType::PreservedForeach as usize)
     | (QuantifierType::Scalar as usize);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum BoxType {
     /// A table from the catalog.
     Get(Get),
@@ -230,7 +230,7 @@ pub(crate) enum BoxType {
     Values(Values),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Get {
     pub id: mz_expr::GlobalId,
     pub unique_keys: Vec<Vec<usize>>,
@@ -243,7 +243,7 @@ impl From<Get> for BoxType {
 }
 
 /// The content of a Grouping box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Grouping {
     pub key: Vec<BoxScalarExpr>,
 }
@@ -255,7 +255,7 @@ impl From<Grouping> for BoxType {
 }
 
 /// The content of a OuterJoin box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
@@ -268,7 +268,7 @@ impl From<OuterJoin> for BoxType {
 }
 
 /// The content of a Select box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Select {
     /// The list of predicates applied by the box.
     pub predicates: Vec<BoxScalarExpr>,
@@ -297,7 +297,7 @@ impl Select {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
@@ -309,7 +309,7 @@ impl From<TableFunction> for BoxType {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
 }

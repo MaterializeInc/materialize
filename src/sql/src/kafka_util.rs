@@ -125,7 +125,7 @@ impl Config {
 
     /// Get the appropriate String to use as the Kafka config key.
     fn get_kafka_config_key(&self) -> String {
-        self.name.replace("_", ".")
+        self.name.replace('_', ".")
     }
 
     /// Gets the key to lookup for configs that support environment variable lookups.

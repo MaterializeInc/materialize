@@ -131,7 +131,21 @@ Detail | Info
 **Database** | `materialize`
 **Port** | `6875`
 
-### CLI Connections
+### `systemd` service
+
+If you've installed Materialize via [`apt`](#apt-ubuntu-debian-or-variants), you can start it as a service by running:
+
+```shell
+systemctl start materialized.service
+```
+
+To enable the service to start up at boot, run:
+
+```shell
+systemctl enable materialized.service
+```
+
+## CLI Connections
 
 To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
 like `psql` or `mzcli`. To install the `psql` client:

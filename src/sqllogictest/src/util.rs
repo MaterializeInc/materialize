@@ -9,6 +9,6 @@
 
 pub fn indent(s: &str, n: usize) -> String {
     let space = " ".repeat(n);
-    let s = s.replace("\n", &format!("\n{}", space));
+    let s = s.replace('\n', &format!("\n{}", space));
     space + &s
 }

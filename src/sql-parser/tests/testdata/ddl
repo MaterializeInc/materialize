@@ -669,7 +669,7 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=tea
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';
@@ -841,6 +841,13 @@ CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
+----
+CREATE INDEX foo ON myschema.bar (a, b)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>

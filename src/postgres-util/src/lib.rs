@@ -16,17 +16,19 @@ use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::{Client, Config};
 
 use mz_ore::task;
-use mz_pgrepr::Type as PgType;
 
 /// The schema of a single column
+#[derive(Eq, PartialEq)]
 pub struct PgColumn {
     pub name: String,
-    pub ty: PgType,
+    pub oid: u32,
+    pub typmod: i32,
     pub nullable: bool,
     pub primary_key: bool,
 }
 
 /// Information about a remote table
+#[derive(Eq, PartialEq)]
 pub struct TableInfo {
     /// The OID of the table
     pub rel_id: u32,
@@ -162,15 +164,12 @@ pub async fn publication_info(
                 let name: String = row.get("name");
                 let oid = row.get("oid");
                 let typmod: i32 = row.get("typmod");
-                let ty = match PgType::from_oid_and_typmod(oid, typmod) {
-                    Some(ty) => ty,
-                    None => bail!("unknown type with OID {}", oid),
-                };
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PgColumn {
                     name,
-                    ty,
+                    oid,
+                    typmod,
                     nullable: !not_null,
                     primary_key,
                 })

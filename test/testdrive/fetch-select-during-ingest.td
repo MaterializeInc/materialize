@@ -42,8 +42,11 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 # Sleep here to make sure the entire machinery has run. Since we are in a transaction,
 # we have no way of knowing that the source has progressed to '234' outside of the transaction
 
-> SELECT mz_internal.mz_sleep(2);
-<null>
+# NOTE(benesch): grumble. This is not a particularly robust way to write this
+# test. It is, however, better than what was previously here, which used
+# `SELECT mz_internal.mz_sleep(2)`, which had the extremely suboptimal property
+# of wedging up the coordinator for 2s, instead of just pausing the test for 2s.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 # This will return an empty result - nothing else available for fetching in the current transaction
 > FETCH 1 c WITH (timeout='2s');

@@ -15,7 +15,7 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
 use mz_expr::GlobalId;
 use openssl::nid::Nid;
@@ -159,28 +159,12 @@ where
         }
     }
 
-    if let Some(frontegg) = frontegg {
+    let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
-        match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => {
-                let res = frontegg
-                    .exchange_password_for_token(&password)
-                    .await
-                    .and_then(|res| frontegg.validate_access_token(&res.access_token));
-                match res {
-                    Ok(claims) if claims.email == user => {}
-                    _ => {
-                        return conn
-                            .send(ErrorResponse::fatal(
-                                SqlState::INVALID_PASSWORD,
-                                "invalid password",
-                            ))
-                            .await;
-                    }
-                }
-            }
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => password,
             _ => {
                 return conn
                     .send(ErrorResponse::fatal(
@@ -189,8 +173,26 @@ where
                     ))
                     .await
             }
+        };
+        match frontegg
+            .exchange_password_for_token(&password)
+            .await
+            .and_then(|token| frontegg.check_expiry(token, user.clone()))
+        {
+            Ok(check) => check.left_future(),
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
         }
-    }
+    } else {
+        // No frontegg check, so is_expired never resolves.
+        pending().right_future()
+    };
 
     // Construct session.
     let mut session = Session::new(conn.id(), user);
@@ -212,6 +214,7 @@ where
 
     // From this point forward we must not fail without calling `coord_client.terminate`!
 
+    let mut allow_no_session = false;
     let res = async {
         let session = coord_client.session();
         let mut buf = vec![BackendMessage::AuthenticationOk];
@@ -234,10 +237,24 @@ where
             conn,
             coord_client: &mut coord_client,
         };
-        machine.run().await
+
+        tokio::select! {
+            r = machine.run() => r,
+            _ = is_expired => {
+                // If the login has expired, we immediately stop running the state machine,
+                // meaning the session could still be owned by the coordinator, so we allow no
+                // session to be present.
+                allow_no_session = true;
+                Err(io::ErrorKind::ConnectionAborted.into())
+            }
+        }
     }
     .await;
-    coord_client.terminate().await;
+    if allow_no_session {
+        coord_client.terminate_allow_no_session().await;
+    } else {
+        coord_client.terminate().await;
+    }
     res
 }
 
@@ -502,7 +519,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => match ScalarType::try_from(&ty) {
+                Ok(ty) => match ScalarType::try_from(&ty) {
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
@@ -513,12 +530,12 @@ where
                             .await
                     }
                 },
-                None if oid == 0 => param_types.push(None),
-                None => {
+                Err(_) if oid == 0 => param_types.push(None),
+                Err(e) => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
-                            format!("unable to decode parameter whose type OID is {}", oid),
+                            e.to_string(),
                         ))
                         .await;
                 }
@@ -1345,6 +1362,8 @@ where
                 FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
+            } else if want_rows == 0 {
+                FetchResult::Rows(None)
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),

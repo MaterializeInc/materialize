@@ -28,6 +28,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
@@ -163,7 +164,7 @@ pub fn serve_boundary<
             timely_worker,
             compute_state: BTreeMap::default(),
             storage_state: StorageState {
-                local_inputs: HashMap::new(),
+                table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
@@ -362,7 +363,8 @@ where
 
 pub struct LocalInput {
     pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    pub capability: ActivateCapability<Timestamp>,
+    /// A weak reference to the capability, in case all uses are dropped.
+    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }
 
 /// An in-progress peek, and data to eventually fulfill it.
@@ -374,8 +376,8 @@ pub(crate) struct PendingPeek {
     id: GlobalId,
     /// An optional key to use for the arrangement.
     key: Option<Row>,
-    /// The ID of the connection that submitted the peek. For logging only.
-    conn_id: u32,
+    /// The ID of the peek.
+    uuid: Uuid,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -390,7 +392,7 @@ pub(crate) struct PendingPeek {
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.conn_id)
+        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.uuid)
     }
 
     /// Attempts to fulfill the peek and reports success.

@@ -45,6 +45,10 @@ row 2
 $ set-regex match=u\d+ replacement=UID
 
 ? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+Source materialize.public.t1 (UID):
+| Project (#0..=#2)
+
+Query:
 %0 =
 | Get materialize.public.t1 (UID)
 | Filter !(isnull(#0))

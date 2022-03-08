@@ -731,7 +731,7 @@ transformations. */
 
 fn normalize_type_name(type_name: &str) -> String {
     // Normalize the type name by stripping whitespace.
-    let type_name = type_name.replace(" ", "");
+    let type_name = type_name.replace(' ', "");
     // Eliminate outer `Option<>` and `Box<>` from type names because they are
     // inconsequential when it comes to creating a correctly deserializable JSON
     // string.
@@ -764,7 +764,7 @@ fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usi
     // whatever comes before the comma after the last ')'.
     let mut current_elem_end = type_name[current_elem_begin..]
         .find(',')
-        .unwrap_or_else(|| type_name.len());
+        .unwrap_or(type_name.len());
     if let Some(l_paren_pos) = type_name[current_elem_begin..].find('(') {
         if l_paren_pos < current_elem_end {
             if let Some(r_paren_pos) = type_name[current_elem_begin..].rfind(')') {
@@ -772,7 +772,7 @@ fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usi
                     + r_paren_pos
                     + type_name[(current_elem_begin + r_paren_pos)..]
                         .find(',')
-                        .unwrap_or_else(|| type_name.len());
+                        .unwrap_or(type_name.len());
             }
         }
     };

@@ -1,0 +1,46 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+statement ok
+CREATE TABLE a (b text, c int)
+
+statement ok
+CREATE INDEX a_ind ON a (c, lower(b))
+
+query T
+SELECT pg_get_indexdef((SELECT oid FROM mz_catalog.mz_indexes WHERE name = 'a_ind'));
+----
+CREATE INDEX a_ind ON a USING arrangement (c,pg_catalog.lower(b))
+
+query T
+SELECT pg_get_indexdef((SELECT oid FROM mz_catalog.mz_indexes WHERE name = 'a_ind'), 0, true);
+----
+CREATE INDEX a_ind ON a USING arrangement (c,pg_catalog.lower(b))
+
+query T
+SELECT pg_get_indexdef((SELECT oid FROM mz_catalog.mz_indexes WHERE name = 'a_ind'), 1, true);
+----
+c
+
+query T
+SELECT pg_get_indexdef((SELECT oid FROM mz_catalog.mz_indexes WHERE name = 'a_ind'), 2, true);
+----
+pg_catalog.lower(b)
+
+query B
+SELECT pg_get_indexdef((SELECT oid FROM mz_catalog.mz_indexes WHERE name = 'a_ind'), 3, true) IS NULL;
+----
+true

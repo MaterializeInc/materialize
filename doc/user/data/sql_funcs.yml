@@ -425,7 +425,7 @@
   functions:
   - signature: current_timestamp() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.'
-    nonpure: true
+    unmaterializable: true
 
   - signature: 'date_bin(stride: interval, source: timestamp, origin: timestamp) -> timestamp'
     description: Align `source` with `origin` along `stride`.
@@ -454,12 +454,12 @@
       **Note**: This function generally behaves like a [non-pure] function, but
       can be used in limited contexts in materialized views as a [temporal filter](/guides/temporal-filters).
     url: now_and_mz_logical_timestamp
-    nonpure: true
+    unmaterializable: true
 
   - signature: now() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.'
     url: now_and_mz_logical_timestamp
-    nonpure: true
+    unmaterializable: true
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz
     description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
@@ -501,7 +501,7 @@
   functions:
   - signature: mz_cluster_id() -> uuid
     description: The `uuid` uniquely identifying this Materialize cluster.
-    nonpure: true
+    unmaterializable: true
 
 - type: JSON
   functions:
@@ -580,7 +580,7 @@
 - type: Array
   functions:
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
-    description: '[Experimental](/cli/#experimental-mode)––Concatenates `a1` and `a2`.'
+    description: 'Concatenates `a1` and `a2`.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.
@@ -638,54 +638,63 @@
   functions:
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
-    nonpure: true
+    unmaterializable: true
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
-    nonpure: true
-  - signature: 'format_type(oid: int, typemod: int) -> text'
-    description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
+    unmaterializable: true
   - signature: 'current_database() -> text'
     description: >-
       Returns the name of the current database.
-    nonpure: true
+    unmaterializable: true
   - signature: 'current_role() -> text'
     description: >-
       Alias for `current_user`.
-    nonpure: true
+    unmaterializable: true
   - signature: 'current_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
-    nonpure: true
+    unmaterializable: true
   - signature: 'session_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
-    nonpure: true
+    unmaterializable: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
 
 - type: PostgreSQL compatibility
-  description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools
+  description: |
+    Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools.
+    These functions may have suboptimal performance characteristics.
   functions:
+  - signature: 'format_type(oid: int, typemod: int) -> text'
+    description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_schema() -> text'
     description: >-
       Returns the name of the first non-implicit schema on the search path, or
       `NULL` if the search path is empty.
-    nonpure: true
+    unmaterializable: true
   - signature: 'current_schemas(include_implicit: bool) -> text[]'
     description: >-
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
-    nonpure: true
+    unmaterializable: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.
   - signature: 'pg_backend_pid() -> int'
     description: Returns the internal connection ID.
-    nonpure: true
+    unmaterializable: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
-  - signature: 'pg_get_constraintdef(oid: oid [, pretty: bool]) -> text'
-    description: Returns the constraint definition for the given `oid`. Currently always returns an error.
+  - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
+    description: >-
+      Returns the constraint definition for the given `oid`. Currently always
+      returns NULL since constraints aren't supported.
+  - signature: 'pg_get_indexdef(index: oid[, column integer, pretty: bool]) -> text'
+    description: >-
+      Reconstructs the creating command for an index. (This is a decompiled
+      reconstruction, not the original text of the command.) If column is
+      supplied and is not zero, only the definition of that column is reconstructed.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'
@@ -696,7 +705,7 @@
     description: PostgreSQL compatibility shim. Not intended for direct use.
   - signature: 'pg_postmaster_start_time() -> timestamptz'
     description: Returns the time when the server started.
-    nonpure: true
+    unmaterializable: true
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
-    nonpure: true
+    unmaterializable: true

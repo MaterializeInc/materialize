@@ -64,7 +64,7 @@ pub(crate) fn propagated_nulls(expr: &BoxScalarExpr) -> HashSet<ColumnReference>
                     result.insert(col.clone());
                     None
                 }
-                BaseColumn(..) | Literal(..) | CallNullary(_) => None,
+                BaseColumn(..) | Literal(..) | CallUnmaterializable(_) => None,
                 CallUnary { func, .. } => {
                     if func.propagates_nulls() {
                         None

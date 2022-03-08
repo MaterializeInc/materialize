@@ -30,12 +30,16 @@ use tokio::task;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_dataflow_types::sources::{
     ExternalSourceConnector, PostgresSourceConnector, SourceConnector,
 };
+use mz_pgrepr::Type;
 use mz_repr::strconv;
 use mz_sql_parser::parser::parse_data_type;
+
+use prost::Message;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
@@ -189,6 +193,7 @@ pub fn purify(
                     conn,
                     publication,
                     slot,
+                    details,
                 } => {
                     slot.get_or_insert_with(|| {
                         format!(
@@ -197,10 +202,14 @@ pub fn purify(
                         )
                     });
 
-                    // verify that we can connect upstream
-                    // TODO(petrosagg): store this info along with the source for better error
-                    // detection
-                    let _ = mz_postgres_util::publication_info(&conn, &publication).await?;
+                    // verify that we can connect upstream and snapshot publication metadata
+                    let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
+
+                    let details_proto = PostgresSourceDetails {
+                        tables: tables.into_iter().map(|t| t.into()).collect(),
+                        slot: slot.clone().expect("slot must exist"),
+                    };
+                    *details = Some(hex::encode(details_proto.encode_to_vec()));
                 }
                 CreateSourceConnector::PubNub { .. } => (),
             }
@@ -290,6 +299,22 @@ pub fn purify(
 
                             let mut projection = vec![];
                             for (i, column) in table_info.schema.iter().enumerate() {
+                                let mut ty = Type::from_oid_and_typmod(column.oid, column.typmod)?;
+                                // Ignore precision constraints on date/time types until we support
+                                // it. This should be safe enough because our types are wide enough
+                                // to support the maximum possible precision.
+                                //
+                                // See: https://github.com/MaterializeInc/materialize/issues/10837
+                                match &mut ty {
+                                    mz_pgrepr::Type::Interval { constraints } => {
+                                        *constraints = None
+                                    }
+                                    mz_pgrepr::Type::Time { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimeTz { precision } => *precision = None,
+                                    mz_pgrepr::Type::Timestamp { precision } => *precision = None,
+                                    mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
+                                    _ => (),
+                                }
                                 // NOTE(benesch): this *looks* gross, but it is
                                 // safe enough. The `fmt::Display`
                                 // representation on `pgrepr::Type` promises to
@@ -299,7 +324,7 @@ pub fn purify(
                                 // TODO(benesch): converting `json` to `jsonb`
                                 // is wrong. We ought to support the `json` type
                                 // directly.
-                                let mut ty = format!("pg_catalog.{}", column.ty);
+                                let mut ty = format!("pg_catalog.{}", ty);
                                 if ty == "pg_catalog.json" {
                                     ty = "pg_catalog.jsonb".into();
                                 }

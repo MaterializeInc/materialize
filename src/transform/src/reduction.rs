@@ -81,9 +81,12 @@ impl FoldConstants {
                     aggregate.expr.reduce(input_typ);
                 }
 
-                // Guard against evaluating an expression that may contain nullary functions.
-                if group_key.iter().any(|e| e.contains_nullary())
-                    || aggregates.iter().any(|a| a.expr.contains_nullary())
+                // Guard against evaluating an expression that may contain
+                // unmaterializable functions.
+                if group_key.iter().any(|e| e.contains_unmaterializable())
+                    || aggregates
+                        .iter()
+                        .any(|a| a.expr.contains_unmaterializable())
                 {
                     return Ok(());
                 }
@@ -156,8 +159,9 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
-                // Guard against evaluating expression that may contain nullary functions.
-                if scalars.iter().any(|e| e.contains_nullary()) {
+                // Guard against evaluating expression that may contain
+                // unmaterializable functions.
+                if scalars.iter().any(|e| e.contains_unmaterializable()) {
                     return Ok(());
                 }
 
@@ -190,8 +194,8 @@ impl FoldConstants {
                     expr.reduce(input_typ);
                 }
 
-                // Guard against evaluating expression that may contain nullary functions.
-                if exprs.iter().any(|e| e.contains_nullary()) {
+                // Guard against evaluating expression that may contain unmaterializable functions.
+                if exprs.iter().any(|e| e.contains_unmaterializable()) {
                     return Ok(());
                 }
 
@@ -224,8 +228,9 @@ impl FoldConstants {
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
-                // Guard against evaluating expression that may contain nullary function calls.
-                if predicates.iter().any(|e| e.contains_nullary()) {
+                // Guard against evaluating expression that may contain
+                // unmaterializable function calls.
+                if predicates.iter().any(|e| e.contains_unmaterializable()) {
                     return Ok(());
                 }
 
@@ -288,10 +293,10 @@ impl FoldConstants {
                     .iter()
                     .all(|i| matches!(i, MirRelationExpr::Constant { rows: Ok(_), .. }))
                 {
-                    // Guard against evaluating expression that may contain nullary functions.
+                    // Guard against evaluating expression that may contain unmaterializable functions.
                     if equivalences
                         .iter()
-                        .any(|equiv| equiv.iter().any(|e| e.contains_nullary()))
+                        .any(|equiv| equiv.iter().any(|e| e.contains_unmaterializable()))
                     {
                         return Ok(());
                     }

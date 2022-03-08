@@ -20,9 +20,8 @@
 
 use tempfile::NamedTempFile;
 
-use mz_coord::catalog::{Catalog, CatalogItem, Table};
+use mz_coord::catalog::{Catalog, CatalogItem, Op, Table};
 use mz_coord::session::Session;
-use mz_expr::GlobalId;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
@@ -39,32 +38,36 @@ async fn datadriven() {
         let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())
             .await
             .unwrap();
-        let mut id: u32 = 1;
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
                 "add-table" => {
-                    let _ = catalog.insert_item(
-                        GlobalId::User(id.into()),
-                        id,
-                        FullName {
-                            database: DatabaseSpecifier::Name("materialize".into()),
-                            schema: "public".into(),
-                            item: test_case.input.trim_end().to_string(),
-                        },
-                        CatalogItem::Table(Table {
-                            create_sql: "TODO".to_string(),
-                            desc: RelationDesc::empty(),
-                            defaults: vec![Expr::null(); 0],
-                            conn_id: None,
-                            depends_on: vec![],
-                            persist_name: None,
-                        }),
-                    );
-                    id += 1;
-                    format!("{}\n", GlobalId::User((id - 1).into()))
+                    let id = catalog.allocate_user_id().unwrap();
+                    let oid = catalog.allocate_oid().unwrap();
+                    catalog
+                        .transact(
+                            vec![Op::CreateItem {
+                                id,
+                                oid,
+                                name: FullName {
+                                    database: DatabaseSpecifier::Name("materialize".into()),
+                                    schema: "public".into(),
+                                    item: test_case.input.trim_end().to_string(),
+                                },
+                                item: CatalogItem::Table(Table {
+                                    create_sql: "TODO".to_string(),
+                                    desc: RelationDesc::empty(),
+                                    defaults: vec![Expr::null(); 0],
+                                    conn_id: None,
+                                    depends_on: vec![],
+                                    persist_name: None,
+                                }),
+                            }],
+                            |_| Ok(()),
+                        )
+                        .unwrap();
+                    format!("{}\n", id)
                 }
                 "resolve" => {
-                    // let catalog = catalog.for_system_session();
                     let sess = Session::dummy();
                     let catalog = catalog.for_session(&sess);
 

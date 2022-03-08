@@ -34,6 +34,7 @@ use mzcloud::models::deployment_request::DeploymentRequest;
 use mzcloud::models::deployment_size_enum::DeploymentSizeEnum;
 use mzcloud::models::patched_deployment_update_request::PatchedDeploymentUpdateRequest;
 use mzcloud::models::provider_enum::ProviderEnum;
+use mzcloud::models::release_track_enum::ReleaseTrackEnum;
 use mzcloud::models::supported_cloud_region_request::SupportedCloudRegionRequest;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -156,6 +157,10 @@ enum DeploymentsCommand {
         #[clap(short = 'v', long)]
         mz_version: Option<String>,
 
+        /// Release track of materialized to deploy. Defaults to stable.
+        #[clap(long, parse(try_from_str = parse_release_track))]
+        release_track: Option<ReleaseTrackEnum>,
+
         /// Enable Tailscale by setting the Tailscale Auth Key.
         #[clap(long)]
         tailscale_auth_key: Option<String>,
@@ -197,6 +202,10 @@ enum DeploymentsCommand {
         /// version.
         #[clap(short = 'v', long)]
         mz_version: Option<String>,
+
+        /// Release track of materialized to deploy. Defaults to the current track.
+        #[clap(long, parse(try_from_str = parse_release_track))]
+        release_track: Option<ReleaseTrackEnum>,
 
         /// If Tailscale is configured, disable it and delete stored keys.
         #[clap(long)]
@@ -260,7 +269,7 @@ enum MzVersionsCommand {
 }
 
 fn parse_cloud_region(s: &str) -> Result<SupportedCloudRegionRequest, String> {
-    let (provider, region) = s.split_once(":").ok_or_else(|| {
+    let (provider, region) = s.split_once(':').ok_or_else(|| {
         "Cloud provider region should colon separated `provider:region` pair.".to_owned()
     })?;
     let provider = provider.to_lowercase();
@@ -274,6 +283,10 @@ fn parse_cloud_region(s: &str) -> Result<SupportedCloudRegionRequest, String> {
             provider: ProviderEnum::AWS,
             region: "eu-west-1".to_owned(),
         }),
+        ("local", "minikube") => Ok(SupportedCloudRegionRequest {
+            provider: ProviderEnum::Local,
+            region: "minikube".to_owned(),
+        }),
         _ => Err("Unsupported cloud provider/region pair.".to_owned()),
     }
 }
@@ -286,6 +299,14 @@ fn parse_size(s: &str) -> Result<DeploymentSizeEnum, String> {
         "L" => Ok(DeploymentSizeEnum::L),
         "XL" => Ok(DeploymentSizeEnum::XL),
         _ => Err("Invalid size.".to_owned()),
+    }
+}
+
+fn parse_release_track(s: &str) -> Result<ReleaseTrackEnum, String> {
+    match s.to_lowercase().as_str() {
+        "stable" => Ok(ReleaseTrackEnum::Stable),
+        "canary" => Ok(ReleaseTrackEnum::Canary),
+        _ => Err("Invalid release track.".to_owned()),
     }
 }
 
@@ -315,6 +336,7 @@ async fn handle_deployment_operations(
             catalog_restore_mode,
             materialized_extra_args,
             mz_version,
+            release_track,
             tailscale_auth_key,
         } => {
             let deployment = deployments_create(
@@ -328,6 +350,7 @@ async fn handle_deployment_operations(
                     catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,
+                    release_track: release_track.map(Box::new),
                     enable_tailscale: Some(tailscale_auth_key.is_some()),
                     tailscale_auth_key,
                 },
@@ -347,6 +370,7 @@ async fn handle_deployment_operations(
             catalog_restore_mode,
             materialized_extra_args,
             mz_version,
+            release_track,
             remove_tailscale,
             tailscale_auth_key,
         } => {
@@ -366,6 +390,7 @@ async fn handle_deployment_operations(
                     catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,
+                    release_track: release_track.map(Box::new),
                     enable_tailscale,
                     tailscale_auth_key,
                 }),

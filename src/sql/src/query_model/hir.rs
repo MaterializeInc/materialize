@@ -17,14 +17,15 @@ use std::collections::HashMap;
 
 use crate::plan::expr::HirRelationExpr;
 use crate::plan::expr::{HirScalarExpr, JoinKind};
-use crate::query_model::error::QGMError;
+use crate::query_model::error::{QGMError, UnsupportedHirRelationExpr, UnsupportedHirScalarExpr};
 use crate::query_model::model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, DistinctOperation, Get,
     Grouping, Model, OuterJoin, QuantifierType, Select, Values,
 };
 
-impl From<HirRelationExpr> for Result<Model, QGMError> {
-    fn from(expr: HirRelationExpr) -> Self {
+impl TryFrom<HirRelationExpr> for Model {
+    type Error = QGMError;
+    fn try_from(expr: HirRelationExpr) -> Result<Self, Self::Error> {
         FromHir::generate(expr)
     }
 }
@@ -88,11 +89,14 @@ impl FromHir {
                     Ok(result)
                 } else {
                     // Other id variants should not be present in the HirRelationExpr.
-                    // Tn theory, this should be `unreachable!(...)`, but we return an
+                    // In theory, this should be `unreachable!(...)`, but we return an
                     // Error just to be safe here.
                     let expr = HirRelationExpr::Get { id, typ };
-                    let msg = String::from("Unexpected Id variant in Get");
-                    Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
+                    let explanation = Some(String::from("Unexpected Id variant in Get"));
+                    Err(QGMError::from(UnsupportedHirRelationExpr {
+                        expr,
+                        explanation,
+                    }))
                 }
             }
             HirRelationExpr::Let {
@@ -120,8 +124,11 @@ impl FromHir {
                     Ok(values_box_id)
                 } else {
                     let expr = HirRelationExpr::Constant { rows, typ };
-                    let msg = String::from("Cannot convert Constant with arity > 0 to QGM");
-                    Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
+                    let explanation = String::from("Cannot convert Constant with arity > 0 to QGM");
+                    Err(QGMError::from(UnsupportedHirRelationExpr {
+                        expr,
+                        explanation: Some(explanation),
+                    }))
                 }
             }
             HirRelationExpr::Map { input, mut scalars } => {
@@ -328,10 +335,10 @@ impl FromHir {
 
                 Ok(join_box)
             }
-            expr => {
-                let msg = String::from("Unsupported HirRelationExpr variant in QGM conversion");
-                Err(QGMError::UnsupportedHirRelationExpr { expr, msg })
-            }
+            expr => Err(QGMError::from(UnsupportedHirRelationExpr {
+                expr,
+                explanation: None,
+            })),
         }
     }
 
@@ -365,7 +372,9 @@ impl FromHir {
                     self.find_column_within_box(context_box, c.column),
                 ))
             }
-            HirScalarExpr::CallNullary(func) => Ok(BoxScalarExpr::CallNullary(func)),
+            HirScalarExpr::CallUnmaterializable(func) => {
+                Ok(BoxScalarExpr::CallUnmaterializable(func))
+            }
             HirScalarExpr::CallUnary { func, expr } => Ok(BoxScalarExpr::CallUnary {
                 func,
                 expr: Box::new(self.generate_expr(*expr, context_box)?),
@@ -399,10 +408,7 @@ impl FromHir {
                     position: 0,
                 }))
             }
-            expr => {
-                let msg = String::from("Unsupported HirScalarExpr variant in QGM conversion");
-                Err(QGMError::UnsupportedHirScalarExpr { expr, msg })
-            }
+            scalar => Err(QGMError::from(UnsupportedHirScalarExpr { scalar })),
         }
     }
 

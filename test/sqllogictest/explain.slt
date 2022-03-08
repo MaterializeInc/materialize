@@ -272,6 +272,10 @@ EOF
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
+Source materialize.public.ordered (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
@@ -287,6 +291,10 @@ CREATE VIEW ordered_view AS SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 ----
+Source materialize.public.ordered (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
@@ -311,6 +319,16 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "Get": {
     "id": {
@@ -319,24 +337,8 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
       }
     },
     "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
-      ]
+      "raw": true,
+      "arranged": []
     },
     "mfp": {
       "expressions": [],
@@ -347,17 +349,7 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -366,6 +358,16 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "Get": {
     "id": {
@@ -374,24 +376,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
       }
     },
     "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
-      ]
+      "raw": true,
+      "arranged": []
     },
     "mfp": {
       "expressions": [],
@@ -402,17 +388,7 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -421,72 +397,30 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "TopK": {
     "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 2
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    },
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
-                  []
-                ]
-              ]
-            },
-            "mfp": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1
-              ],
-              "input_arity": 2
-            },
-            "key_val": [
-              [
-                {
-                  "Column": 0
-                },
-                {
-                  "Column": 1
-                }
-              ],
-              null
-            ]
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
           }
         },
-        "forms": {
+        "keys": {
           "raw": true,
           "arranged": []
         },
-        "input_key": [
-          {
-            "Column": 0
-          },
-          {
-            "Column": 1
-          }
-        ],
-        "input_mfp": {
+        "mfp": {
           "expressions": [],
           "predicates": [],
           "projection": [
@@ -494,7 +428,8 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
             1
           ],
           "input_arity": 2
-        }
+        },
+        "key_val": null
       }
     },
     "top_k_plan": {
@@ -523,72 +458,30 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "TopK": {
     "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 2
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    },
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
-                  []
-                ]
-              ]
-            },
-            "mfp": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1
-              ],
-              "input_arity": 2
-            },
-            "key_val": [
-              [
-                {
-                  "Column": 0
-                },
-                {
-                  "Column": 1
-                }
-              ],
-              null
-            ]
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
           }
         },
-        "forms": {
+        "keys": {
           "raw": true,
           "arranged": []
         },
-        "input_key": [
-          {
-            "Column": 0
-          },
-          {
-            "Column": 1
-          }
-        ],
-        "input_mfp": {
+        "mfp": {
           "expressions": [],
           "predicates": [],
           "projection": [
@@ -596,7 +489,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
             1
           ],
           "input_arity": 2
-        }
+        },
+        "key_val": null
       }
     },
     "top_k_plan": {
@@ -625,6 +519,16 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "Get": {
     "id": {
@@ -633,24 +537,8 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
       }
     },
     "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
-      ]
+      "raw": true,
+      "arranged": []
     },
     "mfp": {
       "expressions": [],
@@ -661,17 +549,7 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 
@@ -682,6 +560,16 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
+Source materialize.public.ordered (u2):
+{
+  "predicates": [],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
 {
   "Get": {
     "id": {
@@ -690,24 +578,8 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
       }
     },
     "keys": {
-      "raw": false,
-      "arranged": [
-        [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ],
-          {
-            "0": 0,
-            "1": 1
-          },
-          []
-        ]
-      ]
+      "raw": true,
+      "arranged": []
     },
     "mfp": {
       "expressions": [],
@@ -718,17 +590,7 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
       ],
       "input_arity": 2
     },
-    "key_val": [
-      [
-        {
-          "Column": 0
-        },
-        {
-          "Column": 1
-        }
-      ],
-      null
-    ]
+    "key_val": null
   }
 }
 

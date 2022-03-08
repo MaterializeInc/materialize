@@ -235,6 +235,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
     client_reads.batch_execute(
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",

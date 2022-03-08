@@ -19,14 +19,17 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
+use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use prost::Message;
 use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
 use mz_dataflow_types::{
+    postgres_source::PostgresSourceDetails,
     sinks::{
         AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
         KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
@@ -43,7 +46,7 @@ use mz_dataflow_types::{
         UnplannedSourceEnvelope, UpsertStyle,
     },
 };
-use mz_expr::GlobalId;
+use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
@@ -507,15 +510,20 @@ pub fn plan_create_source(
             conn,
             publication,
             slot,
+            details,
         } => {
             let slot_name = slot
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
-
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 slot_name: slot_name.clone(),
+                details: PostgresSourceDetails::decode(Bytes::from(hex::decode(
+                    details
+                        .as_ref()
+                        .expect("Postgres source must provide associated details"),
+                )?))?,
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
@@ -1304,7 +1312,7 @@ pub fn plan_view(
     expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
-    let relation_expr = expr.optimize_and_lower(&scx.into());
+    let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
         scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
@@ -1344,7 +1352,7 @@ pub fn plan_create_view(
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
-            if view.expr.global_uses().contains(&item.id()) {
+            if view.expr.depends_on().contains(&item.id()) {
                 bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     item.name()
@@ -2098,7 +2106,7 @@ pub fn plan_create_type(
     let CreateTypeStatement { name, as_type, .. } = stmt;
     fn ensure_valid_data_type(
         scx: &StatementContext,
-        data_type: ResolvedDataType,
+        data_type: &ResolvedDataType,
         as_type: &CreateTypeAs<Raw>,
         key: &str,
     ) -> Result<(), anyhow::Error> {
@@ -2148,8 +2156,8 @@ pub fn plan_create_type(
         Ok(())
     }
 
-    let mut ids = vec![];
-    let mut record_field_names = vec![];
+    let mut depends_on = vec![];
+    let mut record_fields = vec![];
     match &as_type {
         CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
             let mut with_options = normalize::option_objects(&with_options);
@@ -2163,8 +2171,8 @@ pub fn plan_create_type(
                 match with_options.remove(&key.to_string()) {
                     Some(SqlOption::DataType { data_type, .. }) => {
                         let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                        ensure_valid_data_type(scx, data_type, &as_type, key)?;
-                        ids.extend(dt_ids);
+                        ensure_valid_data_type(scx, &data_type, &as_type, key)?;
+                        depends_on.extend(dt_ids);
                     }
                     Some(_) => bail!("{} must be a data type", key),
                     None => bail!("{} parameter required", key),
@@ -2178,9 +2186,13 @@ pub fn plan_create_type(
                 let key = ident(column_def.name.clone());
                 let (data_type, dt_ids) =
                     resolve_names_data_type(scx, column_def.data_type.clone())?;
-                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
-                ids.extend(dt_ids);
-                record_field_names.push(ColumnName::from(key.clone()));
+                ensure_valid_data_type(scx, &data_type, &as_type, &key)?;
+                depends_on.extend(dt_ids);
+                if let ResolvedDataType::Named { id, .. } = data_type {
+                    record_fields.push((ColumnName::from(key.clone()), id));
+                } else {
+                    bail!("field {} must be a named type", key)
+                }
             }
         }
     };
@@ -2192,10 +2204,10 @@ pub fn plan_create_type(
 
     let inner = match as_type {
         CreateTypeAs::List { .. } => CatalogType::List {
-            element_id: *ids.get(0).expect("custom type to have element id"),
+            element_id: *depends_on.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map { .. } => {
-            let key_id = *ids.get(0).expect("key");
+            let key_id = *depends_on.get(0).expect("key");
             let entry = scx.catalog.get_item_by_id(&key_id);
             match entry.type_details() {
                 Some(CatalogTypeDetails {
@@ -2208,14 +2220,11 @@ pub fn plan_create_type(
 
             CatalogType::Map {
                 key_id,
-                value_id: *ids.get(1).expect("value"),
+                value_id: *depends_on.get(1).expect("value"),
             }
         }
         CreateTypeAs::Record { .. } => CatalogType::Record {
-            fields: record_field_names
-                .into_iter()
-                .zip_eq(ids.iter().cloned())
-                .collect_vec(),
+            fields: record_fields,
         },
     };
 
@@ -2224,7 +2233,7 @@ pub fn plan_create_type(
         typ: Type {
             create_sql,
             inner,
-            depends_on: ids,
+            depends_on,
         },
     }))
 }

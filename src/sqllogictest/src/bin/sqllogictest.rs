@@ -245,7 +245,7 @@ where
                 None => (&*s, false),
                 Some(s) => (s, true),
             };
-            self.emit_str(&s.replace("\n", &format!("\n[{}] ", timestamp)));
+            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp)));
 
             // If the line ended with a newline, output the newline but *not*
             // the timestamp prefix. We want the timestamp to reflect the moment

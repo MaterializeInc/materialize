@@ -414,7 +414,7 @@ pub fn optimize(
                     }
                     column_knowledge[index].clone()
                 }
-                MirScalarExpr::Literal(_, _) | MirScalarExpr::CallNullary(_) => {
+                MirScalarExpr::Literal(_, _) | MirScalarExpr::CallUnmaterializable(_) => {
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallUnary { func, expr: _ } => {

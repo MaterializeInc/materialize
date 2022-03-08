@@ -37,9 +37,22 @@ hugo --gc --baseURL /docs --destination public/docs
 cp -R ../../ci/deploy/website/. public/
 hugo deploy
 
+touch empty
+
+# Make the alias redirects into server-side redirects rather than client side
+# redirects.
+(
+    cd public
+    grep -lr '#HUGOALIAS' | while IFS= read -r src; do
+        src=${src#./}
+        dst=$(sed -nE 's/<!-- #HUGOALIAS# (.*) -->/\1/p' "$src")
+        echo "Installing server-side redirect $src => $dst"
+        aws s3 cp ../empty "s3://materialize-website/$src" --website-redirect "$dst"
+    done
+)
+
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
 # the whole point is that the shortlinks live forever.
-touch empty
 for slug in "${!shortlinks[@]}"; do
     aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
 done

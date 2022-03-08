@@ -209,6 +209,7 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
     b decimal(13, 1),
     z text
   )
+> CREATE DEFAULT INDEX ON foo
 > CREATE INDEX ON foo (a + b)
 > CREATE INDEX ON foo (substr(z, 3))
 > SHOW INDEXES FROM foo

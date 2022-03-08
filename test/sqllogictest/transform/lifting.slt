@@ -21,6 +21,10 @@ union all
 union all
 (select a, b, 2 from t)
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 
@@ -44,6 +48,10 @@ union all
 union all
 (select a, b, 2, 3 from t)
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 
@@ -67,6 +75,10 @@ union all
 union all
 (select a, b, 3 from t)
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map 2
@@ -88,6 +100,11 @@ query T multiline
 explain
 select a, b from t where a = 1 group by a, b
 ----
+Source materialize.public.t (u1):
+| Filter (#0 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1)
@@ -102,6 +119,11 @@ query T multiline
 explain
 select a, b from t where b = 1 group by a, b
 ----
+Source materialize.public.t (u1):
+| Filter (#1 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
@@ -117,6 +139,10 @@ query T multiline
 explain
 select * from (select 1, a+1 from t), t;
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map (#0 + 1)
@@ -138,6 +164,10 @@ query T multiline
 explain
 select * from (select b+1, 2, 1, a+1 from t), t;
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map (#1 + 1), (#0 + 1)
@@ -159,6 +189,10 @@ query T multiline
 explain
 select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
 ----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map (#1 + 1), (#0 + 2), (#0 + 1)
@@ -180,6 +214,10 @@ query T multiline
 explain
 select a+1 from (select 1 as a, b from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map 2
@@ -191,6 +229,10 @@ query T multiline
 explain
 select z+1 from (select 2 as y, a, 1 as z, b from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map 2
@@ -203,6 +245,10 @@ query T multiline
 explain
 select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1, 3) as x union all select 1, x, 3 from generate_series(5, 8) as x), t;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Constant () () () () () () ()
 
@@ -232,6 +278,10 @@ query T multiline
 explain typed plan for
 select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), generate_series(2, 4) as f2) group by f2, f1) as c, t;
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Constant (2) (3) (4)
 | | types = (integer)
@@ -263,6 +313,10 @@ query T multiline
 explain typed plan for
 select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(2, 4) as f2, generate_series(3, 5) as f3, (select 1 as f1)) group by f2, f3, f1) as c, t;
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Constant (2, 3) (2, 4) (2, 5) (3, 3) (3, 4) (3, 5) (4, 3) (4, 4) (4, 5)
 | | types = (integer, integer)
@@ -294,6 +348,10 @@ EOF
 query T multiline
 explain select * from (select 1 as a from t), generate_series(a+1, 4);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -311,6 +369,10 @@ EOF
 query T multiline
 explain select 123 from (select 234 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map 123
@@ -321,6 +383,10 @@ EOF
 query T multiline
 explain select 123 from (select distinct 234 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -332,6 +398,10 @@ EOF
 query T multiline
 explain select distinct 123 from (select 234 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -343,6 +413,10 @@ EOF
 query T multiline
 explain select distinct 123 from (select distinct 234 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -356,6 +430,10 @@ EOF
 query T multiline
 explain select * from (select distinct 123 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -367,6 +445,10 @@ EOF
 query T multiline
 explain select distinct * from (select 123 from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -380,6 +462,10 @@ EOF
 query T multiline
 explain select 123 from (select a from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Map 123
@@ -390,6 +476,10 @@ EOF
 query T multiline
 explain select 123 from (select distinct a from t);
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -402,6 +492,10 @@ EOF
 query T multiline
 explain select distinct 123 from (select a from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -413,6 +507,10 @@ EOF
 query T multiline
 explain select distinct 123 from (select distinct a from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -426,6 +524,10 @@ EOF
 query T multiline
 explain select distinct a1.a, a1.literal from (select a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -437,6 +539,10 @@ EOF
 query T multiline
 explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -448,6 +554,10 @@ EOF
 query T multiline
 explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -459,6 +569,10 @@ EOF
 query T multiline
 explain select distinct a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -472,6 +586,10 @@ EOF
 query T multiline
 explain select distinct a1.a, 123 from (select a from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -483,6 +601,10 @@ EOF
 query T multiline
 explain select distinct a1.a, 123 from (select distinct a from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -495,6 +617,10 @@ EOF
 query T multiline
 explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -505,6 +631,10 @@ EOF
 query T multiline
 explain select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -516,6 +646,10 @@ EOF
 query T multiline
 explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -528,6 +662,10 @@ EOF
 query T multiline
 explain select distinct a1.a, a1.literal + 1 from (select distinct a, 123 as literal from t) as a1;
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
@@ -547,8 +685,12 @@ create table t_pk (
 query T multiline
 explain select a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
 ----
+Source materialize.public.t_pk (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t_pk (u3)
+| Get materialize.public.t_pk (u2)
 | Map 123
 
 EOF
@@ -556,8 +698,12 @@ EOF
 query T multiline
 explain select distinct a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
 ----
+Source materialize.public.t_pk (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t_pk (u3)
+| Get materialize.public.t_pk (u2)
 | Map 123
 
 EOF
@@ -567,6 +713,11 @@ query T multiline
 explain
 select a, b, max(2), count(*) from t where b = 1 group by a, b;
 ----
+Source materialize.public.t (u1):
+| Filter (#1 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
@@ -582,6 +733,11 @@ query T multiline
 explain
 select a, b, count(*), max(2) from t where b = 1 group by a, b;
 ----
+Source materialize.public.t (u1):
+| Filter (#1 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
@@ -597,6 +753,11 @@ query T multiline
 explain
 select a, b, min(2), max(3) from t where b = 1 group by a, b;
 ----
+Source materialize.public.t (u1):
+| Filter (#1 = 1)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
@@ -610,6 +771,10 @@ EOF
 query T multiline
 explain select min(1/x) from (select a as y, 0 as x from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -638,6 +803,10 @@ EOF
 query T multiline
 explain select sum(1/x) from (select a as y, 0 as x from t);
 ----
+Source materialize.public.t (u1):
+| Project ()
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Project ()
@@ -666,12 +835,23 @@ EOF
 query T multiline
 explain select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
+Source materialize.public.t (u1):
+| Filter (#0 = 1308)
+| Project (#0)
+
+Source materialize.public.t_pk (u2):
+| Filter (#0 <= 195), (#0 >= 38)
+| Project (#0)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1308)
 
 %1 =
-| Get materialize.public.t_pk (u3)
+| Get materialize.public.t_pk (u2)
+| Filter (#0 <= 195), (#0 >= 38)
+| Project (#0)
 | ArrangeBy (#0)
 
 %2 =
@@ -691,9 +871,8 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 | Union %2 %3
 
 %5 = Let l1 =
-| Join %1 %4 (= #0 #2)
+| Join %1 %4 (= #0 #1)
 | | implementation = Differential %4 %1.(#0)
-| Filter (#0 <= 195), (#0 >= 38)
 | Project (#0)
 | Reduce group=()
 | | agg min(#0)
@@ -718,6 +897,10 @@ EOF
 query T multiline
 explain select min(a) from t where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
+Source materialize.public.t (u1):
+| Project (#0)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1308)
@@ -807,16 +990,20 @@ create table t1 (f1 double precision, f2 double precision not null);
 query T multiline
 explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
 ----
+Source materialize.public.t1 (u3):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t1 (u5)
+| Get materialize.public.t1 (u3)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t1 (u5)
+| Get materialize.public.t1 (u3)
 | Filter (#1 = 9)
 
 %2 =
-| Get materialize.public.t1 (u5)
+| Get materialize.public.t1 (u3)
 | Project ()
 | Reduce group=()
 | | agg count(true)

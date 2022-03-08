@@ -14,22 +14,18 @@ This page details Materialize's supported SQL [functions](#functions) and [opera
 
 ## Functions
 
+### Unmaterializable functions
+
+Several functions in Materialize are **unmaterializable** because their output
+depends upon state besides their input parameters, like the value of a session
+parameter or the timestamp of the current transaction. You cannot create an
+[index](/sql/create-index) or materialized view that depends on an
+unmaterializable function, but you can use them in unmaterialized views and
+one-off [`SELECT`](/sql/select) statements.
+
+Unmaterializable functions are marked as such in the table below.
+
 {{< fnlist >}}
-
-### Pure and nonpure functions
-
-Most functions in Materialize are **pure** functions, which means their output
-is wholly determined by their inputs. Pure functions can be used in all
-contexts.
-
-Several functions in Materialize are **nonpure** functions, which means their
-output depends upon state besides their input parameters, like the value of a
-session parameter or the timestamp of the current transaction. You cannot create
-an [index](/sql/create-index) or materialized view that depends on a nonpure
-function, but you can use nonpure functions in unmaterialized views and one-off
-[`SELECT`](/sql/select) statements.
-
-Nonpure functions are marked as such in the table above.
 
 ## Operators
 

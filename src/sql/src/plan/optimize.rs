@@ -40,16 +40,16 @@ impl HirRelationExpr {
     /// Perform optimizing algebraic rewrites on this [`HirRelationExpr`] and lower it to a [`mz_expr::MirRelationExpr`].
     ///
     /// The optimization path is fully-determined by the values of the feature flag defined in the [`OptimizerConfig`].
-    pub fn optimize_and_lower(self, config: &OptimizerConfig) -> mz_expr::MirRelationExpr {
+    pub fn optimize_and_lower(
+        self,
+        config: &OptimizerConfig,
+    ) -> Result<mz_expr::MirRelationExpr, QGMError> {
         if config.qgm_optimizations {
             // try to go through the QGM path
-            self.clone().try_qgm_path().unwrap_or_else(|e| {
-                println!("Falling back to direct HIR ⇒ MIR due to QGM error: {}", e);
-                self.lower()
-            })
+            self.try_qgm_path()
         } else {
             // directly decorrelate and lower into a MirRelationExpr
-            self.lower()
+            Ok(self.lower())
         }
     }
 
@@ -58,12 +58,12 @@ impl HirRelationExpr {
     /// Return `Result::Err` if the path is not possible.
     fn try_qgm_path(self) -> Result<mz_expr::MirRelationExpr, QGMError> {
         // create a query graph model from this HirRelationExpr
-        let mut model = Result::<Model, QGMError>::from(self)?;
+        let mut model = Model::try_from(self)?;
 
         // perform optimizing algebraic rewrites on the qgm
         model.optimize();
 
         // decorrelate and lower the optimized query graph model into a MirRelationExpr
-        Ok(model.into())
+        model.try_into()
     }
 }
