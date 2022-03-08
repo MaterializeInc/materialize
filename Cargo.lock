@@ -2951,6 +2951,7 @@ dependencies = [
  "aws-smithy-client",
  "aws-smithy-http",
  "aws-types",
+ "hyper-tls",
  "mz-http-proxy",
  "openssl-sys",
 ]
@@ -3313,9 +3314,7 @@ name = "mz-http-proxy"
 version = "0.1.0"
 dependencies = [
  "http",
- "hyper",
  "hyper-proxy",
- "hyper-tls",
  "ipnet",
  "lazy_static",
  "reqwest",
