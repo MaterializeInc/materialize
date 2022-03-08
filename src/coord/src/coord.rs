@@ -2177,7 +2177,7 @@ impl Coordinator {
 
         // The dataflow must (eventually) be built on a specific compute instance.
         // Use this in `catalog_transact` and stash for eventual sink construction.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = sink.compute_instance;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_user_id() {
@@ -2439,9 +2439,10 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let id = self.catalog.allocate_user_id()?;
         // An index must be created on a specific compute instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = index.compute_instance;
+
+        let id = self.catalog.allocate_user_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,

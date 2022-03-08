@@ -114,6 +114,12 @@ pub struct CatalogState {
     by_oid: HashMap<u32, GlobalId>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
+
+    // We pass around `ComputeInstanceId`, but not the name, though still need
+    // a means by which to correlate names to an ID, necessitating this
+    // two-level lookup.
+    compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
+    compute_instance_names: HashMap<String, ComputeInstanceId>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
 }
@@ -322,6 +328,7 @@ impl CatalogState {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
+    compute_instance: String,
     database: String,
     search_path: &'a [&'a str],
     user: String,
@@ -359,6 +366,12 @@ pub struct Role {
     pub id: i64,
     #[serde(skip)]
     pub oid: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstance {
+    pub name: String,
+    pub id: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -733,6 +746,8 @@ impl Catalog {
                 by_oid: HashMap::new(),
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
+                compute_instance_names: HashMap::new(),
+                compute_instances_by_id: HashMap::new(),
                 roles: HashMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
@@ -811,6 +826,19 @@ impl Catalog {
                 },
             );
         }
+
+        // TODO(benesch,sploiselle): Take instances from the catalog.
+        catalog.state.compute_instances_by_id.insert(
+            DEFAULT_COMPUTE_INSTANCE_ID,
+            ComputeInstance {
+                name: "default".into(),
+                id: DEFAULT_COMPUTE_INSTANCE_ID,
+            },
+        );
+        catalog
+            .state
+            .compute_instance_names
+            .insert("default".into(), DEFAULT_COMPUTE_INSTANCE_ID);
 
         for builtin in BUILTINS.values() {
             let name = FullName {
@@ -1089,6 +1117,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
+            compute_instance: "default".into(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
@@ -1100,6 +1129,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
+            compute_instance: "default".into(),
             database: "materialize".into(),
             search_path: &[],
             user,
@@ -1203,6 +1233,18 @@ impl Catalog {
             name,
             conn_id,
         )
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: &str,
+    ) -> Result<&ComputeInstance, SqlCatalogError> {
+        let id = self
+            .state
+            .compute_instance_names
+            .get(name)
+            .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+        Ok(&self.state.compute_instances_by_id[id])
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -2150,6 +2192,12 @@ impl Catalog {
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.state.by_id.values()
     }
+
+    pub fn compute_instances(
+        &self,
+    ) -> impl Iterator<Item = (&ComputeInstanceId, &ComputeInstance)> {
+        self.state.compute_instances_by_id.iter()
+    }
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -2395,7 +2443,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn active_compute_instance(&self) -> &str {
         // TODO(benesch,sploiselle): wire this up to the session.
-        "default"
+        &self.compute_instance
     }
 
     fn resolve_database(
@@ -2535,6 +2583,16 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 
     fn id(&self) -> i64 {
+        self.id
+    }
+}
+
+impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> ComputeInstanceId {
         self.id
     }
 }
