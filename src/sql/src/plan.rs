@@ -34,7 +34,8 @@ use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::{
-    sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector,
+    client::ComputeInstanceId, sinks::SinkConnectorBuilder, sinks::SinkEnvelope,
+    sources::SourceConnector,
 };
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
@@ -410,6 +411,7 @@ pub struct Sink {
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -427,6 +429,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]

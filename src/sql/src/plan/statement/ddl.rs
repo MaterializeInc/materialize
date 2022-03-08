@@ -1864,6 +1864,8 @@ pub fn plan_create_sink(
         bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
+    let compute_instance = scx.resolve_compute_instance(None)?.id();
+
     let mut depends_on = vec![from.id()];
     depends_on.extend(from.uses());
 
@@ -1902,6 +1904,7 @@ pub fn plan_create_sink(
             connector_builder,
             envelope,
             depends_on,
+            compute_instance,
         },
         with_snapshot,
         if_not_exists,
@@ -2072,14 +2075,15 @@ pub fn plan_create_index(
     };
 
     let options = plan_index_options(with_options.clone())?;
+    let compute_instance = scx.resolve_compute_instance(None)?.id();
+    let mut depends_on = vec![on.id()];
+    depends_on.extend(exprs_depend_on);
 
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
-    let mut depends_on = vec![on.id()];
-    depends_on.extend(exprs_depend_on);
 
     Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
@@ -2088,6 +2092,7 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             depends_on,
+            compute_instance,
         },
         options,
         if_not_exists,
