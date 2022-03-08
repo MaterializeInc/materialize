@@ -222,11 +222,13 @@ Below are the recommended ways to work around this.
 
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [only one `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
-This allows you to limit the number of rows and the time window of your requests. First, declare a `TAIL` cursor:
+This allows you to limit the number of rows and the time window of your requests.
+Let's see it in action tailing [Materialize time spent internally](/sql/system-catalog/#mz_scheduling_elapsed). <br/><br/>
+First, declare a `TAIL` cursor:
 
 ```sql
 BEGIN;
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed);
 ```
 
 Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
@@ -263,7 +265,7 @@ FETCH ALL c WITH (timeout='0s');
 If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
 
 ```sql
-COPY (TAIL (SELECT * FROM mz_catalog.mz_tables)) TO STDOUT;
+COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
 ```
 
 [`bigint`]: /sql/types/bigint
@@ -285,7 +287,7 @@ dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR TAIL v")
+    cur.execute("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
@@ -324,7 +326,7 @@ with conn.cursor() as cur:
 
 ```csharp
 var txn = conn.BeginTransaction();
-new NpgsqlCommand("DECLARE c CURSOR FOR TAIL t", conn, txn).ExecuteNonQuery();
+new NpgsqlCommand("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed", conn, txn).ExecuteNonQuery();
 while (true)
 {
     using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
@@ -354,7 +356,7 @@ async function main() {
     await client.connect();
 
     await client.query("BEGIN");
-    await client.query("DECLARE c CURSOR FOR TAIL t");
+    await client.query("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed");
     while (true) {
         const res = await client.query("FETCH ALL c");
         console.log(res.rows);
@@ -377,7 +379,7 @@ main();
  // Begin a transaction
  $connection->beginTransaction();
  // Declare a cursor
- $statement = $connection->prepare('DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_catalog.mz_tables)');
+ $statement = $connection->prepare('DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed');
  // Execute the statement
  $statement->execute();
  /* Fetch all of the remaining rows in the result set */
@@ -406,7 +408,7 @@ main();
 
   conn.setAutoCommit(false);
 
-  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL (SELECT * FROM antennas_performance);");
+  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed;");
 
   while (true) {
       ResultSet fetchResultSet = stmt.executeQuery("FETCH 100 c WITH (timeout='1s');");
@@ -434,17 +436,17 @@ See the [examples](#examples) for details.
 
 ### Using `AS OF`
 
-Begin creating a view:
+Start Materialize with a custom compaction window [`--logical-compaction-window 10000`](/cli/#compaction-window) and create a non-materialized view:
 
 ```sql
 CREATE VIEW most_tired_worker AS
   SELECT worker, max(elapsed_ns)
-  FROM mz_catalog.mz_scheduling_elapsed
+  FROM mz_scheduling_elapsed
   WHERE worker = 0
   GROUP BY worker;
 ```
 
-Set the compaction in the index creation:
+Create an index and set a the compaction:
 
 ```sql
 CREATE INDEX most_tired_worker_idx
@@ -458,4 +460,4 @@ Stream out changes from ten seconds before the statement is executed:
 COPY (TAIL most_tired_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 ```
 
-Take into account, for this example, that ten logical seconds need to pass by inside Materialize to recover changes from the last ten seconds.
+Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
