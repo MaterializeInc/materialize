@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::FutureExt;
-use mz_dataflow_types::client::{ComputeResponse, Response};
+use mz_dataflow_types::client::{ComputeResponse, InstanceConfig, Response};
 use mz_dataflow_types::sources::AwsExternalId;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -146,6 +146,7 @@ impl CoordTest {
             .await?;
         let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
             dataflow_client: Box::new(dataflow_client.clone()),
+            dataflow_instance: InstanceConfig::Virtual,
             storage,
             logging: None,
             logical_compaction_window: None,

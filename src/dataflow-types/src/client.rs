@@ -47,6 +47,15 @@ pub type ComputeInstanceId = usize;
 /// A default value whose use we can track down and remove later.
 pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
 
+/// Instance configuration
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum InstanceConfig {
+    /// In-process virtual instance, likely the default instance
+    Virtual,
+    /// Out-of-process named instance
+    Remote(Vec<String>),
+}
+
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
 #[enum_kind(
@@ -58,7 +67,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
     /// Optionally, request that the logging sources in the contained configuration are installed.
-    CreateInstance(Option<LoggingConfig>),
+    CreateInstance(InstanceConfig, Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -302,7 +311,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
+            Command::Compute(ComputeCommand::CreateInstance(_config, logging), _instance) => {
                 if let Some(logging_config) = logging {
                     start.extend(logging_config.log_identifiers());
                 }

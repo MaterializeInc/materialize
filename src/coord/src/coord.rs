@@ -91,10 +91,10 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
-use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
-use mz_dataflow_types::client::{ComputeResponse, TimestampBindingFeedback};
 use mz_dataflow_types::client::{
-    CreateSourceCommand, Response as DataflowResponse, StorageResponse,
+    ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
+    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
+    DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
@@ -236,6 +236,7 @@ pub struct LoggingConfig {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
+    pub dataflow_instance: InstanceConfig,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
@@ -4387,6 +4388,7 @@ impl Coordinator {
 pub async fn serve(
     Config {
         dataflow_client,
+        dataflow_instance,
         logging,
         storage,
         timestamp_frequency,
@@ -4474,11 +4476,11 @@ pub async fn serve(
                 log_logging: config.log_logging,
             });
             handle
-                .block_on(
-                    coord
-                        .dataflow_client
-                        .create_instance(DEFAULT_COMPUTE_INSTANCE_ID, logging),
-                )
+                .block_on(coord.dataflow_client.create_instance(
+                    DEFAULT_COMPUTE_INSTANCE_ID,
+                    dataflow_instance,
+                    logging,
+                ))
                 .unwrap();
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

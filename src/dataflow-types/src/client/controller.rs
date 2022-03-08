@@ -29,7 +29,8 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::client::{
-    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, Response, StorageResponse,
+    Client, Command, ComputeCommand, ComputeInstanceId, ComputeResponse, InstanceConfig, Response,
+    StorageResponse,
 };
 use crate::logging::LoggingConfig;
 
@@ -53,13 +54,14 @@ where
     pub async fn create_instance(
         &mut self,
         instance: ComputeInstanceId,
+        config: InstanceConfig,
         logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
         self.compute
             .insert(instance, compute::ComputeControllerState::new(&logging));
         self.client
             .send(Command::Compute(
-                ComputeCommand::CreateInstance(logging),
+                ComputeCommand::CreateInstance(config, logging),
                 instance,
             ))
             .await

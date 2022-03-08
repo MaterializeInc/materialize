@@ -14,10 +14,17 @@
 
 #![deny(missing_docs)]
 
+use anyhow::anyhow;
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
+use std::collections::HashMap;
 
-use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
+use mz_dataflow_types::client::{
+    partitioned::Partitioned, Client, Command, ComputeCommand, ComputeInstanceId, InstanceConfig,
+    Response,
+};
 use tracing::trace;
 
 /// A convenience type for compatibility.
@@ -57,35 +64,89 @@ impl Client for RemoteClient {
     }
 }
 
-/// A [Client] backed by separate clients for storage and compute.
-pub struct SplitClient<S, C> {
-    storage_client: S,
-    compute_client: C,
+/// Types of compute clients we manage.
+pub enum ComputeClientFlavor {
+    /// A virtual compute client, hosted on the storage server.
+    Virtual,
+    /// A remote compute client, likely a network connection away.
+    Remote(Box<dyn Client + Send + 'static>),
 }
 
-impl<S: Client, C: Client> SplitClient<S, C> {
+/// A [Client] backed by separate clients for storage and compute.
+pub struct SplitClient<S> {
+    /// Client on which storage commands are executed, and where virtual compute instances are created.
+    storage_client: S,
+    /// A map of remote compute instances.
+    compute_clients: HashMap<ComputeInstanceId, ComputeClientFlavor>,
+}
+
+impl<S: Client> SplitClient<S> {
     /// Construct a new split client
-    pub fn new(storage_client: S, compute_client: C) -> Self {
+    pub fn new(storage_client: S) -> Self {
         Self {
             storage_client,
-            compute_client,
+            compute_clients: Default::default(),
         }
     }
 }
 
 #[async_trait(?Send)]
-impl<S: Client, C: Client> Client for SplitClient<S, C> {
+impl<S: Client> Client for SplitClient<S> {
     async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SplitClient: Sending dataflow command: {:?}", cmd);
-        match cmd {
-            cmd @ Command::Compute(_, _) => self.compute_client.send(cmd),
-            cmd @ Command::Storage(_) => self.storage_client.send(cmd),
+        // Ensure that a client exists, if we are asked to create one.
+        if let Command::Compute(ComputeCommand::CreateInstance(config, _logging), instance) = &cmd {
+            assert!(self.compute_clients.get(instance).is_none());
+            let client = match config {
+                InstanceConfig::Virtual => ComputeClientFlavor::Virtual,
+                InstanceConfig::Remote(addr) => {
+                    ComputeClientFlavor::Remote(Box::new(RemoteClient::connect(&addr).await?))
+                }
+            };
+            self.compute_clients.insert(*instance, client);
         }
-        .await
+
+        // Notice whether we should drop the instance as a result of the command.
+        let drop_instance = if let Command::Compute(ComputeCommand::DropInstance, instance) = &cmd {
+            Some(*instance)
+        } else {
+            None
+        };
+
+        // Route the command appropriately
+        match cmd {
+            Command::Compute(inner, instance) => match self.compute_clients.get_mut(&instance) {
+                Some(ComputeClientFlavor::Virtual) => {
+                    self.storage_client
+                        .send(Command::Compute(inner, instance))
+                        .await?;
+                }
+                Some(ComputeClientFlavor::Remote(client)) => {
+                    client.send(Command::Compute(inner, instance)).await?;
+                }
+                None => {
+                    Err(anyhow!("Unknown compute instance: {instance:?}"))?;
+                }
+            },
+            cmd @ Command::Storage(_) => self.storage_client.send(cmd).await?,
+        }
+
+        if let Some(instance) = drop_instance {
+            self.compute_clients.remove(&instance);
+        }
+
+        Ok(())
     }
     async fn recv(&mut self) -> Option<Response> {
+        // TODO: We currently don't have a good way to receive from many clients
+        let mut futures = FuturesUnordered::new();
+        for client in self.compute_clients.values_mut() {
+            if let ComputeClientFlavor::Remote(client) = client {
+                futures.push(client.recv());
+            }
+        }
         tokio::select! {
-            response = self.compute_client.recv() => response,
+            response = futures.select_next_some() => response,
             response = self.storage_client.recv() => response,
         }
     }
