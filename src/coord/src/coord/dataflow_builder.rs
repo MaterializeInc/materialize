@@ -163,22 +163,26 @@ impl<'a> DataflowBuilder<'a> {
             //
             // TODO: indexes should be imported after the optimization process,
             // and only those actually used by the optimized plan
-            let valid_index = self
+            let valid_indexes = self
                 .catalog
                 .enabled_indexes()
                 .indexes_on(*id)
-                .find(|(id, _keys)| self.compute.collection(*id).is_ok());
-            if let Some((index_id, keys)) = valid_index {
-                let index_desc = IndexDesc {
-                    on_id: *id,
-                    key: keys.to_vec(),
-                };
-                let desc = self
-                    .catalog
-                    .get_by_id(id)
-                    .desc()
-                    .expect("indexes can only be built on items with descs");
-                dataflow.import_index(index_id, index_desc, desc.typ().clone());
+                .into_iter()
+                .filter(|(id, _keys)| self.compute.collection(*id).is_ok())
+                .collect::<Vec<_>>();
+            if !valid_indexes.is_empty() {
+                for (index_id, keys) in valid_indexes.into_iter() {
+                    let index_desc = IndexDesc {
+                        on_id: *id,
+                        key: keys.to_vec(),
+                    };
+                    let desc = self
+                        .catalog
+                        .get_by_id(id)
+                        .desc()
+                        .expect("indexes can only be built on items with descs");
+                    dataflow.import_index(index_id, index_desc, desc.typ().clone());
+                }
             } else {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
