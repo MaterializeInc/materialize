@@ -30,16 +30,16 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
     pub fn render_topk(
         &mut self,
-        input: CollectionBundle<G, Row, mz_repr::Timestamp>,
+        input: CollectionBundle<G, Row>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G, Row, mz_repr::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.

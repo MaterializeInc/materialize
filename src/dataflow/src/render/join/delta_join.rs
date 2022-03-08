@@ -28,7 +28,7 @@ use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
 use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -39,10 +39,10 @@ where
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, Row, mz_repr::Timestamp>>,
+        inputs: Vec<CollectionBundle<G, Row>>,
         join_plan: DeltaJoinPlan,
         scope: &mut G,
-    ) -> CollectionBundle<G, Row, mz_repr::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
 

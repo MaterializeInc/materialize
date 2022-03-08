@@ -17,7 +17,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -25,12 +25,12 @@ where
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionBundle<G, Row, mz_repr::Timestamp>,
+        input: CollectionBundle<G, Row>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G, Row, mz_repr::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {

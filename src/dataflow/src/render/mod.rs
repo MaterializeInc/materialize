@@ -88,7 +88,7 @@
 //! unsatisfactory long term. We suspect that we can continue to imbue the oks
 //! stream with semantics if we are very careful in describing what data should
 //! and should not be produced upon encountering an error. Roughly speaking, the
-//! oks stream could mz_represent the correct result of the computation where all
+//! oks stream could represent the correct result of the computation where all
 //! rows that caused an error have been pruned from the stream. There are
 //! strange and confusing questions here around foreign keys, though: what if
 //! the optimizer proves that a particular key must exist in a collection, but
@@ -298,7 +298,9 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
     })
 }
 
-impl<'g, G, T> Context<Child<'g, G, T>, Row, mz_repr::Timestamp>
+// This implementation block allows child timestamps to vary from parent timestamps,
+// but requires the parent timestamp to be `repr::Timestamp`.
+impl<'g, G, T> Context<Child<'g, G, T>, Row>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
@@ -347,11 +349,10 @@ where
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps.
-
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
     G: Scope,
-    G::Timestamp: Refines<mz_repr::Timestamp> + Lattice + RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn build_object(&mut self, scope: &mut G, object: BuildDesc<plan::Plan>) {
         // First, transform the relation expression into a render plan.
@@ -416,21 +417,21 @@ where
     }
 }
 
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
     G: Scope,
-    G::Timestamp: Refines<mz_repr::Timestamp> + Lattice + RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
-    /// The return type reflects the uncertainty about the data mz_representation, perhaps
+    /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(
         &mut self,
         plan: plan::Plan,
         scope: &mut G,
         worker_index: usize,
-    ) -> CollectionBundle<G, Row, mz_repr::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         match plan {
             Plan::Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
