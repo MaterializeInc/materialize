@@ -1117,7 +1117,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
-            compute_instance: "default".into(),
+            compute_instance: session.vars().cluster().into(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
@@ -2442,7 +2442,6 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn active_compute_instance(&self) -> &str {
-        // TODO(benesch,sploiselle): wire this up to the session.
         &self.compute_instance
     }
 
@@ -2480,27 +2479,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
-        let compute_instance_name =
-            compute_instance_name.unwrap_or_else(|| self.active_compute_instance());
-        if compute_instance_name != self.active_compute_instance() {
-            return Err(SqlCatalogError::UnknownComputeInstance(
-                compute_instance_name.into(),
-            ));
-        }
-
-        struct DummyDefaultComputeInstance;
-
-        impl mz_sql::catalog::CatalogComputeInstance for DummyDefaultComputeInstance {
-            fn id(&self) -> ComputeInstanceId {
-                0
-            }
-
-            fn name(&self) -> &str {
-                "dummy"
-            }
-        }
-
-        Ok(&DummyDefaultComputeInstance)
+        self.catalog
+            .resolve_compute_instance(
+                compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
+            )
+            .map(|compute_instance| {
+                compute_instance as &dyn mz_sql::catalog::CatalogComputeInstance
+            })
     }
 
     fn resolve_item(
