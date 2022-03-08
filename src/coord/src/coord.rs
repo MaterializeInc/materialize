@@ -127,12 +127,13 @@ use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
-    ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan,
+    AlterItemRenamePlan, ComputeInstanceConfig, CreateComputeInstancePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params,
+    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
 use mz_transform::Optimizer;
@@ -1166,6 +1167,7 @@ impl Coordinator {
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
                                 | Statement::CreateRole(_)
+                                | Statement::CreateCluster(_)
                                 | Statement::CreateSchema(_)
                                 | Statement::CreateSecret(_)
                                 | Statement::CreateSink(_)
@@ -1600,6 +1602,9 @@ impl Coordinator {
             Plan::CreateRole(plan) => {
                 tx.send(self.sequence_create_role(plan).await, session);
             }
+            Plan::CreateComputeInstance(plan) => {
+                tx.send(self.sequence_create_compute_instance(plan).await, session);
+            }
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
@@ -1635,6 +1640,9 @@ impl Coordinator {
             }
             Plan::DropRoles(plan) => {
                 tx.send(self.sequence_drop_roles(plan).await, session);
+            }
+            Plan::DropComputeInstances(plan) => {
+                tx.send(self.sequence_drop_compute_instances(plan).await, session);
             }
             Plan::DropItems(plan) => {
                 tx.send(self.sequence_drop_items(plan).await, session);
@@ -1897,6 +1905,20 @@ impl Coordinator {
         self.catalog_transact(vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
+    }
+
+    async fn sequence_create_compute_instance(
+        &mut self,
+        plan: CreateComputeInstancePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        match plan.config {
+            ComputeInstanceConfig::Virtual => (),
+            ComputeInstanceConfig::Real { .. } => {
+                coord_bail!("SIZE not yet supported");
+            }
+        }
+        // TODO(benesch,sploiselle): actually create compute instances.
+        Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
     }
 
     async fn sequence_create_table(
@@ -2518,6 +2540,14 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedRole)
     }
 
+    async fn sequence_drop_compute_instances(
+        &mut self,
+        _plan: DropComputeInstancesPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(benesch,sploiselle): actually drop compute instances.
+        Ok(ExecuteResponse::DroppedComputeInstance)
+    }
+
     async fn sequence_drop_items(
         &mut self,
         plan: DropItemsPlan,
@@ -2532,8 +2562,9 @@ impl Coordinator {
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
-            ObjectType::Role => unreachable!("DROP ROLE not supported"),
-            ObjectType::Secret => unreachable!("DROP SECRET not supported"),
+            ObjectType::Role => unreachable!("DROP ROLE is handled elsewhere"),
+            ObjectType::Cluster => unreachable!("DROP CLUSTER is handled elsewhere"),
+            ObjectType::Secret => unreachable!("DROP SECRET is handled elsewhere"),
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }

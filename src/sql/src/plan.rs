@@ -73,6 +73,7 @@ pub enum Plan {
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
+    CreateComputeInstance(CreateComputeInstancePlan),
     CreateSource(CreateSourcePlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -85,6 +86,7 @@ pub enum Plan {
     DropDatabase(DropDatabasePlan),
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
+    DropComputeInstances(DropComputeInstancesPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -136,6 +138,19 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct CreateComputeInstancePlan {
+    pub name: String,
+    pub if_not_exists: bool,
+    pub config: ComputeInstanceConfig,
+}
+
+#[derive(Debug)]
+pub enum ComputeInstanceConfig {
+    Virtual,
+    Real { size: String },
 }
 
 #[derive(Debug)]
@@ -205,6 +220,11 @@ pub struct DropSchemaPlan {
 
 #[derive(Debug)]
 pub struct DropRolesPlan {
+    pub names: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct DropComputeInstancesPlan {
     pub names: Vec<String>,
 }
 

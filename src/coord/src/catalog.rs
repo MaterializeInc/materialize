@@ -19,6 +19,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::{
     sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
     sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
@@ -2404,6 +2405,11 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self.database
     }
 
+    fn active_compute_instance(&self) -> &str {
+        // TODO(benesch,sploiselle): wire this up to the session.
+        "default"
+    }
+
     fn resolve_database(
         &self,
         database_name: &str,
@@ -2432,6 +2438,33 @@ impl SessionCatalog for ConnCatalog<'_> {
             Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
+    }
+
+    fn resolve_compute_instance(
+        &self,
+        compute_instance_name: Option<&str>,
+    ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
+        let compute_instance_name =
+            compute_instance_name.unwrap_or_else(|| self.active_compute_instance());
+        if compute_instance_name != self.active_compute_instance() {
+            return Err(SqlCatalogError::UnknownComputeInstance(
+                compute_instance_name.into(),
+            ));
+        }
+
+        struct DummyDefaultComputeInstance;
+
+        impl mz_sql::catalog::CatalogComputeInstance for DummyDefaultComputeInstance {
+            fn id(&self) -> ComputeInstanceId {
+                0
+            }
+
+            fn name(&self) -> &str {
+                "dummy"
+            }
+        }
+
+        Ok(&DummyDefaultComputeInstance)
     }
 
     fn resolve_item(

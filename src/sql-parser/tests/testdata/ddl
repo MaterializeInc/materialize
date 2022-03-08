@@ -1246,3 +1246,66 @@ ALTER INDEX name SET ENABLED (property = true)
 error: Expected end of statement, found left parenthesis
 ALTER INDEX name SET ENABLED (property = true)
                              ^
+
+parse-statement
+CREATE CLUSTER cluster
+----
+CREATE CLUSTER cluster
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [] })
+
+parse-statement
+CREATE CLUSTER cluster VIRTUAL
+----
+CREATE CLUSTER cluster VIRTUAL
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE 'small'
+----
+CREATE CLUSTER cluster SIZE 'small'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE = 'small'
+----
+CREATE CLUSTER cluster SIZE 'small'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+
+parse-statement
+CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+----
+CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual, Virtual, Size("small"), Virtual, Size("medium")] })
+
+parse-statement
+DROP CLUSTER cluster
+----
+DROP CLUSTER cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: false, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster
+----
+DROP CLUSTER IF EXISTS cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster RESTRICT
+----
+DROP CLUSTER IF EXISTS cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster CASCADE
+----
+DROP CLUSTER IF EXISTS cluster CASCADE
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: true })
