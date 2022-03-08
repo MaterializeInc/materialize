@@ -25,17 +25,18 @@ A *time-varying collections* (TVC) is a map of partially ordered *times* to
 *collection versions*, where each collection version is a multiset of typed
 *pieces of data*. Because the past and future of a TVC may be unknown,
 Materialize represents a TVC as a *partial TVC* (pTVC), which is an accurate
-representation of a TVC during a range of times bounded by two *frontiers*.
+representation of a TVC during a range of times bounded by two *frontiers*: a
+lower frontier `since`, and an upper frontier `upper`.
 
 To avoid storing and processing the entire collection version for every single
 time, Materialize uses sets of *updates* as a differential representation of a
 pTVC. These updates are triples of `[data, time, diff]`: the piece of data
 being changed, the time of the change, and the change in multiplicity of that
 data. Materialize can *compact* a pTVC by merging updates from the past, and
-*append* new updates to a pTVC as they arrive. Compaction advances the lower
-*since frontier* of the pTVC, and appending advances the *upper frontier*. Both
-compact and append preserve correctness: these differential representations of
-a pTVC are faithful to the "real" TVC between `since` and `upper`.
+*append* new updates to a pTVC as they arrive. Compaction advances the `since`
+frontier of the pTVC, and appending advances the `upper` frontier. Both compact
+and append preserve correctness: these differential representations of a pTVC
+are faithful to the "real" TVC between `since` and `upper`.
 
 Materialize identifies each TVC by a unique `GlobalId`, and maintains a mutable map of `GlobalId`s to the current pTVC representing that `GlobalID`'s TVC.
 
@@ -99,8 +100,8 @@ our join and `t0 = 0`. The usual senses of `<=` and `<` then serve as
 A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
 upper) bound on times in `T`. We say that a time `t` *is later than* or *after*
 a frontier `F` iff there exists some `f` in `F` such that `f <t t`. We write
-this `F <=t t`. Similarly we can speak of a time `t` which is later than or
-equal to F, by which we mean there exists some `f` in `F` such that `f <=t t`:
+this `F <t t`. Similarly we can speak of a time `t` which is later than or
+equal to `F`, by which we mean there exists some `f` in `F` such that `f <=t t`:
 we write this `F <=t t`.
 
 For integers, a frontier could be the singleton set `F = {5}`; the set of times
@@ -145,10 +146,10 @@ Every TVC begins with the empty collection version: `read(tvc, t0) = cv0`.
 ## Partial time-varying collections
 
 At any wall-clock time a TVC is (in general) unknowable. Some of its past
-changes have been forgotten, some information has yet to arrive, and its future
-is unwritten. A *partial time-varying collection* (pTVC) is a partial
-representation of a corresponding TVC which is accurate for some range of
-times. We model this as a map of times to collection versions plus two
+changes have been forgotten or were never recorded, some information has yet to
+arrive, and its future is unwritten. A *partial time-varying collection* (pTVC)
+is a partial representation of a corresponding TVC which is accurate for some
+range of times. We model this as a map of times to collection versions plus two
 frontiers: *since* and *upper*.
 
 Informally, the `since` frontier tells us which versions have been lost to the
@@ -156,9 +157,12 @@ past, and the `upper` frontier tells us which versions have yet to be learned.
 At times between `since` and `upper`, a pTVC should be identical to its
 corresponding TVC.
 
-We think of `since` as the "read frontier": times not later than `since` cannot
-be correctly read. We think of `upper` as the "write frontier": times later
-than or equal to `upper` may still be written to the TVC.
+![A diagram showing a pTVC as a small region of a larger
+TVC](assets/tvc-ptvc.jpeg)
+
+We think of `since` as the "read frontier": times not later than or equal to
+`since` cannot be correctly read. We think of `upper` as the "write frontier":
+times later than or equal to `upper` may still be written to the TVC.
 
 A *read* of a pTVC `ptvc` at time `t` is the collection version in `ptvc` which
 corresponds to `t`. We write this as `read(ptvc, t) => collection-version`.
@@ -240,8 +244,19 @@ read(updates, t) =
 
 Similarly, given a time-function representation `tvc`, we can obtain an
 update-set representation by considering each point in time and finding the
-difference between the version at that time and the product of all updates from
-all prior times:
+difference between the version at that time and the sum of all updates from
+all prior times. If we take Materialize times as the natural numbers, this is
+simple: the update set for a given time `t` is simply the difference between
+the version at `t-1` and the version at `t`.
+
+```
+updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
+```
+
+In general times may be partially ordered, which means there might be
+*multiple* prior times; there is no single diff. Instead, we must sum the
+updates from all prior times, and diff that sum with the collection version at
+`t`:
 
 ```
 updates(tvc, t) = diff(t,
@@ -257,22 +272,18 @@ prior-updates(tvc, t) = ⋃ updates(tvc, prior-t) for all prior-t <t t
 ```
 
 These mutually-recursive relations bottom out in the initial time `t0`, and the
-corresponding initial collection version `cv0`. Using these definitions, we
-can inductively transform an entire time-function representation `tvc` into a
-set of updates for all times by taking the union over all times:
+corresponding initial collection version `read(tvc, t0)`:
+
+```
+prior-updates(tvc, t0) = diff(t0, cv0, read(tvc, t0))
+```
+
+Using these definitions, we can inductively transform an entire time-function
+representation `tvc` into a set of updates for all times by taking the union
+over all times:
 
 ```
 updates(tvc) = ⋃ updates(tvc, t) for all t in T
-```
-
-This may seem a bit abstract---the formalism is shaped this way because
-collection versions are only partially ordered. If we take our times `T` to be
-the (totally ordered) naturals, we obtain a much simpler definition: the update
-set for a given time `t` is simply the difference between the version at `t-1`
-and the version at `t`.
-
-```
-updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
 ```
 
 ### Update representation of pTVCs
@@ -280,8 +291,16 @@ updates(tvc, t) = diff(t, read(tvc, t - 1), read(tvc, t))
 We have argued that the time-function and update-set representations of a TVC
 are equivalent. Similarly, we can also represent a pTVC as a set of updates
 together with `since` and `upper` frontiers: `ptvc = [updates, since, upper]`.
-We use the same definition for reads as we gave for TVCs above. We wish to
-ensure that every such pTVC maintains the correctness invariant: `read(ptvc, t)
+To convert between time-function and update-set representations of pTVCs, we
+use the same definitions we gave for TVCs above. This gives the following
+four structure:
+
+![Four nodes in a graph: update-set and time-function representations of both pTVCs and TVCs](assets/tvc-ptvc-quad.jpeg)
+
+Materialize's goal is to physically store only the update-set representation of
+a pTVC, and for that pTVC to be an accurate view into the time-function and
+update-set representations of the corresponding TVC. To do this, we need to
+ensure each update-set pTVC maintains the correctness invariant: `read(ptvc, t)
 = read(tvc, t)` so long as `t` is at least `since` and not later than `upper`.
 
 First, consider the empty pTVC `ptvc0 = [{}, {t0}, {t0}]`. `ptvc0` is trivially
@@ -364,9 +383,10 @@ backwards---and typically, they advance.
 ## The TVC Map
 
 To track these changing pTVCs over time, Materialize maintains a mutable *TVC
-map*. The keys in this map are `GlobalId`s, and the values are pTVCs. Each TVC
-has at most one `GlobalID` over the entire history of a Materialize cluster. In
-short, the TVC map allows one to ask "What is the current pTVC view of the TVC
+map*. The keys in this map are `GlobalId`s, and the values are pTVCs. Each
+`GlobalId` in the TVC map identifies a single logical TVC, and the pTVC that ID
+refers to at any point in wall-clock time corresponds to that TVC. In short,
+the TVC map allows one to ask "What is the current pTVC view of the TVC
 identified by `GlobalId` `gid`?
 
 The life cycle of each `GlobalId` follows several steps:
