@@ -11,6 +11,7 @@
 application_name            ""                                         "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding             UTF8                                       "Sets the client's character set encoding (PostgreSQL)."
 client_min_messages         notice                                     "Sets the message levels that are sent to the client (PostgreSQL)."
+cluster                     default                                    "Sets the current cluster (Materialize)."
 database                    materialize                                "Sets the current database (CockroachDB)."
 extra_float_digits          3                                          "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                  ""                                         "Allows failpoints to be dynamically activated."

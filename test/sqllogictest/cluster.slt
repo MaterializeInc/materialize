@@ -42,3 +42,13 @@ DROP CLUSTER default
 
 statement error unknown cluster 'foo'
 DROP CLUSTER foo
+
+# Test `cluster` session variable.
+
+query T
+SHOW cluster
+----
+default
+
+statement error parameter "cluster" cannot be changed
+SET cluster = 'foo'
