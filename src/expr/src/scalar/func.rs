@@ -2071,16 +2071,17 @@ where
     }
 }
 
-fn date_trunc_interval<'a>(a: Datum, mut int: Interval) -> Result<Datum<'a>, EvalError> {
+fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let mut interval = b.unwrap_interval();
     let units = a.unwrap_str();
     let dtf = units
         .parse()
         .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
 
-    // truncate_low_fields should never return an error in our case
-    int.truncate_low_fields(dtf, Some(0))
-        .map_err(|e| EvalError::Internal(e.to_string()))?;
-    Ok(int.into())
+    interval
+        .truncate_low_fields(dtf, Some(0))
+        .expect("truncate_low_fields should not fail with max_precision 0");
+    Ok(interval.into())
 }
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
@@ -2535,7 +2536,7 @@ impl BinaryFunc {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
             }
             BinaryFunc::DateTruncInterval => {
-                eager!(|a, b: Datum| date_trunc_interval(a, b.unwrap_interval()))
+                eager!(date_trunc_interval)
             }
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
