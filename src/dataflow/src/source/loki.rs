@@ -113,15 +113,14 @@ impl SimpleSource for LokiSourceReader {
                         })
                         .collect();
 
-                    let rows: Vec<_> = lines
-                        .iter()
-                        .map(|l| Datum::String(&line))
-                        .collect();
-                    let row = Row::pack_slice(&rows);
-                    timestamper.insert(row).await.map_err(|e| SourceError {
-                        source_id: self.source_id.clone(),
-                        error: SourceErrorDetails::FileIO(e.to_string()),
-                    })?;
+                    for line in lines {
+                        let row = Row::pack_slice(&[Datum::String(&line)]);
+
+                        timestamper.insert(row).await.map_err(|e| SourceError {
+                            source_id: self.source_id.clone(),
+                            error: SourceErrorDetails::FileIO(e.to_string()),
+                        })?;
+                    }
                 }
                 Err(e) => warn!("Loki error: {:?}", e),
             }
