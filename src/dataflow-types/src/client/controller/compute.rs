@@ -39,12 +39,14 @@ use mz_repr::Row;
 use super::ReadPolicy;
 
 /// Controller state maintained for each compute instance.
+#[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
 /// An immutable controller for a compute instance.
+#[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
     pub(super) _instance: ComputeInstanceId, // likely to be needed soon
     pub(super) compute: &'a ComputeControllerState<T>,
@@ -52,6 +54,7 @@ pub struct ComputeController<'a, T> {
 }
 
 /// A mutable controller for a compute instance.
+#[derive(Debug)]
 pub struct ComputeControllerMut<'a, C, T> {
     pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a mut ComputeControllerState<T>,
@@ -519,6 +522,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
 }
 
 /// State maintained about individual collections.
+#[derive(Debug)]
 pub struct CollectionState<T> {
     /// Accumulation of read capabilities for the collection.
     ///
