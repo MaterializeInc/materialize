@@ -415,8 +415,8 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=tr
 # See: https://github.com/MaterializeInc/materialize/issues/10927
 # Verify compaction of exactly once sinks.
 # $ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=input_kafka_dbz max-size=3 permit-progress=true
+$ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
+$ verify-timestamp-compaction source=input_kafka_dbz max-size=3 permit-progress=true
 
 # TODO: enable when possible
 # $ verify-timestamp-compaction source=input_kafka_cdcv2 max-size=3 permit-progress=true
