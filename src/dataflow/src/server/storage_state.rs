@@ -43,7 +43,7 @@ const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
     /// State about each table, keyed by table ID.
-    pub table_state: HashMap<GlobalId, TableState>,
+    pub table_state: HashMap<GlobalId, TableState<mz_repr::Timestamp>>,
     /// Source descriptions that have been created and not yet dropped.
     ///
     /// For the moment we retain all source descriptions, even those that have been
@@ -87,13 +87,13 @@ pub struct StorageState {
 }
 
 /// State about a single table.
-pub struct TableState {
+pub struct TableState<T> {
     /// The since frontier for the table.
-    pub since: Antichain<Timestamp>,
+    pub since: Antichain<T>,
     /// The upper frontier for the table.
-    pub upper: u64,
+    pub upper: T,
     /// The data in the table.
-    pub data: Vec<(Row, Timestamp, Diff)>,
+    pub data: Vec<(Row, T, Diff)>,
     /// The size of `data` after the last consolidation.
     pub last_consolidated_size: usize,
     /// Handles to the live local inputs for the table.
