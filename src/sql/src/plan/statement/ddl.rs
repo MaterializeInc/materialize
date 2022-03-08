@@ -2372,7 +2372,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
         ObjectType::Role => plan_drop_role(scx, if_exists, names),
-        ObjectType::Secret => unreachable!("DROP SECRET"),
+        ObjectType::Secret => bail_unsupported!("DROP SECRET"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
