@@ -34,6 +34,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
+    client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID},
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
@@ -478,6 +479,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -503,6 +505,7 @@ pub struct Index {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub enabled: bool,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -904,6 +907,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&index_id),
+                            compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -2155,6 +2159,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2167,6 +2172,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

@@ -525,7 +525,7 @@ impl Coordinator {
                 }
                 CatalogItem::Index(idx) => {
                     // The index is expected to live on some compute instance.
-                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                    let compute_instance = idx.compute_instance;
                     if BUILTINS.logs().any(|log| log.id == idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
@@ -561,13 +561,12 @@ impl Coordinator {
                     let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
                         .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    // The sink should be established on a specific compute instance.
-                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
                     self.handle_sink_connector_ready(
                         entry.id(),
                         entry.oid(),
                         connector,
-                        compute_instance,
+                        // The sink should be established on a specific compute instance.
+                        sink.compute_instance,
                     )
                     .await?;
                 }
@@ -2191,6 +2190,7 @@ impl Coordinator {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance,
             }),
         };
 
@@ -2425,6 +2425,7 @@ impl Coordinator {
             conn_id: None,
             depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
+            compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -4513,6 +4514,7 @@ fn auto_generate_primary_idx(
         conn_id,
         depends_on,
         enabled,
+        compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
     }
 }
 
