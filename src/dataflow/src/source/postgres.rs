@@ -28,6 +28,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
+use crate::source::postgres::metrics::PgOp;
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
@@ -141,9 +142,9 @@ impl PostgresSourceReader {
                     .iter()
                     .map(|t| (t.relation_id, t.clone())),
             ),
-            connector,
+            connector: connector.clone(),
             lsn: 0.into(),
-            metrics: PgSourceMetrics::new(metrics, source_id),
+            metrics: PgSourceMetrics::new(metrics, source_id, &connector.details),
         }
     }
 
@@ -274,9 +275,9 @@ impl PostgresSourceReader {
                 try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
             }
 
-            self.metrics.tables.inc();
+            self.metrics.tables();
         }
-        self.metrics.lsn.set(self.lsn.into());
+        self.metrics.lsn(self.lsn.into());
         client.simple_query("COMMIT;").await?;
         Ok(())
     }
@@ -387,7 +388,6 @@ impl PostgresSourceReader {
             }
             match item {
                 XLogData(xlog_data) => {
-                    self.metrics.total.inc();
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -399,21 +399,23 @@ impl PostgresSourceReader {
                             }
                         }
                         Insert(insert) => {
-                            self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
                             if !self.source_tables.contains_key(&rel_id) {
+                                self.metrics.ignored();
                                 continue;
                             }
+                            self.metrics.op(rel_id, PgOp::INSERT);
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
                         }
                         Update(update) => {
-                            self.metrics.updates.inc();
                             let rel_id = update.rel_id();
                             if !self.source_tables.contains_key(&rel_id) {
+                                self.metrics.ignored();
                                 continue;
                             }
+                            self.metrics.op(rel_id, PgOp::UPDATE);
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
@@ -437,9 +439,9 @@ impl PostgresSourceReader {
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
-                            self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
                             if !self.source_tables.contains_key(&rel_id) {
+                                self.metrics.ignored();
                                 continue;
                             }
                             let old_tuple = try_fatal!(delete
@@ -451,7 +453,7 @@ impl PostgresSourceReader {
                             deletes.push(row);
                         }
                         Commit(commit) => {
-                            self.metrics.transactions.inc();
+                            self.metrics.transactions();
                             self.lsn = commit.end_lsn().into();
 
                             let tx = timestamper.start_tx().await;
@@ -462,7 +464,7 @@ impl PostgresSourceReader {
                             for row in inserts.drain(..) {
                                 try_fatal!(tx.insert(row).await);
                             }
-                            self.metrics.lsn.set(self.lsn.into());
+                            self.metrics.lsn(self.lsn.into());
                         }
                         Relation(relation) => {
                             let rel_id = relation.rel_id();
@@ -515,11 +517,14 @@ impl PostgresSourceReader {
                                     }
                                 }
                                 // Ignore messages for tables we do not know about
-                                None => continue,
+                                None => {
+                                    self.metrics.ignored();
+                                    continue
+                                },
                             }
                         }
                         Origin(_) | Type(_) => {
-                            self.metrics.ignored.inc();
+                            self.metrics.ignored();
                         }
                         Truncate(truncate) => {
                             let tables = truncate

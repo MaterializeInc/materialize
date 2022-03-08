@@ -142,12 +142,9 @@ impl PartitionSpecificMetrics {
 
 #[derive(Clone, Debug)]
 pub(super) struct PostgresSourceSpecificMetrics {
-    pub(super) total_messages: UIntCounterVec,
     pub(super) transactions: UIntCounterVec,
     pub(super) ignored_messages: UIntCounterVec,
-    pub(super) insert_messages: UIntCounterVec,
-    pub(super) update_messages: UIntCounterVec,
-    pub(super) delete_messages: UIntCounterVec,
+    pub(super) dml_messages: UIntCounterVec,
     pub(super) tables_in_publication: UIntGaugeVec,
     pub(super) wal_lsn: UIntGaugeVec,
 }
@@ -155,11 +152,6 @@ pub(super) struct PostgresSourceSpecificMetrics {
 impl PostgresSourceSpecificMetrics {
     fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            total_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_messages_total",
-                help: "The total number of replication messages for this source, not expected to be the sum of the other values.",
-                var_labels: ["source_id"],
-            )),
             transactions: registry.register(metric!(
                 name: "mz_postgres_per_source_transactions_total",
                 help: "The number of committed transactions for all tables in this source",
@@ -170,20 +162,10 @@ impl PostgresSourceSpecificMetrics {
                 help: "The number of messages ignored because of an irrelevant type or relation_id",
                 var_labels: ["source_id"],
             )),
-            insert_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_inserts",
-                help: "The number of inserts for all tables in this source",
-                var_labels: ["source_id"],
-            )),
-            update_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_updates",
-                help: "The number of updates for all tables in this source",
-                var_labels: ["source_id"],
-            )),
-            delete_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_deletes",
-                help: "The number of deletes for all tables in this source",
-                var_labels: ["source_id"],
+            dml_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_operations",
+                help: "The number of DML operations (INSERT/UPDATE/DELETE) for all tables in this source",
+                var_labels: ["source_id", "namespace", "table", "operation"],
             )),
             tables_in_publication: registry.register(metric!(
                 name: "mz_postgres_per_source_tables_count",
