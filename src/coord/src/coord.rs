@@ -524,23 +524,21 @@ impl Coordinator {
                     .await;
                 }
                 CatalogItem::Index(idx) => {
-                    // The index is expected to live on some compute instance.
-                    let compute_instance = idx.compute_instance;
                     if BUILTINS.logs().any(|log| log.id == idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
-                            compute_instance,
+                            idx.compute_instance,
                             // TODO(benesch): why is this hardcoded to 1000?
                             Some(1000),
                         )
                         .await;
                     } else {
                         let df = self
-                            .dataflow_builder(compute_instance)
+                            .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
                         if let Some(df) = df {
-                            self.ship_dataflow(df, compute_instance).await;
+                            self.ship_dataflow(df, idx.compute_instance).await;
                         }
                     }
                 }
@@ -2418,6 +2416,8 @@ impl Coordinator {
         } = plan;
 
         let id = self.catalog.allocate_user_id()?;
+        // An index must be created on a specific compute instance.
+        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
@@ -2425,7 +2425,7 @@ impl Coordinator {
             conn_id: None,
             depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
-            compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+            compute_instance,
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -2434,8 +2434,6 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
-        // An index must be created on a specific compute instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
         match self
             .catalog_transact_dataflow(compute_instance, vec![op], |mut builder| {
                 let df = builder.build_index_dataflow(id)?;
@@ -3091,7 +3089,7 @@ impl Coordinator {
         };
 
         let (sink_id, sink_desc) = &dataflow.sink_exports[0];
-        session.add_drop_sink(*sink_id);
+        session.add_drop_sink(compute_instance, *sink_id);
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
@@ -3862,7 +3860,12 @@ impl Coordinator {
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
             // An index lives on a specific compute instance.
-            let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+            let compute_instance = self
+                .catalog
+                .get_by_id(&plan.id)
+                .index()
+                .expect("planned on index")
+                .compute_instance;
             let df = self
                 .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
                     let df = builder
@@ -3940,12 +3943,15 @@ impl Coordinator {
                     }
                     CatalogItem::Sink(catalog::Sink {
                         connector: SinkConnectorState::Ready(_),
+                        compute_instance,
                         ..
                     }) => {
-                        sinks_to_drop.push(*id);
+                        sinks_to_drop.push((*compute_instance, *id));
                     }
-                    CatalogItem::Index(_) => {
-                        indexes_to_drop.push(*id);
+                    CatalogItem::Index(catalog::Index {
+                        compute_instance, ..
+                    }) => {
+                        indexes_to_drop.push((*compute_instance, *id));
                     }
                     _ => (),
                 }
@@ -3994,12 +4000,7 @@ impl Coordinator {
                     .unwrap();
             }
             if !sinks_to_drop.is_empty() {
-                self.dataflow_client
-                    .compute_mut(compute_instance)
-                    .unwrap()
-                    .drop_sinks(sinks_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sinks(sinks_to_drop).await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -4086,31 +4087,41 @@ impl Coordinator {
             .await
     }
 
-    async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        if !dataflow_names.is_empty() {
+    async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
+        let mut by_compute_instance = HashMap::new();
+        for (compute_instance, id) in sinks {
+            by_compute_instance
+                .entry(compute_instance)
+                .or_insert(vec![])
+                .push(id);
+        }
+        for (compute_instance, ids) in by_compute_instance {
             self.dataflow_client
-                .compute_mut(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute_mut(compute_instance)
                 .unwrap()
-                .drop_sinks(dataflow_names)
+                .drop_sinks(ids)
                 .await
                 .unwrap();
         }
     }
 
-    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
-        let mut trace_keys = Vec::new();
-        for id in indexes {
+    async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
+        let mut by_compute_instance = HashMap::new();
+        for (compute_instance, id) in indexes {
             if self.read_capability.remove(&id).is_some() {
-                trace_keys.push(id)
+                by_compute_instance
+                    .entry(compute_instance)
+                    .or_insert(vec![])
+                    .push(id);
             } else {
                 tracing::error!("Instructed to drop a non-index index");
             }
         }
-        if !trace_keys.is_empty() {
+        for (compute_instance, ids) in by_compute_instance {
             self.dataflow_client
-                .compute_mut(DEFAULT_COMPUTE_INSTANCE_ID)
+                .compute_mut(compute_instance)
                 .unwrap()
-                .drop_indexes(trace_keys)
+                .drop_sinks(ids)
                 .await
                 .unwrap();
         }
@@ -4138,7 +4149,12 @@ impl Coordinator {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
                     // The index is on a specific compute instance.
-                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                    let compute_instance = self
+                        .catalog
+                        .get_by_id(&id)
+                        .index()
+                        .expect("setting options on index")
+                        .compute_instance;
                     let window = window.map(duration_to_timestamp_millis);
                     let policy = match window {
                         Some(time) => ReadPolicy::lag_writes_by(time),
@@ -4826,6 +4842,9 @@ pub mod fast_path_peek {
                 ),
                 Plan::PeekDataflow(PeekDataflowPlan {
                     desc: dataflow,
+                    // n.b. this index_id identifies a transient index the
+                    // caller created, so it is guaranteed to be on
+                    // `compute_instance`.
                     id: index_id,
                     key: index_key,
                     permutation: index_permutation,
@@ -4944,7 +4963,7 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
-                self.drop_indexes(vec![index_id]).await;
+                self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
             Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))

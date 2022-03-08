@@ -720,6 +720,13 @@ impl CatalogEntry {
         }
     }
 
+    pub fn sink(&self) -> Option<&Sink> {
+        match self.item() {
+            CatalogItem::Sink(sink) => Some(sink),
+            _ => None,
+        }
+    }
+
     /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
