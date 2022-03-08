@@ -1094,7 +1094,7 @@ fn flatten_results_prepend_keys<G>(
     results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
 {
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),

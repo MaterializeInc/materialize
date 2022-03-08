@@ -341,7 +341,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
     /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    pub async fn allow_compaction(
+    async fn allow_compaction(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), ComputeError> {
