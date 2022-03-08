@@ -2489,7 +2489,7 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW, SECRET,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2512,11 +2512,12 @@ impl<'a> Parser<'a> {
             Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
+            Some(SECRET) => ObjectType::Secret,
             _ => {
                 return self.expected(
                     self.peek_pos(),
                     "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, \
-                     TABLE, TYPE, USER, VIEW after DROP",
+                     TABLE, TYPE, USER, VIEW, SECRET after DROP",
                     self.peek_token(),
                 );
             }
