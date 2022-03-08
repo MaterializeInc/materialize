@@ -1426,8 +1426,10 @@ pub mod sources {
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct LokiSourceConnector {
-        pub address: String,
+        pub address: Option<String>,
         pub query: String,
+        pub user: Option<String>,
+        pub password: Option<String>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

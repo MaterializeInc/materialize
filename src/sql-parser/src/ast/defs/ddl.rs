@@ -496,9 +496,13 @@ pub enum CreateSourceConnector {
     },
     Loki {
         /// The address of the Loki HTTP endpoint.
-        address: String,
+        address: Option<String>,
         /// The LogQL query to issue to Loki.
         query: String,
+        // The user name used to authenticate with Loki.
+        user: Option<String>,
+        // The password used to authenticate with Loki.
+        password: Option<String>,
     },
 }
 
@@ -576,11 +580,28 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
-            CreateSourceConnector::Loki { address, query } => {
-                f.write_str("LOKI ADDRESS '");
-                f.write_str(&display::escape_single_quote_string(address));
-                f.write_str("' QUERY '");
+            CreateSourceConnector::Loki {
+                address,
+                query,
+                user,
+                password,
+            } => {
+                f.write_str("LOKI QUERY '");
                 f.write_str(&display::escape_single_quote_string(query));
+
+                if let Some(address) = address {
+                    f.write_str("' ADDRESS '");
+                    f.write_str(&display::escape_single_quote_string(address));
+                }
+                if let Some(user) = user {
+                    f.write_str("' USER '");
+                    f.write_str(&display::escape_single_quote_string(user));
+                }
+                if let Some(password) = password {
+                    f.write_str("' PASSWORD '");
+                    f.write_str(&display::escape_single_quote_string(&password));
+                }
+
                 f.write_str("'");
             }
         }

@@ -2124,11 +2124,33 @@ impl<'a> Parser<'a> {
                 })
             }
             LOKI => {
-                self.expect_keyword(ADDRESS)?;
-                let address = self.parse_literal_string()?;
+                let address = if self.parse_keyword(ADDRESS) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+
                 self.expect_keyword(QUERY)?;
                 let query = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::Loki { address, query })
+
+                let user = if self.parse_keyword(USER) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+
+                let password = if self.parse_keyword(PASSWORD) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+
+                Ok(CreateSourceConnector::Loki {
+                    address,
+                    query,
+                    user,
+                    password,
+                })
             }
             _ => unreachable!(),
         }

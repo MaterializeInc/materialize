@@ -199,6 +199,7 @@ Ordinality
 Outer
 Over
 Partition
+Password
 Physical
 Plan
 Plans

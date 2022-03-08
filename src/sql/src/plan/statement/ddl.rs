@@ -535,7 +535,12 @@ pub fn plan_create_source(
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
-        CreateSourceConnector::Loki { address, query } => {
+        CreateSourceConnector::Loki {
+            address,
+            query,
+            user,
+            password,
+        } => {
             match format {
                 CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
                 _ => bail!("CREATE SOURCE ... LOKI must specify FORMAT TEXT"),
@@ -543,6 +548,8 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::Loki(LokiSourceConnector {
                 address: address.clone(),
                 query: query.clone(),
+                user: user.clone(),
+                password: password.clone(),
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }

@@ -44,9 +44,9 @@ use crate::server::LocalInput;
 use crate::server::StorageState;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
-    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader, LokiSourceReader,
-    PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
-    SourceConfig,
+    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    LokiConnectionInfo, LokiSourceReader, PersistentTimestampBindingsConfig, PostgresSourceReader,
+    PubNubSourceReader, S3SourceReader, SourceConfig,
 };
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -263,14 +263,13 @@ where
 
                 (ok_stream.as_collection(), capability)
             } else if let ExternalSourceConnector::Loki(loki_connector) = connector {
-                // TODO(bsull) pass the query here.
-                let source = LokiSourceReader::new(
-                    uid,
-                    "".to_string(),
-                    "".to_string(),
-                    loki_connector.address,
-                    loki_connector.query,
-                );
+                // Load connection information from env and override with explicitly passed info.
+                let connection_info = LokiConnectionInfo::from_env()
+                    .with_user(loki_connector.user)
+                    .with_password(loki_connector.password)
+                    .with_endpont(loki_connector.address);
+
+                let source = LokiSourceReader::new(uid, connection_info, loki_connector.query);
                 let ((ok_stream, err_stream), capability) =
                     source::create_source_simple(source_config, source);
                 error_collections.push(

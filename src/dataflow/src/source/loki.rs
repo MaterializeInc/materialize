@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -7,7 +8,6 @@ use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
 
@@ -19,30 +19,83 @@ use crate::source::{SimpleSource, SourceError, Timestamper};
 
 pub struct LokiSourceReader {
     source_id: SourceInstanceId,
-    conn_info: ConnectionInfo,
+    conn_info: LokiConnectionInfo,
     batch_window: Duration,
     query: String,
     client: reqwest::Client,
 }
 
 #[derive(Clone)]
-struct ConnectionInfo {
+pub struct LokiConnectionInfo {
     user: String,
     pw: String,
     endpoint: String,
 }
 
+impl LokiConnectionInfo {
+    /// Loads connection information form the environment. Checks for `LOKI_ADDR`, `LOKI_USERNAME` and `LOKI_PASSWORD`.
+    pub fn from_env() -> LokiConnectionInfo {
+        let mut c = LokiConnectionInfo {
+            user: "".to_string(),
+            pw: "".to_string(),
+            endpoint: "".to_string(),
+        };
+
+        if let Ok(user) = env::var("LOKI_USERNAME") {
+            c.user = user;
+        }
+
+        if let Ok(password) = env::var("LOKI_PASSWORD") {
+            c.pw = password;
+        }
+
+        if let Ok(address) = env::var("LOKI_ADDR") {
+            c.endpoint = address;
+        }
+
+        return c;
+    }
+
+    pub fn with_user(self, user: Option<String>) -> LokiConnectionInfo {
+        if let Some(user) = user {
+            let mut c = self.clone();
+            c.user = user;
+            return c;
+        } else {
+            return self;
+        }
+    }
+
+    pub fn with_password(self, password: Option<String>) -> LokiConnectionInfo {
+        if let Some(password) = password {
+            let mut c = self.clone();
+            c.pw = password;
+            return c;
+        } else {
+            return self;
+        }
+    }
+
+    pub fn with_endpont(self, address: Option<String>) -> LokiConnectionInfo {
+        if let Some(address) = address {
+            let mut c = self.clone();
+            c.endpoint = address;
+            return c;
+        } else {
+            return self;
+        }
+    }
+}
+
 impl LokiSourceReader {
     pub fn new(
         source_id: SourceInstanceId,
-        user: String,
-        pw: String,
-        endpoint: String,
+        conn_info: LokiConnectionInfo,
         query: String,
     ) -> LokiSourceReader {
         Self {
-            source_id: source_id,
-            conn_info: ConnectionInfo { user, pw, endpoint },
+            source_id,
+            conn_info,
             batch_window: Duration::from_secs(60),
             query: query,
             client: reqwest::Client::new(),
@@ -51,7 +104,7 @@ impl LokiSourceReader {
 
     async fn query(
         &self,
-        conn_info: ConnectionInfo,
+        conn_info: LokiConnectionInfo,
         start: u128,
         end: u128,
         query: String,
@@ -183,9 +236,11 @@ mod test {
 
         let loki = LokiSourceReader::new(
             uid,
-            user.to_string(),
-            pw.to_string(),
-            endpoint.to_string(),
+            LokiConnectionInfo {
+                user: user.to_string(),
+                pw: pw.to_string(),
+                endpoint: endpoint.to_string(),
+            },
             "{job=\"systemd-journal\"}".to_owned(),
         );
 
