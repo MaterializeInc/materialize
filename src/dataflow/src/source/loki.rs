@@ -179,8 +179,7 @@ mod test {
             "{job=\"systemd-journal\"}".to_owned(),
         );
 
-        let fut =
-            LokiSourceReader::new_stream(loki.query, loki.batch_window, loki.conn_info).take(5);
+        let fut = loki.new_stream().take(5);
         fut.for_each(|data| async move {
             println!("{:?}", data);
         })
