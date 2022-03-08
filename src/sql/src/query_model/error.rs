@@ -43,6 +43,26 @@ pub enum QGMError {
 
 impl Error for QGMError {}
 
+impl fmt::Display for QGMError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            QGMError::UnsupportedHirRelationExpr(e) => write!(f, "{}", e),
+            QGMError::UnsupportedHirScalarExpr(e) => write!(f, "{}", e),
+            QGMError::UnsupportedBoxType(e) => write!(f, "{}", e),
+            QGMError::UnsupportedBoxScalarExpr(e) => write!(f, "{}", e),
+            QGMError::UnsupportedQuantifierType(e) => write!(f, "{}", e),
+            QGMError::UnsupportedDecorrelation(e) => write!(f, "{}", e),
+            QGMError::Internal(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl From<QGMError> for String {
+    fn from(error: QGMError) -> Self {
+        format!("{}", error)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnsupportedHirRelationExpr {
     pub(crate) expr: HirRelationExpr,
@@ -189,17 +209,5 @@ impl From<Internal> for QGMError {
 impl fmt::Display for Internal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.msg)
-    }
-}
-
-impl fmt::Display for QGMError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-impl From<QGMError> for String {
-    fn from(error: QGMError) -> Self {
-        format!("{}", error)
     }
 }

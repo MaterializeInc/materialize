@@ -12,3 +12,4 @@
 pub mod core;
 pub mod propagated_nulls;
 pub mod rejected_nulls;
+pub mod relation_type;

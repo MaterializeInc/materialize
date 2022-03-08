@@ -1,0 +1,2021 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Currently, the tests check only that the nullability flag of the
+# inferred type is correct, assuming that the type is always inferred
+# correctly. Since the type inference logic for QGM graphs mostly
+# delegates to the function symbols, which are tested elsewhere, code
+# coverage does not suffer from that restriction (see the `expr_type`
+# function in `attributes/relation_type.rs`).
+
+mode cockroach
+
+statement ok
+CREATE TABLE int_table (col_null INTEGER, col_not_null INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE bool_table (col_null BOOLEAN, col_not_null BOOLEAN NOT NULL);
+
+statement ok
+CREATE TABLE str_table (col_null STRING, col_not_null STRING NOT NULL);
+
+statement ok
+CREATE TABLE ts_table (col_null TIMESTAMP, col_not_null TIMESTAMP NOT NULL);
+
+
+#
+# Constants are NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT 1;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: 1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+# NULL literal is NULL-able
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT NULL;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: null (text?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# VALUES
+#
+
+query error
+EXPLAIN TYPED QUERY GRAPH FOR SELECT * FROM (VALUES(1), (2));
+
+query error
+EXPLAIN TYPED QUERY GRAPH FOR SELECT * FROM (VALUES(1), (NULL));
+
+#
+# CAST propagates NOT NULL property
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (bigint?)| 1: Q1.C3 (bigint) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: i32toi64(Q0.C0) (bigint?)| 3: i32toi64(Q0.C1) (bigint) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# IS NULL and friends
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: isnull(Q0.C0) (boolean)| 3: !(isnull(Q0.C0)) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: istrue(Q0.C0) (boolean)| 3: !(istrue(Q0.C0)) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (boolean?)| 1: C1 (boolean) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: isnull(Q0.C0) (boolean)| 3: !(isnull(Q0.C0)) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (boolean?)| 1: C1 (boolean) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# Try some other operators
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q0.C1 + Q0.C1) (integer)| 3: (Q0.C1 + 1) (integer)| 4: (Q0.C1 % Q0.C1) (integer)| 5: (Q0.C1 % 2) (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+
+#
+# GREATEST / LEAST / COALESCE are NOT NULL if at leat one of their arguments is NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: greatest(Q0.C1) (integer)| 3: greatest(Q0.C1, Q0.C1) (integer)| 4: greatest(Q0.C1, Q0.C0) (integer)| 5: greatest(Q0.C0, Q0.C0) (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: least(Q0.C1) (integer)| 3: least(Q0.C1, Q0.C1) (integer)| 4: least(Q0.C1, Q0.C0) (integer)| 5: least(Q0.C0, Q0.C0) (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: coalesce(Q0.C1) (integer)| 3: coalesce(Q0.C1, Q0.C1) (integer)| 4: coalesce(Q0.C1, Q0.C0) (integer)| 5: coalesce(Q0.C0, Q0.C0) (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# NULLIF should be NOT NULL if first argument is NOT NULL, second argument is NULL, NULL-able otherwise
+#
+
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer?)| 1: Q1.C3 (integer?)| 2: Q1.C4 (integer?)| 3: Q1.C5 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: if (Q0.C1 = strtoi32(\"a\")) then \{null\} else \{Q0.C1\} (integer?)| 3: if (Q0.C1 = null) then \{null\} else \{Q0.C1\} (integer?)| 4: if (Q0.C0 = null) then \{null\} else \{Q0.C0\} (integer?)| 5: if (Q0.C0 = Q0.C1) then \{null\} else \{Q0.C0\} (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# Equality, logical operators
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null = 1 FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q0.C1 = 1) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: (Q0.C1 && Q0.C1) (boolean)| 3: (Q0.C1 \|\| Q0.C1) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (boolean?)| 1: C1 (boolean) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean?)| 1: Q1.C3 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: (Q0.C0 && Q0.C1) (boolean?)| 3: (Q0.C0 \|\| Q0.C1) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (boolean?)| 1: C1 (boolean) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean?)| 1: Q1.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: !(Q0.C0) (boolean?)| 3: !(Q0.C1) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (boolean?)| 1: C1 (boolean) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# Meth, that is, math
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (double precision)| 2: Q1.C4 (double precision)| 3: Q1.C5 (double precision)| 4: Q1.C6 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: abs(Q0.C1) (integer)| 3: log10f64(i32tof64(Q0.C1)) (double precision)| 4: roundf64(i32tof64(Q0.C1)) (double precision)| 5: cos(i32tof64(Q0.C1)) (double precision)| 6: (Q0.C1 \<\< Q0.C1) (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# MIN/MAX/AVG/.. can be NULL even on a NOT NULL column
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0 (integer?)| 1: Q3.C1 (integer?)| 2: Q3.C8 (double precision?)| 3: Q3.C9 (numeric?)| 4: Q3.C7 (integer list?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0 (integer?)| 1: Q2.C1 (integer?)| 2: Q2.C2 (bigint?)| 3: Q2.C3 (bigint)| 4: Q2.C4 (numeric?)| 5: Q2.C5 (numeric?)| 6: Q2.C6 (bigint)| 7: Q2.C7 (integer list?)| 8: (i64tof64(Q2.C2) / i64tof64(if (Q2.C3 = i32toi64(0)) then \{null\} else \{Q2.C3\})) (double precision?)| 9: sqrtnumeric(((Q2.C4 - ((Q2.C5 * Q2.C5) / i64tonumeric(if (Q2.C6 = i32toi64(0)) then \{null\} else \{Q2.C6\}))) / i64tonumeric(if ((Q2.C6 - i32toi64(1)) = i32toi64(0)) then \{null\} else \{(Q2.C6 - i32toi64(1))\}))) (numeric?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Grouping"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: min(Q1.C0) (integer?)| 1: max(Q1.C0) (integer?)| 2: sum(Q1.C0) (bigint?)| 3: count(Q1.C0) (bigint)| 4: sum(Q1.C1) (numeric?)| 5: sum(Q1.C2) (numeric?)| 6: count(Q1.C2) (bigint)| 7: list_agg(Q1.C3) (integer list?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C1 (integer)| 1: (i32tonumeric(Q0.C1) * i32tonumeric(Q0.C1)) (numeric)| 2: i32tonumeric(Q0.C1) (numeric)| 3: record_create(list_create(Q0.C1)) (record(: integer list)) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# COUNT preserves NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0 (bigint)| 1: Q2.C1 (bigint) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Grouping"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: count(Q1.C0) (bigint)| 1: count(distinct Q1.C0) (bigint) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# LIKE
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean?)| 1: Q1.C3 (boolean?)| 2: Q1.C4 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (text?)| 1: Q0.C1 (text)| 2: (Q0.C1 like Q0.C1) (boolean?)| 3: (Q0.C0 like Q0.C1) (boolean?)| 4: (Q0.C1 like Q0.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (text?)| 1: C1 (text) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# REGEXP returns NULL on no match, so can not be NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (text[]?)| 1: Q1.C3 (text[]?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (text?)| 1: Q0.C1 (text)| 2: regexp_match(Q0.C1, \"aaa\") (text[]?)| 3: regexp_match(\"aaa\", Q0.C1) (text[]?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (text?)| 1: C1 (text) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# SPLIT_PART on the other hand returns an empty string, so can be NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (text)| 1: Q1.C3 (text)| 2: Q1.C4 (text) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (text?)| 1: Q0.C1 (text)| 2: split_string(Q0.C1, \"a\", i32toi64(100)) (text)| 3: split_string(\"a\", Q0.C1, i32toi64(100)) (text)| 4: split_string(\"a\", \"a\", i32toi64(strtoi32(Q0.C1))) (text) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (text?)| 1: C1 (text) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# IN , NOT IN
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean)| 2: Q1.C4 (boolean?)| 3: Q1.C5 (boolean?)| 4: Q1.C6 (boolean?)| 5: Q1.C7 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (false \|\| (Q0.C1 = 1)) (boolean)| 3: (false \|\| (1 = Q0.C1)) (boolean)| 4: ((false \|\| (1 = 1)) \|\| (1 = Q0.C0)) (boolean?)| 5: (false \|\| (1 = null)) (boolean?)| 6: (false \|\| (null = 1)) (boolean?)| 7: (false \|\| (null = Q0.C1)) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (boolean)| 1: Q1.C3 (boolean)| 2: Q1.C4 (boolean?)| 3: Q1.C5 (boolean?)| 4: Q1.C6 (boolean?)| 5: Q1.C7 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: !((false \|\| (Q0.C1 = 1))) (boolean)| 3: !((false \|\| (1 = Q0.C1))) (boolean)| 4: !(((false \|\| (1 = 1)) \|\| (1 = Q0.C0))) (boolean?)| 5: !((false \|\| (1 = null))) (boolean?)| 6: !((false \|\| (null = 1))) (boolean?)| 7: !((false \|\| (null = Q0.C1))) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# SOME, ANY, ALL
+#
+
+query error
+EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
+
+query error
+#EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
+
+query error
+#EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
+
+query error
+#EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
+
+query error
+#EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
+
+query error
+#EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
+
+#
+# Scalar subqueries can return NULL on no rows returned by the subquery
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q2.C0 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q2 [ label = "Q2(S)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q3 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# IN/EXISTS
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster10 {
+        label = "Box10:Select"
+        boxhead10 [ shape = record, label = "{ Distinct: Preserve| 0: Q11.C2 (boolean?)| 1: Q11.C3 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q11 [ label = "Q11(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q5.C0 (boolean?)| 3: Q10.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q5 [ label = "Q5(S)" ]
+            Q10 [ label = "Q10(S)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Grouping"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: any(Q3.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: ((1 = Q2.C0) && true) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster9 {
+        label = "Box9:Select"
+        boxhead9 [ shape = record, label = "{ Distinct: Preserve| 0: Q9.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q9 [ label = "Q9(F)" ]
+        }
+    }
+    subgraph cluster8 {
+        label = "Box8:Grouping"
+        boxhead8 [ shape = record, label = "{ Distinct: Preserve| 0: all(Q8.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q8 [ label = "Q8(F)" ]
+        }
+    }
+    subgraph cluster7 {
+        label = "Box7:Select"
+        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: !(((1 = Q7.C0) && true)) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q7 [ label = "Q7(F)" ]
+        }
+    }
+    subgraph cluster6 {
+        label = "Box6:Select"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: Q6.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q6 [ label = "Q6(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q11 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q5 -> boxhead5 [ lhead = cluster5 ]
+    Q10 -> boxhead9 [ lhead = cluster9 ]
+    Q4 -> boxhead4 [ lhead = cluster4 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+    Q9 -> boxhead8 [ lhead = cluster8 ]
+    Q8 -> boxhead7 [ lhead = cluster7 ]
+    Q7 -> boxhead6 [ lhead = cluster6 ]
+    Q6 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C2 (boolean)| 1: Q4.C3 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0 (integer?)| 1: Q3.C1 (integer)| 2: Q3.C2 (boolean)| 3: !(Q3.C2) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q2.C0 (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q2 [ label = "Q2(E)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead3 [ lhead = cluster3 ]
+    Q3 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster15 {
+        label = "Box15:Select"
+        boxhead15 [ shape = record, label = "{ Distinct: Preserve| 0: Q16.C2 (boolean?)| 1: Q16.C3 (boolean?)| 2: Q16.C4 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q16 [ label = "Q16(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q5.C0 (boolean?)| 3: Q10.C0 (boolean?)| 4: Q15.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q5 [ label = "Q5(S)" ]
+            Q10 [ label = "Q10(S)" ]
+            Q15 [ label = "Q15(S)" ]
+            Q10 -> Q0 [ label = "correlation", style = filled, color = red ]
+            Q15 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Grouping"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: any(Q3.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: ((1 = Q2.C0) && true) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster10 {
+        label = "Box10:Select"
+        boxhead10 [ shape = record, label = "{ Distinct: Preserve| 0: Q9.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q9 [ label = "Q9(F)" ]
+        }
+    }
+    subgraph cluster9 {
+        label = "Box9:Grouping"
+        boxhead9 [ shape = record, label = "{ Distinct: Preserve| 0: any(Q8.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q8 [ label = "Q8(F)" ]
+        }
+    }
+    subgraph cluster8 {
+        label = "Box8:Select"
+        boxhead8 [ shape = record, label = "{ Distinct: Preserve| 0: ((Q0.C1 = Q7.C0) && true) (boolean) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q7 [ label = "Q7(F)" ]
+        }
+    }
+    subgraph cluster7 {
+        label = "Box7:Select"
+        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: 1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q6 [ label = "Q6(F)" ]
+        }
+    }
+    subgraph cluster6 {
+        label = "Box6:Values"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster14 {
+        label = "Box14:Select"
+        boxhead14 [ shape = record, label = "{ Distinct: Preserve| 0: Q14.C0 (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q14 [ label = "Q14(F)" ]
+        }
+    }
+    subgraph cluster13 {
+        label = "Box13:Grouping"
+        boxhead13 [ shape = record, label = "{ Distinct: Preserve| 0: any(Q13.C0) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q13 [ label = "Q13(F)" ]
+        }
+    }
+    subgraph cluster12 {
+        label = "Box12:Select"
+        boxhead12 [ shape = record, label = "{ Distinct: Preserve| 0: ((Q0.C0 = Q12.C0) && true) (boolean?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q12 [ label = "Q12(F)" ]
+        }
+    }
+    subgraph cluster11 {
+        label = "Box11:Select"
+        boxhead11 [ shape = record, label = "{ Distinct: Preserve| 0: Q11.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q11 [ label = "Q11(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q16 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q5 -> boxhead5 [ lhead = cluster5 ]
+    Q10 -> boxhead10 [ lhead = cluster10 ]
+    Q15 -> boxhead14 [ lhead = cluster14 ]
+    Q4 -> boxhead4 [ lhead = cluster4 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+    Q9 -> boxhead9 [ lhead = cluster9 ]
+    Q8 -> boxhead8 [ lhead = cluster8 ]
+    Q7 -> boxhead7 [ lhead = cluster7 ]
+    Q6 -> boxhead6 [ lhead = cluster6 ]
+    Q14 -> boxhead13 [ lhead = cluster13 ]
+    Q13 -> boxhead12 [ lhead = cluster12 ]
+    Q12 -> boxhead11 [ lhead = cluster11 ]
+    Q11 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# DATE / TIME functions
+#
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (timestamp?)| 1: Q1.C3 (timestamp) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (timestamp?)| 1: Q0.C1 (timestamp)| 2: (Q0.C0 - 00:00:01) (timestamp?)| 3: (Q0.C1 - 00:00:01) (timestamp) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (timestamp?)| 1: C1 (timestamp) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (interval?)| 1: Q1.C3 (interval?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (timestamp?)| 1: Q0.C1 (timestamp)| 2: (Q0.C0 - Q0.C1) (interval?)| 3: (Q0.C1 - Q0.C0) (interval?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (timestamp?)| 1: C1 (timestamp) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+
+#
+# INNER JOIN preserves
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C1 (integer)| 1: Q2.C3 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Select"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q1.C0 (integer?)| 3: Q1.C1 (integer)| true }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+}
+
+EOF
+
+#
+# OUTER JOIN does not for columns coming from the right side
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C1 (integer)| 1: Q2.C3 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q1.C0 (integer?)| 3: Q1.C1 (integer?)| true }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C1 (integer?)| 1: Q2.C3 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:OuterJoin"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer?)| 2: Q1.C0 (integer?)| 3: Q1.C1 (integer?)| true }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(P)" ]
+            Q1 [ label = "Q1(P)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Get"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead0 [ lhead = cluster0 ]
+    Q0 -> boxhead1 [ lhead = cluster1 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+}
+
+EOF
+
+#
+# UNION
+#
+
+query error
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
+
+query error
+EXPLAIN TYPED QUERY GRAPH FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
+
+#
+# DERIVED TABLES
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0 (integer)| 1: (Q2.C0 + 1) (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q0.C1 + 1) (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+#
+# CORRELATED SUBQUERIES
+#
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT (SELECT outer.col_not_null FROM int_table AS inner) FROM int_table AS outer;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q3.C0 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q3 [ label = "Q3(S)" ]
+            Q3 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C2 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0 (integer?)| 1: Q1.C1 (integer)| 2: Q0.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT (SELECT outer.col_not_null FROM int_table AS inner) + outer.col_not_null FROM int_table AS outer;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q3.C0 + Q0.C1) (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q3 [ label = "Q3(S)" ]
+            Q3 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C2 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0 (integer?)| 1: Q1.C1 (integer)| 2: Q0.C1 (integer) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT (SELECT outer.col_null FROM int_table AS inner) FROM int_table AS outer;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: Q3.C0 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q3 [ label = "Q3(S)" ]
+            Q3 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0 (integer?)| 1: Q1.C1 (integer)| 2: Q0.C0 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR SELECT (SELECT outer.col_null FROM int_table AS inner) + outer.col_not_null FROM int_table AS outer;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster4 {
+        label = "Box4:Select"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q3.C0 + Q0.C1) (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q3 [ label = "Q3(S)" ]
+            Q3 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer) }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C2 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0 (integer?)| 1: Q1.C1 (integer)| 2: Q0.C0 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q4 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q3 -> boxhead3 [ lhead = cluster3 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
