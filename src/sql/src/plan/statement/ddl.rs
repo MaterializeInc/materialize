@@ -130,7 +130,7 @@ pub fn plan_create_schema(
             .expect("names always have at least one component"),
     );
     let database_name = match name.0.pop() {
-        None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
+        None => DatabaseSpecifier::Name(scx.catalog.active_database().into()),
         Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
     };
     Ok(Plan::CreateSchema(CreateSchemaPlan {
@@ -2413,7 +2413,7 @@ pub fn plan_drop_role(
         } else {
             bail!("invalid role name {}", name.to_string().quoted())
         };
-        if name == scx.catalog.user() {
+        if name == scx.catalog.active_user() {
             bail!("current user cannot be dropped");
         }
         match scx.catalog.resolve_role(&name) {

@@ -57,14 +57,14 @@ use crate::plan::statement::StatementDesc;
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Returns the name of the user who is issuing the query.
-    fn user(&self) -> &str;
+    fn active_user(&self) -> &str;
+
+    /// Returns the database to use if one is not explicitly specified.
+    fn active_database(&self) -> &str;
 
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
-
-    /// Returns the database to use if one is not explicitly specified.
-    fn default_database(&self) -> &str;
 
     /// Resolves the named database.
     ///
@@ -76,7 +76,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// If `database_name` is provided, it searches the named database for a
     /// schema named `schema_name`. If `database_name` is not provided, it
-    /// searches the default database instead. It returns the ID of the schema
+    /// searches the active database instead. It returns the ID of the schema
     /// if found; otherwise it returns an error if the database does not exist,
     /// or if the database exists but the schema does not.
     fn resolve_schema(
@@ -91,7 +91,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the
-    /// specified database; otherwise, it searches the default database. If the
+    /// specified database; otherwise, it searches the active database. If the
     /// partial name has a schema component, it searches only the specified
     /// schema; otherwise, it searches a default set of schemas within the
     /// selected database. It returns an error if none of the searched schemas
@@ -434,16 +434,16 @@ lazy_static! {
 }
 
 impl SessionCatalog for DummyCatalog {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
+        "dummy"
+    }
+
+    fn active_database(&self) -> &str {
         "dummy"
     }
 
     fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
         None
-    }
-
-    fn default_database(&self) -> &str {
-        "dummy"
     }
 
     fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
