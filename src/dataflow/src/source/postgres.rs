@@ -253,25 +253,34 @@ impl PostgresSourceReader {
 
             pin_mut!(reader);
             let mut mz_row = Row::default();
-            while let Some(Ok(b)) = reader.next().await {
-                let mut packer = mz_row.packer();
-                packer.push(relation_id);
-                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
-                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-                let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+            while let Some(next) = reader.next().await {
+                match next {
+                    Ok(b) => {
+                        let mut packer = mz_row.packer();
+                        packer.push(relation_id);
+                        // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                        // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                        let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.columns.len() as i32);
-                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
-                    while let Some(raw_value) = raw_values.next() {
-                        match raw_value? {
-                            Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
-                            None => rp.push(Datum::Null),
-                        }
+                        let mut raw_values = parser.iter_raw(info.columns.len() as i32);
+                        try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                            while let Some(raw_value) = raw_values.next() {
+                                match raw_value? {
+                                    Some(value) => {
+                                        rp.push(Datum::String(std::str::from_utf8(value)?))
+                                    }
+                                    None => rp.push(Datum::Null),
+                                }
+                            }
+                            Ok(())
+                        }));
+                        try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                        try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
                     }
-                    Ok(())
-                }));
-                try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
             }
 
             self.metrics.tables.inc();
