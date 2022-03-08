@@ -13,7 +13,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 
 use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
@@ -25,7 +25,7 @@ use mz_dataflow_types::{
 };
 use mz_expr::{EvalError, MirScalarExpr, SourceInstanceId};
 use mz_ore::result::ResultExt;
-use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
+use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
@@ -198,8 +198,12 @@ where
 
             let mut row_buf = Row::default();
 
-            let (upsert_output, upsert_persist_errs) =
-                stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
+            let (upsert_output, upsert_persist_errs) = persist::persistent_upsert(
+                &stream,
+                source_name,
+                as_of_frontier,
+                upsert_persist_config,
+            );
 
             // Apply Map-Filter-Project and also map back from DecodeError to DataflowError because
             // that's what downstream code expects.
@@ -309,8 +313,10 @@ fn upsert_core<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let result_stream = stream.unary_frontier(
+    let result_stream = stream.binary_frontier::<Vec<()>, _, _, _, _, _>(
+        &operator::empty(&stream.scope()),
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
+        Pipeline,
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
@@ -327,7 +333,7 @@ where
             let mut vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
 
-            move |input, output| {
+            move |input, _state_input, output| {
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
@@ -586,6 +592,263 @@ fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_buf: &mu
     row_packer.extend(values);
 
     row_buf.clone()
+}
+
+mod persist {
+    use super::*;
+
+    use differential_dataflow::lattice::Lattice;
+    use differential_dataflow::Hashable;
+    use mz_persist::operators::replay::Replay;
+    use mz_persist::operators::split_ok_err;
+    use mz_persist::operators::stream::{Persist, RetractUnsealed};
+    use mz_persist_types::Codec;
+    use std::collections::hash_map::Entry;
+    use std::collections::{BTreeMap, HashMap};
+    use std::fmt::Debug;
+    use std::hash::Hash;
+    use timely::dataflow::channels::pact::Exchange;
+    use timely::dataflow::operators::{Concat, Map, OkErr};
+    use timely::dataflow::operators::{Delay, Operator};
+    use timely::dataflow::{Scope, Stream};
+    use timely::progress::Antichain;
+    use tracing::trace;
+
+    /// lalala
+    pub fn persistent_upsert<G, K, V, T>(
+        stream: &Stream<G, (K, Option<V>, T)>,
+        name: &str,
+        as_of_frontier: Antichain<u64>,
+        persist_config: PersistentUpsertConfig<K, V>,
+    ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>)
+    where
+        G: Scope<Timestamp = u64>,
+        G: Scope<Timestamp = u64>,
+        K: timely::Data + timely::ExchangeData + Codec + Debug + Hash + Eq,
+        V: timely::Data + timely::ExchangeData + Codec + Debug + Hash + Eq,
+        T: timely::Data + timely::ExchangeData + Ord,
+    {
+        let operator_name = format!("persistent_upsert({})", name);
+
+        let (restored_upsert_oks, state_errs) = {
+            let snapshot = persist_config.read_handle.snapshot();
+            let (restored_oks, restored_errs) = stream
+                .scope()
+                .replay(snapshot, &as_of_frontier)
+                .ok_err(split_ok_err);
+            let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
+                name,
+                persist_config.write_handle.clone(),
+                persist_config.upper_seal_ts,
+            );
+            let combined_errs = restored_errs.concat(&retract_errs);
+            (restored_upsert_oks, combined_errs)
+        };
+
+        let mut differential_state_ingester = Some(DifferentialStateIngester::new());
+
+        let upsert_as_of_frontier = as_of_frontier.clone();
+
+        let new_upsert_oks = stream.binary_frontier(
+            &restored_upsert_oks,
+            Exchange::new(move |(key, _value, _ts): &(K, Option<V>, T)| key.hashed()),
+            Exchange::new(move |((key, _data), _ts, _diff): &((K, _), _, _)| key.hashed()),
+            &operator_name.clone(),
+            move |_cap, _info| {
+                // This is a map of (time) -> (capability, ((key) -> (value with max offset))). This
+                // is a BTreeMap because we want to ensure that if we receive (key1, value1, time
+                // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
+                // value2, time 7).
+                //
+                // This is a staging area, where we group incoming updates by timestamp (the timely
+                // timestamp) and disambiguate by the offset (also called "timestamp" above) if
+                // necessary.
+                let mut to_send = BTreeMap::<_, (_, HashMap<_, (Option<V>, T)>)>::new();
+
+                // This is a map from key -> value. We store the latest value for a given key that
+                // way we know what to retract if a new value with the same key comes along.
+                let mut current_values = HashMap::new();
+
+                let mut input_buffer = Vec::new();
+                let mut state_input_buffer = Vec::new();
+
+                move |input, state_input, output| {
+                    state_input.for_each(|_time, data| {
+                        data.swap(&mut state_input_buffer);
+                        for state_update in state_input_buffer.drain(..) {
+                            trace!("In {}, restored upsert: {:?}", operator_name, state_update);
+
+                            differential_state_ingester
+                                .as_mut()
+                                .expect("already finished ingesting")
+                                .add_update(state_update);
+                        }
+                    });
+
+                    // An empty frontier signals that we will never receive data from that input
+                    // again because no-one upstream holds any capability anymore.
+                    if differential_state_ingester.is_some()
+                        && state_input.frontier.frontier().is_empty()
+                    {
+                        let initial_state = differential_state_ingester
+                            .take()
+                            .expect("already finished ingesting")
+                            .finish();
+                        current_values.extend(initial_state.into_iter());
+
+                        trace!(
+                            "In {}, initial (restored) upsert state: {:?}",
+                            operator_name,
+                            current_values.iter().take(10).collect::<Vec<_>>()
+                        );
+                    }
+
+                    // Digest each input, reduce by presented timestamp.
+                    input.for_each(|cap, data| {
+                        data.swap(&mut input_buffer);
+                        for (key, value, offset) in input_buffer.drain(..) {
+                            let mut time = cap.time().clone();
+                            time.advance_by(upsert_as_of_frontier.borrow());
+
+                            let time_entries = &mut to_send
+                                .entry(time)
+                                .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+                                .1;
+
+                            let new_entry = (value, offset);
+
+                            match time_entries.entry(key) {
+                                Entry::Occupied(mut occupied) => {
+                                    let existing_entry = occupied.get_mut();
+                                    // If the time is equal, toss out the row with the lower
+                                    // offset.
+                                    if new_entry.1 > existing_entry.1 {
+                                        *existing_entry = new_entry;
+                                    }
+                                }
+                                Entry::Vacant(vacant) => {
+                                    // We didn't yet see an entry with the same timestamp. We can
+                                    // just insert and don't need to disambiguate by offset.
+                                    vacant.insert(new_entry);
+                                }
+                            }
+                        }
+                    });
+
+                    let mut removed_times = Vec::new();
+                    for (time, (cap, map)) in to_send.iter_mut() {
+                        if !input.frontier.less_equal(time)
+                            && !state_input.frontier.less_equal(time)
+                        {
+                            let mut session = output.session(cap);
+                            removed_times.push(time.clone());
+                            for (key, (value, _offset)) in map.drain() {
+                                let old_value = if let Some(new_value) = &value {
+                                    current_values.insert(key.clone(), new_value.clone())
+                                } else {
+                                    current_values.remove(&key)
+                                };
+                                if let Some(old_value) = old_value {
+                                    // Retract old value.
+                                    session.give((
+                                        (key.clone(), old_value),
+                                        cap.time().clone(),
+                                        -1,
+                                    ));
+                                }
+                                if let Some(new_value) = value {
+                                    // Give new value.
+                                    session.give(((key, new_value), cap.time().clone(), 1));
+                                }
+                            }
+                        } else {
+                            // Because this is a BTreeMap, the rest of the times in the map will be
+                            // greater than this time. So if the input_frontier is less than or
+                            // equal to this time, it will be less than the times in the rest of
+                            // the map.
+                            break;
+                        }
+                    }
+
+                    // Discard entries, which hold capabilities, for complete times.
+                    for time in removed_times {
+                        to_send.remove(&time);
+                    }
+                }
+            },
+        );
+
+        let (new_upsert_oks, new_upsert_persist_errs) =
+            new_upsert_oks.persist(name, persist_config.write_handle);
+
+        // Also pull the timestamp of restored data up to the as_of_frontier. We are doing this in
+        // two steps: first, we are modifying the timestamp in the data itself, then we're delaying
+        // the timely timestamp. The latter will stash updates while they are not beyond the
+        // frontier.
+        let retime_as_of_frontier = as_of_frontier.clone();
+        let restored_upsert_oks = restored_upsert_oks
+            .map(move |(data, mut time, diff)| {
+                time.advance_by(retime_as_of_frontier.borrow());
+                (data, time, diff)
+            })
+            .delay_batch(move |time| {
+                let mut time = *time;
+                time.advance_by(as_of_frontier.borrow());
+                time
+            });
+
+        (
+            new_upsert_oks.concat(&restored_upsert_oks),
+            new_upsert_persist_errs.concat(&state_errs),
+        )
+    }
+
+    /// Ingests differential updates, consolidates them, and emits a final `HashMap` that contains the
+    /// consolidated upsert state.
+    struct DifferentialStateIngester<K, V> {
+        differential_state: HashMap<(K, V), i64>,
+    }
+
+    impl<K, V> DifferentialStateIngester<K, V>
+    where
+        K: Hash + Eq + Clone + Debug,
+        V: Hash + Eq + Debug,
+    {
+        fn new() -> Self {
+            DifferentialStateIngester {
+                differential_state: HashMap::new(),
+            }
+        }
+
+        fn add_update(&mut self, update: ((K, V), u64, i64)) {
+            let ((k, v), _ts, diff) = update;
+
+            *self.differential_state.entry((k, v)).or_default() += diff;
+        }
+
+        fn finish(mut self) -> HashMap<K, V> {
+            self.differential_state.retain(|_k, diff| *diff > 0);
+
+            let mut state = HashMap::new();
+
+            for ((key, value), diff) in self.differential_state.into_iter() {
+                // our state must be internally consistent
+                assert!(diff == 1, "i64 for ({:?}, {:?}) is {}", key, value, diff);
+                match state.insert(key.clone(), value) {
+                    None => (), // it's all good
+                    // we must be internally consistent: there can only be one value per key in the
+                    // consolidated state
+                    Some(old_value) => {
+                        // try_insert() would be perfect here, because we could also report the key
+                        // without cloning
+                        panic!("Already have a value for key {:?}: {:?}", key, old_value)
+                    }
+                }
+            }
+
+            state
+        }
+    }
 }
 
 #[cfg(test)]
