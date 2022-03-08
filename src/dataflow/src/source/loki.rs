@@ -22,6 +22,7 @@ pub struct LokiSourceReader {
     conn_info: ConnectionInfo,
     batch_window: Duration,
     query: String,
+    client: reqwest::Client,
 }
 
 #[derive(Clone)]
@@ -44,17 +45,18 @@ impl LokiSourceReader {
             conn_info: ConnectionInfo { user, pw, endpoint },
             batch_window: Duration::from_secs(60),
             query: query,
+            client: reqwest::Client::new(),
         }
     }
 
     async fn query(
+        &self,
         conn_info: ConnectionInfo,
         start: u128,
         end: u128,
         query: String,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        let client = reqwest::Client::new();
-        client
+        self.client
             .get(format!("{}/loki/api/v1/query_range", conn_info.endpoint))
             .basic_auth(conn_info.user, Some(conn_info.pw))
             .query(&[("query", query)])
@@ -65,23 +67,26 @@ impl LokiSourceReader {
             .await
     }
 
-    fn new_stream(
-        query: String,
-        batch_window: Duration,
-        conn_info: ConnectionInfo,
-    ) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> {
-        let polls = IntervalStream::new(tokio::time::interval(batch_window));
+    fn new_stream<'a>(
+        &'a self,
+    ) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> + 'a {
+        let polls = IntervalStream::new(tokio::time::interval(self.batch_window));
 
-        let conn_info = conn_info;
+        let conn_info = self.conn_info.clone();
         polls.then(move |_tick| {
-            let start = SystemTime::now() - batch_window;
             let end = SystemTime::now();
+            let start = end - self.batch_window;
 
-            Self::query(
+            self.query(
                 conn_info.clone(),
-                start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-                end.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-                query.clone(),
+                start
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Start must be after epoch.")
+                    .as_nanos(),
+                end.duration_since(UNIX_EPOCH)
+                    .expect("End must be after epoch.")
+                    .as_nanos(),
+                self.query.clone(),
             )
             .and_then(|resp| resp.json::<QueryResult>())
         })
@@ -91,7 +96,7 @@ impl LokiSourceReader {
 #[async_trait]
 impl SimpleSource for LokiSourceReader {
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
-        let stream = Self::new_stream(self.query, self.batch_window, self.conn_info);
+        let stream = self.new_stream();
         tokio::pin!(stream);
 
         while let Some(entry) = stream.next().await {
