@@ -3174,6 +3174,7 @@ dependencies = [
  "bytes",
  "chrono",
  "crossbeam-channel",
+ "derivative",
  "differential-dataflow",
  "enum-iterator",
  "enum-kinds",

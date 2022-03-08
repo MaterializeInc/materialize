@@ -51,7 +51,7 @@ use mz_sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
-use mz_transform::{IndexOracle, Optimizer};
+use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
@@ -114,9 +114,6 @@ pub struct CatalogState {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
-    /// Contains only enabled indexes from objects in the catalog; does not
-    /// contain indexes disabled by e.g. the disable_user_indexes flag.
-    enabled_indexes: EnabledIndexes,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
@@ -151,10 +148,6 @@ impl CatalogState {
             }
             _ => None,
         }
-    }
-
-    pub fn enabled_indexes(&self) -> &EnabledIndexes {
-        &self.enabled_indexes
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -193,6 +186,17 @@ impl CatalogState {
         &self.by_id[id]
     }
 
+    /// Returns all indexes on this object known in the catalog.
+    pub fn get_indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
+        self.get_by_id(&id)
+            .used_by()
+            .iter()
+            .filter_map(move |uses_id| match self.get_by_id(uses_id).item() {
+                CatalogItem::Index(index) if index.on == id => Some((*uses_id, index)),
+                _ => None,
+            })
+    }
+
     fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
@@ -214,9 +218,6 @@ impl CatalogState {
                 ),
             }
         }
-
-        self.populate_enabled_indexes(id, entry.item());
-
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
         let schema = self
             .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
@@ -229,29 +230,6 @@ impl CatalogState {
 
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry.clone());
-    }
-
-    pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
-        match item {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.0.entry(id).or_insert_with(Vec::new);
-            }
-            CatalogItem::Index(index) => {
-                if index.enabled {
-                    let idxs = self
-                        .enabled_indexes
-                        .0
-                        .get_mut(&index.on)
-                        .expect("object known to exist");
-
-                    // If index not already enabled, add it.
-                    if !idxs.iter().any(|(index_id, _)| index_id == &id) {
-                        idxs.push((id, index.keys.clone()));
-                    }
-                }
-            }
-            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
-        }
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -339,35 +317,6 @@ impl CatalogState {
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
-    }
-}
-
-/// Maintains the set of currently-enabled indexes.
-///
-/// TODO: hoist this out of the catalog and derive it on the fly based on the
-/// set of indexes installed on each cluster.
-#[derive(Debug, Clone)]
-pub struct EnabledIndexes(HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>);
-
-impl EnabledIndexes {
-    /// Returns an iterator over the indexes built on the identified collection.
-    ///
-    /// Indexes are described by the ID of the index itself and the scalar
-    /// expressions that form the key of the index.
-    // TODO(benesch): this slight variant on `IndexOracle::indexes_on` will
-    // vanish shortly, when this type is hoisted out of the catalog.
-    pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &[MirScalarExpr])> {
-        self.0
-            .get(&id)
-            .into_iter()
-            .flatten()
-            .map(|(id, key)| (*id, key.as_slice()))
-    }
-}
-
-impl IndexOracle for EnabledIndexes {
-    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
-        Box::new(EnabledIndexes::indexes_on(self, id).map(|(_id, key)| key))
     }
 }
 
@@ -502,6 +451,10 @@ pub struct Index {
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    // TODO(benesch): we'd ideally delete this field and instead derive it from
+    // whether the index is present in the compute controller or not. But it is
+    // presently hard to have an `enabled` field in `mz_indexes` if this field
+    // does not exist in the catalog.
     pub enabled: bool,
 }
 
@@ -771,7 +724,6 @@ impl Catalog {
                 by_name: BTreeMap::new(),
                 by_id: BTreeMap::new(),
                 by_oid: HashMap::new(),
-                enabled_indexes: EnabledIndexes(HashMap::new()),
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
                 roles: HashMap::new(),
@@ -1972,22 +1924,6 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
-                    if let CatalogItem::Index(index) = &metadata.item {
-                        let indexes = state
-                            .enabled_indexes
-                            .0
-                            .get_mut(&index.on)
-                            .expect("catalog out of sync");
-                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
-                        match i {
-                            Some(i) => {
-                                indexes.remove(i);
-                            }
-                            None if !index.enabled => {}
-                            None => panic!("catalog out of sync"),
-                        };
-                    }
-                    state.enabled_indexes.0.remove(&id);
                 }
 
                 Action::UpdateItem {
@@ -2003,11 +1939,6 @@ impl Catalog {
                         id
                     );
                     assert_eq!(old_entry.uses(), to_item.uses());
-
-                    // Handle updating any indexes. n.b. only supports enabling
-                    // indexes; does not support disabling indexes.
-                    state.populate_enabled_indexes(id, &to_item);
-
                     let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut state
                         .get_schema_mut(&old_entry.name.database, &old_entry.name.schema, conn_id)
@@ -2188,15 +2119,6 @@ impl Catalog {
         !self.config().disable_user_indexes || !id.is_user()
     }
 
-    /// Returns a mapping that indicates all indices that are available for each
-    /// item in the catalog.
-    ///
-    /// Note that when `self.config.disable_user_indexes` is `true`, this does
-    /// not include any user indexes.
-    pub fn enabled_indexes(&self) -> &EnabledIndexes {
-        &self.state.enabled_indexes
-    }
-
     /// Returns whether or not an index is enabled.
     ///
     /// # Panics
@@ -2209,19 +2131,6 @@ impl Catalog {
         }
     }
 
-    /// Returns all indexes on this object known in the catalog.
-    pub fn get_indexes_on(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.get_by_id(&id)
-            .used_by()
-            .iter()
-            .filter(|uses_id| match self.get_by_id(uses_id).item() {
-                CatalogItem::Index(index) => index.on == id,
-                _ => false,
-            })
-            .cloned()
-            .collect()
-    }
-
     /// Returns the default index for the specified `id`.
     ///
     /// Panics if `id` does not exist, or if `id` is not an object on which
@@ -2229,7 +2138,7 @@ impl Catalog {
     pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
         // The default index is the index with the smallest ID, i.e. the one
         // created in closest temporal proximity to the object itself.
-        self.get_indexes_on(id).iter().min().cloned()
+        self.state.get_indexes_on(id).map(|(id, _idx)| id).min()
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {

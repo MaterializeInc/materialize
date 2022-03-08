@@ -23,6 +23,7 @@
 
 use std::collections::BTreeMap;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
@@ -160,7 +161,8 @@ impl<C> Controller<C> {
 use std::sync::Arc;
 
 /// Compaction policies for collections maintained by `Controller`.
-#[derive(Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub enum ReadPolicy<T> {
     /// Maintain the collection as valid from this frontier onward.
     ValidFrom(Antichain<T>),
@@ -171,7 +173,7 @@ pub enum ReadPolicy<T> {
     /// consider using the `ValidFrom` variant to manually pilot compaction.
     ///
     /// The `Arc` makes the function cloneable.
-    LagWriteFrontier(Arc<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
+    LagWriteFrontier(#[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T>>),
     /// Allows one to express multiple read policies, taking the least of
     /// the resulting frontiers.
     Multiple(Vec<ReadPolicy<T>>),

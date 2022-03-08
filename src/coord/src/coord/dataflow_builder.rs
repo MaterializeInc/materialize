@@ -67,81 +67,6 @@ impl Coordinator {
             compute,
         }
     }
-
-    /// Identifies a bundle of storage and compute collection ids sufficient for building
-    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
-    pub fn sufficient_collections_global<'b, I>(&self, ids: I) -> crate::coord::CollectionIdBundle
-    where
-        I: IntoIterator<Item = &'b GlobalId>,
-    {
-        Self::sufficient_collections_inner(&self.catalog.state(), |_id| true, ids)
-    }
-
-    /// Identifies a bundle of storage and compute collection ids sufficient for building
-    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
-    pub fn sufficient_collections_instanced<'b, I>(
-        &mut self,
-        instance: mz_dataflow_types::client::ComputeInstanceId,
-        ids: I,
-    ) -> crate::coord::CollectionIdBundle
-    where
-        I: IntoIterator<Item = &'b GlobalId>,
-    {
-        let compute = self.dataflow_client.compute(instance).unwrap();
-        Self::sufficient_collections_inner(
-            &self.catalog.state(),
-            |id| compute.collection(*id).is_ok(),
-            ids,
-        )
-    }
-
-    /// Identifies a bundle of storage and compute collection ids sufficient for building
-    /// a dataflow for the identifiers in `ids`, optionally on compute instance `instance`.
-    pub fn sufficient_collections_inner<'b, I, P>(
-        catalog: &CatalogState,
-        predicate: P,
-        ids: I,
-    ) -> crate::coord::CollectionIdBundle
-    where
-        I: IntoIterator<Item = &'b GlobalId>,
-        P: Fn(&GlobalId) -> bool,
-    {
-        let mut id_bundle = crate::coord::CollectionIdBundle::default();
-        let mut todo: std::collections::BTreeSet<GlobalId> = ids.into_iter().cloned().collect();
-
-        // Iteratively extract the largest element, potentially introducing lesser elements.
-        while let Some(id) = todo.iter().rev().next().cloned() {
-            // Extract available indexes as those that are enabled, and installed on the cluster.
-            let available_indexes = catalog
-                .enabled_indexes()
-                .indexes_on(id)
-                .map(|(id, _)| id)
-                .filter(|id| predicate(id))
-                .collect::<Vec<_>>();
-
-            if !available_indexes.is_empty() {
-                id_bundle.compute_ids.extend(available_indexes);
-            } else {
-                match catalog.get_by_id(&id).item() {
-                    // Unmaterialized view. Search its dependencies.
-                    view @ CatalogItem::View(_) => {
-                        todo.extend(view.uses());
-                    }
-                    CatalogItem::Source(_) | CatalogItem::Table(_) => {
-                        // Unmaterialized source or table. Record that we are
-                        // missing at least one index.
-                        id_bundle.storage_ids.insert(id);
-                    }
-                    _ => {
-                        // Non-indexable thing; no work to do.
-                    }
-                }
-            }
-            todo.remove(&id);
-        }
-
-        id_bundle
-    }
 }
 
 impl<'a> DataflowBuilder<'a> {
@@ -158,23 +83,21 @@ impl<'a> DataflowBuilder<'a> {
                 return Ok(());
             }
 
-            // A valid index is any index on `id` that is known to the dataflow
-            // layer, as indicated by its presence in `self.compute`.
+            // A valid index is any index on `id` that is known to index oracle.
             //
             // TODO: indexes should be imported after the optimization process,
             // and only those actually used by the optimized plan
-            let valid_indexes = self
-                .catalog
-                .enabled_indexes()
-                .indexes_on(*id)
-                .into_iter()
-                .filter(|(id, _keys)| self.compute.collection(*id).is_ok())
-                .collect::<Vec<_>>();
-            if !valid_indexes.is_empty() {
-                for (index_id, keys) in valid_indexes.into_iter() {
+            //
+            // NOTE(benesch): is the above TODO still true? The dataflow layer
+            // has gotten increasingly smart about index selection. Maybe it's
+            // now fine to present all indexes?
+            let index_oracle = self.index_oracle();
+            let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
+            if valid_indexes.peek().is_some() {
+                for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
-                        key: keys.to_vec(),
+                        key: idx.keys.to_vec(),
                     };
                     let desc = self
                         .catalog
@@ -184,6 +107,7 @@ impl<'a> DataflowBuilder<'a> {
                     dataflow.import_index(index_id, index_desc, desc.typ().clone());
                 }
             } else {
+                drop(valid_indexes);
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
                     CatalogItem::Table(_) => {
@@ -294,7 +218,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle())?;
 
         Ok(Some(dataflow))
     }
@@ -331,7 +255,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(dataflow, &self.index_oracle())?;
 
         Ok(())
     }

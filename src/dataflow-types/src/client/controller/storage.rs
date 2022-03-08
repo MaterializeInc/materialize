@@ -30,6 +30,7 @@ use crate::Update;
 use mz_expr::GlobalId;
 
 /// Controller state maintained for each storage instance.
+#[derive(Debug)]
 pub struct StorageControllerState<T> {
     /// Collections maintained by the storage controller.
     ///
@@ -346,6 +347,7 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
 }
 
 /// State maintained about individual collections.
+#[derive(Debug)]
 pub struct CollectionState<T> {
     /// Description with which the source was created, and its initial `since`.
     pub(super) description: (crate::sources::SourceDesc, Antichain<T>),

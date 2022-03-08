@@ -159,6 +159,7 @@ use crate::util::ClientTransmitter;
 pub mod id_bundle;
 
 mod dataflow_builder;
+mod indexes;
 mod prometheus;
 
 #[derive(Debug)]
@@ -1546,7 +1547,9 @@ impl Coordinator {
         // Materialize and their sink, they'll need to reason about the
         // timestamps we emit anyway, so might as emit as much historical detail
         // as we possibly can.
-        let id_bundle = self.sufficient_collections_instanced(compute_instance, &[sink.from]);
+        let id_bundle = self
+            .index_oracle(compute_instance)
+            .sufficient_collections(&[sink.from]);
         let frontier = self.least_valid_read(&id_bundle, compute_instance);
         let as_of = SinkAsOf {
             frontier,
@@ -2794,9 +2797,19 @@ impl Coordinator {
             item_ids.extend(schema.items.values());
         }
 
+        // Gather the compute_instances of all indexes.
+        // TODO: for now we know this is just the default cluster ID.
+        let compute_instances = &[DEFAULT_COMPUTE_INSTANCE_ID];
+
         // Gather the indexes and unmaterialized sources used by those items.
         let mut id_bundle = CollectionIdBundle::default();
-        id_bundle.extend(&self.sufficient_collections_global(item_ids.iter()));
+        for compute_instance in compute_instances {
+            id_bundle.extend(
+                &self
+                    .index_oracle(*compute_instance)
+                    .sufficient_collections(item_ids.iter()),
+            );
+        }
 
         // Filter out ids from different timelines.
         for ids in [&mut id_bundle.storage_ids, &mut id_bundle.compute_ids] {
@@ -2902,11 +2915,9 @@ impl Coordinator {
 
             // Verify that the references and indexes for this query are in the
             // current read transaction.
-            //
-            // Using nearest_indexes here is a hack until #8318 is fixed. It's
-            // used because that's what determine_timestamp uses.
-            // Unknown what the comment above means; not using `nearest_indexes` now.
-            let id_bundle = self.sufficient_collections_instanced(compute_instance, &source_ids);
+            let id_bundle = self
+                .index_oracle(compute_instance)
+                .sufficient_collections(&source_ids);
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -2936,7 +2947,9 @@ impl Coordinator {
 
             timestamp
         } else {
-            let id_bundle = self.sufficient_collections_instanced(compute_instance, &source_ids);
+            let id_bundle = self
+                .index_oracle(compute_instance)
+                .sufficient_collections(&source_ids);
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
@@ -2980,7 +2993,7 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
 
         // Finalization optimizes the dataflow as much as possible.
         let dataflow_plan = self.finalize_dataflow(dataflow, compute_instance);
@@ -3045,7 +3058,9 @@ impl Coordinator {
         let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
-            let id_bundle = coord.sufficient_collections_instanced(compute_instance, uses);
+            let id_bundle = coord
+                .index_oracle(compute_instance)
+                .sufficient_collections(uses);
             // If a timestamp was explicitly requested, use that.
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
@@ -3395,7 +3410,10 @@ impl Coordinator {
                         &optimized_plan,
                         &mut dataflow,
                     )?;
-                mz_transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
+                mz_transform::optimize_dataflow(
+                    &mut dataflow,
+                    &coord.index_oracle(compute_instance),
+                )?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
             };
