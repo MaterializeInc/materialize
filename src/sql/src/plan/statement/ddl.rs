@@ -52,7 +52,7 @@ use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
+use mz_sql_parser::ast::{CreateSecretStatement, CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -2283,6 +2283,24 @@ pub fn plan_create_role(
     }))
 }
 
+pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
+    _: &StatementContext,
+    _: CreateSecretStatement<T>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_secret<T: mz_sql_parser::ast::AstInfo>(
+    _: &StatementContext,
+    CreateSecretStatement {
+        name: _,
+        if_not_exists: _,
+        value: _,
+    }: CreateSecretStatement<T>,
+) -> Result<Plan, anyhow::Error> {
+    bail_unsupported!("CREATE SECRET")
+}
+
 pub fn describe_drop_database(
     _: &StatementContext,
     _: DropDatabaseStatement,
@@ -2354,6 +2372,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
         ObjectType::Role => plan_drop_role(scx, if_exists, names),
+        ObjectType::Secret => unreachable!("DROP SECRET"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }

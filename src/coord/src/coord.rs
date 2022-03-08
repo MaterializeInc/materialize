@@ -1166,6 +1166,7 @@ impl Coordinator {
                                 | Statement::CreateIndex(_)
                                 | Statement::CreateRole(_)
                                 | Statement::CreateSchema(_)
+                                | Statement::CreateSecret(_)
                                 | Statement::CreateSink(_)
                                 | Statement::CreateSource(_)
                                 | Statement::CreateTable(_)
@@ -2531,6 +2532,7 @@ impl Coordinator {
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Role => unreachable!("DROP ROLE not supported"),
+            ObjectType::Secret => unreachable!("DROP SECRET not supported"),
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }

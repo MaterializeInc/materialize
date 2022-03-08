@@ -1574,6 +1574,8 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[TEMPORARY, TABLE])
         {
             self.parse_create_table()
+        } else if self.peek_keyword(SECRET) {
+            self.parse_create_secret()
         } else {
             let index = self.index;
 
@@ -1591,7 +1593,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
                     self.peek_token(),
                 )
             }
@@ -2375,6 +2377,19 @@ impl<'a> Parser<'a> {
             is_user,
             name,
             options,
+        }))
+    }
+
+    fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SECRET)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_identifier()?;
+        self.expect_keyword(AS)?;
+        let value = self.parse_expr()?;
+        Ok(Statement::CreateSecret(CreateSecretStatement {
+            name,
+            if_not_exists,
+            value,
         }))
     }
 

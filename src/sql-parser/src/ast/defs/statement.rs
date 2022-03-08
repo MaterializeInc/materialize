@@ -46,6 +46,7 @@ pub enum Statement<T: AstInfo> {
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
+    CreateSecret(CreateSecretStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement),
     Discard(DiscardStatement),
@@ -94,6 +95,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
+            Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
@@ -765,6 +767,27 @@ impl AstDisplay for CreateRoleOption {
 }
 impl_display!(CreateRoleOption);
 
+/// A `CREATE SECRET` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSecretStatement<T: AstInfo> {
+    pub name: Ident,
+    pub if_not_exists: bool,
+    pub value: Expr<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSecretStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE SECRET ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str("AS ");
+        f.write_node(&self.value);
+    }
+}
+impl_display_t!(CreateSecretStatement);
+
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement<T: AstInfo> {
@@ -1067,6 +1090,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::Type => "TYPES",
             ObjectType::Role => "ROLES",
             ObjectType::Object => "OBJECTS",
+            ObjectType::Secret => "SECRETS",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -1369,6 +1393,7 @@ pub enum ObjectType {
     Type,
     Role,
     Object,
+    Secret,
 }
 
 impl AstDisplay for ObjectType {
@@ -1383,6 +1408,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Object => "OBJECT",
+            ObjectType::Secret => "SECRET",
         })
     }
 }
