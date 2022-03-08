@@ -35,6 +35,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::{
+    client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID},
     sinks::{SinkConnector, SinkConnectorBuilder},
     sources::{AwsExternalId, SourceConnector, Timeline},
 };
@@ -428,6 +429,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -457,6 +459,7 @@ pub struct Index {
     // presently hard to have an `enabled` field in `mz_indexes` if this field
     // does not exist in the catalog.
     pub enabled: bool,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -671,6 +674,13 @@ impl CatalogEntry {
         }
     }
 
+    pub fn sink(&self) -> Option<&Sink> {
+        match self.item() {
+            CatalogItem::Sink(sink) => Some(sink),
+            _ => None,
+        }
+    }
+
     /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
@@ -857,6 +867,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![log.id],
                             enabled: catalog.index_enabled_by_default(&index_id),
+                            compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
                 }
@@ -2087,6 +2098,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2099,6 +2111,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

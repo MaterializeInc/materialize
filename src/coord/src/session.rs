@@ -20,6 +20,7 @@ use derivative::Derivative;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::GlobalId;
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, Row, ScalarType, Timestamp};
@@ -46,7 +47,7 @@ pub struct Session {
     pcx: Option<PlanContext>,
     user: String,
     vars: Vars,
-    drop_sinks: Vec<GlobalId>,
+    drop_sinks: Vec<(ComputeInstanceId, GlobalId)>,
 }
 
 impl Session {
@@ -142,7 +143,7 @@ impl Session {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> (Vec<GlobalId>, TransactionStatus) {
+    pub fn clear_transaction(&mut self) -> (Vec<(ComputeInstanceId, GlobalId)>, TransactionStatus) {
         self.portals.clear();
         self.pcx = None;
         let drop_sinks = mem::take(&mut self.drop_sinks);
@@ -214,8 +215,8 @@ impl Session {
 
     /// Adds a sink that will need to be dropped when the current transaction is
     /// cleared.
-    pub fn add_drop_sink(&mut self, name: GlobalId) {
-        self.drop_sinks.push(name);
+    pub fn add_drop_sink(&mut self, compute_instance: ComputeInstanceId, name: GlobalId) {
+        self.drop_sinks.push((compute_instance, name));
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
@@ -377,7 +378,7 @@ impl Session {
 
     /// Resets the session to its initial state. Returns sinks that need to be
     /// dropped.
-    pub fn reset(&mut self) -> Vec<GlobalId> {
+    pub fn reset(&mut self) -> Vec<(ComputeInstanceId, GlobalId)> {
         let (drop_sinks, _) = self.clear_transaction();
         self.prepared_statements.clear();
         self.vars = Vars::default();
