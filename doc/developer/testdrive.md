@@ -225,6 +225,10 @@ Kafka configuration option use when connecting or performing operations. For exa
 
 Schema registry URL [default: http://localhost:8081]
 
+#### `--loki-addr <URL>`
+
+Loki URL [default: http://localhost:3100]
+
 ## Resource sharing and reuse across tests
 
 By default, `testdrive` will clean up the environment and Mz prior to running each test. In certain situations, two or more testdrive invocations need to run consequtively while being able to operate on the same database objects. The options below help to ensure successful cooperation.
@@ -470,6 +474,8 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 #### `testdrive.materialized-addr`
 
 #### `testdrive.materialized-user`
+
+#### `testdrive.loki-addr`
 
 ## Accessing the environment variables
 
@@ -763,6 +769,12 @@ The test will fail unless the HTTP status code of the response is in the 200 ran
 #### `$ schema-registry-wait-schema schema=...`
 
 Block the test until the specified schema has been defined at the schema registry. This is used to fortify tests that expect an external party, e.g. Debezium to  upload a particular schema.
+
+## Actions on Loki
+
+#### `$ loki-ingest label1=... label2=... ...`
+
+Send log entries to Loki with the given label/value pairs.
 
 ## Actions with `psql`
 
