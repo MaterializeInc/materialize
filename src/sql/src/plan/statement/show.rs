@@ -230,7 +230,7 @@ fn show_schemas<'a>(
     let database = if let Some(from) = from {
         scx.resolve_database(from)?
     } else {
-        scx.resolve_default_database()?
+        scx.resolve_active_database()?
     };
     let query = if !full & !extended {
         format!(
@@ -272,7 +272,7 @@ fn show_tables<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(
@@ -302,7 +302,7 @@ fn show_sources<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = match (full, materialized) {
@@ -364,7 +364,7 @@ fn show_views<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = if !full & !materialized {
@@ -410,7 +410,7 @@ fn show_sinks<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = if full {
@@ -439,7 +439,7 @@ fn show_types<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(
@@ -469,7 +469,7 @@ fn show_all_objects<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(

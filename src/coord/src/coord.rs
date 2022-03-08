@@ -1030,12 +1030,9 @@ impl Coordinator {
 
                 let mut messages = vec![];
                 let catalog = self.catalog.for_session(&session);
-                if catalog
-                    .resolve_database(catalog.default_database())
-                    .is_err()
-                {
+                if catalog.resolve_database(catalog.active_database()).is_err() {
                     messages.push(StartupMessage::UnknownSessionDatabase(
-                        catalog.default_database().into(),
+                        catalog.active_database().into(),
                     ));
                 }
 

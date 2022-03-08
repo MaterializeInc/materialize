@@ -319,7 +319,7 @@ impl<'a> StatementContext<'a> {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
-                None => DatabaseSpecifier::Name(self.catalog.default_database().into()),
+                None => DatabaseSpecifier::Name(self.catalog.active_database().into()),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
             item: name.item,
@@ -334,12 +334,12 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<&dyn CatalogDatabase, PlanError> {
-        let name = self.catalog.default_database();
+    pub fn resolve_active_database(&self) -> Result<&dyn CatalogDatabase, PlanError> {
+        let name = self.catalog.active_database();
         Ok(self.catalog.resolve_database(name)?)
     }
 
-    pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
+    pub fn resolve_active_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
         self.resolve_schema(UnresolvedObjectName::unqualified("public"))
     }
 

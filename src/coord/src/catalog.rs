@@ -2390,7 +2390,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
         &self.user
     }
 
@@ -2400,7 +2400,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             .flatten()
     }
 
-    fn default_database(&self) -> &str {
+    fn active_database(&self) -> &str {
         &self.database
     }
 

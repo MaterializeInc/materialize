@@ -176,7 +176,7 @@ impl Default for TestCatalog {
 }
 
 impl SessionCatalog for TestCatalog {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
         "dummy"
     }
 
@@ -184,7 +184,7 @@ impl SessionCatalog for TestCatalog {
         None
     }
 
-    fn default_database(&self) -> &str {
+    fn active_database(&self) -> &str {
         "dummy"
     }
 
@@ -300,9 +300,9 @@ impl TestCatalog {
                             TestCatalogItem::BaseTable {
                                 name: FullName {
                                     database: DatabaseSpecifier::from(Some(
-                                        self.default_database().to_string(),
+                                        self.active_database().to_string(),
                                     )),
-                                    schema: self.user().to_string(),
+                                    schema: self.active_user().to_string(),
                                     item: source_name,
                                 },
                                 id,
