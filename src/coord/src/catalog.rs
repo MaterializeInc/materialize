@@ -19,28 +19,24 @@ use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::{
-    sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
-    sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
-};
-use mz_expr::PartitionId;
-use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
-use mz_repr::Timestamp;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::{
-    client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID},
-    sinks::{SinkConnector, SinkConnectorBuilder},
-    sources::{AwsExternalId, SourceConnector, Timeline},
+use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
+use mz_dataflow_types::sources::{
+    AwsExternalId, ExternalSourceConnector, MzOffset, SourceConnector, Timeline,
 };
+use mz_expr::PartitionId;
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
+use mz_repr::Timestamp;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw};
@@ -1407,27 +1403,6 @@ impl Catalog {
             }
             ops.push(Op::DropItem(id));
         }
-    }
-
-    /// Returns the [`Op`]s necessary to enable an index.
-    ///
-    /// # Panics
-    /// Panics if `id` is not the `id` of a [`CatalogItem::Index`].
-    pub fn enable_index_ops(&mut self, id: GlobalId) -> Result<Vec<Op>, Error> {
-        Ok(match &self.get_by_id(&id).item {
-            // no-op
-            CatalogItem::Index(index) if index.enabled => vec![],
-            CatalogItem::Index(index) => {
-                vec![Op::UpdateItem {
-                    id,
-                    to_item: CatalogItem::Index(Index {
-                        enabled: true,
-                        ..index.clone()
-                    }),
-                }]
-            }
-            _ => unreachable!("cannot enable non-indexes"),
-        })
     }
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
