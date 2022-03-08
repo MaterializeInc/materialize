@@ -22,7 +22,6 @@ use std::env;
 use std::ffi::CStr;
 use std::fmt;
 use std::fs;
-use std::io;
 use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
@@ -42,18 +41,15 @@ use clap::{AppSettings, Parser};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use sysinfo::{ProcessorExt, SystemExt};
+use uuid::Uuid;
+
+use materialized::TlsMode;
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::metric;
-use mz_ore::metrics::ThirdPartyMetric;
-use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
-use sysinfo::{ProcessorExt, SystemExt};
-use uuid::Uuid;
-
-use self::tracing::MetricsRecorderLayer;
-use materialized::TlsMode;
+use mz_ore::metrics::MetricsRegistry;
 
 mod sys;
 mod tracing;
@@ -70,7 +66,7 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 /// The streaming SQL materialized view engine.
 #[derive(Parser)]
 #[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
-struct Args {
+pub struct Args {
     // === Special modes. ===
     /// Print version information and exit.
     ///
@@ -424,14 +420,23 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
-    panic::set_hook(Box::new(handle_panic));
-
+    // Configure signal handling as soon as possible. We want signals to be
+    // handled to our liking ASAP.
     if !args.no_sigbus_sigsegv_backtraces {
         sys::enable_sigbus_sigsegv_backtraces()?;
     }
-
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Install a custom panic handler that instructs users to file a bug report.
+    // This requires that we configure tracing, so that the panic can be
+    // reported as a trace event.
+    //
+    // Avoid adding code above this point, because panics in that code won't get
+    // handled by the custom panic handler.
+    let metrics_registry = MetricsRegistry::new();
+    tracing::configure(&args, &metrics_registry)?;
+    panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -546,96 +551,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 .unwrap_or_else(|| Duration::from_secs(3600)),
         })
     };
-
-    let metrics_registry = MetricsRegistry::new();
-    // Configure tracing.
-    {
-        use tracing_subscriber::filter::{LevelFilter, Targets};
-        use tracing_subscriber::fmt;
-        use tracing_subscriber::layer::{Layer, SubscriberExt};
-        use tracing_subscriber::util::SubscriberInitExt;
-
-        let filter = Targets::from_str(&args.log_filter)
-            .context("parsing --log-filter option")?
-            // Ensure panics are logged, even if the user has specified
-            // otherwise.
-            .with_target("panic", LevelFilter::ERROR);
-
-        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
-            .register_third_party_visible(metric!(
-                name: "mz_log_message_total",
-                help: "The number of log messages produced by this materialized instance",
-                var_labels: ["severity"],
-            ));
-
-        match args.log_file.as_deref() {
-            Some("stderr") => {
-                // The user explicitly directed logs to stderr. Log only to
-                // stderr with the user-specified `filter`.
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-            log_file => {
-                // Logging to a file. If the user did not explicitly specify
-                // a file, bubble up warnings and errors to stderr.
-                let stderr_level = match log_file {
-                    Some(_) => LevelFilter::OFF,
-                    None => LevelFilter::WARN,
-                };
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with({
-                        let path = match log_file {
-                            Some(log_file) => PathBuf::from(log_file),
-                            None => data_directory.join("materialized.log"),
-                        };
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent).with_context(|| {
-                                format!("creating log file directory: {}", parent.display())
-                            })?;
-                        }
-                        let file = fs::OpenOptions::new()
-                            .append(true)
-                            .create(true)
-                            .open(&path)
-                            .with_context(|| format!("creating log file: {}", path.display()))?;
-                        fmt::layer()
-                            .with_ansi(false)
-                            .with_writer(move || {
-                                file.try_clone().expect("failed to clone log file")
-                            })
-                            .with_filter(filter.clone())
-                    })
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(stderr_level)
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-        }
-    }
 
     // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector(&metrics_registry);
