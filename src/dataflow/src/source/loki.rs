@@ -104,11 +104,21 @@ impl SimpleSource for LokiSourceReader {
                 Ok(result) => {
                     let Data::Streams(streams) = result.data;
 
+                    #[derive(Debug, Serialize)]
+                    struct LokiRow<'a> {
+                        line: &'a str,
+                        labels: &'a HashMap<String, String>,
+                    }
+
                     let lines: Vec<String> = streams
                         .iter()
                         .flat_map(|s| {
                             s.values.iter().map(|v| {
-                                json!({"line": v.line.clone(), "labels": s.labels}).to_string()
+                                serde_json::to_string(&LokiRow {
+                                    line: &v.line,
+                                    labels: &s.labels,
+                                })
+                                .unwrap()
                             })
                         })
                         .collect();
