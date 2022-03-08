@@ -64,10 +64,20 @@ impl Client for RemoteClient {
     }
 }
 
+/// Types of compute clients we manage.
+pub enum ComputeClientFlavor {
+    /// A virtual compute client, hosted on the storage server.
+    Virtual,
+    /// A remote compute client, likely a network connection away.
+    Remote(Box<dyn Client + Send + 'static>),
+}
+
 /// A [Client] backed by separate clients for storage and compute.
 pub struct SplitClient<S> {
+    /// Client on which storage commands are executed, and where virtual compute instances are created.
     storage_client: S,
-    compute_clients: HashMap<ComputeInstanceId, Box<dyn Client + Send + 'static>>,
+    /// A map of remote compute instances.
+    compute_clients: HashMap<ComputeInstanceId, ComputeClientFlavor>,
 }
 
 impl<S: Client> SplitClient<S> {
@@ -84,49 +94,56 @@ impl<S: Client> SplitClient<S> {
 impl<S: Client> Client for SplitClient<S> {
     async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SplitClient: Sending dataflow command: {:?}", cmd);
-        match cmd {
-            Command::Compute(
-                ComputeCommand::CreateInstance(InstanceConfig::Virtual, _logging),
-                _id,
-            ) => panic!("SplitClient cannot host a virtual instance."),
-            Command::Compute(
-                ComputeCommand::CreateInstance(InstanceConfig::Remote(addr), logging),
-                id,
-            ) => {
-                let mut client = RemoteClient::connect(&addr).await?;
-                client
-                    .send(Command::Compute(
-                        ComputeCommand::CreateInstance(InstanceConfig::Remote(addr), logging),
-                        id,
-                    ))
-                    .await?;
-                self.compute_clients.insert(id, Box::new(client));
-                Ok(())
-            }
-            Command::Compute(ComputeCommand::DropInstance, id) => {
-                if let Some(mut client) = self.compute_clients.remove(&id) {
-                    client
-                        .send(Command::Compute(ComputeCommand::DropInstance, id))
-                        .await
-                } else {
-                    Err(anyhow!("Unknown compute instance: {id:?}"))
+        // Ensure that a client exists, if we are asked to create one.
+        if let Command::Compute(ComputeCommand::CreateInstance(config, _logging), instance) = &cmd {
+            assert!(self.compute_clients.get(instance).is_none());
+            let client = match config {
+                InstanceConfig::Virtual => ComputeClientFlavor::Virtual,
+                InstanceConfig::Remote(addr) => {
+                    ComputeClientFlavor::Remote(Box::new(RemoteClient::connect(&addr).await?))
                 }
-            }
-            Command::Compute(cmd, id) => {
-                let client = self
-                    .compute_clients
-                    .get_mut(&id)
-                    .ok_or(anyhow!("Unknown compute instance: {id:?}"))?;
-                client.send(Command::Compute(cmd, id)).await
-            }
-            cmd @ Command::Storage(_) => self.storage_client.send(cmd).await,
+            };
+            self.compute_clients.insert(*instance, client);
         }
+
+        // Notice whether we should drop the instance as a result of the command.
+        let drop_instance = if let Command::Compute(ComputeCommand::DropInstance, instance) = &cmd {
+            Some(*instance)
+        } else {
+            None
+        };
+
+        // Route the command appropriately
+        match cmd {
+            Command::Compute(inner, instance) => match self.compute_clients.get_mut(&instance) {
+                Some(ComputeClientFlavor::Virtual) => {
+                    self.storage_client
+                        .send(Command::Compute(inner, instance))
+                        .await?;
+                }
+                Some(ComputeClientFlavor::Remote(client)) => {
+                    client.send(Command::Compute(inner, instance)).await?;
+                }
+                None => {
+                    Err(anyhow!("Unknown compute instance: {instance:?}"))?;
+                }
+            },
+            cmd @ Command::Storage(_) => self.storage_client.send(cmd).await?,
+        }
+
+        if let Some(instance) = drop_instance {
+            self.compute_clients.remove(&instance);
+        }
+
+        Ok(())
     }
     async fn recv(&mut self) -> Option<Response> {
         // TODO: We currently don't have a good way to receive from many clients
         let mut futures = FuturesUnordered::new();
         for client in self.compute_clients.values_mut() {
-            futures.push(client.recv());
+            if let ComputeClientFlavor::Remote(client) = client {
+                futures.push(client.recv());
+            }
         }
         tokio::select! {
             response = futures.select_next_some() => response,
