@@ -88,7 +88,7 @@
 //! unsatisfactory long term. We suspect that we can continue to imbue the oks
 //! stream with semantics if we are very careful in describing what data should
 //! and should not be produced upon encountering an error. Roughly speaking, the
-//! oks stream could represent the correct result of the computation where all
+//! oks stream could mz_represent the correct result of the computation where all
 //! rows that caused an error have been pruned from the stream. There are
 //! strange and confusing questions here around foreign keys, though: what if
 //! the optimizer proves that a particular key must exist in a collection, but
@@ -108,13 +108,13 @@ use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
 use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt as IteratorExt;
-use mz_repr::{Row, Timestamp};
+use mz_repr::Row;
 
 use crate::arrangement::manager::TraceBundle;
 pub use crate::render::context::CollectionBundle;
@@ -195,7 +195,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                             let mut borrow = shared_frontier.borrow_mut();
                             for time1 in borrow.iter() {
                                 for time2 in &input.frontier.frontier() {
-                                    use differential_dataflow::lattice::Lattice;
                                     joined_frontier.insert(time1.join(time2));
                                 }
                             }
@@ -299,16 +298,17 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
     })
 }
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
+impl<'g, G, T> Context<Child<'g, G, T>, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: Refines<G::Timestamp> + RenderTimestamp,
 {
     pub(crate) fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         scope: &mut G,
-        region: &mut Child<'g, G, G::Timestamp>,
+        region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -344,17 +344,28 @@ where
             );
         }
     }
+}
 
-    pub(crate) fn build_object(
-        &mut self,
-        scope: &mut Child<'g, G, G::Timestamp>,
-        object: BuildDesc<plan::Plan>,
-    ) {
+// This implementation block allows child timestamps to vary from parent timestamps.
+
+impl<G> Context<G, Row, mz_repr::Timestamp>
+where
+    G: Scope,
+    G::Timestamp: Refines<mz_repr::Timestamp> + Lattice + RenderTimestamp,
+{
+    pub(crate) fn build_object(&mut self, scope: &mut G, object: BuildDesc<plan::Plan>) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.plan, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
+}
 
+// This implementation block requires the scopes have the same timestamp as the trace manager.
+// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, G::Timestamp>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
     pub(crate) fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
@@ -405,41 +416,55 @@ where
     }
 }
 
-impl<G> Context<G, Row, Timestamp>
+impl<G> Context<G, Row, mz_repr::Timestamp>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
+    G::Timestamp: Refines<mz_repr::Timestamp> + Lattice + RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
-    /// The return type reflects the uncertainty about the data representation, perhaps
+    /// The return type reflects the uncertainty about the data mz_representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(
         &mut self,
         plan: plan::Plan,
         scope: &mut G,
         worker_index: usize,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, mz_repr::Timestamp> {
         match plan {
             Plan::Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (mut rows, errs) = match rows {
+                let (rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
 
                 // We should advance times in constant collections to start from `as_of`.
-                use differential_dataflow::lattice::Lattice;
-                for (_, time, _) in rows.iter_mut() {
-                    time.advance_by(self.as_of_frontier.borrow());
-                }
-                let mut error_time: G::Timestamp = timely::progress::Timestamp::minimum();
+                let as_of_frontier = self.as_of_frontier.clone();
+                let ok_collection = rows
+                    .into_iter()
+                    .map(move |(row, mut time, diff)| {
+                        time.advance_by(as_of_frontier.borrow());
+                        (
+                            row,
+                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
+                            diff,
+                        )
+                    })
+                    .to_stream(scope)
+                    .as_collection();
+
+                let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
                 error_time.advance_by(self.as_of_frontier.borrow());
-
-                let ok_collection = rows.into_iter().to_stream(scope).as_collection();
-
                 let err_collection = errs
                     .into_iter()
-                    .map(move |e| (DataflowError::from(e), error_time, 1))
+                    .map(move |e| {
+                        (
+                            DataflowError::from(e),
+                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
+                            1,
+                        )
+                    })
                     .to_stream(scope)
                     .as_collection();
 
@@ -570,5 +595,44 @@ where
                 input.ensure_collections(keys, input_key, input_mfp)
             }
         }
+    }
+}
+
+use differential_dataflow::lattice::Lattice;
+use timely::progress::timestamp::Refines;
+
+/// A timestamp type that can be used for operations within MZ's dataflow layer.
+pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> {
+    /// The system timestamp component of the timestamp.
+    ///
+    /// This is useful for manipulating the system time, as when delaying
+    /// updates for subsequent cancellation, as with monotonic reduction.
+    fn system_time(&mut self) -> &mut mz_repr::Timestamp;
+    /// Effects a system delay in terms of the timestamp summary.
+    fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// The event timestamp component of the timestamp.
+    fn event_time(&mut self) -> &mut mz_repr::Timestamp;
+    /// Effects an event delay in terms of the timestamp summary.
+    fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// Steps the timestamp back so that logical compaction to the output will
+    /// not conflate `self` with any historical times.
+    fn step_back(&self) -> Self;
+}
+
+impl RenderTimestamp for mz_repr::Timestamp {
+    fn system_time(&mut self) -> &mut mz_repr::Timestamp {
+        self
+    }
+    fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn event_time(&mut self) -> &mut mz_repr::Timestamp {
+        self
+    }
+    fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn step_back(&self) -> Self {
+        self.saturating_sub(1)
     }
 }
