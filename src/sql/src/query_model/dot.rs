@@ -21,9 +21,7 @@ use mz_ore::str::separated;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Write};
 
-use super::attribute::core::{
-    dependency_order, derive_dft_attributes, transitive_closure, Attribute,
-};
+use super::attribute::core::{Attribute, RequiredAttributes};
 use super::attribute::relation_type::RelationType;
 
 impl Model {
@@ -73,18 +71,13 @@ impl<'a> DotGenerator<'a> {
 
     /// Derive attributes required for rendering the given [`Model`].
     fn derive_required_attributes(&self, model: &mut Model, start_box: BoxId) {
-        // collect a set of attributes required by the given rules
+        // collect a set of required attributes for rendering
         let mut attributes = HashSet::new();
         if self.with_types {
             attributes.insert(Box::new(RelationType) as Box<dyn Attribute>);
         }
-        // add missing dependencies required to derive this set of attributes
-        transitive_closure(&mut attributes);
-        // order transitive closure topologically based on dependency order
-        let attributes = dependency_order(attributes);
-        // compute initial values of the required derived attributes
-
-        derive_dft_attributes(model, &attributes, start_box);
+        // derive the required derived attributes
+        RequiredAttributes::from(attributes).derive(model, start_box);
     }
 
     /// Generates a graphviz graph for the given model, labeled with `label`.

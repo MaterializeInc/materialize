@@ -139,7 +139,6 @@ pub(crate) struct QueryBox {
     /// rows from its input boxes. See [DistinctOperation].
     pub distinct: DistinctOperation,
     /// Derived attributes
-    #[allow(dead_code)]
     pub attributes: Attributes,
 }
 
