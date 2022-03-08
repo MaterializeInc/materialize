@@ -3841,7 +3841,7 @@ impl<'a> Parser<'a> {
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+            OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
         ]) {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
@@ -3854,6 +3854,7 @@ impl<'a> Parser<'a> {
                     TABLES => ObjectType::Table,
                     TYPES => ObjectType::Type,
                     VIEWS => ObjectType::View,
+                    SECRETS => ObjectType::Secret,
                     val => panic!(
                         "`parse_one_of_keywords` returned an impossible value: {}",
                         val
