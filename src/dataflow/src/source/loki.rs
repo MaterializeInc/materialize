@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{self, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
