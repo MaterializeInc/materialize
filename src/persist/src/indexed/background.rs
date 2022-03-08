@@ -249,19 +249,15 @@ impl<B: Blob> Maintainer<B> {
             debug_assert!(consolidation_buffer.is_empty());
 
             // Pull more data if either of the holding pens from first or second are empty
-            //
-            // TODO: we can simplify this logic once empty trace batch parts are disallowed.
-            while first_updates.is_empty() {
-                match first_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut first_updates)?,
-                    None => break,
+            if first_updates.is_empty() {
+                if let Some(key) = first_batch_iter.next() {
+                    Self::load_trace_batch_part(&blob, key, &mut first_updates)?;
                 }
             }
 
-            while second_updates.is_empty() {
-                match second_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut second_updates)?,
-                    None => break,
+            if second_updates.is_empty() {
+                if let Some(key) = second_batch_iter.next() {
+                    Self::load_trace_batch_part(&blob, key, &mut second_updates)?;
                 }
             }
 
@@ -734,80 +730,6 @@ mod tests {
                     vec![(("k".as_bytes(), "v".as_bytes()), 2, 1)],
                     vec![(("k3".as_bytes(), "v3".as_bytes()), 2, 1)],
                 ],
-                b1_desc: desc_from(1, 3, 0),
-                since: 2,
-                merged: TraceBatchMeta {
-                    keys: vec!["MERGED-KEY-0".into()],
-                    format: ProtoBatchFormat::ParquetKvtd,
-                    desc: desc_from(0, 3, 2),
-                    level: 0,
-                    size_bytes: 0,
-                },
-                expected_updates: vec![
-                    (("k".as_bytes(), "v".as_bytes()), 2, 2),
-                    (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                    (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                ],
-            },
-            CompactionTestCase {
-                b0: vec![
-                    vec![],
-                    vec![(("k".as_bytes(), "v".as_bytes()), 0, 1)],
-                    vec![],
-                    vec![(("k2".as_bytes(), "v2".as_bytes()), 0, 1)],
-                    vec![],
-                ],
-                b0_desc: desc_from(0, 1, 0),
-                b1: vec![
-                    vec![(("k".as_bytes(), "v".as_bytes()), 2, 1)],
-                    vec![(("k3".as_bytes(), "v3".as_bytes()), 2, 1)],
-                ],
-                b1_desc: desc_from(1, 3, 0),
-                since: 2,
-                merged: TraceBatchMeta {
-                    keys: vec!["MERGED-KEY-0".into()],
-                    format: ProtoBatchFormat::ParquetKvtd,
-                    desc: desc_from(0, 3, 2),
-                    level: 0,
-                    size_bytes: 0,
-                },
-                expected_updates: vec![
-                    (("k".as_bytes(), "v".as_bytes()), 2, 2),
-                    (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                    (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                ],
-            },
-            CompactionTestCase {
-                b0: vec![vec![], vec![], vec![]],
-                b0_desc: desc_from(0, 1, 0),
-                b1: vec![vec![
-                    (("k".as_bytes(), "v".as_bytes()), 2, 2),
-                    (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                    (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                ]],
-                b1_desc: desc_from(1, 3, 0),
-                since: 2,
-                merged: TraceBatchMeta {
-                    keys: vec!["MERGED-KEY-0".into()],
-                    format: ProtoBatchFormat::ParquetKvtd,
-                    desc: desc_from(0, 3, 2),
-                    level: 0,
-                    size_bytes: 0,
-                },
-                expected_updates: vec![
-                    (("k".as_bytes(), "v".as_bytes()), 2, 2),
-                    (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                    (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                ],
-            },
-            CompactionTestCase {
-                b0: vec![],
-                b0_desc: desc_from(0, 1, 0),
-                b1: vec![vec![
-                    (("k".as_bytes(), "v".as_bytes()), 2, 2),
-                    (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                    (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                ]],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
                 merged: TraceBatchMeta {

@@ -257,9 +257,8 @@ pub struct BlobUnsealedBatch {
 /// - The values in updates are "consolidated", i.e. (key, value, time) is
 ///   unique.
 /// - All entries have a non-zero diff.
-///
-/// TODO: disallow empty trace batch parts in the future so there is one unique way
-/// to represent an empty trace batch.
+/// - Updates has at least one ColumnarRecords, and all ColumnarRecords in updates
+///   are empty.
 #[derive(Clone, Debug)]
 pub struct BlobTraceBatchPart {
     /// Which updates are included in this batch.
@@ -653,6 +652,18 @@ impl BlobTraceBatchPart {
         // up making sense.
         if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
+        }
+
+        if self.updates.is_empty() {
+            return Err(Error::from("invalid trace batch part: empty updates"));
+        }
+
+        for update in self.updates.iter() {
+            if update.len() == 0 {
+                return Err(
+                    format!("invalid trace batch part: empty chunk {:?}", self.updates).into(),
+                );
+            }
         }
 
         let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, u64)> = None;
@@ -1137,7 +1148,10 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![]),
         };
-        assert_eq!(b.validate(), Ok(()));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("invalid trace batch part: empty updates"))
+        );
 
         // Invalid desc
         let b: BlobTraceBatchPart = BlobTraceBatchPart {
