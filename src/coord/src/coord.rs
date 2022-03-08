@@ -2900,7 +2900,7 @@ impl Coordinator {
                     let read_holds = read_holds::ReadHolds {
                         time: timestamp,
                         id_bundle,
-                        compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+                        compute_instance,
                     };
                     self.acquire_read_holds(&read_holds).await;
                     let txn_reads = TxnReads {
@@ -3212,7 +3212,7 @@ impl Coordinator {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
 
-        let since = self.least_valid_read(&id_bundle, DEFAULT_COMPUTE_INSTANCE_ID);
+        let since = self.least_valid_read(&id_bundle, compute_instance);
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -3273,7 +3273,7 @@ impl Coordinator {
                     // advanced already.
                     self.get_local_read_ts()
                 } else {
-                    let upper = self.least_valid_write(&id_bundle, DEFAULT_COMPUTE_INSTANCE_ID);
+                    let upper = self.least_valid_write(&id_bundle, compute_instance);
 
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
