@@ -298,7 +298,7 @@ pub struct Coordinator {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timeline: timeline::TimestampOracle,
+    global_timeline: timeline::TimestampOracle<Timestamp>,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -4604,7 +4604,7 @@ pub async fn serve(
                 logging,
                 internal_cmd_tx,
                 metric_scraper,
-                global_timeline: timeline::TimestampOracle::new(now()),
+                global_timeline: timeline::TimestampOracle::new(now(), move || (&*now)()),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -5289,41 +5289,55 @@ mod timeline {
     ///
     /// At each time, writes happen and then reads happen, meaning that writes at a time are
     /// visible to exactly reads at that time or greater, and no other times.
-    enum TimestampOracleState {
+    enum TimestampOracleState<T> {
         /// The timeline is producing collection updates timestamped with the argument.
-        Writing(mz_repr::Timestamp),
+        Writing(T),
         /// The timeline is observing collections aot the time of the argument.
-        Reading(mz_repr::Timestamp),
+        Reading(T),
     }
 
     /// A type that provides write and read timestamps, reads observe exactly their preceding writes..
     ///
     /// Specifically, all read timestamps will be greater or equal to all previously reported write timestamps,
     /// and strictly less than all subsequently emitted write timestamps.
-    pub struct TimestampOracle {
-        state: TimestampOracleState,
-        advance_to: Option<mz_repr::Timestamp>,
+    pub struct TimestampOracle<T> {
+        state: TimestampOracleState<T>,
+        advance_to: Option<T>,
+        next: Box<dyn Fn() -> T>,
     }
 
-    impl TimestampOracle {
-        /// Create a new timeline, starting at the indicated time.
-        pub fn new(initially: mz_repr::Timestamp) -> Self {
+    impl<T: super::CoordTimestamp> TimestampOracle<T> {
+        /// Create a new timeline, starting at the indicated time. `next` generates
+        /// new timestamps when invoked. The timestamps have no requirements, and can
+        /// retreat from previous invocations.
+        pub fn new<F>(initially: T, next: F) -> Self
+        where
+            F: Fn() -> T + 'static,
+        {
             Self {
-                state: TimestampOracleState::Writing(initially),
+                state: TimestampOracleState::Writing(initially.clone()),
                 advance_to: Some(initially),
+                next: Box::new(next),
             }
         }
 
         /// Acquire a new timestamp for writing.
         ///
-        /// This timestamp will be strictly greater than all prior values of `self.read_ts()`,
-        /// and less than or equal to all subsequent values of `self.read_ts()`.
-        pub fn write_ts(&mut self) -> mz_repr::Timestamp {
-            match self.state {
-                TimestampOracleState::Writing(ts) => ts,
+        /// This timestamp will be strictly greater than all prior values of
+        /// `self.read_ts()`, and less than or equal to all subsequent values of
+        /// `self.read_ts()`.
+        pub fn write_ts(&mut self) -> T {
+            match &self.state {
+                TimestampOracleState::Writing(ts) => ts.clone(),
                 TimestampOracleState::Reading(ts) => {
-                    self.state = TimestampOracleState::Writing(ts + 1);
-                    ts + 1
+                    let mut next = (self.next)();
+                    if next.less_equal(&ts) {
+                        next = ts.step_forward();
+                    }
+                    assert!(ts.less_than(&next));
+                    self.state = TimestampOracleState::Writing(next.clone());
+                    self.advance_to = Some(next.clone());
+                    next
                 }
             }
         }
@@ -5331,12 +5345,14 @@ mod timeline {
         ///
         /// This timestamp will be greater or equal to all prior values of `self.write_ts()`,
         /// and strictly less than all subsequent values of `self.write_ts()`.
-        pub fn read_ts(&mut self) -> mz_repr::Timestamp {
-            match self.state {
-                TimestampOracleState::Reading(ts) => ts,
+        pub fn read_ts(&mut self) -> T {
+            match &self.state {
+                TimestampOracleState::Reading(ts) => ts.clone(),
                 TimestampOracleState::Writing(ts) => {
-                    self.state = TimestampOracleState::Reading(ts);
-                    self.advance_to = Some(ts + 1);
+                    // Avoid rust borrow complaint.
+                    let ts = ts.clone();
+                    self.state = TimestampOracleState::Reading(ts.clone());
+                    self.advance_to = Some(ts.step_forward());
                     ts
                 }
             }
@@ -5345,19 +5361,19 @@ mod timeline {
         ///
         /// If `lower_bound` is strictly greater than the current time (of either state), the
         /// resulting state will be `Writing(lower_bound)`.
-        pub fn fast_forward(&mut self, lower_bound: mz_repr::Timestamp) {
-            match self.state {
+        pub fn fast_forward(&mut self, lower_bound: T) {
+            match &self.state {
                 TimestampOracleState::Writing(ts) => {
-                    if lower_bound > ts {
-                        self.advance_to = Some(lower_bound);
+                    if ts.less_than(&lower_bound) {
+                        self.advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
                 TimestampOracleState::Reading(ts) => {
-                    if lower_bound > ts {
+                    if ts.less_than(&lower_bound) {
                         // This may result in repetition in the case `lower_bound == ts + 1`.
                         // This is documented as fine, and concerned users can protect themselves.
-                        self.advance_to = Some(lower_bound);
+                        self.advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
@@ -5367,7 +5383,7 @@ mod timeline {
         ///
         /// This method may produce the same value multiple times, and should not be used as a test for whether
         /// a write-to-read transition has occurred, so much as an advisory signal that write capabilities can advance.
-        pub fn should_advance_to(&mut self) -> Option<mz_repr::Timestamp> {
+        pub fn should_advance_to(&mut self) -> Option<T> {
             self.advance_to.take()
         }
     }
@@ -5376,6 +5392,16 @@ mod timeline {
 pub trait CoordTimestamp:
     timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug
 {
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
 }
 
-impl CoordTimestamp for mz_repr::Timestamp {}
+impl CoordTimestamp for mz_repr::Timestamp {
+    fn step_forward(&self) -> Self {
+        match self.checked_add(1) {
+            Some(ts) => ts,
+            None => panic!("could not step forward"),
+        }
+    }
+}
