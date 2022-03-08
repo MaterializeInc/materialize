@@ -1565,6 +1565,8 @@ impl<'a> Parser<'a> {
             self.parse_create_type()
         } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
             self.parse_create_role()
+        } else if self.peek_keyword(CLUSTER) {
+            self.parse_create_cluster()
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
@@ -2432,6 +2434,34 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_identifier()?;
+        let _ = self.parse_keyword(WITH);
+        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
+            vec![]
+        } else {
+            self.parse_comma_separated(Parser::parse_cluster_option)?
+        };
+        Ok(Statement::CreateCluster(CreateClusterStatement {
+            name,
+            if_not_exists,
+            options,
+        }))
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
+        match self.expect_one_of_keywords(&[VIRTUAL, SIZE])? {
+            VIRTUAL => Ok(ClusterOption::Virtual),
+            SIZE => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::Size(self.parse_literal_string()?))
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
         if self.parse_keyword(IF) {
             self.expect_keyword(EXISTS)?;
@@ -2489,7 +2519,7 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW, SECRET,
+            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2506,6 +2536,7 @@ impl<'a> Parser<'a> {
             }
             Some(INDEX) => ObjectType::Index,
             Some(ROLE) | Some(USER) => ObjectType::Role,
+            Some(CLUSTER) => ObjectType::Cluster,
             Some(SCHEMA) => ObjectType::Schema,
             Some(SINK) => ObjectType::Sink,
             Some(SOURCE) => ObjectType::Source,
@@ -2516,8 +2547,8 @@ impl<'a> Parser<'a> {
             _ => {
                 return self.expected(
                     self.peek_pos(),
-                    "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, \
-                     TABLE, TYPE, USER, VIEW, SECRET after DROP",
+                    "DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, \
+                     TABLE, TYPE, USER, VIEW after DROP",
                     self.peek_token(),
                 );
             }
@@ -3810,12 +3841,13 @@ impl<'a> Parser<'a> {
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+            OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
         ]) {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
                     OBJECTS => ObjectType::Object,
                     ROLES | USERS => ObjectType::Role,
+                    CLUSTERS => ObjectType::Cluster,
                     SCHEMAS => ObjectType::Schema,
                     SINKS => ObjectType::Sink,
                     SOURCES => ObjectType::Source,

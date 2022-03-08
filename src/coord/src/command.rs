@@ -188,6 +188,10 @@ pub enum ExecuteResponse {
     },
     /// The requested role was created.
     CreatedRole,
+    /// The requested compute instance was created.
+    CreatedComputeInstance {
+        existed: bool,
+    },
     /// The requested index was created.
     CreatedIndex {
         existed: bool,
@@ -224,6 +228,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
+    /// The requested compute instance was dropped.
+    DroppedComputeInstance,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.

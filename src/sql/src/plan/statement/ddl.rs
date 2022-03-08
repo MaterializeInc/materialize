@@ -52,12 +52,14 @@ use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{CreateSecretStatement, CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
+use mz_sql_parser::ast::{
+    CreateClusterStatement, CreateSecretStatement, CsrSeedCompiledOrLegacy, SourceIncludeMetadata,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
-    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ColumnOption,
-    Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ClusterOption,
+    ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
     CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
@@ -79,11 +81,12 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
-    Source, Table, Type, View,
+    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, CreateComputeInstancePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source, Table, Type,
+    View,
 };
 use crate::pure::Schema;
 
@@ -2283,6 +2286,56 @@ pub fn plan_create_role(
     }))
 }
 
+pub fn describe_create_cluster(
+    _: &StatementContext,
+    _: CreateClusterStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_cluster(
+    scx: &StatementContext,
+    CreateClusterStatement {
+        name,
+        if_not_exists,
+        options,
+    }: CreateClusterStatement,
+) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("CREATE CLUSTER")?;
+
+    let mut is_virtual = false;
+    let mut size = None;
+
+    for option in options {
+        match option {
+            ClusterOption::Virtual => {
+                if is_virtual {
+                    bail!("VIRTUAL specified more than once");
+                }
+                is_virtual = true;
+            }
+            ClusterOption::Size(s) => {
+                if size.is_some() {
+                    bail!("SIZE specified more than once");
+                }
+                size = Some(s);
+            }
+        }
+    }
+
+    let config = match (is_virtual, size) {
+        (false, Some(size)) => ComputeInstanceConfig::Real { size },
+        (false, None) | (true, None) => ComputeInstanceConfig::Virtual,
+        (true, Some(_)) => bail!("VIRTUAL and SIZE options cannot be specified together"),
+    };
+
+    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
+        name: normalize::ident(name),
+        if_not_exists,
+        config,
+    }))
+}
+
 pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
     _: &StatementContext,
     _: CreateSecretStatement<T>,
@@ -2372,6 +2425,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
         ObjectType::Role => plan_drop_role(scx, if_exists, names),
+        ObjectType::Cluster => plan_drop_cluster(scx, if_exists, names),
         ObjectType::Secret => bail_unsupported!("DROP SECRET"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
@@ -2445,6 +2499,37 @@ pub fn plan_drop_role(
         }
     }
     Ok(Plan::DropRoles(DropRolesPlan { names: out }))
+}
+
+pub fn plan_drop_cluster(
+    scx: &StatementContext,
+    if_exists: bool,
+    names: Vec<UnresolvedObjectName>,
+) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("DROP CLUSTER")?;
+
+    let mut out = vec![];
+    for name in names {
+        let name = if name.0.len() == 1 {
+            name.0.into_element()
+        } else {
+            bail!("invalid cluster name {}", name.to_string().quoted())
+        };
+        if name.as_str() == scx.catalog.active_compute_instance() {
+            bail!("active cluster cannot be dropped");
+        }
+        match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
+            Ok(_) => out.push(name.into_string()),
+            Err(_) if if_exists => {
+                // TODO(benesch): generate a notice indicating that the
+                // cluster does not exist.
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(Plan::DropComputeInstances(DropComputeInstancesPlan {
+        names: out,
+    }))
 }
 
 pub fn plan_drop_items(

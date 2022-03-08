@@ -216,6 +216,7 @@ pub fn show_objects<'a>(
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
+        ObjectType::Cluster => bail_unsupported!("SHOW CLUSTERS"),
         ObjectType::Secret => bail_unsupported!("SHOW SECRETS"),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }

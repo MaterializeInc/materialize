@@ -22,7 +22,8 @@ use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{
-    CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+    CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
+    SessionCatalog,
 };
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
@@ -112,6 +113,7 @@ pub fn describe(
         Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
+        Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
@@ -203,6 +205,7 @@ pub fn plan(
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
+        Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
@@ -383,6 +386,14 @@ impl<'a> StatementContext<'a> {
     ) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: Option<&Ident>,
+    ) -> Result<&dyn CatalogComputeInstance, PlanError> {
+        let name = name.map(|name| name.as_str());
+        Ok(self.catalog.resolve_compute_instance(name)?)
     }
 
     pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {

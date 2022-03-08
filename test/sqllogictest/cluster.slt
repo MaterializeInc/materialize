@@ -1,0 +1,44 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Basic tests of the `CREATE CLUSTER` and `DROP CLUSTER` DDL statements.
+
+mode cockroach
+
+# Creating a cluster without any options should work. (It creates a virtual
+# cluster.)
+statement ok
+CREATE CLUSTER foo
+
+# Creating a virtual cluster should "work". (Nothing happens presently.)
+statement ok
+CREATE CLUSTER foo VIRTUAL
+
+# Creating a sized cluster should be rejected.
+statement error SIZE not yet supported
+CREATE CLUSTER foo SIZE 'small'
+
+# Test invalid option combinations.
+
+statement error VIRTUAL specified more than once
+CREATE CLUSTER foo VIRTUAL, VIRTUAL
+
+statement error SIZE specified more than once
+CREATE CLUSTER foo SIZE 'small', SIZE 'medium'
+
+statement error VIRTUAL and SIZE options cannot be specified together
+CREATE CLUSTER foo VIRTUAL, SIZE 'small'
+
+# Test invalid DROPs.
+
+statement error active cluster cannot be dropped
+DROP CLUSTER default
+
+statement error unknown cluster 'foo'
+DROP CLUSTER foo

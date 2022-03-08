@@ -9,8 +9,8 @@
 
 use crate::ast::{Expr, Raw};
 use crate::catalog::{
-    CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, CatalogTypeDetails, SessionCatalog,
+    CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -188,6 +188,10 @@ impl SessionCatalog for TestCatalog {
         "dummy"
     }
 
+    fn active_compute_instance(&self) -> &str {
+        "dummy"
+    }
+
     fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
         unimplemented!();
     }
@@ -219,6 +223,17 @@ impl SessionCatalog for TestCatalog {
             return Ok(result);
         }
         Err(CatalogError::UnknownFunction(partial_name.item.clone()))
+    }
+
+    fn resolve_compute_instance(
+        &self,
+        compute_instance_name: Option<&str>,
+    ) -> Result<&dyn CatalogComputeInstance, CatalogError> {
+        Err(CatalogError::UnknownComputeInstance(
+            compute_instance_name
+                .unwrap_or_else(|| self.active_compute_instance())
+                .into(),
+        ))
     }
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
