@@ -36,6 +36,7 @@ pub fn bench_persist(c: &mut Criterion) {
         &mut c.benchmark_group("writer/blob_cache_set_unsealed_batch"),
     );
     writer::bench_indexed_drain(&data, &mut c.benchmark_group("writer/indexed_drain"));
+    writer::bench_compact_trace(&data, &mut c.benchmark_group("writer/compact_trace"));
 }
 
 // The grouping here is an artifact of criterion's interaction with the
