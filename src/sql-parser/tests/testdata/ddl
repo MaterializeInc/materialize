@@ -1248,6 +1248,20 @@ ALTER INDEX name SET ENABLED (property = true)
                              ^
 
 parse-statement
+ALTER INDEX i1 misplaced
+----
+error: Expected one of RESET or SET or RENAME, found identifier "misplaced"
+ALTER INDEX i1 misplaced
+               ^
+
+parse-statement
+ALTER INDEX i1
+----
+error: Expected one of RESET or SET or RENAME, found EOF
+ALTER INDEX i1
+              ^
+
+parse-statement
 CREATE CLUSTER cluster
 ----
 CREATE CLUSTER cluster
