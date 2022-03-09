@@ -119,7 +119,7 @@ use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
-    FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
+    FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
@@ -2091,6 +2091,7 @@ impl Coordinator {
             let index_id = self.catalog.allocate_user_id()?;
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
+                compute_instance,
                 plan.name,
                 source_id,
                 &source.desc,
@@ -2335,6 +2336,7 @@ impl Coordinator {
             let index_id = self.catalog.allocate_user_id()?;
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
+                compute_instance,
                 name,
                 view_id,
                 &view.desc,
@@ -3944,7 +3946,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    /// Perform a catalog transaction. The closure is passed a [`DataflowBuilder`]
+    /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
     /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
     /// applied but before the transaction is committed). The closure can return
     /// an error to abort the transaction, or otherwise return a value that is
@@ -4533,6 +4535,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 
 fn auto_generate_primary_idx(
     index_name: String,
+    compute_instance: ComputeInstanceId,
     on_name: FullName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
@@ -4542,7 +4545,13 @@ fn auto_generate_primary_idx(
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
-        create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
+        create_sql: index_sql(
+            index_name,
+            compute_instance,
+            on_name,
+            &on_desc,
+            &default_key,
+        ),
         on: on_id,
         keys: default_key
             .iter()
@@ -4559,6 +4568,7 @@ fn auto_generate_primary_idx(
 // the responsibility of the SQL package.
 pub fn index_sql(
     index_name: String,
+    compute_instance: ComputeInstanceId,
     view_name: FullName,
     view_desc: &RelationDesc,
     keys: &[usize],
@@ -4568,6 +4578,7 @@ pub fn index_sql(
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: mz_sql::normalize::unresolve(view_name),
+        in_cluster: Some(RawIdent::Resolved(compute_instance.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {

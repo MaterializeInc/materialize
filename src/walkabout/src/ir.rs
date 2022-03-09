@@ -164,8 +164,12 @@ pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
             syn::Data::Union(_) => bail!("Unable to analyze union: {}", syn_item.ident),
         };
         for field in item.fields() {
-            if let Type::Abstract(ty) = &field.ty {
-                items.insert(ty.clone(), Item::Abstract);
+            let mut field_ty = &field.ty;
+            while let Type::Box(ty) | Type::Vec(ty) | Type::Option(ty) = field_ty {
+                field_ty = ty;
+            }
+            if let Type::Abstract(name) = field_ty {
+                items.insert(name.clone(), Item::Abstract);
             }
         }
         items.insert(name, item);
