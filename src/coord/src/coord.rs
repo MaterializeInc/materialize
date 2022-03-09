@@ -78,7 +78,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
-use itertools::Itertools;
 use rand::Rng;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -2048,160 +2047,113 @@ impl Coordinator {
         // The dataflow must be built on a specific compute instance.
         let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
 
-        let if_not_exists = plan.if_not_exists;
-        let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
+        let mut ops = vec![];
+        let source_id = self.catalog.allocate_user_id()?;
+        let source_oid = self.catalog.allocate_oid()?;
+        let persist_details = self.persister.new_serialized_source_persist_details(
+            source_id,
+            &plan.source.connector,
+            &plan.name.to_string(),
+        );
+        let source = catalog::Source {
+            create_sql: plan.source.create_sql,
+            connector: plan.source.connector,
+            persist_details,
+            desc: plan.source.desc,
+        };
+        ops.push(catalog::Op::CreateItem {
+            id: source_id,
+            oid: source_oid,
+            name: plan.name.clone(),
+            item: CatalogItem::Source(source.clone()),
+        });
+        let index_id = if plan.materialized {
+            let mut index_name = plan.name.clone();
+            index_name.item += "_primary_idx";
+            index_name = self
+                .catalog
+                .for_session(session)
+                .find_available_name(index_name);
+            let index_id = self.catalog.allocate_user_id()?;
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                plan.name,
+                source_id,
+                &source.desc,
+                None,
+                vec![source_id],
+                self.catalog.index_enabled_by_default(&index_id),
+            );
+            let index_oid = self.catalog.allocate_oid()?;
+            ops.push(catalog::Op::CreateItem {
+                id: index_id,
+                oid: index_oid,
+                name: index_name,
+                item: CatalogItem::Index(index),
+            });
+            Some(index_id)
+        } else {
+            None
+        };
         match self
             .catalog_transact_dataflow(compute_instance, ops, move |mut builder| {
-                let mut dfs = Vec::new();
-                let mut source_ids = Vec::new();
-                for (source_id, idx_id) in metadata {
-                    source_ids.push(source_id);
-                    if let Some(index_id) = idx_id {
-                        let df = builder.build_index_dataflow(index_id)?;
-                        dfs.extend(df);
-                    }
+                if let Some(index_id) = index_id {
+                    let df = builder.build_index_dataflow(index_id)?;
+                    return Ok(df);
                 }
-                Ok((dfs, source_ids))
+                Ok(None)
             })
             .await
         {
-            Ok((dfs, source_ids)) => {
+            Ok(df) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
-                let catalog_state = self.catalog.state();
 
                 // Ask persistence if it has a since timestamps for any
                 // of the new sources.
-                let since_timestamps = source_ids
-                    .iter()
-                    .map(|id| {
-                        let source = catalog_state.get_by_id(&id).source().ok_or_else(|| {
-                            CoordError::Internal(format!("ID {} unexpectedly not a source", id))
-                        })?;
-                        let since_ts = self
-                            .persister
-                            .load_source_persist_desc(&source)
-                            .map_err(CoordError::Persistence)?
-                            .map(|p| p.since_ts)
-                            .unwrap_or(0);
-                        Ok::<_, CoordError>(since_ts)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let since_ts = self
+                    .persister
+                    .load_source_persist_desc(&source)
+                    .map_err(CoordError::Persistence)?
+                    .map(|p| p.since_ts)
+                    .unwrap_or(0);
 
-                let descriptions = source_ids
-                    .iter()
-                    .map(|id| catalog_state.source_description_for(*id).unwrap())
-                    .collect::<Vec<_>>();
-
-                // Continue to do those things.
-                let mut source_descriptions = Vec::with_capacity(source_ids.len());
-                for ((source_id, since_ts), description) in source_ids
-                    .iter()
-                    .cloned()
-                    .zip_eq(since_timestamps)
-                    .zip_eq(descriptions)
-                {
-                    let ts_bindings = self
-                        .catalog
-                        .load_timestamp_bindings(source_id)
-                        .expect("loading timestamps from coordinator cannot fail");
-
-                    source_descriptions.push(CreateSourceCommand {
-                        id: source_id,
-                        desc: description,
-                        since: Antichain::from_elem(since_ts),
-                        ts_bindings,
-                    });
-                }
+                let ts_bindings = self
+                    .catalog
+                    .load_timestamp_bindings(source_id)
+                    .expect("loading timestamps from coordinator cannot fail");
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(source_descriptions)
+                    .create_sources(vec![CreateSourceCommand {
+                        id: source_id,
+                        desc: self
+                            .catalog
+                            .state()
+                            .source_description_for(source_id)
+                            .unwrap(),
+                        since: Antichain::from_elem(since_ts),
+                        ts_bindings,
+                    }])
                     .await
                     .unwrap();
                 self.initialize_storage_read_policies(
-                    source_ids,
+                    vec![source_id],
                     self.logical_compaction_window_ms,
                 )
                 .await;
-                self.ship_dataflows(dfs, compute_instance).await;
+                if let Some(df) = df {
+                    self.ship_dataflow(df, compute_instance).await;
+                }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
-    }
-
-    fn generate_create_source_ops(
-        &mut self,
-        session: &mut Session,
-        plans: Vec<CreateSourcePlan>,
-    ) -> Result<(Vec<(GlobalId, Option<GlobalId>)>, Vec<catalog::Op>), CoordError> {
-        let mut metadata = vec![];
-        let mut ops = vec![];
-        for plan in plans {
-            let CreateSourcePlan {
-                name,
-                source,
-                materialized,
-                ..
-            } = plan;
-            let source_id = self.catalog.allocate_user_id()?;
-            let source_oid = self.catalog.allocate_oid()?;
-
-            let persist_details = self.persister.new_serialized_source_persist_details(
-                source_id,
-                &source.connector,
-                &name.to_string(),
-            );
-
-            let source = catalog::Source {
-                create_sql: source.create_sql,
-                connector: source.connector,
-                persist_details,
-                desc: source.desc,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: source_id,
-                oid: source_oid,
-                name: name.clone(),
-                item: CatalogItem::Source(source.clone()),
-            });
-            let index_id = if materialized {
-                let mut index_name = name.clone();
-                index_name.item += "_primary_idx";
-                index_name = self
-                    .catalog
-                    .for_session(session)
-                    .find_available_name(index_name);
-                let index_id = self.catalog.allocate_user_id()?;
-                let index = auto_generate_primary_idx(
-                    index_name.item.clone(),
-                    name,
-                    source_id,
-                    &source.desc,
-                    None,
-                    vec![source_id],
-                    self.catalog.index_enabled_by_default(&index_id),
-                );
-                let index_oid = self.catalog.allocate_oid()?;
-                ops.push(catalog::Op::CreateItem {
-                    id: index_id,
-                    oid: index_oid,
-                    name: index_name,
-                    item: CatalogItem::Index(index),
-                });
-                Some(index_id)
-            } else {
-                None
-            };
-            metadata.push((source_id, index_id))
-        }
-        Ok((metadata, ops))
     }
 
     async fn sequence_create_sink(
