@@ -247,3 +247,10 @@ def workflow_smoke_test(c: Composition) -> None:
         c.kill("materialized")
         c.rm("materialized", "testdrive-svc", "kafka", destroy_volumes=True)
         c.rm_volumes("mzdata")
+
+
+def workflow_restart(c: Composition, parser: WorkflowArgumentParser) -> None:
+    workflow_default(c, parser)
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")

@@ -1,0 +1,13 @@
+{
+    "name": "ruchir-kafka-ingest-open-loop-persist",
+    "instance_type": "r5a.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 200,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "ruchir-kafka-ingest-open-loop-persist",
+        "purpose": "load_test",
+        "test": "ruchir-kafka-ingest-open-loop-persist",
+        "environment": "scratch"
+    }
+}
