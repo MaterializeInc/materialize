@@ -149,8 +149,6 @@ version, for all times in `timeline`.
 A *read* of a TVC `tvc` at time `t` means the collection version stored in
 `tvc` for `t`. We write this as `read(tvc, t) => collection-version`.
 
-Every TVC begins with the empty collection version: `read(tvc, t0) = cv0`.
-
 ## Partial time-varying collections
 
 At any wall-clock time a TVC is (in general) unknowable. Some of its past
@@ -391,9 +389,20 @@ be observed in the "real" TVC.
 During this process the `since` and `upper` frontiers never move
 backwards---and typically, they advance.
 
+## GlobalIds
+
+A *GlobalId* is a globally unique identifier used in Materialize. One of the
+things Materialize can identify with a GlobalId is a TVC. Every GlobalId
+corresponds to at most one TVC. This invariant holds over all wall-clock time:
+GlobalIds are never re-bound to different TVCs.
+
+There is no complete in-memory representation of a TVC in Materialize: such a
+thing would require perfect knowledge of the collection's versions over all
+time. Instead, we use GlobalIds to refer to TVCs.
+
 ## The TVC Map
 
-To track these changing pTVCs over time, Materialize maintains a mutable *TVC
+To track changing pTVCs over time, Materialize maintains a mutable *TVC
 map*. The keys in this map are `GlobalId`s, and the values are pTVCs. Each
 `GlobalId` in the TVC map identifies a single logical TVC, and the pTVC that ID
 refers to at any point in wall-clock time corresponds to that TVC. In short,
