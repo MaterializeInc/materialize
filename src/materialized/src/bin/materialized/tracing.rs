@@ -12,6 +12,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use hyper::client::HttpConnector;
@@ -65,8 +66,13 @@ where
     for<'ls> S: LookupSpan<'ls>,
 {
     if let Some(endpoint) = opentelemetry_endpoint {
-        // Manually setup an openssl-backed, h2, proxied `Channel`
-        let endpoint = Endpoint::from_shared(endpoint.clone())?;
+        // Manually setup an openssl-backed, h2, proxied `Channel`,
+        // and setup the timeout accoding to
+        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
+        let endpoint = Endpoint::from_shared(endpoint.clone())?.timeout(Duration::from_secs(
+            opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+        ));
+
         // TODO(guswynn): investigate if this should be non-lazy
         let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector())?;
         let otlp_exporter = opentelemetry_otlp::new_exporter()
