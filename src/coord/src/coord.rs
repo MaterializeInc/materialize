@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
@@ -121,7 +121,9 @@ use mz_sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use mz_sql::catalog::{CatalogError, CatalogTypeDetails, SessionCatalog as _};
+use mz_sql::catalog::{
+    CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
+};
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -2075,7 +2077,11 @@ impl Coordinator {
             name: plan.name.clone(),
             item: CatalogItem::Source(source.clone()),
         });
-        let index_id = if plan.materialized {
+        let index = if plan.materialized {
+            let compute_instance = self
+                .catalog
+                .resolve_compute_instance(session.vars().cluster())?
+                .id;
             let mut index_name = plan.name.clone();
             index_name.item += "_primary_idx";
             index_name = self
@@ -2099,14 +2105,13 @@ impl Coordinator {
                 name: index_name,
                 item: CatalogItem::Index(index),
             });
-            Some(index_id)
+            Some((index_id, compute_instance))
         } else {
             None
         };
         match self
             .catalog_transact(ops, move |txn| {
-                if let Some(index_id) = index_id {
-                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
                     Ok(builder
                         .build_index_dataflow(index_id)?
@@ -2287,7 +2292,7 @@ impl Coordinator {
         view: View,
         replace: Option<GlobalId>,
         materialize: bool,
-    ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
+    ) -> Result<(Vec<catalog::Op>, Option<(GlobalId, ComputeInstanceId)>), CoordError> {
         self.validate_timeline(view.expr.depends_on())?;
 
         let mut ops = vec![];
@@ -2317,6 +2322,10 @@ impl Coordinator {
             item: CatalogItem::View(view.clone()),
         });
         let index_id = if materialize {
+            let compute_instance = self
+                .catalog
+                .resolve_compute_instance(session.vars().cluster())?
+                .id;
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
             index_name = self
@@ -2340,7 +2349,7 @@ impl Coordinator {
                 name: index_name,
                 item: CatalogItem::Index(index),
             });
-            Some(index_id)
+            Some((index_id, compute_instance))
         } else {
             None
         };
@@ -2354,18 +2363,16 @@ impl Coordinator {
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index_id) = self.generate_view_ops(
+        let (ops, index) = self.generate_view_ops(
             session,
             plan.name,
             plan.view.clone(),
             plan.replace,
             plan.materialize,
         )?;
-        // A materialized view must be created in the context of some instance.
         match self
             .catalog_transact(ops, |txn| {
-                if let Some(index_id) = index_id {
-                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
                     Ok(builder
                         .build_index_dataflow(index_id)?
@@ -2396,37 +2403,33 @@ impl Coordinator {
         plan: CreateViewsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
-        let mut index_ids = vec![];
+        let mut indexes = vec![];
 
         for (name, view) in plan.views {
-            let (mut view_ops, index_id) =
+            let (mut view_ops, index) =
                 self.generate_view_ops(session, name, view, None, plan.materialize)?;
             ops.append(&mut view_ops);
-            if let Some(index_id) = index_id {
-                index_ids.push(index_id);
-            }
+            indexes.extend(index);
         }
-        // A materialized view must be created in the context of some instance.
-        let compute_instance = if plan.materialize {
-            Some(DEFAULT_COMPUTE_INSTANCE_ID)
-        } else {
-            None
-        };
         match self
             .catalog_transact(ops, |txn| {
-                let mut dfs = vec![];
-                for index_id in index_ids {
-                    let mut builder = txn.dataflow_builder(compute_instance.unwrap());
+                let mut dfs = HashMap::new();
+                for (index_id, compute_instance) in indexes {
+                    let mut builder = txn.dataflow_builder(compute_instance);
                     let df = builder.build_index_dataflow(index_id)?;
-                    dfs.extend(df);
+                    dfs.entry(compute_instance)
+                        .or_insert_with(Vec::new)
+                        .extend(df);
                 }
                 Ok(dfs)
             })
             .await
         {
             Ok(dfs) => {
-                if !dfs.is_empty() {
-                    self.ship_dataflows(dfs, compute_instance.unwrap()).await;
+                for (compute_instance, dfs) in dfs {
+                    if !dfs.is_empty() {
+                        self.ship_dataflows(dfs, compute_instance).await;
+                    }
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2837,16 +2840,15 @@ impl Coordinator {
             item_ids.extend(schema.items.values());
         }
 
-        // Gather the compute_instances of all indexes.
-        // TODO: for now we know this is just the default cluster ID.
-        let compute_instances = &[DEFAULT_COMPUTE_INSTANCE_ID];
-
         // Gather the indexes and unmaterialized sources used by those items.
+        //
+        // NOTE: there is surely a more efficient way to do this than to call
+        // sufficient_collections per cluster.
         let mut id_bundle = CollectionIdBundle::default();
-        for compute_instance in compute_instances {
+        for compute_instance in self.catalog.compute_instances() {
             id_bundle.extend(
                 &self
-                    .index_oracle(*compute_instance)
+                    .index_oracle(compute_instance.id())
                     .sufficient_collections(item_ids.iter()),
             );
         }
@@ -2891,10 +2893,10 @@ impl Coordinator {
             copy_to,
         } = plan;
 
-        // The peek must occur on a specific compute instance.
-        // This instance may need to be determined by the subjects of `plan`, or by the currently
-        // set default instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
 
         let source_ids = source.depends_on();
         let timeline = self.validate_timeline(source_ids.clone())?;
@@ -3083,9 +3085,10 @@ impl Coordinator {
             emit_progress,
         } = plan;
 
-        // The tail must be installed on a compute instance.
-        // How that instance is determined remains to be seen.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
 
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -3400,10 +3403,10 @@ impl Coordinator {
         session: &Session,
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        // An explain runs in the context of a compute instance, which may have certain indexes.
-        // We should be sure we are explaining the plan as if it were materialized on whatever
-        // instance it would run if invoked.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
 
         let ExplainPlan {
             raw_plan,
@@ -3411,7 +3414,6 @@ impl Coordinator {
             stage,
             options,
         } = plan;
-        use std::time::Instant;
 
         struct Timings {
             decorrelation: Option<Duration>,
