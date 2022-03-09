@@ -351,7 +351,8 @@ INSERT INTO alter_table_renamed VALUES (2);
 ! SELECT * FROM alter_table_rename;
 contains:altered
 
-> CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
+! CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
+contains:alter_table_renamed not found
 
 ! SELECT * FROM alter_table_renamed;
 contains:altered

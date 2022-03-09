@@ -1446,7 +1446,7 @@ pub fn plan_create_views(
                             .entry(table.name.clone())
                             .or_default()
                             .entry(table.namespace.clone())
-                            .or_insert(table.clone().into());
+                            .or_insert_with(|| table.clone().into());
                     }
                     let mut views = Vec::with_capacity(targets.len());
                     for target in targets {
