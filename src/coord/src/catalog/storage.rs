@@ -703,6 +703,19 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
+            .execute(params![name])?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
+        }
+    }
+
     pub fn remove_item(&self, id: GlobalId) -> Result<(), Error> {
         let n = self
             .inner

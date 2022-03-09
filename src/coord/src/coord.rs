@@ -2555,11 +2555,18 @@ impl Coordinator {
 
     async fn sequence_drop_compute_instances(
         &mut self,
-        _plan: DropComputeInstancesPlan,
+        plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        coord_bail!("cannot yet drop clusters");
-        // TODO(benesch,sploiselle): actually drop compute instances.
-        // Ok(ExecuteResponse::DroppedComputeInstance)
+        let mut ops = Vec::new();
+        for name in plan.names {
+            let instance = self.catalog.resolve_compute_instance(&name)?;
+            let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
+            ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
+            ops.push(catalog::Op::DropComputeInstance { name });
+        }
+
+        self.catalog_transact(ops, |_| Ok(())).await?;
+        Ok(ExecuteResponse::DroppedComputeInstance)
     }
 
     async fn sequence_drop_items(
@@ -4560,7 +4567,7 @@ fn auto_generate_primary_idx(
         conn_id,
         depends_on,
         enabled,
-        compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+        compute_instance,
     }
 }
 

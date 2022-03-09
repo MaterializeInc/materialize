@@ -2443,7 +2443,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
         ObjectType::Role => plan_drop_role(scx, if_exists, names),
-        ObjectType::Cluster => plan_drop_cluster(scx, if_exists, names),
+        ObjectType::Cluster => plan_drop_cluster(scx, if_exists, names, cascade),
         ObjectType::Secret => bail_unsupported!("DROP SECRET"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
@@ -2523,6 +2523,7 @@ pub fn plan_drop_cluster(
     scx: &StatementContext,
     if_exists: bool,
     names: Vec<UnresolvedObjectName>,
+    cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("DROP CLUSTER")?;
 
@@ -2537,7 +2538,12 @@ pub fn plan_drop_cluster(
             bail!("active cluster cannot be dropped");
         }
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
-            Ok(_) => out.push(name.into_string()),
+            Ok(instance) => {
+                if !instance.indexes().is_empty() && !cascade {
+                    bail!("cannot drop cluster with active indexes or sinks");
+                }
+                out.push(name.into_string());
+            }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
                 // cluster does not exist.
