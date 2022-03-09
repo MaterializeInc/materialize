@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -117,7 +117,7 @@ where
 pub async fn configure(
     args: &Args,
     metrics_registry: &MetricsRegistry,
-) -> Result<(), anyhow::Error> {
+) -> Result<Box<dyn Write>, anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -136,7 +136,7 @@ pub async fn configure(
             var_labels: ["severity"],
         ));
 
-    match args.log_file.as_deref() {
+    let stream: Box<dyn Write> = match args.log_file.as_deref() {
         Some("stderr") => {
             // The user explicitly directed logs to stderr. Log only to
             // stderr with the user-specified `filter`.
@@ -157,11 +157,24 @@ pub async fn configure(
                 &args.opentelemetry_endpoint,
                 &args.opentelemetry_headers,
             )
-            .await?
+            .await?;
+
+            Box::new(io::stderr())
         }
         log_file => {
             // Logging to a file. If the user did not explicitly specify
             // a file, bubble up warnings and errors to stderr.
+
+            let path = match log_file {
+                Some(log_file) => PathBuf::from(log_file),
+                None => args.data_directory.join("materialized.log"),
+            };
+            let file = fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+                .with_context(|| format!("creating log file: {}", path.display()))?;
+
             let stderr_level = match log_file {
                 Some(_) => LevelFilter::OFF,
                 None => LevelFilter::WARN,
@@ -169,20 +182,12 @@ pub async fn configure(
             let stack = tracing_subscriber::registry()
                 .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
                 .with({
-                    let path = match log_file {
-                        Some(log_file) => PathBuf::from(log_file),
-                        None => args.data_directory.join("materialized.log"),
-                    };
+                    let file = file.try_clone().expect("failed to clone log file");
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent).with_context(|| {
                             format!("creating log file directory: {}", parent.display())
                         })?;
                     }
-                    let file = fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(&path)
-                        .with_context(|| format!("creating log file: {}", path.display()))?;
                     fmt::layer()
                         .with_ansi(false)
                         .with_writer(move || file.try_clone().expect("failed to clone log file"))
@@ -204,11 +209,13 @@ pub async fn configure(
                 &args.opentelemetry_endpoint,
                 &args.opentelemetry_headers,
             )
-            .await?
-        }
-    }
+            .await?;
 
-    Ok(())
+            Box::new(file)
+        }
+    };
+
+    Ok(stream)
 }
 
 /// A tracing [`Layer`] that allows hooking into the reporting/filtering chain

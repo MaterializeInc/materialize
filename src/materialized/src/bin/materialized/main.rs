@@ -33,7 +33,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use ::tracing::info;
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
@@ -501,7 +500,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    runtime.block_on(tracing::configure(&args, &metrics_registry))?;
+    let mut tracing_stream = runtime.block_on(tracing::configure(&args, &metrics_registry))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -655,7 +654,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // we get is the log file.
     let mut system = sysinfo::System::new();
     system.refresh_system();
-    info!(
+
+    writeln!(
+        tracing_stream,
         "booting server
 materialized {mz_version}
 {dep_versions}
@@ -665,7 +666,8 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-dataflow workers: {workers}",
+dataflow workers: {workers}
+max log level: {max_log_level}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
@@ -699,7 +701,8 @@ dataflow workers: {workers}",
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
         workers = args.workers.0,
-    );
+        max_log_level = ::tracing::level_filters::LevelFilter::current(),
+    )?;
 
     sys::adjust_rlimits();
 
