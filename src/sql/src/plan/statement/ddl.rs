@@ -55,8 +55,8 @@ use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
     CreateClusterStatement, CreateSecretStatement, CreateViewsSourceTarget,
-    CsrSeedCompiledOrLegacy, Op, Query, RawName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins, RawIdent,
+    CsrSeedCompiledOrLegacy, Op, Query, RawIdent, RawName, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins,
 };
 
 use crate::ast::display::AstDisplay;
