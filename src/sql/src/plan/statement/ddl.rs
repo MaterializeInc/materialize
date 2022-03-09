@@ -55,8 +55,8 @@ use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
     CreateClusterStatement, CreateSecretStatement, CreateViewsSourceTarget,
-    CsrSeedCompiledOrLegacy, Op, Query, RawIdent, RawName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins,
+    CsrSeedCompiledOrLegacy, Op, Query, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SubscriptPosition, TableFactor, TableWithJoins, UnresolvedObjectName,
 };
 
 use crate::ast::display::AstDisplay;
@@ -69,14 +69,14 @@ use crate::ast::{
     CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
     DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
-    SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption,
+    SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, Value, ViewDefinition,
+    WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    resolve_names_cluster, resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType,
-    SchemaName,
+    resolve_names_data_type, Aug, DatabaseSpecifier, FullName, ResolvedDataType,
+    ResolvedObjectName, SchemaName,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -156,7 +156,8 @@ pub fn describe_create_table(
 
 pub fn plan_create_table(
     scx: &StatementContext,
-    stmt: CreateTableStatement<Raw>,
+    stmt: CreateTableStatement<Aug>,
+    ids: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateTableStatement {
         name,
@@ -188,7 +189,7 @@ pub fn plan_create_table(
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
-        let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+        let aug_data_type = &c.data_type;
         let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
@@ -215,8 +216,8 @@ pub fn plan_create_table(
         }
         column_types.push(ty.nullable(nullable));
         defaults.push(default);
-        depends_on.extend(ids);
     }
+    depends_on.extend(ids);
 
     for constraint in constraints {
         match constraint {
@@ -293,7 +294,7 @@ pub fn describe_create_source(
 
 pub fn plan_create_source(
     scx: &StatementContext,
-    stmt: CreateSourceStatement<Raw>,
+    stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -1003,7 +1004,7 @@ fn typecheck_debezium_dedup(
 }
 
 fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
-    format: &CreateSourceFormat<Raw>,
+    format: &CreateSourceFormat<T>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
@@ -1036,7 +1037,7 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
 }
 
 fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
-    format: &Format<Raw>,
+    format: &Format<T>,
     with_options: &Vec<SqlOption<T>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
@@ -1285,7 +1286,7 @@ pub fn describe_create_view(
 
 pub fn plan_view(
     scx: &StatementContext,
-    def: &mut ViewDefinition<Raw>,
+    def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
 ) -> Result<(FullName, View), anyhow::Error> {
@@ -1347,7 +1348,7 @@ pub fn plan_view(
 
 pub fn plan_create_view(
     scx: &StatementContext,
-    mut stmt: CreateViewStatement<Raw>,
+    mut stmt: CreateViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let CreateViewStatement {
@@ -1396,7 +1397,7 @@ pub fn plan_create_views(
         if_exists,
         materialized,
         temporary,
-    }: CreateViewsStatement<Raw>,
+    }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     match definitions {
         CreateViewsDefinitions::Literal(view_definitions) => {
@@ -1415,8 +1416,7 @@ pub fn plan_create_views(
             name: source_name,
             targets,
         } => {
-            let name = normalize::unresolved_object_name(source_name.clone())?;
-            let source_connector = scx.catalog.resolve_item(&name)?.source_connector()?;
+            let source_connector = scx.get_item_by_name(&source_name)?.source_connector()?;
             match source_connector {
                 SourceConnector::External {
                     connector:
@@ -1492,11 +1492,13 @@ pub fn plan_create_views(
                             // TODO(benesch): converting `json` to `jsonb`
                             // is wrong. We ought to support the `json` type
                             // directly.
+                            // TODO(jkosh44) Let's try and get avoid adding unresolved elements in the middle of planning
                             let mut ty = format!("pg_catalog.{}", ty);
                             if ty == "pg_catalog.json" {
                                 ty = "pg_catalog.jsonb".into();
                             }
                             let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
+                            let (data_type, _) = resolve_names_data_type(scx, data_type)?;
                             projection.push(SelectItem::Expr {
                                 expr: Expr::Cast {
                                     expr: Box::new(Expr::Subscript {
@@ -1524,7 +1526,7 @@ pub fn plan_create_views(
                                 projection,
                                 from: vec![TableWithJoins {
                                     relation: TableFactor::Table {
-                                        name: RawName::Name(source_name.clone()),
+                                        name: source_name.clone(),
                                         alias: None,
                                     },
                                     joins: vec![],
@@ -1576,8 +1578,8 @@ pub fn plan_create_views(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    format: Option<Format<Raw>>,
-    consistency: Option<KafkaConsistency<Raw>>,
+    format: Option<Format<Aug>>,
+    consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
@@ -1795,7 +1797,7 @@ fn get_kafka_sink_consistency_config(
     sink_format: &KafkaSinkFormat,
     config_options: &BTreeMap<String, String>,
     reuse_topic: bool,
-    consistency: Option<KafkaConsistency<Raw>>,
+    consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
     let result = match consistency {
@@ -1886,7 +1888,7 @@ fn get_kafka_sink_consistency_config(
 }
 
 fn avro_ocf_sink_builder(
-    format: Option<Format<Raw>>,
+    format: Option<Format<Aug>>,
     path: String,
     file_name_suffix: String,
     value_desc: RelationDesc,
@@ -1917,14 +1919,12 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Raw>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let compute_instance = match stmt.in_cluster {
+    let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => resolve_names_cluster(scx, in_cluster)?.0,
+        Some(in_cluster) => in_cluster.0,
     };
-    stmt.in_cluster = Some(RawIdent::Resolved(compute_instance.to_string()));
-
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
@@ -1951,7 +1951,7 @@ pub fn plan_create_sink(
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
-    let from = scx.resolve_item(from)?;
+    let from = scx.get_item_by_name(&from)?;
     let suffix_nonce = format!(
         "{}-{}",
         scx.catalog.config().start_time.timestamp(),
@@ -2165,7 +2165,7 @@ pub fn describe_create_index(
 
 pub fn plan_create_index(
     scx: &StatementContext,
-    mut stmt: CreateIndexStatement<Raw>,
+    mut stmt: CreateIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
         name,
@@ -2175,7 +2175,7 @@ pub fn plan_create_index(
         with_options,
         if_not_exists,
     } = &mut stmt;
-    let on = scx.resolve_item(on_name.clone())?;
+    let on = scx.get_item_by_name(on_name)?;
 
     if CatalogItemType::View != on.item_type()
         && CatalogItemType::Source != on.item_type()
@@ -2246,9 +2246,8 @@ pub fn plan_create_index(
     let options = plan_index_options(with_options.clone())?;
     let compute_instance = match in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => resolve_names_cluster(scx, in_cluster.clone())?.0,
+        Some(in_cluster) => in_cluster.0,
     };
-    *in_cluster = Some(RawIdent::Resolved(compute_instance.to_string()));
 
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
@@ -2282,14 +2281,15 @@ pub fn describe_create_type(
 
 pub fn plan_create_type(
     scx: &StatementContext,
-    stmt: CreateTypeStatement<Raw>,
+    stmt: CreateTypeStatement<Aug>,
+    ids: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
     fn ensure_valid_data_type(
         scx: &StatementContext,
         data_type: &ResolvedDataType,
-        as_type: &CreateTypeAs<Raw>,
+        as_type: &CreateTypeAs<Aug>,
         key: &str,
     ) -> Result<(), anyhow::Error> {
         let item = match data_type {
@@ -2352,30 +2352,30 @@ pub fn plan_create_type(
             for key in option_keys {
                 match with_options.remove(&key.to_string()) {
                     Some(SqlOption::DataType { data_type, .. }) => {
-                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
                         ensure_valid_data_type(scx, &data_type, &as_type, key)?;
-                        depends_on.extend(dt_ids);
                     }
                     Some(_) => bail!("{} must be a data type", key),
                     None => bail!("{} parameter required", key),
                 };
             }
+            // TODO(jkosh44) See other todo with this
+            depends_on.extend(ids);
 
             normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
         }
         CreateTypeAs::Record { ref column_defs } => {
             for column_def in column_defs {
+                let data_type = &column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let (data_type, dt_ids) =
-                    resolve_names_data_type(scx, column_def.data_type.clone())?;
-                ensure_valid_data_type(scx, &data_type, &as_type, &key)?;
-                depends_on.extend(dt_ids);
+                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
                 if let ResolvedDataType::Named { id, .. } = data_type {
-                    record_fields.push((ColumnName::from(key.clone()), id));
+                    record_fields.push((ColumnName::from(key.clone()), *id));
                 } else {
                     bail!("field {} must be a named type", key)
                 }
             }
+            // TODO(jkosh44) Get a better idea of what these ids are and how they're used. Are we adding too many ids here?
+            depends_on.extend(ids);
         }
     };
 
@@ -2535,7 +2535,7 @@ pub fn plan_create_secret<T: mz_sql_parser::ast::AstInfo>(
 
 pub fn describe_drop_database(
     _: &StatementContext,
-    _: DropDatabaseStatement,
+    _: DropDatabaseStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2546,9 +2546,10 @@ pub fn plan_drop_database(
         name,
         if_exists,
         restrict,
-    }: DropDatabaseStatement,
+    }: DropDatabaseStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let name = match scx.resolve_database_ident(name) {
+    // TODO(jkosh44) THis should be switched to look things up by NAME not ID
+    let name = match scx.resolve_database_ident(Ident::from(name.raw_name.to_string())) {
         Ok(database) => {
             let name = String::from(database.name());
             if restrict && database.has_schemas() {
@@ -2574,7 +2575,7 @@ pub fn plan_drop_database(
 
 pub fn describe_drop_objects(
     _: &StatementContext,
-    _: DropObjectsStatement,
+    _: DropObjectsStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2587,7 +2588,7 @@ pub fn plan_drop_objects(
         if_exists,
         names,
         cascade,
-    }: DropObjectsStatement,
+    }: DropObjectsStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     if materialized {
         bail!(
@@ -2613,13 +2614,18 @@ pub fn plan_drop_objects(
 pub fn plan_drop_schema(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<UnresolvedObjectName>,
+    names: Vec<ResolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
         bail_unsupported!("DROP SCHEMA with multiple schemas");
     }
-    match scx.resolve_schema(names.into_element()) {
+    // TODO(jkosh44) Should switch to looking up schema by id not name!!
+    let name = names.into_element();
+    match scx.resolve_schema_ident(
+        name.raw_name.database.map(Ident::from),
+        Ident::from(name.raw_name.schema.unwrap()),
+    ) {
         Ok(schema) => {
             if let DatabaseSpecifier::Ambient = schema.name().database {
                 bail!(
@@ -2656,15 +2662,18 @@ pub fn plan_drop_schema(
 pub fn plan_drop_role(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<UnresolvedObjectName>,
+    names: Vec<ResolvedObjectName>,
 ) -> Result<Plan, anyhow::Error> {
     let mut out = vec![];
     for name in names {
-        let name = if name.0.len() == 1 {
-            normalize::ident(name.0.into_element())
-        } else {
-            bail!("invalid role name {}", name.to_string().quoted())
-        };
+        // TODO(jkosh44) This check should switch to using ID
+        let name = name.raw_name.to_string();
+        // TODO(jkosh44) Where does this error checking move to?? Need someway of fold to generate nice errors
+        // let name = if name.0.len() == 1 {
+        //     normalize::ident(name.0.into_element())
+        // } else {
+        //     bail!("invalid role name {}", name.to_string().quoted())
+        // };
         if name == scx.catalog.active_user() {
             bail!("current user cannot be dropped");
         }
@@ -2683,18 +2692,20 @@ pub fn plan_drop_role(
 pub fn plan_drop_cluster(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<UnresolvedObjectName>,
+    names: Vec<ResolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("DROP CLUSTER")?;
 
     let mut out = vec![];
     for name in names {
-        let name = if name.0.len() == 1 {
-            name.0.into_element()
-        } else {
-            bail!("invalid cluster name {}", name.to_string().quoted())
-        };
+        // TODO(jkosh44) This check should switch to using ID
+        let name = name.raw_name.to_string();
+        // let name = if name.0.len() == 1 {
+        //     name.0.into_element()
+        // } else {
+        //     bail!("invalid cluster name {}", name.to_string().quoted())
+        // };
         if name.as_str() == scx.catalog.active_compute_instance() {
             bail!("active cluster cannot be dropped");
         }
@@ -2703,7 +2714,7 @@ pub fn plan_drop_cluster(
                 if !instance.indexes().is_empty() && !cascade {
                     bail!("cannot drop cluster with active indexes or sinks");
                 }
-                out.push(name.into_string());
+                out.push(name);
             }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
@@ -2721,12 +2732,12 @@ pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
-    names: Vec<UnresolvedObjectName>,
+    names: Vec<ResolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     let items = names
         .into_iter()
-        .map(|n| scx.resolve_item(n))
+        .map(|n| scx.get_item_by_name(&n))
         .collect::<Vec<_>>();
     let mut ids = vec![];
     for item in items {
@@ -2798,7 +2809,7 @@ with_options! {
 
 pub fn describe_alter_index_options(
     _: &StatementContext,
-    _: AlterIndexStatement,
+    _: AlterIndexStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2825,9 +2836,9 @@ pub fn plan_alter_index_options(
         index_name,
         if_exists,
         action: actions,
-    }: AlterIndexStatement,
+    }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let entry = match scx.resolve_item(index_name) {
+    let entry = match scx.get_item_by_name(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this index does not
@@ -2872,7 +2883,7 @@ pub fn plan_alter_index_options(
 
 pub fn describe_alter_object_rename(
     _: &StatementContext,
-    _: AlterObjectRenameStatement,
+    _: AlterObjectRenameStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2884,20 +2895,16 @@ pub fn plan_alter_object_rename(
         object_type,
         if_exists,
         to_item_name,
-    }: AlterObjectRenameStatement,
+    }: AlterObjectRenameStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let id = match scx.resolve_item(name.clone()) {
+    let id = match scx.get_item_by_name(&name) {
         Ok(entry) => {
             if entry.item_type() != object_type {
                 bail!("{} is a {} not a {}", name, entry.item_type(), object_type)
             }
-            let mut proposed_name = name.0;
-            let last = proposed_name.last_mut().unwrap();
-            *last = to_item_name.clone();
-            if scx
-                .resolve_item(UnresolvedObjectName(proposed_name))
-                .is_ok()
-            {
+            let mut proposed_name = name.raw_name;
+            proposed_name.item = to_item_name.clone().into_string();
+            if scx.item_exists(proposed_name) {
                 bail!("{} is already taken by item in schema", to_item_name)
             }
             entry.id()

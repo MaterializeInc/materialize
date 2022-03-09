@@ -103,6 +103,7 @@ impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// TODO(jkosh44) Look at all usages and make sure they are correct!!!
 pub struct UnresolvedObjectName(pub Vec<Ident>);
 
 pub enum CatalogName {

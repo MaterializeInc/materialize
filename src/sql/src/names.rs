@@ -299,6 +299,13 @@ impl AstInfo for Aug {
 }
 
 #[derive(Debug)]
+pub struct BoundStatement {
+    // TODO(jkosh44) rename to stmt
+    pub statement: Statement<Aug>,
+    pub(crate) ids: HashSet<GlobalId>,
+}
+
+#[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
     ctes: HashMap<String, LocalId>,
@@ -566,11 +573,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve_names_stmt(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
-) -> Result<Statement<Aug>, PlanError> {
+) -> Result<BoundStatement, PlanError> {
     let mut n = NameResolver::new(catalog);
     let result = n.fold_statement(stmt);
     n.status?;
-    Ok(result)
+    Ok(BoundStatement {
+        statement: result,
+        ids: n.ids,
+    })
 }
 
 // Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
@@ -608,6 +618,16 @@ pub fn resolve_names_cluster(
 ) -> Result<ResolvedClusterName, PlanError> {
     let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_cluster_name(cluster_name);
+    n.status?;
+    Ok(result)
+}
+
+pub fn resolve_object_name(
+    scx: &StatementContext,
+    object_name: <Raw as AstInfo>::ObjectName,
+) -> Result<<Aug as AstInfo>::ObjectName, PlanError> {
+    let mut n = NameResolver::new(scx.catalog);
+    let result = n.fold_object_name(object_name);
     n.status?;
     Ok(result)
 }

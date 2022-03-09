@@ -41,7 +41,6 @@ use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
 };
 
-use mz_sql_parser::ast::fold::Fold;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction,
@@ -53,10 +52,7 @@ use mz_sql_parser::ast::{
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{
-    resolve_names, resolve_names_expr, resolve_names_extend_qcx_ids, Aug, NameResolver,
-    PartialName, ResolvedDataType, ResolvedObjectName,
-};
+use crate::names::{resolve_names_expr, Aug, PartialName, ResolvedDataType, ResolvedObjectName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -88,13 +84,12 @@ pub struct PlannedQuery<E> {
 /// applying the returned `RowSetFinishing`.
 pub fn plan_root_query(
     scx: &StatementContext,
-    mut query: Query<Raw>,
+    mut query: Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform_query(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let resolved_query = resolve_names(&mut qcx, query)?;
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &resolved_query)?;
+    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -158,12 +153,12 @@ fn try_push_projection_order_by(
 
 pub fn plan_insert_query(
     scx: &StatementContext,
-    table_name: UnresolvedObjectName,
+    table_name: ResolvedObjectName,
     columns: Vec<Ident>,
-    source: InsertSource<Raw>,
+    source: InsertSource<Aug>,
 ) -> Result<(GlobalId, HirRelationExpr), PlanError> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let table = scx.resolve_item(table_name)?;
+    let table = scx.get_item_by_name(&table_name)?;
 
     // Validate the target of the insert.
     if table.item_type() != CatalogItemType::Table {
@@ -221,7 +216,6 @@ pub fn plan_insert_query(
     let expr = match source {
         InsertSource::Query(mut query) => {
             transform_ast::transform_query(scx, &mut query)?;
-            let query = resolve_names(&mut qcx, query)?;
 
             match query {
                 // Special-case simple VALUES clauses as PostgreSQL does.
@@ -301,10 +295,10 @@ pub fn plan_insert_query(
 
 pub fn plan_copy_from(
     scx: &StatementContext,
-    table_name: UnresolvedObjectName,
+    table_name: ResolvedObjectName,
     columns: Vec<Ident>,
 ) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
-    let table = scx.resolve_item(table_name)?;
+    let table = scx.get_item_by_name(&table_name)?;
 
     // Validate the target of the insert.
     if table.item_type() != CatalogItemType::Table {
@@ -438,7 +432,7 @@ pub struct ReadThenWritePlan {
 
 pub fn plan_delete_query(
     scx: &StatementContext,
-    mut delete_stmt: DeleteStatement<Raw>,
+    mut delete_stmt: DeleteStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::run_transforms(
         scx,
@@ -446,22 +440,20 @@ pub fn plan_delete_query(
         &mut delete_stmt,
     )?;
 
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let DeleteStatement {
-        table_name,
-        alias,
-        using,
-        selection,
-    } = resolve_names_extend_qcx_ids(&mut qcx, move |n: &mut NameResolver| {
-        n.fold_delete_statement(delete_stmt)
-    })?;
-
-    plan_mutation_query_inner(qcx, table_name, alias, using, vec![], selection)
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    plan_mutation_query_inner(
+        qcx,
+        delete_stmt.table_name,
+        delete_stmt.alias,
+        delete_stmt.using,
+        vec![],
+        delete_stmt.selection,
+    )
 }
 
 pub fn plan_update_query(
     scx: &StatementContext,
-    mut update_stmt: UpdateStatement<Raw>,
+    mut update_stmt: UpdateStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::run_transforms(
         scx,
@@ -469,16 +461,16 @@ pub fn plan_update_query(
         &mut update_stmt,
     )?;
 
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let UpdateStatement {
-        table_name,
-        assignments,
-        selection,
-    } = resolve_names_extend_qcx_ids(&mut qcx, move |n: &mut NameResolver| {
-        n.fold_update_statement(update_stmt)
-    })?;
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    plan_mutation_query_inner(qcx, table_name, None, vec![], assignments, selection)
+    plan_mutation_query_inner(
+        qcx,
+        update_stmt.table_name,
+        None,
+        vec![],
+        update_stmt.assignments,
+        update_stmt.selection,
+    )
 }
 
 pub fn plan_mutation_query_inner(
@@ -729,7 +721,7 @@ where
 }
 
 /// Plans an expression in the AS OF position of a `SELECT` or `TAIL` statement.
-pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Raw>>) -> Result<QueryWhen, PlanError> {
+pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Aug>>) -> Result<QueryWhen, PlanError> {
     let mut expr = match expr {
         None => return Ok(QueryWhen::Immediately),
         Some(expr) => expr,
@@ -737,11 +729,9 @@ pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Raw>>) -> Result<Que
 
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    transform_ast::transform_expr(scx, &mut expr)?;
-
-    let expr = resolve_names_expr(&mut qcx, expr)?;
+    transform_ast::transform_expr_aug(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -760,11 +750,10 @@ pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Raw>>) -> Result<Que
 
 pub fn plan_default_expr(
     scx: &StatementContext,
-    expr: &Expr<Raw>,
+    expr: &Expr<Aug>,
     target_ty: &ScalarType,
 ) -> Result<(HirScalarExpr, Vec<GlobalId>), PlanError> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let expr = resolve_names_expr(&mut qcx, expr.clone())?;
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
@@ -799,9 +788,9 @@ pub fn plan_params<'a>(
     let mut packer = datums.packer();
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
-    for (mut param, ty) in params.into_iter().zip(&desc.param_types) {
-        transform_ast::transform_expr(scx, &mut param)?;
-        let expr = resolve_names_expr(&mut qcx, param)?;
+    for (param, ty) in params.into_iter().zip(&desc.param_types) {
+        let mut expr = resolve_names_expr(&mut qcx, param)?;
+        transform_ast::transform_expr_aug(scx, &mut expr)?;
 
         let ecx = &ExprContext {
             qcx: &qcx,
@@ -832,18 +821,10 @@ pub fn plan_params<'a>(
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
-    exprs: Vec<Expr<Raw>>,
+    exprs: Vec<Expr<Aug>>,
 ) -> Result<(Vec<mz_expr::MirScalarExpr>, Vec<GlobalId>), PlanError> {
     let scope = Scope::from_source(None, on_desc.iter_names());
-    let mut qcx = QueryContext::root(scx, QueryLifetime::Static);
-
-    let resolved_exprs = exprs
-        .into_iter()
-        .map(|mut e| {
-            transform_ast::transform_expr(scx, &mut e)?;
-            resolve_names_expr(&mut qcx, e)
-        })
-        .collect::<Result<Vec<Expr<Aug>>, _>>()?;
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -855,7 +836,8 @@ pub fn plan_index_exprs<'a>(
         allow_windows: false,
     };
     let mut out = vec![];
-    for expr in resolved_exprs {
+    for mut expr in exprs {
+        transform_ast::transform_expr_aug(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }

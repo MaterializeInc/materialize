@@ -40,12 +40,12 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::Timestamp;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw};
+use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use mz_sql::names::{Aug, DatabaseSpecifier, FullName, PartialName, SchemaName};
 use mz_sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
@@ -110,6 +110,7 @@ pub struct Catalog {
 
 #[derive(Debug, Clone)]
 pub struct CatalogState {
+    //TODO(jkosh) we need to start tracking things by ID and not use NAME once things are resolved.
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
@@ -344,9 +345,12 @@ impl CatalogState {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
+    // TODO(jkosh44) should this be an id??
     compute_instance: String,
+    // TODO(jkosh44) Should be id
     database: String,
     search_path: &'a [&'a str],
+    // TODO(jkosh44) SHould be id
     user: String,
     prepared_statements: Option<&'a HashMap<String, PreparedStatement>>,
 }
@@ -417,7 +421,7 @@ pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr<Raw>>,
+    pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub persist_name: Option<String>,
@@ -613,6 +617,7 @@ impl CatalogItem {
     /// Returns a clone of `self` with all instances of `from` renamed to `to`
     /// (with the option of including the item's own name) or errors if request
     /// is ambiguous.
+    /// TODO(jkosh44) This will most likely need to change massively
     fn rename_item_refs(
         &self,
         from: FullName,
@@ -2763,7 +2768,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+    fn table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

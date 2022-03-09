@@ -48,21 +48,21 @@ pub enum Statement<T: AstInfo> {
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement),
     CreateSecret(CreateSecretStatement<T>),
-    AlterObjectRename(AlterObjectRenameStatement),
-    AlterIndex(AlterIndexStatement),
+    AlterObjectRename(AlterObjectRenameStatement<T>),
+    AlterIndex(AlterIndexStatement<T>),
     Discard(DiscardStatement),
-    DropDatabase(DropDatabaseStatement),
-    DropObjects(DropObjectsStatement),
+    DropDatabase(DropDatabaseStatement<T>),
+    DropObjects(DropObjectsStatement<T>),
     SetVariable(SetVariableStatement),
     ShowDatabases(ShowDatabasesStatement<T>),
     ShowObjects(ShowObjectsStatement<T>),
     ShowIndexes(ShowIndexesStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
-    ShowCreateView(ShowCreateViewStatement),
-    ShowCreateSource(ShowCreateSourceStatement),
-    ShowCreateTable(ShowCreateTableStatement),
-    ShowCreateSink(ShowCreateSinkStatement),
-    ShowCreateIndex(ShowCreateIndexStatement),
+    ShowCreateView(ShowCreateViewStatement<T>),
+    ShowCreateSource(ShowCreateSourceStatement<T>),
+    ShowCreateTable(ShowCreateTableStatement<T>),
+    ShowCreateSink(ShowCreateSinkStatement<T>),
+    ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowVariable(ShowVariableStatement),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
@@ -155,7 +155,7 @@ impl_display_t!(SelectStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InsertStatement<T: AstInfo> {
     /// TABLE
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
     /// COLUMNS
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
@@ -180,7 +180,7 @@ impl_display_t!(InsertStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CopyRelation<T: AstInfo> {
     Table {
-        name: UnresolvedObjectName,
+        name: T::ObjectName,
         columns: Vec<Ident>,
     },
     Select(SelectStatement<T>),
@@ -237,7 +237,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
         f.write_str("COPY ");
         match &self.relation {
             CopyRelation::Table { name, columns } => {
-                f.write_node(&name);
+                f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
                     f.write_node(&display::comma_separated(&columns));
@@ -433,7 +433,7 @@ impl_display_t!(CreateSourceStatement);
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub in_cluster: Option<T::ClusterName>,
-    pub from: UnresolvedObjectName,
+    pub from: T::ObjectName,
     pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
@@ -570,7 +570,7 @@ impl_display!(CreateViewsSourceTarget);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateViewsDefinitions<T: AstInfo> {
     Source {
-        name: UnresolvedObjectName,
+        name: T::ObjectName,
         targets: Option<Vec<CreateViewsSourceTarget>>,
     },
     Literal(Vec<ViewDefinition<T>>),
@@ -684,7 +684,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     pub name: Option<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     /// `ON` table or view name
-    pub on_name: UnresolvedObjectName,
+    pub on_name: T::ObjectName,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
@@ -905,14 +905,14 @@ impl_display_t!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterObjectRenameStatement {
+pub struct AlterObjectRenameStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: UnresolvedObjectName,
+    pub name: T::ObjectName,
     pub to_item_name: Ident,
 }
 
-impl AstDisplay for AlterObjectRenameStatement {
+impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
         f.write_node(&self.object_type);
@@ -925,7 +925,7 @@ impl AstDisplay for AlterObjectRenameStatement {
         f.write_node(&self.to_item_name);
     }
 }
-impl_display!(AlterObjectRenameStatement);
+impl_display_t!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction {
@@ -936,13 +936,13 @@ pub enum AlterIndexAction {
 
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterIndexStatement {
-    pub index_name: UnresolvedObjectName,
+pub struct AlterIndexStatement<T: AstInfo> {
+    pub index_name: T::ObjectName,
     pub if_exists: bool,
     pub action: AlterIndexAction,
 }
 
-impl AstDisplay for AlterIndexStatement {
+impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER INDEX ");
         if self.if_exists {
@@ -967,7 +967,7 @@ impl AstDisplay for AlterIndexStatement {
     }
 }
 
-impl_display!(AlterIndexStatement);
+impl_display_t!(AlterIndexStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -1003,13 +1003,13 @@ impl AstDisplay for DiscardTarget {
 impl_display!(DiscardTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropDatabaseStatement {
-    pub name: Ident,
+pub struct DropDatabaseStatement<T: AstInfo> {
+    pub name: T::ObjectName,
     pub if_exists: bool,
     pub restrict: bool,
 }
 
-impl AstDisplay for DropDatabaseStatement {
+impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP DATABASE ");
         if self.if_exists {
@@ -1021,11 +1021,11 @@ impl AstDisplay for DropDatabaseStatement {
         }
     }
 }
-impl_display!(DropDatabaseStatement);
+impl_display_t!(DropDatabaseStatement);
 
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropObjectsStatement {
+pub struct DropObjectsStatement<T: AstInfo> {
     /// If this was constructed as `DROP MATERIALIZED <type>`
     pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
@@ -1033,13 +1033,13 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
+    pub names: Vec<T::ObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
 }
 
-impl AstDisplay for DropObjectsStatement {
+impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP ");
         f.write_node(&self.object_type);
@@ -1053,7 +1053,7 @@ impl AstDisplay for DropObjectsStatement {
         }
     }
 }
-impl_display!(DropObjectsStatement);
+impl_display_t!(DropObjectsStatement);
 
 /// `SET <variable>`
 ///
@@ -1063,6 +1063,7 @@ impl_display!(DropObjectsStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SetVariableStatement {
     pub local: bool,
+    // TODO(jkosh44) Should this be AstInfo::ObjectName??
     pub variable: Ident,
     pub value: SetVariableValue,
 }
@@ -1083,6 +1084,7 @@ impl_display!(SetVariableStatement);
 /// `SHOW <variable>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowVariableStatement {
+    //TODO(jkosh44) Should this be AstInfo::ObjectName
     pub variable: Ident,
 }
 
@@ -1122,7 +1124,7 @@ impl_display_t!(ShowDatabasesStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
-    pub from: Option<UnresolvedObjectName>,
+    pub from: Option<T::ObjectName>,
     pub extended: bool,
     pub full: bool,
     pub materialized: bool,
@@ -1157,7 +1159,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         });
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
-            f.write_node(&from);
+            f.write_node(from);
         }
         if let Some(filter) = &self.filter {
             f.write_str(" ");
@@ -1170,7 +1172,7 @@ impl_display_t!(ShowObjectsStatement);
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowIndexesStatement<T: AstInfo> {
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
     pub extended: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -1198,7 +1200,7 @@ impl_display_t!(ShowIndexesStatement);
 pub struct ShowColumnsStatement<T: AstInfo> {
     pub extended: bool,
     pub full: bool,
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
@@ -1223,73 +1225,73 @@ impl_display_t!(ShowColumnsStatement);
 
 /// `SHOW CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateViewStatement {
-    pub view_name: UnresolvedObjectName,
+pub struct ShowCreateViewStatement<T: AstInfo> {
+    pub view_name: T::ObjectName,
 }
 
-impl AstDisplay for ShowCreateViewStatement {
+impl<T: AstInfo> AstDisplay for ShowCreateViewStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW CREATE VIEW ");
         f.write_node(&self.view_name);
     }
 }
-impl_display!(ShowCreateViewStatement);
+impl_display_t!(ShowCreateViewStatement);
 
 /// `SHOW CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateSourceStatement {
-    pub source_name: UnresolvedObjectName,
+pub struct ShowCreateSourceStatement<T: AstInfo> {
+    pub source_name: T::ObjectName,
 }
 
-impl AstDisplay for ShowCreateSourceStatement {
+impl<T: AstInfo> AstDisplay for ShowCreateSourceStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW CREATE SOURCE ");
         f.write_node(&self.source_name);
     }
 }
-impl_display!(ShowCreateSourceStatement);
+impl_display_t!(ShowCreateSourceStatement);
 
 /// `SHOW CREATE TABLE <table>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateTableStatement {
-    pub table_name: UnresolvedObjectName,
+pub struct ShowCreateTableStatement<T: AstInfo> {
+    pub table_name: T::ObjectName,
 }
 
-impl AstDisplay for ShowCreateTableStatement {
+impl<T: AstInfo> AstDisplay for ShowCreateTableStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW CREATE TABLE ");
         f.write_node(&self.table_name);
     }
 }
-impl_display!(ShowCreateTableStatement);
+impl_display_t!(ShowCreateTableStatement);
 
 /// `SHOW CREATE SINK <sink>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateSinkStatement {
-    pub sink_name: UnresolvedObjectName,
+pub struct ShowCreateSinkStatement<T: AstInfo> {
+    pub sink_name: T::ObjectName,
 }
 
-impl AstDisplay for ShowCreateSinkStatement {
+impl<T: AstInfo> AstDisplay for ShowCreateSinkStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW CREATE SINK ");
         f.write_node(&self.sink_name);
     }
 }
-impl_display!(ShowCreateSinkStatement);
+impl_display_t!(ShowCreateSinkStatement);
 
 /// `SHOW CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateIndexStatement {
-    pub index_name: UnresolvedObjectName,
+pub struct ShowCreateIndexStatement<T: AstInfo> {
+    pub index_name: T::ObjectName,
 }
 
-impl AstDisplay for ShowCreateIndexStatement {
+impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW CREATE INDEX ");
         f.write_node(&self.index_name);
     }
 }
-impl_display!(ShowCreateIndexStatement);
+impl_display_t!(ShowCreateIndexStatement);
 
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1384,14 +1386,14 @@ impl_display_t!(TailStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TailRelation<T: AstInfo> {
-    Name(UnresolvedObjectName),
+    Name(T::ObjectName),
     Query(Query<T>),
 }
 
 impl<T: AstInfo> AstDisplay for TailRelation<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            TailRelation::Name(name) => f.write_node(&name),
+            TailRelation::Name(name) => f.write_node(name),
             TailRelation::Query(query) => {
                 f.write_str("(");
                 f.write_node(query);
@@ -1510,6 +1512,7 @@ pub enum SqlOption<T: AstInfo> {
     },
     ObjectName {
         name: Ident,
+        // TODO(jkosh44) why is this always unresolved???
         object_name: UnresolvedObjectName,
     },
     DataType {
@@ -1708,7 +1711,7 @@ impl_display!(ExplainStage);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
-    View(UnresolvedObjectName),
+    View(T::ObjectName),
     Query(Query<T>),
 }
 
@@ -1721,11 +1724,11 @@ pub struct ExplainOptions {
 impl<T: AstInfo> AstDisplay for Explainee<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Explainee::View(name) => {
+            Self::View(name) => {
                 f.write_str("VIEW ");
-                f.write_node(&name);
+                f.write_node(name);
             }
-            Explainee::Query(query) => f.write_node(query),
+            Self::Query(query) => f.write_node(query),
         }
     }
 }
@@ -1758,6 +1761,7 @@ impl_display_t!(DeclareStatement);
 /// `CLOSE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CloseStatement {
+    // TODO(jkosh44) Should this be AstInfo::ObjectName
     pub name: Ident,
 }
 
@@ -1772,6 +1776,7 @@ impl_display!(CloseStatement);
 /// `FETCH ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchStatement {
+    // TODO(jkosh44) Should this be AstInfo::ObjectName
     pub name: Ident,
     pub count: Option<FetchDirection>,
     pub options: Vec<WithOption>,
@@ -1812,6 +1817,7 @@ impl_display!(FetchDirection);
 /// `PREPARE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrepareStatement<T: AstInfo> {
+    // TODO(jkosh44) Should this be AstInfo::ObjectName
     pub name: Ident,
     pub stmt: Box<Statement<T>>,
 }

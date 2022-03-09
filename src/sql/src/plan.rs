@@ -46,7 +46,7 @@ use crate::ast::{
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
-use crate::names::{DatabaseSpecifier, FullName, SchemaName};
+use crate::names::{Aug, DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -209,6 +209,7 @@ pub struct CreateTypePlan {
     pub typ: Type,
 }
 
+// TODO(jkosh44) All these plans should use IDs not names
 #[derive(Debug)]
 pub struct DropDatabasePlan {
     pub name: String,
@@ -391,7 +392,7 @@ pub struct RaisePlan {
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    pub defaults: Vec<Expr<Raw>>,
+    pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
     pub depends_on: Vec<GlobalId>,
 }

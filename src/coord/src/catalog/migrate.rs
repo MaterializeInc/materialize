@@ -813,7 +813,7 @@ fn semantic_use_id_for_table_format_0_7_1(
     // Resolve Statement<Raw> to Statement<Aug>
     let resolved = resolve_names_stmt(cat, stmt.clone()).unwrap();
     // Use consistent intermediary format between Aug and Raw.
-    let create_sql = resolved.to_ast_string_stable();
+    let create_sql = resolved.statement.to_ast_string_stable();
     // Convert Statement<Aug> to Statement<Raw> (Aug is a subset of Raw's
     // semantics) and reassign to `stmt`.
     *stmt = mz_sql::parse::parse(&create_sql)?.into_element();

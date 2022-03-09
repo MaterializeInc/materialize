@@ -24,11 +24,11 @@ use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, Raw};
+use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
 use crate::func::Func;
-use crate::names::{FullName, PartialName, SchemaName};
+use crate::names::{Aug, FullName, PartialName, SchemaName};
 use crate::plan::statement::StatementDesc;
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -57,6 +57,7 @@ use crate::plan::statement::StatementDesc;
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
+    //TODO(jkosh44) These active_X methods should return IDs, not strings
     /// Returns the name of the user who is issuing the query.
     fn active_user(&self) -> &str;
 
@@ -272,6 +273,7 @@ pub trait CatalogItem {
 
     /// A normalized SQL statement that describes how to create the catalog
     /// item.
+    /// TODO(jkosh) This function should itself replace IDs with Names and hide that from the caller
     fn create_sql(&self) -> &str;
 
     /// Returns the IDs of the catalog items upon which this catalog item
@@ -287,7 +289,7 @@ pub trait CatalogItem {
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr<Raw>]>;
+    fn table_details(&self) -> Option<&[Expr<Aug>]>;
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.

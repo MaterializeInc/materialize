@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use anyhow::bail;
 
-use mz_expr::GlobalId;
+use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
@@ -25,7 +25,10 @@ use crate::catalog::{
     CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
     SessionCatalog,
 };
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{
+    resolve_names_stmt, BoundStatement, DatabaseSpecifier, FullName, PartialName,
+    ResolvedObjectName,
+};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query;
@@ -121,15 +124,41 @@ pub fn describe(
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
 
         // `SHOW` statements.
-        Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
         Statement::ShowCreateTable(stmt) => show::describe_show_create_table(&scx, stmt)?,
         Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
         Statement::ShowCreateView(stmt) => show::describe_show_create_view(&scx, stmt)?,
         Statement::ShowCreateSink(stmt) => show::describe_show_create_sink(&scx, stmt)?,
         Statement::ShowCreateIndex(stmt) => show::describe_show_create_index(&scx, stmt)?,
-        Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
-        Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
-        Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
+        //TODO(jkosh44) THIS PATERN IS SO UGLY!!
+        s @ Statement::ShowColumns(_) => {
+            let BoundStatement { statement, .. } = resolve_names_stmt(catalog, s)?;
+            match statement {
+                Statement::ShowColumns(s) => show::show_columns(&scx, s)?.describe()?,
+                _ => unreachable!(),
+            }
+        }
+        //TODO(jkosh44) THIS PATERN IS SO UGLY!!
+        s @ Statement::ShowDatabases(_) => {
+            let BoundStatement { statement, .. } = resolve_names_stmt(catalog, s)?;
+            match statement {
+                Statement::ShowDatabases(s) => show::show_databases(&scx, s)?.describe()?,
+                _ => unreachable!(),
+            }
+        }
+        s @ Statement::ShowObjects(_) => {
+            let BoundStatement { statement, .. } = resolve_names_stmt(catalog, s)?;
+            match statement {
+                Statement::ShowObjects(s) => show::show_objects(&scx, s)?.describe()?,
+                _ => unreachable!(),
+            }
+        }
+        s @ Statement::ShowIndexes(_) => {
+            let BoundStatement { statement, .. } = resolve_names_stmt(catalog, s)?;
+            match statement {
+                Statement::ShowIndexes(s) => show::show_indexes(&scx, s)?.describe()?,
+                _ => unreachable!(),
+            }
+        }
 
         // SCL statements.
         Statement::SetVariable(stmt) => scl::describe_set_variable(&scx, stmt)?,
@@ -177,9 +206,16 @@ pub fn describe(
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
-    stmt: Statement<Raw>,
+    //TODO(jkosh44) rename to stmt when able
+    stmt_raw: Statement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
+    //TODO(jkosh44) remove clone when able
+    let BoundStatement {
+        statement: stmt,
+        ids,
+    } = resolve_names_stmt(catalog, stmt_raw.clone())?;
+
     let param_types = params
         .types
         .iter()
@@ -197,13 +233,13 @@ pub fn plan(
         // DDL statements.
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
-        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
+        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt, ids),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
         Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
-        Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
+        Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt, ids),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
@@ -213,8 +249,11 @@ pub fn plan(
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
 
         // DML statements.
+        // X
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
+        // X
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
+        // X
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
         Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
@@ -222,26 +261,38 @@ pub fn plan(
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
 
         // `SHOW` statements.
-        Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.plan(),
         Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
         Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
         Statement::ShowCreateView(stmt) => show::plan_show_create_view(scx, stmt),
         Statement::ShowCreateSink(stmt) => show::plan_show_create_sink(scx, stmt),
         Statement::ShowCreateIndex(stmt) => show::plan_show_create_index(scx, stmt),
+        Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.plan(),
         Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
         Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
         Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
 
         // SCL statements.
-        Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
-        Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
-        Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
-        Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
-        Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
-        Statement::Close(stmt) => scl::plan_close(scx, stmt),
-        Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
-        Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
-        Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
+        // TODO(jkosh44) Figure out SCL statements later. They're more complicated
+        Statement::SetVariable(_)
+        | Statement::ShowVariable(_)
+        | Statement::Discard(_)
+        | Statement::Declare(_)
+        | Statement::Fetch(_)
+        | Statement::Close(_)
+        | Statement::Prepare(_)
+        | Statement::Execute(_)
+        | Statement::Deallocate(_) => match stmt_raw {
+            Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
+            Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
+            Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
+            Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
+            Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
+            Statement::Close(stmt) => scl::plan_close(scx, stmt),
+            Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
+            Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+            Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
+            _ => unreachable!(),
+        },
 
         // TCL statements.
         Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),
@@ -375,9 +426,35 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
-    pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::unresolved_object_name(name)?;
-        Ok(self.catalog.resolve_item(&name)?)
+    // TODO(jkosh44) Delete me
+    pub fn resolve_schema_ident(
+        &self,
+        db: Option<Ident>,
+        schema: Ident,
+    ) -> Result<&dyn CatalogSchema, PlanError> {
+        let db = db.map(normalize::ident);
+        let schema = normalize::ident(schema);
+        Ok(self.catalog.resolve_schema(db, schema.as_str())?)
+    }
+
+    pub fn item_exists(&self, name: PartialName) -> bool {
+        self.catalog.resolve_item(&name).is_ok()
+    }
+
+    pub fn get_item_by_name(
+        &self,
+        name: &ResolvedObjectName,
+    ) -> Result<&dyn CatalogItem, PlanError> {
+        // TODO(Jkosh44) Reference this check for similar errors
+        let id = match &name.id {
+            Id::Global(id) => id,
+            _ => sql_bail!("non-user table"),
+        };
+        Ok(self.get_item_by_id(id))
+    }
+
+    pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+        self.catalog.get_item_by_id(id)
     }
 
     pub fn resolve_function(
@@ -394,10 +471,6 @@ impl<'a> StatementContext<'a> {
     ) -> Result<&dyn CatalogComputeInstance, PlanError> {
         let name = name.map(|name| name.as_str());
         Ok(self.catalog.resolve_compute_instance(name)?)
-    }
-
-    pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
-        self.catalog.get_item_by_id(id)
     }
 
     pub fn experimental_mode(&self) -> bool {

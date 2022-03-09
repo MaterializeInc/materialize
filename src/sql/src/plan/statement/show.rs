@@ -18,23 +18,24 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, Statement, UnresolvedObjectName, Value,
+    ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{resolve_names_stmt, NameSimplifier};
+use crate::names::{resolve_names_stmt, Aug, BoundStatement, NameSimplifier, ResolvedObjectName};
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
-    _: ShowCreateViewStatement,
+    _: ShowCreateViewStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -45,9 +46,9 @@ pub fn describe_show_create_view(
 
 pub fn plan_show_create_view(
     scx: &StatementContext,
-    ShowCreateViewStatement { view_name }: ShowCreateViewStatement,
+    ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let view = scx.resolve_item(view_name)?;
+    let view = scx.get_item_by_name(&view_name)?;
     let view_sql = view.create_sql();
 
     let parsed = parse::parse(view_sql)?;
@@ -56,13 +57,13 @@ pub fn plan_show_create_view(
     let mut s = NameSimplifier {
         catalog: scx.catalog,
     };
-    s.visit_statement_mut(&mut resolved);
+    s.visit_statement_mut(&mut resolved.statement);
 
     if let CatalogItemType::View = view.item_type() {
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&view.name().to_string()),
-                Datum::String(&resolved.to_ast_string_stable()),
+                Datum::String(&resolved.statement.to_ast_string_stable()),
             ])],
         }))
     } else {
@@ -72,7 +73,7 @@ pub fn plan_show_create_view(
 
 pub fn describe_show_create_table(
     _: &StatementContext,
-    _: ShowCreateTableStatement,
+    _: ShowCreateTableStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -83,20 +84,20 @@ pub fn describe_show_create_table(
 
 pub fn plan_show_create_table(
     scx: &StatementContext,
-    ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
+    ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let table = scx.resolve_item(table_name)?;
+    let table = scx.get_item_by_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
         let parsed = parse::parse(table.create_sql())?.into_element();
         let mut resolved = resolve_names_stmt(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
-        s.visit_statement_mut(&mut resolved);
+        s.visit_statement_mut(&mut resolved.statement);
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&table.name().to_string()),
-                Datum::String(&resolved.to_ast_string_stable()),
+                Datum::String(&resolved.statement.to_ast_string_stable()),
             ])],
         }))
     } else {
@@ -106,7 +107,7 @@ pub fn plan_show_create_table(
 
 pub fn describe_show_create_source(
     _: &StatementContext,
-    _: ShowCreateSourceStatement,
+    _: ShowCreateSourceStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -117,9 +118,9 @@ pub fn describe_show_create_source(
 
 pub fn plan_show_create_source(
     scx: &StatementContext,
-    ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement,
+    ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let source = scx.resolve_item(source_name)?;
+    let source = scx.get_item_by_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
@@ -134,7 +135,7 @@ pub fn plan_show_create_source(
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
-    _: ShowCreateSinkStatement,
+    _: ShowCreateSinkStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -145,9 +146,9 @@ pub fn describe_show_create_sink(
 
 pub fn plan_show_create_sink(
     scx: &StatementContext,
-    ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement,
+    ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let sink = scx.resolve_item(sink_name)?;
+    let sink = scx.get_item_by_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
@@ -162,7 +163,7 @@ pub fn plan_show_create_sink(
 
 pub fn describe_show_create_index(
     _: &StatementContext,
-    _: ShowCreateIndexStatement,
+    _: ShowCreateIndexStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -173,9 +174,9 @@ pub fn describe_show_create_index(
 
 pub fn plan_show_create_index(
     scx: &StatementContext,
-    ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement,
+    ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let index = scx.resolve_item(index_name)?;
+    let index = scx.get_item_by_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
@@ -190,7 +191,7 @@ pub fn plan_show_create_index(
 
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
-    ShowDatabasesStatement { filter }: ShowDatabasesStatement<Raw>,
+    ShowDatabasesStatement { filter }: ShowDatabasesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
     Ok(ShowSelect::new(scx, query, filter, None, None))
@@ -205,7 +206,7 @@ pub fn show_objects<'a>(
         object_type,
         from,
         filter,
-    }: ShowObjectsStatement<Raw>,
+    }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     match object_type {
         ObjectType::Schema => show_schemas(scx, extended, full, from, filter),
@@ -226,11 +227,12 @@ fn show_schemas<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let database = if let Some(from) = from {
-        scx.resolve_database(from)?
+        // TODO(jkosh44) Resolve by ID
+        scx.resolve_database_ident(Ident::from(from.raw_name.to_string()))?
     } else {
         scx.resolve_active_database()?
     };
@@ -268,11 +270,15 @@ fn show_tables<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -298,11 +304,15 @@ fn show_sources<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -360,11 +370,15 @@ fn show_views<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -406,11 +420,15 @@ fn show_views<'a>(
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -435,11 +453,15 @@ fn show_types<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -465,11 +487,15 @@ fn show_all_objects<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
-    filter: Option<ShowStatementFilter<Raw>>,
+    from: Option<ResolvedObjectName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
+        // TODO(jkosh44) Resolve from id
+        scx.resolve_schema_ident(
+            from.raw_name.database.map(Ident::from),
+            Ident::from(from.raw_name.schema.unwrap()),
+        )?
     } else {
         scx.resolve_active_schema()?
     };
@@ -497,12 +523,12 @@ pub fn show_indexes<'a>(
         extended,
         table_name,
         filter,
-    }: ShowIndexesStatement<Raw>,
+    }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         bail_unsupported!("SHOW EXTENDED INDEXES")
     }
-    let from = scx.resolve_item(table_name)?;
+    let from = scx.get_item_by_name(&table_name)?;
     if from.item_type() != CatalogItemType::View
         && from.item_type() != CatalogItemType::Source
         && from.item_type() != CatalogItemType::Table
@@ -543,7 +569,7 @@ pub fn show_columns<'a>(
         full,
         table_name,
         filter,
-    }: ShowColumnsStatement<Raw>,
+    }: ShowColumnsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         bail_unsupported!("SHOW EXTENDED COLUMNS");
@@ -552,7 +578,7 @@ pub fn show_columns<'a>(
         bail_unsupported!("SHOW FULL COLUMNS");
     }
 
-    let entry = scx.resolve_item(table_name)?;
+    let entry = scx.get_item_by_name(&table_name)?;
 
     let query = format!(
         "SELECT
@@ -593,7 +619,7 @@ impl<'a> ShowSelect<'a> {
     fn new(
         scx: &'a StatementContext,
         query: String,
-        filter: Option<ShowStatementFilter<Raw>>,
+        filter: Option<ShowStatementFilter<Aug>>,
         order: Option<&str>,
         projection: Option<&[&str]>,
     ) -> ShowSelect<'a> {
@@ -626,6 +652,12 @@ impl<'a> ShowSelect<'a> {
 
     /// Converts this `ShowSelect` into a [`Plan`].
     pub fn plan(self) -> Result<Plan, anyhow::Error> {
-        dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
+        // TODO(jkosh44) This pattern is super ugly and keeps popping up. FIX IT!
+        let BoundStatement { statement, .. } =
+            resolve_names_stmt(self.scx.catalog, Statement::Select(self.stmt))?;
+        if let Statement::Select(stmt) = statement {
+            return dml::plan_select(self.scx, stmt, &Params::empty(), None);
+        }
+        unreachable!()
     }
 }

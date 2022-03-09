@@ -61,6 +61,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
 /// - `to_name.item` does not unambiguously refer to an item in the query after
 ///   the rename. Right now, given the first condition, this is just a coherence
 ///   check, but will be more meaningful once the first restriction is lifted.
+/// TODO(jkosh44) This will probably need to change massively
 pub fn create_stmt_rename_refs(
     create_stmt: &mut Statement<Raw>,
     from_name: FullName,
@@ -80,10 +81,10 @@ pub fn create_stmt_rename_refs(
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
-            maybe_update_object_name(on_name);
+            maybe_update_object_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
-            maybe_update_object_name(from);
+            maybe_update_object_name(from.name_mut());
         }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
