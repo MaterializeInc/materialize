@@ -1564,7 +1564,9 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     -- MZ doesn't support table partitioning so relispartition is filled with false
     false AS relispartition,
     -- PG removed relhasoids in v12 so it's filled with false
-    false AS relhasoids
+    false AS relhasoids,
+    -- MZ doesn't support options for relations
+    NULL::pg_catalog.text[] as reloptions
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
     id: GlobalId::System(5015),
@@ -1602,7 +1604,17 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     true::pg_catalog.bool AS indisvalid,
     -- MZ doesn't support replication so indisreplident is filled with false
     false::pg_catalog.bool AS indisreplident,
-    pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
+    -- Return zero if the index attribute is not a simple column reference, column position otherwise
+    pg_catalog.string_agg(coalesce(mz_index_columns.on_position, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position)::pg_catalog.int2vector AS indkey,
+    -- MZ doesn't have per-column flags, so returning a 0 for each column in the index
+    pg_catalog.string_agg('0', ' ')::pg_catalog.int2vector AS indoption,
+    -- Index expressions are returned in MZ format
+    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position)
+    WHEN NULL THEN NULL
+    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position) || '}'
+    END AS indexprs,
+    -- MZ doesn't support indexes with predicates
+    NULL::pg_catalog.text AS indpred
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
