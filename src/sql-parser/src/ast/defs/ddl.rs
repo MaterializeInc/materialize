@@ -742,7 +742,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: UnresolvedObjectName,
+        foreign_table: T::ObjectName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`

@@ -25,7 +25,7 @@ DECLARE c CURSOR FOR TAIL t
 ----
 DECLARE c CURSOR FOR TAIL t
 =>
-Declare(DeclareStatement { name: Ident("c"), stmt: Tail(TailStatement { relation: Name(UnresolvedObjectName([Ident("t")])), options: [], as_of: None }) })
+Declare(DeclareStatement { name: Ident("c"), stmt: Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("t")]))), options: [], as_of: None }) })
 
 parse-statement
 CLOSE c

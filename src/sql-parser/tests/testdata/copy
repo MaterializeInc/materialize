@@ -18,14 +18,14 @@ COPY t(a, b) FROM STDIN
 ----
 COPY t(a, b) FROM STDIN
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [Ident("a"), Ident("b")] }, direction: From, target: Stdin, options: [] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: From, target: Stdin, options: [] })
 
 parse-statement
 COPY t FROM STDIN
 ----
 COPY t FROM STDIN
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [] }, direction: From, target: Stdin, options: [] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [] })
 
 parse-statement
 COPY (select 1) TO STDOUT
@@ -39,28 +39,28 @@ COPY t(a, b) TO STDOUT
 ----
 COPY t(a, b) TO STDOUT
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [Ident("a"), Ident("b")] }, direction: To, target: Stdout, options: [] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: To, target: Stdout, options: [] })
 
 parse-statement
 COPY t TO STDOUT WITH (FORMAT TEXT)
 ----
 COPY t TO STDOUT WITH (format = text)
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("text")]))) }] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("text")]))) }] })
 
 parse-statement
 COPY t FROM STDIN WITH (FORMAT CSV, DELIMETER '|')
 ----
 COPY t FROM STDIN WITH (format = csv, delimeter = '|')
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [] }, direction: From, target: Stdin, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("csv")]))) }, WithOption { key: Ident("delimeter"), value: Some(Value(String("|"))) }] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("csv")]))) }, WithOption { key: Ident("delimeter"), value: Some(Value(String("|"))) }] })
 
 parse-statement
 COPY t TO STDOUT (format = text)
 ----
 COPY t TO STDOUT WITH (format = text)
 =>
-Copy(CopyStatement { relation: Table { name: UnresolvedObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("text")]))) }] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(UnresolvedObjectName([Ident("text")]))) }] })
 
 parse-statement
 COPY t TO STDOUT ()

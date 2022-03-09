@@ -1968,7 +1968,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
-        let from = self.parse_object_name()?;
+        let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connector = self.parse_create_sink_connector()?;
         let mut with_options = vec![];
@@ -2271,7 +2271,7 @@ impl<'a> Parser<'a> {
         }
 
         let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
-            let name = self.parse_object_name()?;
+            let name = self.parse_raw_name()?;
             let targets = if self.consume_token(&Token::LParen) {
                 let targets = self.parse_comma_separated(|parser| {
                     let name = parser.parse_object_name()?;
@@ -2322,7 +2322,7 @@ impl<'a> Parser<'a> {
         };
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(ON)?;
-        let on_name = self.parse_object_name()?;
+        let on_name = self.parse_raw_name()?;
 
         // Arrangements are the only index type we support, so we can just ignore this
         if self.parse_keyword(USING) {
@@ -2739,7 +2739,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(KEY)?;
                 let columns = self.parse_parenthesized_column_list(Mandatory)?;
                 self.expect_keyword(REFERENCES)?;
-                let foreign_table = self.parse_object_name()?;
+                let foreign_table = self.parse_raw_name()?;
                 let referred_columns = self.parse_parenthesized_column_list(Mandatory)?;
                 Ok(Some(TableConstraint::ForeignKey {
                     name,
@@ -2860,7 +2860,7 @@ impl<'a> Parser<'a> {
         }
 
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_raw_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -2875,7 +2875,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_raw_name()?;
 
         Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
             RESET => {
@@ -2931,7 +2931,7 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
             }
         } else {
-            let name = self.parse_object_name()?;
+            let name = self.parse_raw_name()?;
             let columns = self.parse_parenthesized_column_list(Optional)?;
             CopyRelation::Table { name, columns }
         };
@@ -3916,7 +3916,7 @@ impl<'a> Parser<'a> {
         {
             match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(_) => {
-                    let table_name = self.parse_object_name()?;
+                    let table_name = self.parse_raw_name()?;
                     let filter = if self.parse_keyword(WHERE) {
                         Some(ShowStatementFilter::Where(self.parse_expr()?))
                     } else {
@@ -3936,23 +3936,23 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
-                view_name: self.parse_object_name()?,
+                view_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
-                source_name: self.parse_object_name()?,
+                source_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
             Ok(Statement::ShowCreateTable(ShowCreateTableStatement {
-                table_name: self.parse_object_name()?,
+                table_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
             Ok(Statement::ShowCreateSink(ShowCreateSinkStatement {
-                sink_name: self.parse_object_name()?,
+                sink_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
-                index_name: self.parse_object_name()?,
+                index_name: self.parse_raw_name()?,
             }))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
@@ -3972,7 +3972,7 @@ impl<'a> Parser<'a> {
         full: bool,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_one_of_keywords(&[FROM, IN])?;
-        let table_name = self.parse_object_name()?;
+        let table_name = self.parse_raw_name()?;
         // MySQL also supports FROM <database> here. In other words, MySQL
         // allows both FROM <table> FROM <database> and FROM <database>.<table>,
         // while we only support the latter for now.
@@ -4221,7 +4221,7 @@ impl<'a> Parser<'a> {
     /// Parse an INSERT statement
     fn parse_insert(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(INTO)?;
-        let table_name = self.parse_object_name()?;
+        let table_name = self.parse_raw_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let source = if self.parse_keywords(&[DEFAULT, VALUES]) {
             InsertSource::DefaultValues
@@ -4414,7 +4414,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             TailRelation::Query(query)
         } else {
-            TailRelation::Name(self.parse_object_name()?)
+            TailRelation::Name(self.parse_raw_name()?)
         };
         let options = self.parse_opt_with_options()?;
         let as_of = self.parse_optional_as_of()?;
@@ -4496,7 +4496,7 @@ impl<'a> Parser<'a> {
 
         // VIEW view_name | query
         let explainee = if self.parse_keyword(VIEW) {
-            Explainee::View(self.parse_object_name()?)
+            Explainee::View(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };

@@ -23,49 +23,49 @@ INSERT INTO customer VALUES (1, 2, 3)
 ----
 INSERT INTO customer VALUES (1, 2, 3)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("customer")]), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO customer VALUES (1, 2, 3), (1, 2, 3)
 ----
 INSERT INTO customer VALUES (1, 2, 3), (1, 2, 3)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("customer")]), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))], [Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))], [Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO public.customer VALUES (1, 2, 3)
 ----
 INSERT INTO public.customer VALUES (1, 2, 3)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("public"), Ident("customer")])), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO db.public.customer VALUES (1, 2, 3)
 ----
 INSERT INTO db.public.customer VALUES (1, 2, 3)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("db"), Ident("public"), Ident("customer")]), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("db"), Ident("public"), Ident("customer")])), columns: [], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO public.customer (id, name, active) VALUES (1, 2, 3)
 ----
 INSERT INTO public.customer (id, name, active) VALUES (1, 2, 3)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [Ident("id"), Ident("name"), Ident("active")], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("public"), Ident("customer")])), columns: [Ident("id"), Ident("name"), Ident("active")], source: Query(Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
 ----
 INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("customer")]), columns: [], source: Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("foo"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: SetOperation { op: Union, all: false, left: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), right: Values(Values([[Value(Number("1"))]])) }, order_by: [], limit: None, offset: None }) })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("foo"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: SetOperation { op: Union, all: false, left: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), right: Values(Values([[Value(Number("1"))]])) }, order_by: [], limit: None, offset: None }) })
 
 parse-statement
 INSERT INTO customer DEFAULT VALUES
 ----
 INSERT INTO customer DEFAULT VALUES
 =>
-Insert(InsertStatement { table_name: UnresolvedObjectName([Ident("customer")]), columns: [], source: DefaultValues })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: DefaultValues })
 
 parse-statement
 INSERT INTO customer DEFAULT VALUES, DEFAULT VALUES

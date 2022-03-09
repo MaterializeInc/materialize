@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
+use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use reqwest::Url;
@@ -32,8 +33,6 @@ use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_repr::strconv;
-
-use prost::Message;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnectorAvro,

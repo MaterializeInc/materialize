@@ -15,11 +15,12 @@
 
 use uuid::Uuid;
 
+use crate::names::Aug;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Raw, Select, SelectItem,
-    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
+    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
+    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::normalize;
@@ -27,12 +28,12 @@ use crate::plan::{PlanError, StatementContext};
 
 pub fn transform_query<'a>(
     scx: &StatementContext,
-    query: &'a mut Query<Raw>,
+    query: &'a mut Query<Aug>,
 ) -> Result<(), PlanError> {
     run_transforms(scx, |t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
+pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Aug>) -> Result<(), PlanError> {
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
@@ -42,7 +43,7 @@ pub(crate) fn run_transforms<F, A>(
     ast: &mut A,
 ) -> Result<(), PlanError>
 where
-    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Raw>, &'ast mut A),
+    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Aug>, &'ast mut A),
 {
     let mut func_rewriter = FuncRewriter::new(scx);
     f(&mut func_rewriter, ast);
@@ -88,7 +89,7 @@ impl<'a> FuncRewriter<'a> {
 
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL;
     // note that this is semantically equivalent to `NULLIF(rhs, 0)`.
-    fn plan_divide(lhs: Expr<Raw>, rhs: Expr<Raw>) -> Expr<Raw> {
+    fn plan_divide(lhs: Expr<Aug>, rhs: Expr<Aug>) -> Expr<Aug> {
         lhs.divide(Expr::Case {
             operand: None,
             conditions: vec![rhs.clone().equals(Expr::number("0"))],
@@ -99,11 +100,11 @@ impl<'a> FuncRewriter<'a> {
 
     fn plan_agg(
         name: UnresolvedObjectName,
-        expr: Expr<Raw>,
-        order_by: Vec<OrderByExpr<Raw>>,
-        filter: Option<Box<Expr<Raw>>>,
+        expr: Expr<Aug>,
+        order_by: Vec<OrderByExpr<Aug>>,
+        filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-    ) -> Expr<Raw> {
+    ) -> Expr<Aug> {
         Expr::Function(Function {
             name,
             args: FunctionArgs::Args {
@@ -116,7 +117,7 @@ impl<'a> FuncRewriter<'a> {
         })
     }
 
-    fn plan_avg(expr: Expr<Raw>, filter: Option<Box<Expr<Raw>>>, distinct: bool) -> Expr<Raw> {
+    fn plan_avg(expr: Expr<Aug>, filter: Option<Box<Expr<Aug>>>, distinct: bool) -> Expr<Aug> {
         let sum = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
@@ -136,11 +137,11 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_variance(
-        expr: Expr<Raw>,
-        filter: Option<Box<Expr<Raw>>>,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
-    ) -> Expr<Raw> {
+    ) -> Expr<Aug> {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
         // stable variants, the most well-known of which is Welford's, are
@@ -190,15 +191,15 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_stddev(
-        expr: Expr<Raw>,
-        filter: Option<Box<Expr<Raw>>>,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
-    ) -> Expr<Raw> {
+    ) -> Expr<Aug> {
         Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
     }
 
-    fn rewrite_expr(&mut self, expr: &Expr<Raw>) -> Option<(Ident, Expr<Raw>)> {
+    fn rewrite_expr(&mut self, expr: &Expr<Aug>) -> Option<(Ident, Expr<Aug>)> {
         match expr {
             Expr::Function(Function {
                 name,
@@ -268,8 +269,8 @@ impl<'a> FuncRewriter<'a> {
     }
 }
 
-impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
-    fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem<Raw>) {
+impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
+    fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem<Aug>) {
         if let SelectItem::Expr { expr, alias: None } = item {
             visit_mut::visit_expr_mut(self, expr);
             if let Some((alias, expr)) = self.rewrite_expr(expr) {
@@ -283,7 +284,7 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
         }
     }
 
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         visit_mut::visit_expr_mut(self, expr);
         if let Some((_name, new_expr)) = self.rewrite_expr(expr) {
             *expr = new_expr;
@@ -306,8 +307,8 @@ impl CheckedRecursion for Desugarer {
     }
 }
 
-impl<'ast> VisitMut<'ast, Raw> for Desugarer {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
+impl<'ast> VisitMut<'ast, Aug> for Desugarer {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
@@ -334,7 +335,7 @@ impl Desugarer {
         }
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Aug>) -> Result<(), PlanError> {
         // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();
