@@ -110,7 +110,10 @@ after `F` are `{6, 7, 8, ...}`.
 The latest frontier is the empty set `{}`. No time is later than `{}`.
 
 Throughout this document, "time" generally refers to Materialize time. We say
-"wall-clock time" to describe time in the real world.
+"wall-clock time" to describe time in the real world. Times from external
+systems may be
+[reclocked](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md)
+into Materialize times.
 
 ## Collection Versions
 
@@ -293,7 +296,7 @@ are equivalent. Similarly, we can also represent a pTVC as a set of updates
 together with `since` and `upper` frontiers: `ptvc = [updates, since, upper]`.
 To convert between time-function and update-set representations of pTVCs, we
 use the same definitions we gave for TVCs above. This gives the following
-four structure:
+four-fold structure:
 
 ![Four nodes in a graph: update-set and time-function representations of both pTVCs and TVCs](assets/tvc-ptvc-quad.jpeg)
 
@@ -422,9 +425,12 @@ Materialize produces and maintains bindings of `GlobalId`s to time-varying colle
     The representation in the Storage layer is as explicit update triples and maintained `since` and `upper` frontiers.
     The primary property of the Storage layer is that, even across failures, it is able to reproduce all updates for times that lie between `since` and `upper` frontiers that it has advertised.
 
-*   The  **Compute** layer uses a view definition to transform input TVCs into the exactly corresponding output TVCs.
-    The output TVC varies *exactly* with the input TVCs:
-    For each `time`, the output collection at `time` equals the view applied to the input collections at `time`.
+*   The  **Compute** layer uses a view definition to transform (possibly
+    multiple) input TVCs into a new output TVC. The output TVC varies *exactly*
+    with the input TVCs: For each `time`, the output collection at `time`
+    equals the view applied to the input collections at `time`. We call this
+    process of maintaining an output TVC that varies with input TVCs a
+    *dataflow*.
 
 The Storage and Compute layers both manage the `since` and `upper` frontiers for the `GlobalId`s they manage.
 For both layers, the `since` frontier is controlled by their users and it does not advance unless it is allowed.
@@ -433,8 +439,10 @@ The `upper` frontier in Compute is advanced when its inputs have advanced and it
 
 ## Capabilities
 
-The `since` and `upper` frontiers are allowed to advance through the use of "capabilities".
-Each capability names a `GlobalId` and a frontier.
+The `since` and `upper` frontiers are allowed to advance through the use of
+"capabilities". Layers keep track of the capabilities they've issued, and use
+those capabilities to determine when frontiers may advance. Each capability
+names a `GlobalId` and a frontier.
 
 * `ReadCapability(id, frontier)` prevents the `since` frontier associated with `id` from advancing beyond `frontier`.
 * `WriteCapability(id, frontier)` prevents the `upper` frontier associated with `id` from advancing beyond `frontier`.
@@ -482,6 +490,18 @@ It likely has a more verbose diagnostic API that describes its state, which shou
     A subscription can be constructed with additional arguments that change how the data is returned to the user.
     For example, the user may ask to not receive the initial snapshot, rather that receive and then discard it.
     For example, the user may provide filtering and projection that can be applied before the data are transmitted.
+
+*   `CloneCapability(Capability) -> Capability'`: creates an
+    independent copy of the given capability, with the same `id` and
+    `frontier`.
+
+*   `DowngradeCapability(Capability, frontier')`: downgrades the given capability to `frontier'`, leaving its `id` unchanged.
+
+    Every time in the new `frontier'` must be greater than or equal to the
+    current `frontier`.
+
+*   `DropCapability(Capability)`: downgrades a capability to the final frontier
+    `{}`, rendering it useless.
 
 *   `UpdateAndDowngrade(WriteCapability(id, frontier), updates, new_frontier)`: applies `updates` to `id` and downgrades `frontier` to `new_frontier`.
 
