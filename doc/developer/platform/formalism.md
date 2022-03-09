@@ -78,11 +78,18 @@ CIDR differential dataflow paper, a piece of data is called a "record".
 
 ## Times
 
-A *Timeline* is a set of *Materialize times* `T`, together with a *join* (least
-upper bound) `join(t1, t2) => t3` which takes two elements of `T` and yields a
-third. `join` must be associative, commutative, and idempotent. Each timeline
-therefor therefore forms a
-[join-semilattice](https://en.wikipedia.org/wiki/Semilattice).
+A *Timeline* is a set of *Materialize times* `T`, together with a *meet*
+(greatest lower bound) and *join* (least upper bound), each of which take two
+elements of `T` and yield a third:
+
+```
+meet(t1, t2) => t3
+join(t1, t2) => t3
+```
+
+Both `meet` and `join` must be associative, commutative, and idempotent. Each
+timeline therefore forms a
+[lattice](https://en.wikipedia.org/wiki/Lattice_(order)).
 
 A *time* is an element of `T`. We define a partial order `<=t` over times in
 the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
