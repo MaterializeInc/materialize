@@ -14,11 +14,16 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Context as _;
+use hyper::client::HttpConnector;
+use hyper_proxy::ProxyConnector;
+use hyper_tls::HttpsConnector;
 use prometheus::IntCounterVec;
+use tonic::metadata::{MetadataKey, MetadataMap};
+use tonic::transport::Endpoint;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt;
-use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::layer::{Context, Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -27,8 +32,86 @@ use mz_ore::metrics::{MetricsRegistry, ThirdPartyMetric};
 
 use crate::Args;
 
+fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnector>> {
+    // This accomplishes the same thing as the default
+    // + adding a `request_alpn`
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+
+    mz_http_proxy::hyper::connector(HttpsConnector::from((
+        http,
+        tokio_native_tls::TlsConnector::from(
+            native_tls::TlsConnector::builder()
+                .request_alpns(&["h2"])
+                .build()
+                .unwrap(),
+        ),
+    )))
+}
+
+// Setting up opentel in the background requires we are in a tokio-runtime
+// context, hence the `async`
+#[allow(clippy::unused_async)]
+async fn configure_opentelemetry_and_init<
+    L: Layer<S> + Send + Sync + 'static,
+    S: Subscriber + Send + Sync + 'static,
+>(
+    stack: Layered<L, S>,
+    opentelemetry_endpoint: &Option<String>,
+    opentelemetry_headers: &Option<String>,
+) -> Result<(), anyhow::Error>
+where
+    Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
+    for<'ls> S: LookupSpan<'ls>,
+{
+    if let Some(endpoint) = opentelemetry_endpoint {
+        // Manually setup an openssl-backed, h2, proxied `Channel`
+        let endpoint = Endpoint::from_shared(endpoint.clone())?;
+        // TODO(guswynn): investigate if this should be non-lazy
+        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector())?;
+        let otlp_exporter = opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_channel(channel);
+
+        let otlp_exporter = if let Some(headers) = opentelemetry_headers {
+            let mut mmap = MetadataMap::new();
+            for header in headers.split(',') {
+                let mut splits = header.splitn(2, '=');
+                let k = splits
+                    .next()
+                    .context("opentelemetry-headers must be of the form key=value")?;
+                let v = splits
+                    .next()
+                    .context("opentelemetry-headers must be of the form key=value")?;
+
+                mmap.insert(MetadataKey::from_str(k)?, v.parse()?);
+            }
+            otlp_exporter.with_metadata(mmap)
+        } else {
+            otlp_exporter
+        };
+
+        let tracer = opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(otlp_exporter)
+            .install_batch(opentelemetry::runtime::Tokio)
+            .unwrap();
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+        let stack = stack.with(otel_layer);
+
+        stack.init();
+        Ok(())
+    } else {
+        stack.init();
+        Ok(())
+    }
+}
 /// Configures tracing according to the provided command-line arguments.
-pub fn configure(args: &Args, metrics_registry: &MetricsRegistry) -> Result<(), anyhow::Error> {
+pub async fn configure(
+    args: &Args,
+    metrics_registry: &MetricsRegistry,
+) -> Result<(), anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -63,7 +146,12 @@ pub fn configure(args: &Args, metrics_registry: &MetricsRegistry) -> Result<(), 
             #[cfg(feature = "tokio-console")]
             let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
 
-            stack.init()
+            configure_opentelemetry_and_init(
+                stack,
+                &args.opentelemetry_endpoint,
+                &args.opentelemetry_headers,
+            )
+            .await?
         }
         log_file => {
             // Logging to a file. If the user did not explicitly specify
@@ -105,7 +193,12 @@ pub fn configure(args: &Args, metrics_registry: &MetricsRegistry) -> Result<(), 
             #[cfg(feature = "tokio-console")]
             let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
 
-            stack.init()
+            configure_opentelemetry_and_init(
+                stack,
+                &args.opentelemetry_endpoint,
+                &args.opentelemetry_headers,
+            )
+            .await?
         }
     }
 

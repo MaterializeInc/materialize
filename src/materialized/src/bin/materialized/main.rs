@@ -64,7 +64,7 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 }
 
 /// The streaming SQL materialized view engine.
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
 pub struct Args {
     // === Special modes. ===
@@ -373,6 +373,26 @@ pub struct Args {
     #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 
+    /// The endpoint to send opentelemetry traces to.
+    /// If not provided, tracing is not sent.
+    ///
+    /// You most likely also need to provide
+    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// depending on the collector you are talking to.
+    #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
+    opentelemetry_endpoint: Option<String>,
+
+    /// Comma separated headers of the form `KEY=VALUE`
+    /// to pass through to the opentelemetry
+    /// collector
+    #[clap(
+        long,
+        env = "MZ_OPENTELEMETRY_HEADERS",
+        requires = "opentelemetry-endpoint",
+        hide = true
+    )]
+    opentelemetry_headers: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -382,6 +402,7 @@ pub struct Args {
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
 /// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
+#[derive(Debug)]
 struct WorkerCount(usize);
 
 impl Default for WorkerCount {
@@ -428,6 +449,23 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
+    // Start Tokio runtime.
+
+    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(ncpus_useful)
+            // The default thread name exceeds the Linux limit on thread name
+            // length, so pick something shorter.
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("tokio:work-{}", id)
+            })
+            .enable_all()
+            .build()?,
+    );
+
     // Install a custom panic handler that instructs users to file a bug report.
     // This requires that we configure tracing, so that the panic can be
     // reported as a trace event.
@@ -435,7 +473,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    tracing::configure(&args, &metrics_registry)?;
+    runtime.block_on(tracing::configure(&args, &metrics_registry))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -557,7 +595,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
-    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
         max: None,
         swap_max: None,
@@ -632,21 +669,6 @@ dataflow workers: {workers}",
         &differential_dataflow::Config {
             idle_merge_effort: args.differential_idle_merge_effort,
         },
-    );
-
-    // Start Tokio runtime.
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(ncpus_useful)
-            // The default thread name exceeds the Linux limit on thread name
-            // length, so pick something shorter.
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("tokio:work-{}", id)
-            })
-            .enable_all()
-            .build()?,
     );
 
     // Configure persistence core.
