@@ -377,18 +377,20 @@ pub struct Args {
     /// If not provided, tracing is not sent.
     ///
     /// You most likely also need to provide
-    ///
-    #[clap(
-        long,
-        env = "MZ_OPENTELEMETRY_ENDPOINT",
-        requires = "opentelemetry-headers",
-        hide = true
-    )]
+    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// depending on the collector you are talking to.
+    #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
     opentelemetry_endpoint: Option<String>,
 
-    /// Comma separated headers to pass through to the opentelemetry
-    /// collector. Only used if `opentelemetry-endpoint` is set
-    #[clap(long, env = "MZ_OPENTELEMETRY_HEADERS", hide = true)]
+    /// Comma separated headers of the form `KEY=VALUE`
+    /// to pass through to the opentelemetry
+    /// collector
+    #[clap(
+        long,
+        env = "MZ_OPENTELEMETRY_HEADERS",
+        requires = "opentelemetry-endpoint",
+        hide = true
+    )]
     opentelemetry_headers: Option<String>,
 
     #[cfg(feature = "tokio-console")]
@@ -471,7 +473,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    tracing::configure(&args, &metrics_registry, &runtime)?;
+    runtime.block_on(tracing::configure(&args, &metrics_registry))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
