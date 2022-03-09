@@ -1241,6 +1241,15 @@ lazy_static! {
         // for this to be persisted.
         persistent: true,
     };
+    pub static ref MZ_CLUSTERS: BuiltinTable = BuiltinTable {
+        name: "mz_clusters",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(4049),
+        persistent: false,
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -2196,6 +2205,7 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
+            Builtin::Table(&MZ_CLUSTERS),
             Builtin::View(&MZ_CATALOG_NAMES),
             Builtin::View(&MZ_ARRANGEMENT_SHARING),
             Builtin::View(&MZ_ARRANGEMENT_SIZES),

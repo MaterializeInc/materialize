@@ -31,9 +31,11 @@ pub enum ErrorKind {
     DatabaseAlreadyExists(String),
     SchemaAlreadyExists(String),
     RoleAlreadyExists(String),
+    ClusterAlreadyExists(String),
     ItemAlreadyExists(String),
     ReservedSchemaName(String),
     ReservedRoleName(String),
+    ReservedClusterName(String),
     ReadOnlySystemSchema(String),
     ReadOnlyItem(String),
     SchemaNotEmpty(String),
@@ -77,6 +79,9 @@ impl Error {
             ErrorKind::ReservedRoleName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
+            ErrorKind::ReservedClusterName(_) => {
+                Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())
+            }
             _ => None,
         }
     }
@@ -114,9 +119,11 @@ impl std::error::Error for Error {
             | ErrorKind::DatabaseAlreadyExists(_)
             | ErrorKind::SchemaAlreadyExists(_)
             | ErrorKind::RoleAlreadyExists(_)
+            | ErrorKind::ClusterAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
             | ErrorKind::ReservedSchemaName(_)
             | ErrorKind::ReservedRoleName(_)
+            | ErrorKind::ReservedClusterName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
             | ErrorKind::ReadOnlyItem(_)
             | ErrorKind::SchemaNotEmpty(_)
@@ -150,6 +157,9 @@ impl fmt::Display for Error {
             ErrorKind::RoleAlreadyExists(name) => {
                 write!(f, "role '{}' already exists", name)
             }
+            ErrorKind::ClusterAlreadyExists(name) => {
+                write!(f, "cluster '{}' already exists", name)
+            }
             ErrorKind::ItemAlreadyExists(name) => {
                 write!(f, "catalog item '{}' already exists", name)
             }
@@ -158,6 +168,9 @@ impl fmt::Display for Error {
             }
             ErrorKind::ReservedRoleName(name) => {
                 write!(f, "role name {} is reserved", name.quoted())
+            }
+            ErrorKind::ReservedClusterName(name) => {
+                write!(f, "cluster name {} is reserved", name.quoted())
             }
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)
