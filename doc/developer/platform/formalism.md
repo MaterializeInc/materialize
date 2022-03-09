@@ -588,34 +588,46 @@ While it may be beneficial to think of Adapter's state as a pTVC, changes to its
 Commands acknowledged by the Adapter layer are durably recorded in a total order.
 Any user can rely on all future behavior of the system reflecting any acknowledged command.
 
-## Timelines
+## Timestamp Oracle
 
-The locus of consistency in Materialize is called a timeline.
-A timeline is a durable stateful object that assigns timestamps to a sequence of DML statements, such that
+The adapter assigns timestamps to DML commands using a *timestamp oracle*.
+The timestamp oracle is a stateful, linearizable object which (at a high gloss) provides a simple API:
+
+```
+AssignTimestamp(command) -> timestamp
+```
+
+Since the timestamp oracle is linearizable, all calls to AssignTimestamp appear
+to take place in a total order at some point between the invocation and
+completion of the call to `AssignTimestamp`. Along the linearization order, returned timestamps satisfy several laws:
+
 1. The timestamps never decrease.
 2. The timestamps of INSERT/UPDATE/DELETE statements are strictly greater than those of preceding SELECT statements.
 3. The timestamps of SELECT statements are greater than or equal to the read capabilities of their input collections.
 4. The timestamps of INSERT/UPDATE/DELETE statements are greater than or equal to the write capabilities of their target collection.
 
-All commands are serialized through the timeline.
-A timeline is not a complicated concurrent object.
+The timestamps from the timestamp oracle do not need to strictly increase, and
+any events that have the same timestamp are *concurrent*. Concurrent events (at
+the same timestamp) first modify collections and then read collections. All
+writes at a timestamp are visible to all reads at the same timestamp.
 
-The timeline timestamps do not need to strictly increase, and any events that have the same timestamp are *concurrent*.
-Concurrent events (at the same timestamp) first modify collections and then read collections.
-All writes at a timestamp are visible to all reads at the same timestamp.
-
-SELECT statements observe all data mutations up through and including their timestamp.
-For this reason, we strictly advance the timestamp for each write that occurs after a read, to ensure that the write is not visible to the read.
-ADAPTER uses `UpdateAndDowngrade` in response to the first read after a write, to ensure that prior writes are readable and to strictly advance the write frontier.
+SELECT statements observe all data mutations up through and including their
+timestamp. For this reason, we strictly advance the timestamp for each write
+that occurs after a read, to ensure that the write is not visible to the read.
+The adapter uses `UpdateAndDowngrade` in response to the first read after a
+write, to ensure that prior writes are readable and to strictly advance the
+write frontier.
 
 Some DML operations, like UPDATE and DELETE, require a read-write transaction which prevents other writes from intervening.
 In these and other non-trivial cases, we rely on the total order of timestamps to provide the apparent total order of system execution.
 
 ---
 
-Several commands support an optional `AS OF <time>` clause, which instructs the Adapter to use a specific query `time`, if valid.
-The presence of this clause opts a command out of the timeline reasoning: it is neither constrainted by nor does it constrain timestamp selection for other commands.
-The command will observe all writes up through `time` (if it reads) and be visible by all reads from `time` onward (if it writes).
+Several commands support an optional `AS OF <time>` clause, which instructs the
+Adapter to use a specific query `time`, if valid. If this clause is present,
+the adapter will not ask the timestamp oracle for a timestamp. The command will
+observe all writes up through `time` (if it reads) and be visible by all reads
+from `time` onward (if it writes).
 
 ---
 
@@ -668,4 +680,4 @@ These lower layers should provide similar "transactional" interfaces that valida
 
 As Materialize runs, the Adapter may see fit to "allow compaction" of collections Materialize maintains.
 It does so by downgrading its held read capabilities for the collection (identifier by `GlobalId`).
-Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timeline timestamps forward. Generally, the Adapter should not downgrade its read capabilities past the timeline timestamp, thereby avoiding this constraint.
+Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timestamp oracle's timestamps forward. Generally, the Adapter should not downgrade its read capabilities past the timestamp oracle's current timestamp, thereby avoiding this constraint.
