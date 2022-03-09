@@ -903,6 +903,7 @@ impl Catalog {
                                 .collect(),
                             create_sql: super::coord::index_sql(
                                 index_name,
+                                DEFAULT_COMPUTE_INSTANCE_ID,
                                 name,
                                 &log.variant.desc(),
                                 &log.variant.index_by(),

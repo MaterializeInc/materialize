@@ -64,5 +64,41 @@ SHOW cluster
 ----
 default
 
-statement error parameter "cluster" cannot be changed
+statement ok
 SET cluster = 'foo'
+
+statement ok
+CREATE MATERIALIZED VIEW v AS SELECT 1
+
+query T
+SELECT * FROM v
+----
+1
+
+# Test invalid setting of `cluster`.
+
+# It's okay to set the `cluster` variable to an invalid cluster.
+statement ok
+SET cluster = 'bad'
+
+# But you can't do any reads on that cluster.
+statement error unknown cluster 'bad'
+SELECT * FROM v
+
+# Nor can you create indexes on that cluster.
+statement error unknown cluster 'bad'
+CREATE MATERIALIZED VIEW v2 AS SELECT 1
+
+# But you can create unmaterialized views on that cluster.
+statement ok
+CREATE VIEW unmat AS SELECT 1
+
+# Test `CREATE INDEX ... IN CLUSTER`.
+
+statement ok
+CREATE DEFAULT INDEX IN CLUSTER foo ON v
+
+statement error unknown cluster 'noexist'
+CREATE DEFAULT INDEX IN CLUSTER noexist ON v
+
+# TODO(clusters): write tests for SHOW CREATE INDEX and mz_indexes.

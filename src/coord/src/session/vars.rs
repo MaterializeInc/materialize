@@ -347,7 +347,7 @@ impl Vars {
                 });
             }
         } else if name == CLUSTER.name {
-            return Err(CoordError::ReadOnlyParameter(&CLUSTER));
+            self.cluster.set(value, local)
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {

@@ -313,6 +313,7 @@ pub fn create_statement(
             from,
             connector: _,
             with_options: _,
+            in_cluster: _,
             format: _,
             envelope: _,
             with_snapshot: _,
@@ -355,6 +356,7 @@ pub fn create_statement(
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
             on_name,
+            in_cluster: _,
             key_parts,
             with_options: _,
             if_not_exists,

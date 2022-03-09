@@ -12,7 +12,6 @@ use std::path::Path;
 use anyhow::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use mz_repr::strconv;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -20,9 +19,11 @@ use semver::Version;
 use tokio::fs::File;
 use tracing::warn;
 
+use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_ore::collections::CollectionExt;
 use mz_postgres_util::publication_info;
+use mz_repr::strconv;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::{self, VisitMut};
 use mz_sql::ast::{
@@ -30,8 +31,8 @@ use mz_sql::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
-    ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedDataType,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+    ProtobufSchema, Raw, RawIdent, RawName, SqlOption, Statement, TableFunction,
+    UnresolvedDataType, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::names::resolve_names_stmt;
 use mz_sql_parser::ast::CreateTypeAs;
@@ -108,6 +109,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_23_0 {
             ast_rewrite_pgcdc_with_details_0_23_0(stmt)?;
+            ast_rewrite_index_sink_cluster_default_0_23_0(stmt)?;
         }
         Ok(())
     })?;
@@ -180,6 +182,43 @@ fn ast_rewrite_pgcdc_with_details_0_23_0(
             _ => (),
         }
     }
+    Ok(())
+}
+
+/// Adds the default cluster to all existing indexes and sinks.
+fn ast_rewrite_index_sink_cluster_default_0_23_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::CreateIndex(CreateIndexStatement {
+            name: _,
+            in_cluster,
+            on_name: _,
+            key_parts: _,
+            with_options: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
+        }
+
+        Statement::CreateSink(CreateSinkStatement {
+            name: _,
+            in_cluster,
+            from: _,
+            connector: _,
+            with_options: _,
+            format: _,
+            envelope: _,
+            with_snapshot: _,
+            as_of: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
+        }
+
+        _ => (),
+    };
+
     Ok(())
 }
 
@@ -379,6 +418,7 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,
@@ -552,6 +592,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options: _,
@@ -566,6 +607,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateSink(CreateSinkStatement {
             name: _,
+            in_cluster: _,
             from: _,
             connector: _,
             with_options: _,
@@ -650,6 +692,7 @@ fn ast_rewrite_type_references_0_6_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,
