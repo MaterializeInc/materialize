@@ -35,7 +35,10 @@ use mz_repr::adt::jsonb::Jsonb;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
+use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
+
+mod metrics;
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -69,6 +72,16 @@ pub struct KafkaSourceReader {
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
     _metadata_thread_handle: UnparkOnDropHandle<()>,
+    /// A handle to the partition specific metrics
+    partition_metrics: KafkaPartitionMetrics,
+}
+
+struct UnparkOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for UnparkOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.thread().unpark();
+    }
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -87,7 +100,7 @@ impl SourceReader for KafkaSourceReader {
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,
-        _: SourceBaseMetrics,
+        base_metrics: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kafka(kc) => kc,
@@ -168,10 +181,10 @@ impl SourceReader for KafkaSourceReader {
                 .unwrap()
                 .unpark_on_drop()
         };
-
+        let partition_ids = start_offsets.keys().map(|i| *i).collect();
         Ok(KafkaSourceReader {
-            topic_name: topic,
-            source_name,
+            topic_name: topic.clone(),
+            source_name: source_name.clone(),
             id: source_id,
             partition_consumers: VecDeque::new(),
             consumer,
@@ -184,6 +197,13 @@ impl SourceReader for KafkaSourceReader {
             last_stats: None,
             partition_info,
             _metadata_thread_handle: metadata_thread_handle,
+            partition_metrics: KafkaPartitionMetrics::new(
+                &base_metrics,
+                partition_ids,
+                topic,
+                source_name,
+                source_id,
+            ),
         })
     }
 
@@ -390,7 +410,28 @@ impl KafkaSourceReader {
                     old: self.last_stats.take(),
                     new: Some(stats.clone()),
                 });
-                self.last_stats = Some(stats);
+                self.last_stats = Some(stats.clone());
+            }
+            if let Some(obj) = stats.as_ref().to_serde_json().as_object() {
+                // The high watermark is per partition, get the per partition map from the json stats with the path topics.$topic_name.partitions
+                if let Some(partitions) = obj
+                    .get("topics")
+                    .and_then(|v| v.get(self.topic_name.clone()))
+                    .and_then(|v| v.get("partitions"))
+                    .and_then(|v| v.as_object())
+                {
+                    partitions.iter().for_each(|i| {
+                        if let Ok(id) = str::parse::<i32>(i.0) {
+                            if let Some(offset) = i.1.as_i64() {
+                                self.partition_metrics.set_offset_max(id, offset);
+                            } else {
+                                error!("unable to get hi_offset for {}", id);
+                            }
+                        } else {
+                            error!("unable to get partition id from {:?}", i.0);
+                        }
+                    });
+                }
             }
         }
     }
