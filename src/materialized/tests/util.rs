@@ -19,6 +19,7 @@ use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -47,6 +48,7 @@ pub struct Config {
     safe_mode: bool,
     workers: usize,
     logical_compaction_window: Option<Duration>,
+    now: NowFn,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             safe_mode: false,
             workers: 1,
             logical_compaction_window: None,
+            now: SYSTEM_TIME.clone(),
         }
     }
 }
@@ -114,6 +117,11 @@ impl Config {
         self.frontegg = Some(frontegg.clone());
         self
     }
+
+    pub fn with_now(mut self, now: NowFn) -> Self {
+        self.now = now;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -156,6 +164,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
         third_party_metrics_listen_addr: None,
+        now: config.now,
     }))?;
     let server = Server {
         inner,

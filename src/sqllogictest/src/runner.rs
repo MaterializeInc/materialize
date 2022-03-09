@@ -45,6 +45,7 @@ use md5::{Digest, Md5};
 use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use postgres_protocol::types;
 use regex::Regex;
@@ -568,6 +569,7 @@ impl Runner {
             metrics_registry: MetricsRegistry::new(),
             persist: PersistConfig::disabled(),
             third_party_metrics_listen_addr: None,
+            now: SYSTEM_TIME.clone(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
