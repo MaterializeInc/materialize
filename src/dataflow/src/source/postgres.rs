@@ -58,6 +58,12 @@ trait ErrorExt {
     fn is_recoverable(&self) -> bool;
 }
 
+impl ErrorExt for tokio::time::error::Elapsed {
+    fn is_recoverable(&self) -> bool {
+        true
+    }
+}
+
 impl ErrorExt for tokio_postgres::Error {
     fn is_recoverable(&self) -> bool {
         match self.source() {
@@ -253,7 +259,12 @@ impl PostgresSourceReader {
 
             pin_mut!(reader);
             let mut mz_row = Row::default();
-            while let Some(b) = reader.next().await.transpose()? {
+            // TODO: once tokio-stream is released with https://github.com/tokio-rs/tokio/pull/4502
+            //    we can convert this into a single `timeout(...)` call on the reader CopyOutStream
+            while let Some(b) = tokio::time::timeout(Duration::from_secs(15), reader.next())
+                .await?
+                .transpose()?
+            {
                 let mut packer = mz_row.packer();
                 packer.push(relation_id);
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
