@@ -756,13 +756,13 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    ScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    ScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
             AggregateFunc::StringAgg { .. } => ScalarType::String,
             AggregateFunc::RowNumber { .. } => match input_type.scalar_type {
-                ScalarType::Record { fields, .. } => ScalarType::List {
+                ScalarType::Record { ref fields, .. } => ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (
@@ -787,12 +787,22 @@ impl AggregateFunc {
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
-            _ => input_type.scalar_type,
+            _ => input_type.scalar_type.clone(),
         };
         // Count never produces null, and other aggregations only produce
         // null in the presence of null inputs.
         let nullable = match self {
             AggregateFunc::Count => false,
+            // Use the nullability of the underlying column being aggregated, not the Records wrapping it
+            AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
+                // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
+                ScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
+                    // The inner Record is a (value, separator) tuple
+                    ScalarType::Record { fields, .. } => fields[0].1.nullable,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
             _ => input_type.nullable,
         };
         scalar_type.nullable(nullable)
