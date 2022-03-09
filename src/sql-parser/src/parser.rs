@@ -2834,40 +2834,13 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
-
         // We support `ALTER INDEX ... {RESET, SET} and `ALTER <object type> RENAME
         if object_type == ObjectType::Index {
-            let action = match self.parse_one_of_keywords(&[RESET, SET]) {
-                Some(RESET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
-                    self.expect_token(&Token::RParen)?;
-
-                    Some(AlterIndexAction::ResetOptions(reset_options))
-                }
-                Some(SET) => {
-                    if self.parse_keyword(ENABLED) {
-                        Some(AlterIndexAction::Enable)
-                    } else {
-                        let set_options = self.parse_with_options(true)?;
-
-                        Some(AlterIndexAction::SetOptions(set_options))
-                    }
-                }
-                Some(_) => unreachable!(),
-                None => None,
-            };
-
-            if let Some(action) = action {
-                return Ok(Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action,
-                }));
-            }
+            return self.parse_alter_index();
         }
+
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -2878,6 +2851,53 @@ impl<'a> Parser<'a> {
             name,
             to_item_name,
         }))
+    }
+
+    fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
+                self.expect_token(&Token::RParen)?;
+
+                Statement::AlterIndex(AlterIndexStatement {
+                    index_name: name,
+                    if_exists,
+                    action: AlterIndexAction::ResetOptions(reset_options),
+                })
+            }
+            SET => {
+                if self.parse_keyword(ENABLED) {
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::Enable,
+                    })
+                } else {
+                    let set_options = self.parse_with_options(true)?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::SetOptions(set_options),
+                    })
+                }
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Index,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
     }
 
     /// Parse a copy statement
