@@ -43,13 +43,13 @@ pub enum Command<T = mz_repr::Timestamp> {
 }
 
 /// An abstraction allowing us to name difference compute instances.
-// NOTE(benesch): this is an `i64` rather than a `u64` because SQLite does not
+// TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
 // support natively storing `u64`. Revisit this before shipping Platform, as we
 // might not like to bake in this decision based on a SQLite limitation.
 // See #11123.
 pub type ComputeInstanceId = i64;
 /// A default value whose use we can track down and remove later.
-pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
+pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 
 /// Instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]

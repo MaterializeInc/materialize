@@ -11,36 +11,50 @@
 
 mode cockroach
 
-# Creating a cluster without any options should work. (It creates a virtual
-# cluster.)
+# Creating a cluster without any options works.
 statement ok
 CREATE CLUSTER foo
 
-# Creating a virtual cluster should "work". (Nothing happens presently.)
+statement error cluster 'foo' already exists
+CREATE CLUSTER foo
+
+# Creating a virtual cluster works.
 statement ok
-CREATE CLUSTER foo VIRTUAL
+CREATE CLUSTER bar VIRTUAL
+
+query TT rowsort
+SELECT * FROM mz_clusters
+----
+1 default
+2 foo
+3 bar
 
 # Creating a sized cluster should be rejected.
 statement error SIZE not yet supported
-CREATE CLUSTER foo SIZE 'small'
+CREATE CLUSTER baz SIZE 'small'
 
 # Test invalid option combinations.
 
 statement error VIRTUAL specified more than once
-CREATE CLUSTER foo VIRTUAL, VIRTUAL
+CREATE CLUSTER baz VIRTUAL, VIRTUAL
 
 statement error SIZE specified more than once
-CREATE CLUSTER foo SIZE 'small', SIZE 'medium'
+CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 
 statement error VIRTUAL and SIZE options cannot be specified together
-CREATE CLUSTER foo VIRTUAL, SIZE 'small'
+CREATE CLUSTER baz VIRTUAL, SIZE 'small'
 
 # Test invalid DROPs.
 
 statement error active cluster cannot be dropped
 DROP CLUSTER default
 
-statement error unknown cluster 'foo'
+statement error unknown cluster 'baz'
+DROP CLUSTER baz
+
+# Test valid DROPs, which aren't yet supported.
+
+statement error cannot yet drop clusters
 DROP CLUSTER foo
 
 # Test `cluster` session variable.

@@ -25,8 +25,9 @@ pub struct Config<'a> {
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.
     pub safe_mode: bool,
-    /// Whether to enable logging sources and the views that depend upon them.
-    pub enable_logging: bool,
+    /// Whether to enable logging sources and the views that depend upon them
+    /// for the default cluster.
+    pub default_compute_instance_logging: Option<LoggingConfig>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An [External ID][] to use for all AWS AssumeRole operations.
@@ -45,4 +46,13 @@ pub struct Config<'a> {
     pub disable_user_indexes: bool,
     /// A runtime for the `persist` crate alongside its configuration.
     pub persister: &'a PersisterWithConfig,
+}
+
+/// Configuration of logging for a compute instance.
+#[derive(Debug)]
+pub struct LoggingConfig {
+    /// The interval at which to update logging sources.
+    pub granularity: Duration,
+    // Whether to report logs for the log-processing dataflows.
+    pub log_logging: bool,
 }

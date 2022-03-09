@@ -25,6 +25,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
@@ -69,7 +70,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::Config;
+pub use crate::catalog::config::{Config, LoggingConfig};
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
 
@@ -372,6 +373,7 @@ pub struct Role {
 pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
+    pub logging: Option<DataflowLoggingConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -827,18 +829,31 @@ impl Catalog {
             );
         }
 
-        // TODO(benesch,sploiselle): Take instances from the catalog.
-        catalog.state.compute_instances_by_id.insert(
-            DEFAULT_COMPUTE_INSTANCE_ID,
-            ComputeInstance {
-                name: "default".into(),
-                id: DEFAULT_COMPUTE_INSTANCE_ID,
-            },
-        );
-        catalog
-            .state
-            .compute_instance_names
-            .insert("default".into(), DEFAULT_COMPUTE_INSTANCE_ID);
+        let compute_instances = catalog.storage().load_compute_instances()?;
+        for (id, name) in compute_instances {
+            let logging = match id {
+                // TODO(clusters): this is an *ugly* special case for default
+                // compute instances.
+                DEFAULT_COMPUTE_INSTANCE_ID => config
+                    .default_compute_instance_logging
+                    .as_ref()
+                    .map(|config| DataflowLoggingConfig {
+                        granularity_ns: config.granularity.as_nanos(),
+                        log_logging: config.log_logging,
+                        active_logs: HashMap::new(),
+                    }),
+                _ => None,
+            };
+            catalog.state.compute_instances_by_id.insert(
+                id,
+                ComputeInstance {
+                    name: name.clone(),
+                    id,
+                    logging,
+                },
+            );
+            catalog.state.compute_instance_names.insert(name, id);
+        }
 
         for builtin in BUILTINS.values() {
             let name = FullName {
@@ -847,7 +862,10 @@ impl Catalog {
                 item: builtin.name().into(),
             };
             match builtin {
-                Builtin::Log(log) if config.enable_logging => {
+                // TODO(clusters): we need to be able to add the logging sources
+                // even if logging is off on the default cluster, because
+                // logging might be enabled on other clusters.
+                Builtin::Log(log) if config.default_compute_instance_logging.is_some() => {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
@@ -894,6 +912,16 @@ impl Catalog {
                             compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
                         }),
                     );
+                    catalog
+                        .state
+                        .compute_instances_by_id
+                        .get_mut(&DEFAULT_COMPUTE_INSTANCE_ID)
+                        .expect("default compute instance known to exist")
+                        .logging
+                        .as_mut()
+                        .expect("default compute instance logging known to be enabled")
+                        .active_logs
+                        .insert(log.variant.clone(), index_id);
                 }
 
                 Builtin::Table(table) => {
@@ -920,7 +948,12 @@ impl Catalog {
                     );
                 }
 
-                Builtin::View(view) if config.enable_logging || !view.needs_logs => {
+                // TODO(clusters): we need to be able to add views that depend
+                // on logging sources even if logging is off on the default
+                // cluster, because logging might be enabled on other clusters.
+                Builtin::View(view)
+                    if config.default_compute_instance_logging.is_some() || !view.needs_logs =>
+                {
                     let table_persist_name = None;
                     let source_persist_details = None;
                     let item = catalog
@@ -974,6 +1007,7 @@ impl Catalog {
                 _ => (),
             }
         }
+
         if !config.skip_migrations {
             let last_seen_version = catalog.storage().get_catalog_content_version()?;
             crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
@@ -1023,6 +1057,9 @@ impl Catalog {
         }
         for (role_name, _role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
+        }
+        for (name, _id) in &catalog.state.compute_instance_names {
+            builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
         }
 
         Ok((catalog, builtin_table_updates))
@@ -1095,7 +1132,10 @@ impl Catalog {
         let storage = storage::Connection::open(path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
-            enable_logging: true,
+            default_compute_instance_logging: Some(LoggingConfig {
+                granularity: Duration::from_secs(1),
+                log_logging: false,
+            }),
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -1577,6 +1617,10 @@ impl Catalog {
                 oid: u32,
                 name: String,
             },
+            CreateComputeInstance {
+                id: ComputeInstanceId,
+                name: String,
+            },
             CreateItem {
                 id: GlobalId,
                 oid: u32,
@@ -1665,6 +1709,17 @@ impl Catalog {
                     vec![Action::CreateRole {
                         id: tx.insert_role(&name)?,
                         oid,
+                        name,
+                    }]
+                }
+                Op::CreateComputeInstance { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(CoordError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(name),
+                        )));
+                    }
+                    vec![Action::CreateComputeInstance {
+                        id: tx.insert_compute_instance(&name)?,
                         name,
                     }]
                 }
@@ -1904,6 +1959,22 @@ impl Catalog {
                         },
                     );
                     builtin_table_updates.push(state.pack_role_update(&name, 1));
+                }
+
+                Action::CreateComputeInstance { id, name } => {
+                    info!("create cluster {}", name);
+                    state.compute_instances_by_id.insert(
+                        id,
+                        ComputeInstance {
+                            name: name.clone(),
+                            id,
+                            // TODO(clusters): allow configuring logging per
+                            // cluster.
+                            logging: None,
+                        },
+                    );
+                    state.compute_instance_names.insert(name.clone(), id);
+                    builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                 }
 
                 Action::CreateItem {
@@ -2162,16 +2233,6 @@ impl Catalog {
         }
     }
 
-    /// Returns the default index for the specified `id`.
-    ///
-    /// Panics if `id` does not exist, or if `id` is not an object on which
-    /// indexes can be built.
-    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
-        // The default index is the index with the smallest ID, i.e. the one
-        // created in closest temporal proximity to the object itself.
-        self.state.get_indexes_on(id).map(|(id, _idx)| id).min()
-    }
-
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         self.state.uses_tables(id)
     }
@@ -2193,10 +2254,8 @@ impl Catalog {
         self.state.by_id.values()
     }
 
-    pub fn compute_instances(
-        &self,
-    ) -> impl Iterator<Item = (&ComputeInstanceId, &ComputeInstance)> {
-        self.state.compute_instances_by_id.iter()
+    pub fn compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
+        self.state.compute_instances_by_id.values()
     }
 }
 
@@ -2218,6 +2277,9 @@ pub enum Op {
     CreateRole {
         name: String,
         oid: u32,
+    },
+    CreateComputeInstance {
+        name: String,
     },
     CreateItem {
         id: GlobalId,
