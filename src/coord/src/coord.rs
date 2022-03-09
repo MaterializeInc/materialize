@@ -138,12 +138,14 @@ use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{self, BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, storage, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{
+    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
+};
 use crate::client::{Client, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
-use crate::coord::dataflow_builder::{DataflowBuilder, ExprPrepStyle};
+use crate::coord::dataflow_builder::ExprPrepStyle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
@@ -253,6 +255,14 @@ pub struct Config {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
+}
+
+/// State provided to a catalog transaction closure.
+pub struct CatalogTxn<'a> {
+    dataflow_client:
+        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+    catalog: &'a CatalogState,
+    persister: &'a PersisterWithConfig,
 }
 
 /// Glues the external world to the Timely workers.
@@ -954,7 +964,7 @@ impl Coordinator {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
-                    self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                    self.catalog_transact(vec![catalog::Op::DropItem(id)], |_| Ok(()))
                         .await
                         .expect("deleting placeholder sink cannot fail");
                 } else {
@@ -1537,7 +1547,7 @@ impl Coordinator {
     /// not the temporary schema itself.
     async fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
-        self.catalog_transact(ops)
+        self.catalog_transact(ops, |_| Ok(()))
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -1580,7 +1590,8 @@ impl Coordinator {
             },
         ];
         let df = self
-            .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
+            .catalog_transact(ops, |txn| {
+                let mut builder = txn.dataflow_builder(compute_instance);
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: builder
@@ -1877,7 +1888,7 @@ impl Coordinator {
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1897,7 +1908,7 @@ impl Coordinator {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op], |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1916,7 +1927,7 @@ impl Coordinator {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(vec![op])
+        self.catalog_transact(vec![op], |_| Ok(()))
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -1935,7 +1946,7 @@ impl Coordinator {
         let op = catalog::Op::CreateComputeInstance {
             name: plan.name.clone(),
         };
-        let r = self.catalog_transact(vec![op]).await;
+        let r = self.catalog_transact(vec![op], |_| Ok(())).await;
         match r {
             Ok(()) => {
                 let id = self
@@ -1995,7 +2006,7 @@ impl Coordinator {
             name,
             item: CatalogItem::Table(table.clone()),
         }];
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 self.persister
@@ -2044,9 +2055,6 @@ impl Coordinator {
         session: &mut Session,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        // The dataflow must be built on a specific compute instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
-
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id()?;
         let source_oid = self.catalog.allocate_oid()?;
@@ -2096,12 +2104,16 @@ impl Coordinator {
             None
         };
         match self
-            .catalog_transact_dataflow(compute_instance, ops, move |mut builder| {
+            .catalog_transact(ops, move |txn| {
                 if let Some(index_id) = index_id {
-                    let df = builder.build_index_dataflow(index_id)?;
-                    return Ok(df);
+                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                    let mut builder = txn.dataflow_builder(compute_instance);
+                    Ok(builder
+                        .build_index_dataflow(index_id)?
+                        .map(|df| (df, compute_instance)))
+                } else {
+                    Ok(None)
                 }
-                Ok(None)
             })
             .await
         {
@@ -2143,7 +2155,7 @@ impl Coordinator {
                     self.logical_compaction_window_ms,
                 )
                 .await;
-                if let Some(df) = df {
+                if let Some((df, compute_instance)) = df {
                     self.ship_dataflow(df, compute_instance).await;
                 }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
@@ -2211,35 +2223,26 @@ impl Coordinator {
         };
 
         let transact_result = self
-            .catalog_transact_dataflow(
-                compute_instance,
-                vec![op],
-                |mut builder| -> Result<(), CoordError> {
-                    // Insert a dummy dataflow to trigger validation before we try to actually create
-                    // the external sink resources (e.g. Kafka Topics)
-                    builder
-                        .build_sink_dataflow(
-                            "dummy".into(),
-                            id,
-                            mz_dataflow_types::sinks::SinkDesc {
-                                from: sink.from,
-                                from_desc: builder
-                                    .catalog
-                                    .get_by_id(&sink.from)
-                                    .desc()
-                                    .unwrap()
-                                    .clone(),
-                                connector: SinkConnector::Tail(TailSinkConnector {}),
-                                envelope: Some(sink.envelope),
-                                as_of: SinkAsOf {
-                                    frontier: Antichain::new(),
-                                    strict: false,
-                                },
+            .catalog_transact(vec![op], |txn| -> Result<(), CoordError> {
+                // Insert a dummy dataflow to trigger validation before we try to actually create
+                // the external sink resources (e.g. Kafka Topics)
+                txn.dataflow_builder(sink.compute_instance)
+                    .build_sink_dataflow(
+                        "dummy".into(),
+                        id,
+                        mz_dataflow_types::sinks::SinkDesc {
+                            from: sink.from,
+                            from_desc: txn.catalog.get_by_id(&sink.from).desc().unwrap().clone(),
+                            connector: SinkConnector::Tail(TailSinkConnector {}),
+                            envelope: Some(sink.envelope),
+                            as_of: SinkAsOf {
+                                frontier: Antichain::new(),
+                                strict: false,
                             },
-                        )
-                        .map(|_ok| ())
-                },
-            )
+                        },
+                    )
+                    .map(|_ok| ())
+            })
             .await;
         match transact_result {
             Ok(()) => (),
@@ -2359,19 +2362,22 @@ impl Coordinator {
             plan.materialize,
         )?;
         // A materialized view must be created in the context of some instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
         match self
-            .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
+            .catalog_transact(ops, |txn| {
                 if let Some(index_id) = index_id {
-                    let df = builder.build_index_dataflow(index_id)?;
-                    return Ok(df);
+                    let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+                    let mut builder = txn.dataflow_builder(compute_instance);
+                    Ok(builder
+                        .build_index_dataflow(index_id)?
+                        .map(|df| (df, compute_instance)))
+                } else {
+                    Ok(None)
                 }
-                Ok(None)
             })
             .await
         {
             Ok(df) => {
-                if let Some(df) = df {
+                if let Some((df, compute_instance)) = df {
                     self.ship_dataflow(df, compute_instance).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
@@ -2401,11 +2407,16 @@ impl Coordinator {
             }
         }
         // A materialized view must be created in the context of some instance.
-        let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
+        let compute_instance = if plan.materialize {
+            Some(DEFAULT_COMPUTE_INSTANCE_ID)
+        } else {
+            None
+        };
         match self
-            .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
+            .catalog_transact(ops, |txn| {
                 let mut dfs = vec![];
                 for index_id in index_ids {
+                    let mut builder = txn.dataflow_builder(compute_instance.unwrap());
                     let df = builder.build_index_dataflow(index_id)?;
                     dfs.extend(df);
                 }
@@ -2414,7 +2425,9 @@ impl Coordinator {
             .await
         {
             Ok(dfs) => {
-                self.ship_dataflows(dfs, compute_instance).await;
+                if !dfs.is_empty() {
+                    self.ship_dataflows(dfs, compute_instance.unwrap()).await;
+                }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2454,7 +2467,8 @@ impl Coordinator {
             item: CatalogItem::Index(index),
         };
         match self
-            .catalog_transact_dataflow(compute_instance, vec![op], |mut builder| {
+            .catalog_transact(vec![op], |txn| {
+                let mut builder = txn.dataflow_builder(compute_instance);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)
             })
@@ -2497,7 +2511,7 @@ impl Coordinator {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op], |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
@@ -2508,7 +2522,7 @@ impl Coordinator {
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
@@ -2517,7 +2531,7 @@ impl Coordinator {
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
@@ -2530,7 +2544,7 @@ impl Coordinator {
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
@@ -2548,7 +2562,7 @@ impl Coordinator {
         plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -3865,7 +3879,7 @@ impl Coordinator {
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op], |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -3915,8 +3929,9 @@ impl Coordinator {
                 }),
             }];
             let df = self
-                .catalog_transact_dataflow(compute_instance, ops, |mut builder| {
-                    let df = builder
+                .catalog_transact(ops, |txn| {
+                    let df = txn
+                        .dataflow_builder(compute_instance)
                         .build_index_dataflow(plan.id)?
                         .expect("index enabled");
                     Ok(df)
@@ -3925,19 +3940,6 @@ impl Coordinator {
             self.ship_dataflow(df, compute_instance).await;
         }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    /// Perform a catalog transaction.
-    ///
-    /// This is a simplified form of `catalog_transact_dataflow` for when no dataflow
-    /// is required, sparing the complexity of providing compute instance arguments and
-    /// writing a closure that does nothing with the builder.
-    ///
-    /// [`CatalogState`]: crate::catalog::CatalogState
-    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
-        // The builder is ignored, so we only need a valid compute instance identefier.
-        self.catalog_transact_dataflow(DEFAULT_COMPUTE_INSTANCE_ID, ops, |_builder| Ok(()))
-            .await
     }
 
     /// Perform a catalog transaction. The closure is passed a [`DataflowBuilder`]
@@ -3949,14 +3951,9 @@ impl Coordinator {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    async fn catalog_transact_dataflow<F, R>(
-        &mut self,
-        compute_instance: ComputeInstanceId,
-        ops: Vec<catalog::Op>,
-        f: F,
-    ) -> Result<R, CoordError>
+    async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
     where
-        F: FnOnce(DataflowBuilder) -> Result<R, CoordError>,
+        F: FnOnce(CatalogTxn) -> Result<R, CoordError>,
     {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
@@ -4005,16 +4002,12 @@ impl Coordinator {
             }
         }
 
-        let persister = &self.persister;
-        let compute = self.dataflow_client.compute(compute_instance).unwrap();
-
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
-            let builder = DataflowBuilder {
+            f(CatalogTxn {
+                dataflow_client: &self.dataflow_client,
+                persister: &self.persister,
                 catalog,
-                compute,
-                persister,
-            };
-            f(builder)
+            })
         })?;
 
         // No error returns are allowed after this point. Enforce this at compile time

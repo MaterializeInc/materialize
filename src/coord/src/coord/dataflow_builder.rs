@@ -28,7 +28,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, Row};
 
 use crate::catalog::{CatalogItem, CatalogState};
-use crate::coord::Coordinator;
+use crate::coord::{CatalogTxn, Coordinator};
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::{CoordError, PersisterWithConfig};
@@ -63,6 +63,18 @@ impl Coordinator {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
+            persister: &self.persister,
+            compute,
+        }
+    }
+}
+
+impl CatalogTxn<'_> {
+    /// Creates a new dataflow builder from an ongoing catalog transaction.
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        let compute = self.dataflow_client.compute(instance).unwrap();
+        DataflowBuilder {
+            catalog: self.catalog,
             persister: &self.persister,
             compute,
         }
