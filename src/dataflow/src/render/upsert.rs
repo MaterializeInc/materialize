@@ -615,18 +615,16 @@ mod persist {
     use tracing::trace;
 
     /// lalala
-    pub fn persistent_upsert<G, K, V, T>(
-        stream: &Stream<G, (K, Option<V>, T)>,
+    pub fn persistent_upsert<G, K, V>(
+        stream: &Stream<G, (K, Option<V>, i64)>,
         name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
     ) -> (Stream<G, ((K, V), u64, i64)>, Stream<G, (String, u64, i64)>)
     where
-        G: Scope<Timestamp = u64>,
-        G: Scope<Timestamp = u64>,
+        G: Scope<Timestamp = Timestamp>,
         K: timely::Data + timely::ExchangeData + Codec + Debug + Hash + Eq,
         V: timely::Data + timely::ExchangeData + Codec + Debug + Hash + Eq,
-        T: timely::Data + timely::ExchangeData + Ord,
     {
         let operator_name = format!("persistent_upsert({})", name);
 
@@ -651,7 +649,7 @@ mod persist {
 
         let new_upsert_oks = stream.binary_frontier(
             &restored_upsert_oks,
-            Exchange::new(move |(key, _value, _ts): &(K, Option<V>, T)| key.hashed()),
+            Exchange::new(move |(key, _value, _ts): &(K, Option<V>, i64)| key.hashed()),
             Exchange::new(move |((key, _data), _ts, _diff): &((K, _), _, _)| key.hashed()),
             &operator_name.clone(),
             move |_cap, _info| {
@@ -663,7 +661,7 @@ mod persist {
                 // This is a staging area, where we group incoming updates by timestamp (the timely
                 // timestamp) and disambiguate by the offset (also called "timestamp" above) if
                 // necessary.
-                let mut to_send = BTreeMap::<_, (_, HashMap<_, (Option<V>, T)>)>::new();
+                let mut to_send = BTreeMap::<_, (_, HashMap<_, (Option<V>, i64)>)>::new();
 
                 // This is a map from key -> value. We store the latest value for a given key that
                 // way we know what to retract if a new value with the same key comes along.
