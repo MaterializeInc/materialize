@@ -3659,8 +3659,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "mz-pgrepr",
- "mz-repr",
  "openssl",
  "postgres-openssl",
  "tokio",

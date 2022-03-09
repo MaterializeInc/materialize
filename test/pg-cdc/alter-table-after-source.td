@@ -351,13 +351,10 @@ INSERT INTO alter_table_renamed VALUES (2);
 ! SELECT * FROM alter_table_rename;
 contains:altered
 
-> CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
-
-! SELECT * FROM alter_table_renamed;
-contains:altered
+! CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
+contains:alter_table_renamed not found
 
 > DROP VIEW alter_table_rename;
-> DROP VIEW alter_table_renamed;
 > DROP SOURCE mz_source;
 > CREATE MATERIALIZED SOURCE mz_source
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
