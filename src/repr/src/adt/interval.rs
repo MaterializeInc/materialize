@@ -417,6 +417,21 @@ impl Interval {
     ) -> Result<(), anyhow::Error> {
         use DateTimeField::*;
         match f {
+            Millennium => {
+                self.months -= self.months % (12 * 1000);
+                self.days = 0;
+                self.micros = 0;
+            }
+            Century => {
+                self.months -= self.months % (12 * 100);
+                self.days = 0;
+                self.micros = 0;
+            }
+            Decade => {
+                self.months -= self.months % (12 * 10);
+                self.days = 0;
+                self.micros = 0;
+            }
             Year => {
                 self.months -= self.months % 12;
                 self.days = 0;
@@ -460,11 +475,8 @@ impl Interval {
             Day => {
                 self.micros = 0;
             }
-            Hour | Minute => {
+            Hour | Minute | Milliseconds | Microseconds => {
                 self.micros -= self.micros % f.micros_multiplier();
-            }
-            Millennium | Century | Decade | Milliseconds | Microseconds => {
-                unreachable!("Cannot truncate interval by {f}");
             }
         }
         Ok(())

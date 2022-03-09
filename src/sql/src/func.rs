@@ -1792,6 +1792,7 @@ lazy_static! {
             "date_trunc" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp, 2020;
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217;
+                params!(String, Interval) => BinaryFunc::DateTruncInterval, 1218;
             },
             "degrees" => Scalar {
                 params!(Float64) => UnaryFunc::Degrees(func::Degrees), 1608;

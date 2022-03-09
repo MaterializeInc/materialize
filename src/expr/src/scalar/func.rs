@@ -2073,6 +2073,19 @@ where
     }
 }
 
+fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let mut interval = b.unwrap_interval();
+    let units = a.unwrap_str();
+    let dtf = units
+        .parse()
+        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
+
+    interval
+        .truncate_low_fields(dtf, Some(0))
+        .expect("truncate_low_fields should not fail with max_precision 0");
+    Ok(interval.into())
+}
+
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
 pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
     tz.parse()
@@ -2304,6 +2317,7 @@ pub enum BinaryFunc {
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
+    DateTruncInterval,
     TimezoneTimestamp,
     TimezoneTimestampTz,
     TimezoneTime { wall_time: NaiveDateTime },
@@ -2522,6 +2536,9 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
             }
+            BinaryFunc::DateTruncInterval => {
+                eager!(date_trunc_interval)
+            }
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
@@ -2657,6 +2674,8 @@ impl BinaryFunc {
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
+
+            DateTruncInterval => ScalarType::Interval.nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -2937,6 +2956,7 @@ impl BinaryFunc {
             | DatePartTime
             | DatePartTimestamp
             | DatePartTimestampTz
+            | DateTruncInterval
             | DateTruncTimestamp
             | DateTruncTimestampTz
             | TimezoneTimestamp
@@ -3084,6 +3104,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DatePartTimestamp => f.write_str("date_partts"),
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
             BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
+            BinaryFunc::DateTruncInterval => f.write_str("date_trunciv"),
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
             BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
