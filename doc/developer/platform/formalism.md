@@ -78,10 +78,10 @@ CIDR differential dataflow paper, a piece of data is called a "record".
 
 ## Times
 
-Each instance of Materialize has a single set of *Materialize times* `T`,
-together with a *join* (least upper bound) `join(t1, t2) => t3` which takes two
-elements of `T` and yields a third. `join` must be associative, commutative,
-and idempotent. The times in a Materialize instance therefore form a
+A *Timeline* is a set of *Materialize times* `T`, together with a *join* (least
+upper bound) `join(t1, t2) => t3` which takes two elements of `T` and yields a
+third. `join` must be associative, commutative, and idempotent. Each timeline
+therefor therefore forms a
 [join-semilattice](https://en.wikipedia.org/wiki/Semilattice).
 
 A *time* is an element of `T`. We define a partial order `<=t` over times in
@@ -89,9 +89,8 @@ the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
 `t1 <=t t2` iff `join(t1, t2) = t2`. We also define a strict partial order over
 times `<t`, such that `t1 < t2` iff `t1 <= t2` and `t1 != t2`.
 
-`T` contains a minimal time `t0` such that `t0 <=t t` for all `t` in `T`. Times
-are therefore
-[well-founded](https://en.wikipedia.org/wiki/Well-founded_relation).
+Each `T` contains a minimal time `t0` such that `t0 <=t t` for all `t` in `T`.
+Each timeline is therefore [well-founded](https://en.wikipedia.org/wiki/Well-founded_relation).
 
 As a concrete example, we might choose `T` to be the naturals, with `max` as
 our join and `t0 = 0`. The usual senses of `<=` and `<` then serve as
@@ -109,9 +108,9 @@ after `F` are `{6, 7, 8, ...}`.
 
 The latest frontier is the empty set `{}`. No time is later than `{}`.
 
-Throughout this document, "time" generally refers to Materialize time. We say
-"wall-clock time" to describe time in the real world. Times from external
-systems may be
+Throughout this document, "time" generally refers to a Materialize time in some
+timeline. We say "wall-clock time" to describe time in the real world. Times
+from external systems may be
 [reclocked](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md)
 into Materialize times.
 
@@ -138,8 +137,14 @@ The *empty* collection version `cv0` is an empty multiset.
 
 A *time-varying collection* (TVC) represents the entire history of a collection
 which changes over time. At any time, it has an effective value: a collection
-version. We model a TVC as a map of `{time => collection-version}` for all
-possible times.
+version. Each TVC is associated with a single timeline, which governs which
+times it contains, and how those times relate to one another. Whenever we
+discuss a Materailize time in the context of a TVC, we mean a time in that
+TVC's timeline.
+
+We model a TVC as a pair of `[timeline, collection-versions]`, where
+`collection-versions` is a function which maps a time to a single collection
+version, for all times in `timeline`.
 
 A *read* of a TVC `tvc` at time `t` means the collection version stored in
 `tvc` for `t`. We write this as `read(tvc, t) => collection-version`.
@@ -152,8 +157,9 @@ At any wall-clock time a TVC is (in general) unknowable. Some of its past
 changes have been forgotten or were never recorded, some information has yet to
 arrive, and its future is unwritten. A *partial time-varying collection* (pTVC)
 is a partial representation of a corresponding TVC which is accurate for some
-range of times. We model this as a map of times to collection versions plus two
-frontiers: *since* and *upper*.
+range of times. We model this as a timeline, a function of times to collection
+versions, and two frontiers: *since* and *upper*: `ptvc = [timeline,
+collection-versions, since, upper]`.
 
 Informally, the `since` frontier tells us which versions have been lost to the
 past, and the `upper` frontier tells us which versions have yet to be learned.
@@ -292,11 +298,11 @@ updates(tvc) = ⋃ updates(tvc, t) for all t in T
 ### Update representation of pTVCs
 
 We have argued that the time-function and update-set representations of a TVC
-are equivalent. Similarly, we can also represent a pTVC as a set of updates
-together with `since` and `upper` frontiers: `ptvc = [updates, since, upper]`.
-To convert between time-function and update-set representations of pTVCs, we
-use the same definitions we gave for TVCs above. This gives the following
-four-fold structure:
+are equivalent. Similarly, we can also represent a pTVC as a timeline, a set of
+updates, and the `since` and `upper` frontiers: `ptvc = [timeline, updates,
+since, upper]`. To convert between time-function and update-set representations
+of pTVCs, we use the same definitions we gave for TVCs above. This gives the
+following four-fold structure:
 
 ![Four nodes in a graph: update-set and time-function representations of both pTVCs and TVCs](assets/tvc-ptvc-quad.jpeg)
 
@@ -306,8 +312,9 @@ update-set representations of the corresponding TVC. To do this, we need to
 ensure each update-set pTVC maintains the correctness invariant: `read(ptvc, t)
 = read(tvc, t)` so long as `t` is at least `since` and not later than `upper`.
 
-First, consider the empty pTVC `ptvc0 = [{}, {t0}, {t0}]`. `ptvc0` is trivially
-correct since there are no times not later than than the upper frontier `{t0}`.
+First, consider the empty pTVC `ptvc0 = [timeline, {}, {t0}, {t0}]`. `ptvc0` is
+trivially correct since there are no times not later than than the upper
+frontier `{t0}`.
 
 Next we consider two ways a pTVC could evolve, and wave our hands frantically
 while claiming that each evolution preserves correctness. This is not an
@@ -326,7 +333,8 @@ Which new updates do we need to add? Precisely those whose times are equal to
 or later than `upper`, and also *not* equal to or later than `upper'`.
 
 ```
-ptvc' = [ptvc-updates ⋃ { u = [data, time, diff] in tvc_updates |
+ptvc' = [timeline,
+         ptvc-updates ⋃ { u = [data, time, diff] in tvc_updates |
                           (upper <=t time) and not ( upper' <=t time)}
          since,
          upper']
@@ -353,7 +361,7 @@ remain unchanged. We write this `ptvc' = compact(ptvc, since')`:
 
 ```
 updates' = compact(updates, since')
-ptvc' = [updates', since', upper]
+ptvc' = [timeline, updates', since', upper]
 ```
 
 Since `updates'` has been compacted to `since'`, it contains no updates with
