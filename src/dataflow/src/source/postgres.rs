@@ -261,7 +261,7 @@ impl PostgresSourceReader {
             let mut mz_row = Row::default();
             // TODO: once tokio-stream is released with https://github.com/tokio-rs/tokio/pull/4502
             //    we can convert this into a single `timeout(...)` call on the reader CopyOutStream
-            while let Some(b) = tokio::time::timeout(Duration::from_secs(15), reader.next())
+            while let Some(b) = tokio::time::timeout(Duration::from_secs(30), reader.next())
                 .await?
                 .transpose()?
             {
