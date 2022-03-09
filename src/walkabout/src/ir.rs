@@ -265,18 +265,16 @@ where
 
 fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
-        syn::Type::Path(syn::TypePath { qself: None, path }) => {
-            match path.segments.len() {
-                2 => {
-                    let name = path.segments.iter().map(|s| s.ident.to_string()).join("::");
-                    Ok(Type::Abstract(name))
-                }
-                1 => {
-                    let segment = path.segments.last().unwrap();
-                    let segment_name = segment.ident.to_string();
+        syn::Type::Path(syn::TypePath { qself: None, path }) => match path.segments.len() {
+            2 => {
+                let name = path.segments.iter().map(|s| s.ident.to_string()).join("::");
+                Ok(Type::Abstract(name))
+            }
+            1 => {
+                let segment = path.segments.last().unwrap();
+                let segment_name = segment.ident.to_string();
 
-                    let container = |construct_ty: fn(Box<Type>) -> Type| {
-                        match &segment.arguments {
+                let container = |construct_ty: fn(Box<Type>) -> Type| match &segment.arguments {
                     syn::PathArguments::AngleBracketed(args) if args.args.len() == 1 => {
                         match args.args.last().unwrap() {
                             syn::GenericArgument::Type(ty) => {
@@ -298,36 +296,31 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                         "Container type is missing type argument: {}",
                         ty.into_token_stream()
                     ),
-                }
-                    };
+                };
 
-                    match &*segment_name {
-                        // HACK(benesch): DateTimeField is part of the sqlparser AST but
-                        // comes from another crate whose source code is not easily
-                        // accessible here. We probably want our own local definition of
-                        // this type, but for now, just hardcode it as a primitive.
-                        "bool" | "usize" | "u64" | "i64" | "char" | "String" | "PathBuf"
-                        | "DateTimeField" => match segment.arguments {
+                match &*segment_name {
+                    "bool" | "usize" | "u64" | "i64" | "char" | "String" | "PathBuf" => {
+                        match segment.arguments {
                             syn::PathArguments::None => Ok(Type::Primitive),
                             _ => bail!(
                                 "Primitive type had unexpected arguments: {}",
                                 ty.into_token_stream()
                             ),
-                        },
-                        "Vec" => container(Type::Vec),
-                        "Option" => container(Type::Option),
-                        "Box" => container(Type::Box),
-                        _ => Ok(Type::Local(segment_name)),
+                        }
                     }
-                }
-                _ => {
-                    bail!(
-                        "Unable to analyze type path with more than two components: '{}'",
-                        path.into_token_stream()
-                    )
+                    "Vec" => container(Type::Vec),
+                    "Option" => container(Type::Option),
+                    "Box" => container(Type::Box),
+                    _ => Ok(Type::Local(segment_name)),
                 }
             }
-        }
+            _ => {
+                bail!(
+                    "Unable to analyze type path with more than two components: '{}'",
+                    path.into_token_stream()
+                )
+            }
+        },
         _ => bail!(
             "Unable to analyze non-struct, non-enum type: {}",
             ty.into_token_stream()
