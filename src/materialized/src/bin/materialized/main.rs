@@ -41,6 +41,7 @@ use clap::{AppSettings, Parser};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_ore::now::SYSTEM_TIME;
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
@@ -768,6 +769,7 @@ dataflow workers: {workers}",
             .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
         persist: persist_config,
+        now: SYSTEM_TIME.clone(),
     }))?;
 
     eprintln!(

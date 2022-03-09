@@ -34,7 +34,7 @@ use mz_build_info::BuildInfo;
 use mz_coord::LoggingConfig;
 use mz_dataflow_types::client::InstanceConfig;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_pid_file::PidFile;
@@ -144,6 +144,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Configuration of the persistence runtime and features.
     pub persist: PersistConfig,
+    /// Now generation function.
+    pub now: NowFn,
 }
 
 /// Configures TLS encryption for connections.
@@ -274,7 +276,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             worker: timely::WorkerConfig::default(),
         },
         experimental_mode: config.experimental_mode,
-        now: SYSTEM_TIME.clone(),
+        now: config.now.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister: persister.runtime.clone(),
         aws_external_id: config.aws_external_id.clone(),
@@ -295,7 +297,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister,
-        now: SYSTEM_TIME.clone(),
+        now: config.now,
     })
     .await?;
 

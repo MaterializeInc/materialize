@@ -175,6 +175,7 @@ pub enum Message {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
+    TryToWrite,
 }
 
 #[derive(Derivative)]
@@ -298,6 +299,9 @@ pub struct Coordinator {
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timeline: timeline::TimestampOracle<Timestamp>,
+    /// Writes that are awaiting timestamp assignment before being transmitted to
+    /// storage.
+    writes_awaiting_timestamp: Vec<TxnWrites>,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -357,6 +361,13 @@ struct TxnReads {
     read_holds: crate::coord::read_holds::ReadHolds<mz_repr::Timestamp>,
 }
 
+struct TxnWrites {
+    tx: ClientTransmitter<ExecuteResponse>,
+    session: Session,
+    response: ExecuteResponse,
+    writes: Vec<WriteOp>,
+}
+
 /// Enforces critical section invariants for functions that perform writes to
 /// tables, e.g. `INSERT`, `UPDATE`.
 ///
@@ -398,6 +409,14 @@ impl Coordinator {
     /// they are not visible to any real-time earlier reads.
     fn get_local_write_ts(&mut self) -> Timestamp {
         self.global_timeline.write_ts()
+    }
+
+    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// must ensure that they are assigned a strictly larger timestamp to ensure
+    /// they are not visible to any real-time earlier reads. If a larger timestamp
+    /// was not able to be produced, return `Err` with the current timestamp.
+    fn get_local_write_ts_fallible(&mut self) -> Result<Timestamp, Timestamp> {
+        self.global_timeline.write_ts_fallible()
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
@@ -688,7 +707,7 @@ impl Coordinator {
             // close on a regular interval. This roughly tracks the behaivor of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "coordinator_serve", async move {
+            task::spawn(|| "coordinator_advance_local_inputs", async move {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
                 loop {
                     interval.tick().await;
@@ -743,6 +762,7 @@ impl Coordinator {
                     self.global_timeline
                         .fast_forward((self.catalog.config().now)());
                 }
+                Message::TryToWrite => self.message_try_to_write().await,
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
@@ -1011,7 +1031,12 @@ impl Coordinator {
 
     async fn message_scrape_metrics(&mut self) {
         let scraped_metrics = self.metric_scraper.scrape_once();
-        self.send_builtin_table_updates_at_offset(scraped_metrics)
+        let timestamp_base = match self.get_local_write_ts_fallible() {
+            Ok(ts) => ts,
+            // If no write timestamp can be produced, drop this set of metrics.
+            Err(_) => return,
+        };
+        self.send_builtin_table_updates_at_offset(timestamp_base, scraped_metrics)
             .await;
     }
 
@@ -1502,6 +1527,16 @@ impl Coordinator {
                 ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
             }
 
+            // Cancel writes awaiting timestamps.
+            if let Some(idx) = self
+                .writes_awaiting_timestamp
+                .iter()
+                .position(|write| write.session.conn_id() == conn_id)
+            {
+                let write = self.writes_awaiting_timestamp.swap_remove(idx);
+                write.tx.send(Ok(ExecuteResponse::Canceled), write.session);
+            }
+
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
@@ -1538,7 +1573,7 @@ impl Coordinator {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
-        // Release this transaaction's compaction hold on collections.
+        // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
             self.release_read_hold(txn_reads.read_holds).await;
         }
@@ -2662,138 +2697,177 @@ impl Coordinator {
             was_implicit: session.transaction().is_implicit(),
         };
 
-        // Immediately do tasks that must be serialized in the coordinator.
-        let rx = self
-            .sequence_end_transaction_inner(&mut session, action)
-            .await;
+        let ops = self.clear_transaction(&mut session).await.into_ops();
 
-        // We can now wait for responses or errors and do any session/transaction
-        // finalization in a separate task.
-        let conn_id = session.conn_id();
-        task::spawn(
-            || format!("sequence_end_transaction:{conn_id}"),
-            async move {
-                let result = match rx {
-                    // If we have more work to do, do it
-                    Ok(fut) => fut.await,
-                    Err(e) => Err(e),
-                };
+        if let (EndTransactionAction::Commit, Some(TransactionOps::Writes(writes))) = (action, ops)
+        {
+            self.writes_awaiting_timestamp.push(TxnWrites {
+                tx,
+                session,
+                response,
+                writes,
+            });
+            self.internal_cmd_tx.send(Message::TryToWrite).unwrap();
+            return;
+        }
 
-                if result.is_err() {
-                    action = EndTransactionAction::Rollback;
-                }
-                session.vars_mut().end_transaction(action);
-
-                match result {
-                    Ok(()) => tx.send(Ok(response), session),
-                    Err(err) => tx.send(Err(err), session),
-                }
-            },
-        );
+        Self::end_session_transaction(tx, session, action, Ok(response));
     }
 
-    async fn sequence_end_transaction_inner(
-        &mut self,
-        session: &mut Session,
+    fn end_session_transaction(
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         action: EndTransactionAction,
-    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
-        let txn = self.clear_transaction(session).await;
+        response: Result<ExecuteResponse, CoordError>,
+    ) {
+        session.vars_mut().end_transaction(action);
+        tx.send(response, session);
+    }
 
-        // Although the compaction frontier may have advanced, we do not need to
-        // call `maintenance` here because it will soon be called after the next
-        // `update_upper`.
+    // Attempt to produce a timestamp in advance of previous timestamps and commit
+    // awaiting writes with it. Because we are not guaranteed to be able to produce
+    // such a timestamp, this function is able to retry itself. All user SQL writes
+    // (so not internal metrics) go through here (i.e., there is no fast path that
+    // avoids it).
+    async fn message_try_to_write(&mut self) {
+        // If multiple writes are queued, all will be processed at the first call to
+        // this function, so this can be empty.
+        if self.writes_awaiting_timestamp.is_empty() {
+            return;
+        }
 
-        let mut write_fut = None;
-        if let EndTransactionAction::Commit = action {
-            if let Some(ops) = txn.into_ops() {
-                match ops {
-                    TransactionOps::Writes(inserts) => {
-                        // Although the transaction has a wall_time in its pcx, we use a new
-                        // coordinator timestamp here to provide linearizability. The wall_time does
-                        // not have to relate to the write time.
-                        let timestamp = self.get_local_write_ts();
-
-                        // Separate out which updates were to tables we are
-                        // persisting. In practice, we don't enable/disable this
-                        // with table-level granularity so it will be all of
-                        // them or none of them, which is checked below.
-                        let mut persist_updates = Vec::new();
-                        let mut volatile_updates = Vec::new();
-                        for WriteOp { id, rows } in inserts {
-                            // Re-verify this id exists.
-                            let _ = self.catalog.try_get_by_id(id).ok_or_else(|| {
-                                CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
-                            })?;
-                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            if let Some(persist) = self.persister.table_details.get(&id) {
-                                let updates = rows
-                                    .into_iter()
-                                    .map(|(row, diff)| ((row, ()), timestamp, diff));
-                                persist_updates.push((&persist.write_handle, updates));
-                            } else {
-                                let updates = rows
-                                    .into_iter()
-                                    .map(|(row, diff)| Update {
-                                        row,
-                                        diff,
-                                        timestamp,
-                                    })
-                                    .collect();
-                                volatile_updates.push((id, updates));
-                            }
-                        }
-
-                        // Write all updates, both persistent and volatile.
-                        // Persistence takes care of introducing anything it
-                        // writes to the dataflow, so we only need a
-                        // Command::Insert for the volatile updates.
-                        if !persist_updates.is_empty() {
-                            if !volatile_updates.is_empty() {
-                                coord_bail!("transaction had mixed persistent and volatile writes");
-                            }
-                            let persist_multi =
-                                self.persister.table_writer.as_mut().ok_or_else(|| {
-                                    anyhow!(
-                                        "internal error: persist_multi_details invariant violated"
-                                    )
-                                })?;
-                            // NB: Keep this method call outside any
-                            // tokio::spawns. We're guaranteed by persist that
-                            // writes and seals happen in order, but only if we
-                            // synchronously wait for the (fast) registration of
-                            // that work to return.
-                            write_fut = Some(
-                                persist_multi
-                                    .write_atomic(|builder| {
-                                        for (handle, updates) in persist_updates {
-                                            builder.add_write(handle, updates)?;
-                                        }
-                                        Ok(())
-                                    })
-                                    .map(|res| match res {
-                                        Ok(_) => Ok(()),
-                                        Err(err) => {
-                                            Err(CoordError::Unstructured(anyhow!("{}", err)))
-                                        }
-                                    }),
-                            );
+        // Try to get a new timestamp for some writes. If we are able to do that,
+        // all pending writes get that timestamp. If not, make a guess about when a
+        // timestamp will be available and retry then.
+        match self.get_local_write_ts_fallible() {
+            Ok(ts) => {
+                // TODO: Bundle writes per collection instead of per session. This is probably
+                // required for upcoming persist/storage changes, but the data here should be
+                // sufficient to support those.
+                let writes = self.writes_awaiting_timestamp.drain(..).collect::<Vec<_>>();
+                for TxnWrites {
+                    tx,
+                    session,
+                    response,
+                    writes,
+                } in writes
+                {
+                    let rx = self.sequence_transaction_writes(writes, ts).await;
+                    let conn_id = session.conn_id();
+                    task::spawn(|| format!("message_try_to_write:{conn_id}"), async move {
+                        let result = match rx {
+                            // If we have more work to do, do it
+                            Ok(fut) => fut.await,
+                            Err(e) => Err(e),
+                        };
+                        let action = if result.is_err() {
+                            EndTransactionAction::Rollback
                         } else {
-                            for (id, updates) in volatile_updates {
-                                self.dataflow_client
-                                    .storage_mut()
-                                    .table_insert(id, updates)
-                                    .await
-                                    .unwrap();
-                            }
-                        }
-                    }
-                    _ => {}
+                            EndTransactionAction::Commit
+                        };
+                        let response = result.map(|_| response);
+                        Self::end_session_transaction(tx, session, action, response);
+                    });
                 }
             }
+            Err(prev) => {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let now = (self.catalog.config().now)();
+                // Cap retry time to 1s. In cases where the system clock has retreated by
+                // minutes, this prevents against then waiting for minutes in case the system
+                // clock then advances back to near what it was.
+                let remaining = std::cmp::min(prev.saturating_sub(now).saturating_add(1), 1_000);
+                task::spawn(|| "try_to_write", async move {
+                    // We assume here that the inability to generate a new timestamp is because
+                    // the system clock retreated, or has possibly not advanced by at least 1ms. We
+                    // thus expect prev > now, and would like to wait for that difference plus 1ms.
+                    tokio::time::sleep(Duration::from_millis(remaining)).await;
+                    internal_cmd_tx.send(Message::TryToWrite).unwrap();
+                });
+            }
         }
+    }
+
+    async fn sequence_transaction_writes(
+        &mut self,
+        writes: Vec<WriteOp>,
+        timestamp: Timestamp,
+    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
+        let mut write_fut = None;
+
+        // Separate out which updates were to tables we are
+        // persisting. In practice, we don't enable/disable this
+        // with table-level granularity so it will be all of
+        // them or none of them, which is checked below.
+        let mut persist_updates = Vec::new();
+        let mut volatile_updates = Vec::new();
+        for WriteOp { id, rows } in writes {
+            // Re-verify this id exists.
+            let _ = self
+                .catalog
+                .try_get_by_id(id)
+                .ok_or_else(|| CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string())))?;
+            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
+            if rows.is_empty() {
+                continue;
+            }
+            if let Some(persist) = self.persister.table_details.get(&id) {
+                let updates = rows
+                    .into_iter()
+                    .map(|(row, diff)| ((row, ()), timestamp, diff));
+                persist_updates.push((&persist.write_handle, updates));
+            } else {
+                let updates = rows
+                    .into_iter()
+                    .map(|(row, diff)| Update {
+                        row,
+                        diff,
+                        timestamp,
+                    })
+                    .collect();
+                volatile_updates.push((id, updates));
+            }
+        }
+
+        // Write all updates, both persistent and volatile.
+        // Persistence takes care of introducing anything it
+        // writes to the dataflow, so we only need a
+        // Command::Insert for the volatile updates.
+        if !persist_updates.is_empty() {
+            if !volatile_updates.is_empty() {
+                coord_bail!("transaction had mixed persistent and volatile writes");
+            }
+            let persist_multi = self.persister.table_writer.as_mut().ok_or_else(|| {
+                anyhow!("internal error: persist_multi_details invariant violated")
+            })?;
+            // NB: Keep this method call outside any
+            // tokio::spawns. We're guaranteed by persist that
+            // writes and seals happen in order, but only if we
+            // synchronously wait for the (fast) registration of
+            // that work to return.
+            write_fut = Some(
+                persist_multi
+                    .write_atomic(|builder| {
+                        for (handle, updates) in persist_updates {
+                            builder.add_write(handle, updates)?;
+                        }
+                        Ok(())
+                    })
+                    .map(|res| match res {
+                        Ok(_) => Ok(()),
+                        Err(err) => Err(CoordError::Unstructured(anyhow!("{}", err))),
+                    }),
+            );
+        } else {
+            for (id, updates) in volatile_updates {
+                self.dataflow_client
+                    .storage_mut()
+                    .table_insert(id, updates)
+                    .await
+                    .unwrap();
+            }
+        }
+
         Ok(async move {
             if let Some(fut) = write_fut {
                 // Because we return an async block here, this await is not executed until
@@ -4081,12 +4155,15 @@ impl Coordinator {
         Ok(result)
     }
 
-    async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
+    async fn send_builtin_table_updates_at_offset(
+        &mut self,
+        timestamp_base: Timestamp,
+        updates: Vec<TimestampedUpdate>,
+    ) {
         // NB: This makes sure to send all records for the same id in the same
         // message so we can persist a record and its future retraction
         // atomically. Otherwise, we may end up with permanent orphans if a
         // restart/crash happens at the wrong time.
-        let timestamp_base = self.get_local_write_ts();
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
             let timestamp = timestamp_base + tu.timestamp_offset;
@@ -4134,7 +4211,10 @@ impl Coordinator {
             updates,
             timestamp_offset: 0,
         };
-        self.send_builtin_table_updates_at_offset(vec![timestamped])
+        // Internal table writes must always succeed, even if we have to forcibly bump
+        // the timestamp forward.
+        let timestamp_base = self.get_local_write_ts();
+        self.send_builtin_table_updates_at_offset(timestamp_base, vec![timestamped])
             .await
     }
 
@@ -4501,6 +4581,7 @@ pub async fn serve(
                 internal_cmd_tx,
                 metric_scraper,
                 global_timeline: timeline::TimestampOracle::new(now(), move || (now.deref())()),
+                writes_awaiting_timestamp: Vec::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -5219,7 +5300,8 @@ mod timeline {
         ///
         /// This timestamp will be strictly greater than all prior values of
         /// `self.read_ts()`, and less than or equal to all subsequent values of
-        /// `self.read_ts()`.
+        /// `self.read_ts()`. If `self.next` did not advance, this function forcibly
+        /// steps the timestamp forward.
         pub fn write_ts(&mut self) -> T {
             match &self.state {
                 TimestampOracleState::Writing(ts) => ts.clone(),
@@ -5230,6 +5312,26 @@ mod timeline {
                     }
                     self.state = TimestampOracleState::Writing(next.clone());
                     next
+                }
+            }
+        }
+        /// Acquire a new timestamp for writing.
+        ///
+        /// This timestamp will be strictly greater than all prior values of
+        /// `self.read_ts()`, and less than or equal to all subsequent values of
+        /// `self.read_ts()`. If `self.next` did not advance, return `Err` with the
+        /// current timestamp.
+        pub fn write_ts_fallible(&mut self) -> Result<T, T> {
+            match &self.state {
+                TimestampOracleState::Writing(ts) => Ok(ts.clone()),
+                TimestampOracleState::Reading(ts) => {
+                    let next = (self.next)();
+                    if next.less_equal(&ts) {
+                        Err(ts.clone())
+                    } else {
+                        self.state = TimestampOracleState::Writing(next.clone());
+                        Ok(next)
+                    }
                 }
             }
         }

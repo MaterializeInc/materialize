@@ -20,6 +20,8 @@ use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -30,6 +32,7 @@ use tempfile::NamedTempFile;
 use tracing::info;
 
 use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
@@ -1021,6 +1024,70 @@ fn test_linearizable() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_writes_awaiting_timestamp() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    let enable_now = Arc::new(AtomicBool::new(true));
+    let now = {
+        let enable_now = Arc::clone(&enable_now);
+        NowFn::from(move || {
+            if enable_now.load(Ordering::Relaxed) {
+                SYSTEM_TIME()
+            } else {
+                NOW_ZERO()
+            }
+        })
+    };
+    let config = util::Config::default().with_now(now);
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+    let delay = Duration::from_secs(1);
+
+    client.batch_execute("CREATE TABLE t (i INT)")?;
+    let mut spawn_client = server.connect(postgres::NoTls)?;
+    let handle = thread::spawn(move || spawn_client.batch_execute("INSERT INTO t VALUES (1)"));
+    handle.join().unwrap()?;
+
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM t", &[])?
+            .get::<_, i64>(0),
+        1
+    );
+
+    // Disable now, preventing INSERT from fetching a new timestamp. Sleep to test
+    // that it's pending.
+    enable_now.store(false, Ordering::Relaxed);
+    let mut spawn_client = server.connect(postgres::NoTls)?;
+    let handle1 = thread::spawn(move || spawn_client.batch_execute("INSERT INTO t VALUES (1)"));
+    let mut spawn_client = server.connect(postgres::NoTls)?;
+    let handle2 = thread::spawn(move || spawn_client.batch_execute("INSERT INTO t VALUES (1)"));
+    let mut spawn_client = server.connect(postgres::NoTls)?;
+    let cancel_token = spawn_client.cancel_token();
+    let handle3 = thread::spawn(move || spawn_client.batch_execute("INSERT INTO t VALUES (1)"));
+    sleep(delay);
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM t", &[])?
+            .get::<_, i64>(0),
+        1
+    );
+    // Cancel one of the inserts to verify cancelling works.
+    cancel_token.cancel_query(postgres::NoTls).unwrap();
+    enable_now.store(true, Ordering::Relaxed);
+    handle1.join().unwrap()?;
+    handle2.join().unwrap()?;
+    handle3.join().unwrap()?;
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM t", &[])?
+            .get::<_, i64>(0),
+        3
+    );
 
     Ok(())
 }
