@@ -23,12 +23,11 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_postgres_util::TableInfo;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use mz_dataflow_types::{
     postgres_source::PostgresSourceDetails,
@@ -1416,59 +1415,16 @@ pub fn plan_create_views(
             name: source_name,
             targets,
         } => {
-            let source_connector = normalize::unresolved_object_name(source_name.clone())
-                .map_err(anyhow::Error::new)
-                .and_then(|name| {
-                    scx.catalog
-                        .resolve_item(&name)
-                        .and_then(|item| item.source_connector())
-                        .map(|s| s.clone())
-                        .map_err(anyhow::Error::new)
-                });
-            match source_connector? {
+            let name = normalize::unresolved_object_name(source_name.clone())?;
+            let source_connector = scx.catalog.resolve_item(&name)?.source_connector()?;
+            match source_connector {
                 SourceConnector::External {
                     connector:
-                        ExternalSourceConnector::Postgres(PostgresSourceConnector {
-                            conn: _,
-                            publication: _,
-                            details,
-                            ..
-                        }),
+                        ExternalSourceConnector::Postgres(PostgresSourceConnector { details, .. }),
                     ..
                 } => {
-                    // If the user specified targets, validate they are all in the PostgresSourceDetails
-                    // otherwise create them from the contents of PostgresSourceDetails
-                    let targets = match targets {
-                        Some(targets) => {
-                            let known: HashSet<String> =
-                                HashSet::from_iter(details.tables.iter().flat_map(|t| {
-                                    // It is easier to put both schema_name.table_name and table_name into the hashset than to peel off the namespace from a string
-                                    vec![
-                                        format!("{}", UnresolvedObjectName::qualified(&[&t.name])),
-                                        format!(
-                                            "{}",
-                                            UnresolvedObjectName::qualified(&[
-                                                &t.namespace,
-                                                &t.name
-                                            ])
-                                        ),
-                                    ]
-                                }));
-                            let wanted: HashSet<String> =
-                                HashSet::from_iter(targets.iter().map(|t| t.name.to_string()));
-                            let diff = wanted.difference(&known);
-                            if diff.clone().count() > 0 {
-                                error!("During create views user specified tables not found: {:?}  Known tables: {:?}", diff, known);
-                                return Err(anyhow!(
-                                    "Table(s) {} not found in source, try recreating materialized source.",
-                                    diff.map(|d| d.to_owned())
-                                        .collect::<Vec<String>>()
-                                        .join(", ")
-                                ));
-                            }
-                            targets
-                        }
-                        None => details
+                    let targets = targets.unwrap_or_else(|| {
+                        details
                             .tables
                             .iter()
                             .map(|t| {
@@ -1479,42 +1435,37 @@ pub fn plan_create_views(
                                     alias: Some(name),
                                 }
                             })
-                            .collect(),
-                    };
-
-                    let mut viewdefs = Vec::with_capacity(details.tables.len());
+                            .collect()
+                    });
 
                     // An index from table_name -> schema_name -> PostgresTable
-                    let mut details_info_idx: HashMap<String, HashMap<String, PostgresTable>> =
+                    let mut details_info_idx: HashMap<String, HashMap<String, TableInfo>> =
                         HashMap::new();
-                    for table in details.tables {
+                    for table in &details.tables {
                         details_info_idx
                             .entry(table.name.clone())
                             .or_default()
                             .entry(table.namespace.clone())
-                            .or_insert(table);
+                            .or_insert(table.clone().into());
                     }
-
+                    let mut views = Vec::with_capacity(targets.len());
                     for target in targets {
                         let view_name = target.alias.clone().unwrap_or_else(|| target.name.clone());
-                        let name = normalize::unresolved_object_name(target.name.clone())
-                            .map_err(anyhow::Error::new)?;
+                        let name = normalize::unresolved_object_name(target.name.clone())?;
                         let schemas = details_info_idx.get(&name.item).ok_or_else(|| {
                             anyhow!("table {} not found in upstream database", name)
                         })?;
-                        let t = if let Some(schema) = &name.schema {
-                            schemas.get(schema).ok_or_else(|| {
+                        let table_info = match &name.schema {
+                            Some(schema) => schemas.get(schema).ok_or_else(|| {
                                 anyhow!("schema {} does not exist in upstream database", schema)
-                            })?
-                        } else {
-                            schemas.values().exactly_one().or_else(|_| {
+                            })?,
+                            None => schemas.values().exactly_one().or_else(|_| {
                                 Err(anyhow!(
                                     "table {} is ambiguous, consider specifying the schema",
                                     name
                                 ))
-                            })?
+                            })?,
                         };
-                        let table_info: TableInfo = t.clone().into();
                         let mut projection = vec![];
                         for (i, column) in table_info.schema.iter().enumerate() {
                             let mut ty =
@@ -1594,7 +1545,7 @@ pub fn plan_create_views(
                             offset: None,
                         };
 
-                        viewdefs.push(ViewDefinition {
+                        let mut viewdef = ViewDefinition {
                             name: view_name,
                             columns: table_info
                                 .schema
@@ -1603,12 +1554,9 @@ pub fn plan_create_views(
                                 .collect(),
                             with_options: vec![],
                             query,
-                        });
+                        };
+                        views.push(plan_view(scx, &mut viewdef, &Params::empty(), temporary)?);
                     }
-                    let views = viewdefs
-                        .into_iter()
-                        .map(|mut vd| plan_view(scx, &mut vd, &Params::empty(), temporary))
-                        .collect::<Result<Vec<(FullName, View)>, _>>()?;
                     Ok(Plan::CreateViews(CreateViewsPlan {
                         views,
                         if_not_exists: if_exists == IfExistsBehavior::Skip,
