@@ -156,6 +156,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
         third_party_metrics_listen_addr: None,
+        platform_addr: None,
     }))?;
     let server = Server {
         inner,

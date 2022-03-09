@@ -144,6 +144,9 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Configuration of the persistence runtime and features.
     pub persist: PersistConfig,
+
+    /// Indicates whether we serve network connections to remote compute instances.
+    pub platform_addr: Option<String>,
 }
 
 /// Configures TLS encryption for connections.
@@ -267,7 +270,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .await?;
 
     // Initialize dataflow server.
-    let (dataflow_server, dataflow_client) = mz_dataflow::serve(mz_dataflow::Config {
+    let dataflow_config = mz_dataflow::Config {
         workers,
         timely_config: timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -278,11 +281,39 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         persister: persister.runtime.clone(),
         aws_external_id: config.aws_external_id.clone(),
-    })?;
+    };
+    // Create either a dataflow server with an open TCP STORAGE/COMPUTE boundary and remote compute instance potential,
+    // or a vanilla server if no platform address is provided to bind to.
+    let (dataflow_server, dataflow_client): (
+        _,
+        Box<dyn mz_dataflow_types::client::Client + Send + 'static>,
+    ) = if let Some(addr) = config.platform_addr {
+        // Initialize storage connections.
+        let (storage_server, _thread) =
+            mz_dataflow::tcp_boundary::server::serve(addr.clone()).await?;
+        // Initialize compute connections
+        let (storage_client, _thread) =
+            mz_dataflow::tcp_boundary::client::connect(addr, workers, workers).await?;
+
+        use std::sync::{Arc, Mutex};
+
+        let boundary = (0..config.workers)
+            .into_iter()
+            .map(|_| Some((storage_server.clone(), storage_client.clone())))
+            .collect::<Vec<_>>();
+        let boundary = Arc::new(Mutex::new(boundary));
+        let (server, client) = mz_dataflow::serve_boundary(dataflow_config, move |index| {
+            boundary.lock().unwrap()[index % workers].take().unwrap()
+        })?;
+        (server, Box::new(mz_dataflowd::SplitClient::new(client)))
+    } else {
+        let (server, client) = mz_dataflow::serve(dataflow_config)?;
+        (server, Box::new(client))
+    };
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
-        dataflow_client: Box::new(dataflow_client),
+        dataflow_client,
         dataflow_instance: InstanceConfig::Virtual,
         logging: config.logging,
         storage: coord_storage,

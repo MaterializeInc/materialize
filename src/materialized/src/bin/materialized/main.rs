@@ -377,6 +377,9 @@ pub struct Args {
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
     tokio_console: bool,
+
+    #[clap(long, hide = true)]
+    platform_addr: Option<String>,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
@@ -722,6 +725,8 @@ dataflow workers: {workers}",
         }
     };
 
+    let platform_addr = args.platform_addr;
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         workers: args.workers.0,
         timely_worker,
@@ -746,6 +751,7 @@ dataflow workers: {workers}",
             .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
         persist: persist_config,
+        platform_addr,
     }))?;
 
     eprintln!(

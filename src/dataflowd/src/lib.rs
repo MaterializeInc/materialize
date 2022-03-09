@@ -145,9 +145,13 @@ impl<S: Client> Client for SplitClient<S> {
                 futures.push(client.recv());
             }
         }
-        tokio::select! {
-            response = futures.select_next_some() => response,
-            response = self.storage_client.recv() => response,
+        if futures.is_empty() {
+            self.storage_client.recv().await
+        } else {
+            tokio::select! {
+                response = futures.select_next_some() => response,
+                response = self.storage_client.recv() => response,
+            }
         }
     }
 }

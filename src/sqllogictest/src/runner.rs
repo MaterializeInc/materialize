@@ -563,6 +563,7 @@ impl Runner {
             metrics_registry: MetricsRegistry::new(),
             persist: PersistConfig::disabled(),
             third_party_metrics_listen_addr: None,
+            platform_addr: None,
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
