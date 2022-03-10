@@ -103,12 +103,13 @@ As a concrete example, we might choose `T` to be the naturals, with `max` as
 our join and `t0 = 0`. The usual senses of `<=` and `<` then serve as
 `<=t` and `<t`, respectively.
 
-A *frontier* is a set of times in `T`. We use frontiers to specify a lower (or
-upper) bound on times in `T`. We say that a time `t` *is later than* or *after*
-a frontier `F` iff there exists some `f` in `F` such that `f <t t`. We write
-this `F <t t`. Similarly we can speak of a time `t` which is later than or
-equal to `F`, by which we mean there exists some `f` in `F` such that `f <=t t`:
-we write this `F <=t t`.
+A *frontier* is an antichain of times in `T`: a set where no two times are
+comparable via `<=t`. We use frontiers to specify a lower (or upper) bound on
+times in `T`. We say that a time `t` *is later than* or *after* a frontier `F`
+iff there exists some `f` in `F` such that `f <t t`. We write this `F <t t`.
+Similarly we can speak of a time `t` which is later than or equal to `F`, by
+which we mean there exists some `f` in `F` such that `f <=t t`: we write this
+`F <=t t`.
 
 For integers, a frontier could be the singleton set `F = {5}`; the set of times
 after `F` are `{6, 7, 8, ...}`.
@@ -237,13 +238,6 @@ diff(t, cv1, cv2) = { u = [data, t, diff] |
                     }
 ```
 
-Given a frontier `f`, a set of updates `updates` can be *compacted* together
-into a (likely smaller) set of updates where the sum of the diffs for each
-`data` in the set is preserved, and every update has a time `t` such that `f
-<=t t`. We write this as `compact(updates, f)`. Since the diffs for each data
-are unchanged, and updates commute, `apply(c, updates) = apply(c,
-compact(updates, f))` for any collection version `c`.
-
 ### Isomorphism between update and time-function representations
 
 Imagine we have a TVC represented as a set of updates, and wish to read the
@@ -329,9 +323,9 @@ sketch should give a rough feeling for how and why Materialize works.
 
 ### pTVC append
 
-Let `ptvc = [ptvc-updates, since, upper]` be a correct view of some TVC's
-updates `tvc_updates`. Now consider appending a window of new updates to this
-pTVC, and advancing `upper` to `upper'`: `ptvc' = append(ptvc, upper',
+Let `ptvc = [timeline, ptvc-updates, since, upper]` be a correct view of some
+TVC's updates `tvc_updates`. Now consider appending a window of new updates to
+this pTVC, and advancing `upper` to `upper'`: `ptvc' = append(ptvc, upper',
 new-updates)`.
 
 Which new updates do we need to add? Precisely those whose times are equal to
@@ -359,26 +353,77 @@ preserve correctness.
 
 ### pTVC compaction
 
-Again, let `ptvc = [ptvc-updates, since, upper]` be a correct view of some TVC.
-Now consider compacting all updates prior to some frontier `since'`, in such a
-way that the collection versions read at times later than or equal to `since'`
-remain unchanged. We write this `ptvc' = compact(ptvc, since')`:
+Again, let `ptvc = [timeline, ptvc-updates, since, upper]` be a correct view of
+some TVC. Now consider compacting all updates prior to some frontier `since'`,
+in such a way that the collection versions read at times later than or equal to
+`since'` remain unchanged, to preserve correctness. We write this `ptvc' =
+compact(ptvc, since')`:
 
 ```
 updates' = compact(updates, since')
 ptvc' = [timeline, updates', since', upper]
 ```
 
-Since `updates'` has been compacted to `since'`, it contains no updates with
-times prior to or concurrent with `since'`. Presumably, `updates'` differs from
-`updates` only along the "boundary layer"--the times along the leading edge of
-the set of times which are at or later than `since'`. Updates prior to or
-concurrent with `since'` have been merged forward into that boundary layer,
-preserving correctness.
+Which updates can we compact, and which other updates do we compact them
+*with*? Consider this lattice of times flowing left to right, with two times in
+its `since` frontier. The set of all times at or after `since` is drawn in
+blue. We have also chosen two updates: one outlined in green at the top of the
+illustration, and one outlined in pink at the bottom left. The times which
+descend from those updates are filled with green or pink, respectively.
 
-How exactly compaction works is described in [K-Pg: Shared State in
-Differential
-Dataflows](https://github.com/TimelyDataflow/differential-dataflow/blob/master/sigmod2019-submission.pdf)
+![An illustration of the aforementioned lattice](assets/compact-1.jpeg)
+
+Now consider that each of these updates affects some times which are *not* at
+or after the `since` frontier. Since pTVC correctness does not require us to be
+able to read these times, we are free to "slide" each update around in any way
+that preserves the intersection of the update's downstream effects with the
+`since` region.
+
+![The previous lattice, but with pink update slid forward by two times, and green slid forward by one](assets/compact-2.jpeg)
+
+When sliding an update to a new time, which time is optimal? By "optimal", we
+mean the time which minimizes the number of downstream effects before `since`:
+in short, how "close" can we slide an update at time `t` to the frontier
+`since` while preserving correctness? As [Appendix A of the K-Pg SIGMOD
+paper](https://github.com/TimelyDataflow/differential-dataflow/blob/master/sigmod2019-submission.pdf)
+shows, the answer is:
+
+```
+t' = meet (for all s in since) join(t, s)
+```
+
+Given our two `since` frontier times of `s1` and `s2`, we found the optimal
+time for the pink update at `p` by finding the first time where pink's effects
+intersected times at or after `s1`: `join(p, s1)`; and did the same for s2.
+Then we projected backwards to the `meet` of those two times:
+
+```
+p' = meet(join(p, s1), join(p, s2))
+```
+
+Since `join(t, s1) = t` whenever `t` is at or after `s1`, this sliding process
+leaves any updates at or after `since` unchanged.
+
+This transform allows us to slide updates forward from past times to new times,
+which reduces the number of distinct times in the updates set, but does not
+reduce the set's cardinality. However, we can take advantage of a second
+property for updates: given two updates `u1` and `u2` with the same `data` and
+`time`, and diffs `diff1` and `diff2` respectively, and any collection version
+`c`,
+
+```
+apply(c, {u1, u2}) = apply(c, [data, time, diff1 + diff2])
+```
+
+This allows us to fold updates to the same data together after sliding updates
+forward to the same time. Where `diff1 + diff2 = 0`, we can discard `u1` and
+`u2` altogether.
+
+In summary: `compact(ptvc, since') advances `ptvc`'s `since` to `since'`,
+slides some of `ptvc`'s updates forward to new times (when doing so would not
+affect the computes states at or after `since`), and merges some those updates
+together by summing `diff`s for the same `data` and `time`. The resulting pTVC
+preserves correctness and likely requires fewer updates to store.
 
 ### Time evolution of pTVCs
 
