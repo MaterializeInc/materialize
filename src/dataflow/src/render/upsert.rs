@@ -161,6 +161,9 @@ where
                 as_of_frontier,
                 source_arity,
                 upsert_envelope,
+                operator::empty(&stream.scope()),
+                Pipeline,
+                |_, _| {},
             );
 
             let upsert_errs = operator::empty(&stream.scope());
@@ -301,22 +304,33 @@ fn evaluate(
     Ok(Some(row_buf.clone()))
 }
 
+use timely::communication::message::RefOrMut;
+use timely::dataflow::channels::pact::ParallelizationContract;
+
+type RD<E> = Result<Row, E>;
+type DD<E> = ((RD<E>, RD<E>), u64, i64);
+
 /// Internal core upsert logic.
-fn upsert_core<G>(
+fn upsert_core<G, P, PF>(
     stream: &Stream<G, DecodeResult>,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
+    es: Stream<G, DD<DecodeError>>,
+    extra_p: P,
+    mut persistence: PF,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
+    P: ParallelizationContract<G::Timestamp, DD<DecodeError>>,
+    PF: FnMut(RefOrMut<Vec<DD<DecodeError>>>, &mut HashMap<Row, RD<DataflowError>>) + 'static,
 {
-    let result_stream = stream.binary_frontier::<Vec<()>, _, _, _, _, _>(
-        &operator::empty(&stream.scope()),
+    let result_stream = stream.binary_frontier(
+        &es,
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
-        Pipeline,
+        extra_p,
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
@@ -333,7 +347,10 @@ where
             let mut vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
 
-            move |input, _state_input, output| {
+            move |input, state_input, output| {
+                // perform persistence magic :)
+                state_input.for_each(|_cap, data| persistence(data, &mut current_values));
+
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
