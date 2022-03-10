@@ -32,7 +32,7 @@ Kafka is well-supported in Materialize as a [`SOURCE`](/sql/create-source/) of 
 | Confluent Cloud Kafka | 🟢 Production | Use SASL authentication, see [example here](/sql/create-source/kafka/#saslplain). The same config can be used to produce messages to Confluent Kafka via a [SINK](/sql/create-sink/). |  |
 | AWS MSK (Managed Streaming for Kafka) | 🟢 Production | Use SASL/SCRAM Authentication to securely connect to MSK clusters. [MSK SASL Docs](https://docs.aws.amazon.com/msk/latest/developerguide/msk-password.html) *(mTLS connections coming soon.)* |  |
 | Redpanda | 🟢 Beta | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/third-party/redpanda/) for instructions and limitations. | [](#notify) |
-| Heroku Kafka | 🟡 Alpha | Test it out! | [](#notify) |
+| Heroku Kafka | 🟢 Alpha | Use [SSL Authentication](https://materialize.com/docs/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, preventing SINKs from working. | [](#notify) |
 
 ### Other Message Brokers
 
@@ -48,7 +48,7 @@ _Is there another message broker you'd like to use with Materialize? [Open a Gi
 
 ## Databases
 
-Materialize works with change events _(creates, updates, deletes)_ as source data, typically from the replication logs of databases. This requires Materialize to either connect directly to a database via a replication slot, or to use an intermediary service like Debezium to stream the events to a [message broker](#message-brokers).
+Materialize can use change events _(creates, updates, deletes)_ as source data, typically from the replication logs of databases. This requires Materialize to either connect directly to a database via a replication slot, or to use an intermediary service like Debezium to stream the events to a [message broker](#message-brokers).
 
 ### PostgreSQL
 
@@ -57,13 +57,11 @@ Materialize has a [direct PostgreSQL source](/sql/create-source/postgres/) tha
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
 | Self-managed PostgreSQL (10+) | 🟢 Beta | Users with full control over their PostgreSQL database can [connect directly to a PostgreSQL](/sql/create-source/postgres/) _version 10+_ database via a replication slot, or indirectly via Debezium. | [](#notify) |
-| Amazon RDS for PostgreSQL | 🟢 Beta | The AWS user account requires the `rds_superuser` role to perform logical replication for the PostgreSQL database on Amazon RDS. | [](#notify) |
-| GCP Cloud SQL for PostgreSQL | Tbd | TBD? | [](#notify) |
-| Amazon Aurora | Tbd | TBD? | [](#notify) |
-| Amazon Aurora Serverless | Tbd | TBD? | [](#notify) |
-| Heroku Postgres | Tbd | TBD? | [](#notify) |
-| Azure Database for PostgreSQL | Tbd | TBD? | [](#notify) |
-| Supabase | Tbd | TBD? | [](#notify) |
+| Amazon RDS for PostgreSQL | 🟢 Beta | The AWS user account requires the `rds_superuser` role to perform logical replication for the PostgreSQL database on Amazon RDS. [Detailed instructions](https://materialize.com/docs/guides/postgres-cloud/#amazon-rds). | [](#notify) |
+| GCP Cloud SQL for PostgreSQL | 🟢 Beta | Users must [enable `cloudsql.logical_decoding`](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication). [Detailed instructions](https://materialize.com/docs/guides/postgres-cloud/#cloud-sql) | [](#notify) |
+| Amazon Aurora | 🟢 Beta | AWS Aurora can be configured to work with Materialize by enabling logical replication via `rds.logical_replication`. [Detailed Instructions](https://materialize.com/docs/guides/postgres-cloud/#aws-aurora)  | [](#notify) |
+| Amazon Aurora Serverless | 🔴 Researching | Aurora serverless V1 does [not currently support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) the logical replication required to integrate. | [](#notify) |
+| Heroku Postgres | 🔴 Researching | Heroku Postgres does not open up access to logical replication. But an indirect connection may be possible via Kafka and [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors). | [](#notify) |
 
 ### Other Databases
 
@@ -75,7 +73,7 @@ Currently, it is only possible to use Materialize with other databases via an in
 | MySQL Direct | 🔴 Researching | A direct MySQL Source does not exist yet, but we are exploring creating one. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | SQL Server _(via Debezium)_ | 🟡 Alpha | See the [guide to setting up CDC from MySQL with Debezium](/guides/cdc-mysql/) for more information. |  |
 | MongoDB _(via Debezium)_ | 🔴 Researching | Debezium has a MongoDB connector, but it [lacks the metadata](https://github.com/MaterializeInc/materialize/issues/7289) required to work in Materialize. | [](#notify) |
-
+| Snowflake, BigQuery, Redshift | 🔴 Not Supported | OLAP DB's batch operational model are not a great fit for Materialize' event-driven model. Instead of reading from OLAP DB's, Materialize is better placed closer to where the data originates. |
 
 _Is there another database you'd like to use with Materialize? [Open a GitHub Issue here](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
@@ -185,38 +183,40 @@ _Is there another data tool you'd like to use with Materialize? [Open a GitHub 
 <script>
 
   $(function () {
-    $('a[href="#notify"]').replaceWith('<button class="default_button" data-js="subscribe_open" title="Get notified when support is upgraded.">Notify Me</button>')
+    if(window.analytics ) {
+        $('a[href="#notify"]').replaceWith('<button class="default_button" data-js="subscribe_open" title="Get notified when support is upgraded.">Notify Me</button>')
 
-    var removeForms = function(){
-      $('.subscribe_dialog_active').removeClass('subscribe_dialog_active');
-    };
+        var removeForms = function(){
+            $('.subscribe_dialog_active').removeClass('subscribe_dialog_active');
+        };
 
-    $("[data-js='subscribe_open']").on("click", function(){
-      !$(this).hasClass('success') &&
-      $(this).parent()
-        .addClass('subscribe_dialog_active')
-        .append($('#subscribe_dialog'));
-      return false;
-    });
+        $("[data-js='subscribe_open']").on("click", function(){
+        !$(this).hasClass('success') &&
+        $(this).parent()
+            .addClass('subscribe_dialog_active')
+            .append($('#subscribe_dialog'));
+        return false;
+        });
 
-    $("#subscribe_dialog").submit(function(e) {
-      var email = $(this).find('[name="email"]').val(),
-          subject = $(this).siblings("[data-js='subscribe_open']")
-        .addClass('success')
-        .attr('title', 'Subscribed')
-        .text('✔️')
-        .attr('data-subject');
-      removeForms();
-      window.analytics && window.analytics.identify(email);
-      window.analytics && window.analytics.track("Integration Status Subscribed", { subject: subject });
-      e.preventDefault();
-    });
-
-    $("body").on("click", function(e){
-      if(!$(e.target).closest('#subscribe_dialog').length) {
+        $("#subscribe_dialog").submit(function(e) {
+        var email = $(this).find('[name="email"]').val(),
+            subject = $(this).siblings("[data-js='subscribe_open']")
+            .addClass('success')
+            .attr('title', 'Subscribed')
+            .text('✔️')
+            .attr('data-subject');
         removeForms();
-      }
-    });
+        window.analytics && window.analytics.identify(email);
+        window.analytics && window.analytics.track("Integration Status Subscribed", { subject: subject });
+        e.preventDefault();
+        });
+
+        $("body").on("click", function(e){
+        if(!$(e.target).closest('#subscribe_dialog').length) {
+            removeForms();
+        }
+        });
+    }
  });
 
 </script>
