@@ -33,11 +33,11 @@ $ set-regex match=u\d+ replacement=UID
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-on_name  key_name             seq_in_index  column_name  expression  nullable enabled
--------------------------------------------------------------------------------------
-mz_view  mz_view_primary_idx  1             a            <null>      false    true
-mz_view  mz_view_primary_idx  2             b            <null>      false    true
-mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false    true
+cluster on_name  key_name             seq_in_index  column_name  expression  nullable enabled
+---------------------------------------------------------------------------------------------
+default mz_view  mz_view_primary_idx  1             a            <null>      false    true
+default mz_view  mz_view_primary_idx  2             b            <null>      false    true
+default mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -171,11 +171,11 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-on_name          key_name       seq_in_index  column_name expression nullable enabled
--------------------------------------------------------------------------------------
-renamed_mz_view  renamed_index  1             a           <null>     false    true
-renamed_mz_view  renamed_index  2             b           <null>     false    true
-renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false    true
+cluster on_name          key_name       seq_in_index  column_name expression nullable enabled
+---------------------------------------------------------------------------------------------
+default renamed_mz_view  renamed_index  1             a           <null>     false    true
+default renamed_mz_view  renamed_index  2             b           <null>     false    true
+default renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false    true
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"
@@ -187,6 +187,8 @@ materialize.public.renamed_index "CREATE INDEX \"renamed_index\" IN CLUSTER [1] 
 View                                "Create View"
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
+
+$ set-regex match=u\d+ replacement=UID
 
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"

@@ -57,10 +57,10 @@ contains:non-temporary items cannot depend on temporary item
 > CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
 
 > SHOW INDEXES FROM foo
- on_name    key_name         seq_in_index  column_name  expression  nullable  enabled
--------------------------------------------------------------------------------------
- foo        foo_primary_idx  1             column1      <null>      false     true
- foo        foo_primary_idx  2             column2      <null>      false     true
+cluster on_name    key_name         seq_in_index  column_name  expression  nullable  enabled
+--------------------------------------------------------------------------------------------
+default foo        foo_primary_idx  1             column1      <null>      false     true
+default foo        foo_primary_idx  2             column2      <null>      false     true
 
 ! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v
 contains:catalog item 'foo' already exists
