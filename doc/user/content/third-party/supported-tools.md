@@ -172,7 +172,7 @@ _Is there another data tool you'd like to use with Materialize? [Open a GitHub 
 </div>
 
 <style>
-    td { min-width: 120px;}
+    td { min-width: 115px;}
 </style>
 
 <script>
@@ -193,13 +193,11 @@ $(function() {
         });
 
         $("#subscribe_dialog").submit(function(e) {
-            var email = $(this).find('[name="email"]').val(),
-                subject = $("[data-js='subscribe_open']").parents("tr").find('td').first().text();
-            $("[data-js='subscribe_open']")
+            var email = $(this).find('[name="email"]').val();
+            $(this).siblings("[data-js='subscribe_open']")
                 .addClass('success')
                 .attr('title', 'Subscribed')
-                .text('✔️')
-                .attr('data-subject');
+                .text('✔️');
             removeForms();
             window.analytics && window.analytics.identify(email);
             window.analytics && window.analytics.track("Integration Status Subscribed", {
@@ -213,7 +211,6 @@ $(function() {
                 removeForms();
             }
         });
-
     });
 });
 </script>
