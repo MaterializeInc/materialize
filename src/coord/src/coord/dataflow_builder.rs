@@ -34,14 +34,14 @@ use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::{CoordError, PersisterWithConfig};
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
-pub struct DataflowBuilder<'a> {
+pub struct DataflowBuilder<'a, T> {
     pub catalog: &'a CatalogState,
     pub persister: &'a PersisterWithConfig,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeController<'a, mz_repr::Timestamp>,
+    pub compute: ComputeController<'a, T>,
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -59,7 +59,10 @@ pub enum ExprPrepStyle<'a> {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+    pub fn dataflow_builder(
+        &self,
+        instance: ComputeInstanceId,
+    ) -> DataflowBuilder<mz_repr::Timestamp> {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
@@ -69,9 +72,12 @@ impl Coordinator {
     }
 }
 
-impl CatalogTxn<'_> {
+impl CatalogTxn<'_, mz_repr::Timestamp> {
     /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+    pub fn dataflow_builder(
+        &self,
+        instance: ComputeInstanceId,
+    ) -> DataflowBuilder<mz_repr::Timestamp> {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
@@ -81,7 +87,7 @@ impl CatalogTxn<'_> {
     }
 }
 
-impl<'a> DataflowBuilder<'a> {
+impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(

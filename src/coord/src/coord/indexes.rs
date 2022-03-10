@@ -17,19 +17,22 @@ use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
 use crate::coord::dataflow_builder::DataflowBuilder;
-use crate::coord::{CollectionIdBundle, Coordinator};
+use crate::coord::{CollectionIdBundle, CoordTimestamp, Coordinator};
 
 /// Answers questions about the indexes available on a particular compute
 /// instance.
 #[derive(Debug)]
-pub struct ComputeInstanceIndexOracle<'a> {
+pub struct ComputeInstanceIndexOracle<'a, T> {
     catalog: &'a CatalogState,
-    compute: ComputeController<'a, mz_repr::Timestamp>,
+    compute: ComputeController<'a, T>,
 }
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(&self, instance: ComputeInstanceId) -> ComputeInstanceIndexOracle {
+    pub fn index_oracle(
+        &self,
+        instance: ComputeInstanceId,
+    ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog.state(),
             compute: self.dataflow_client.compute(instance).unwrap(),
@@ -37,10 +40,10 @@ impl Coordinator {
     }
 }
 
-impl DataflowBuilder<'_> {
+impl<T: Copy> DataflowBuilder<'_, T> {
     /// Creates a new index oracle for the same compute instance as the dataflow
     /// builder.
-    pub fn index_oracle(&self) -> ComputeInstanceIndexOracle {
+    pub fn index_oracle(&self) -> ComputeInstanceIndexOracle<T> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog,
             compute: self.compute,
@@ -48,7 +51,7 @@ impl DataflowBuilder<'_> {
     }
 }
 
-impl ComputeInstanceIndexOracle<'_> {
+impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
@@ -95,7 +98,7 @@ impl ComputeInstanceIndexOracle<'_> {
     }
 }
 
-impl IndexOracle for ComputeInstanceIndexOracle<'_> {
+impl<T: CoordTimestamp> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
     fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(
             ComputeInstanceIndexOracle::indexes_on(self, id)
