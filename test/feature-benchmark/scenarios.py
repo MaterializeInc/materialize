@@ -553,12 +553,13 @@ true
 
 class KafkaEnvelopeNoneBytes(Kafka):
     def shared(self) -> Action:
+        data = "a" * 512
         return TdAction(
             f"""
 $ kafka-create-topic topic=kafka-envelope-none-bytes
 
 $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
-12345678901234567890123456789012345678901234567890
+{data}
 """
         )
 
@@ -566,12 +567,12 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
         return Td(
             f"""
 > DROP SOURCE IF EXISTS s1;
-  /* A */
 
 > CREATE MATERIALIZED SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
+  /* A */
 
 > SELECT COUNT(*) = {self.n()} FROM s1
   /* B */
