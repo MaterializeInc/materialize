@@ -230,6 +230,9 @@ pub trait CatalogComputeInstance {
 
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
+
+    /// Returns the set of non-transient indexes on this cluster.
+    fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
 }
 
 /// An item in a [`SessionCatalog`].

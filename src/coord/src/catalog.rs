@@ -208,6 +208,20 @@ impl CatalogState {
             info!("create {} {} ({})", item.typ(), name, id);
         }
 
+        if let CatalogItem::Index(Index {
+            compute_instance, ..
+        })
+        | CatalogItem::Sink(Sink {
+            compute_instance, ..
+        }) = item
+        {
+            self.compute_instances_by_id
+                .get_mut(&compute_instance)
+                .unwrap()
+                .indexes
+                .insert(id);
+        };
+
         let entry = CatalogEntry {
             item,
             name,
@@ -375,6 +389,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
+    pub indexes: HashSet<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -851,6 +866,7 @@ impl Catalog {
                     name: name.clone(),
                     id,
                     logging,
+                    indexes: HashSet::new(),
                 },
             );
             catalog.state.compute_instance_names.insert(name, id);
@@ -1640,6 +1656,9 @@ impl Catalog {
             DropRole {
                 name: String,
             },
+            DropComputeInstance {
+                name: String,
+            },
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
@@ -1808,6 +1827,11 @@ impl Catalog {
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
                 }
+                Op::DropComputeInstance { name } => {
+                    tx.remove_compute_instance(&name)?;
+                    builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
+                    vec![Action::DropComputeInstance { name }]
+                }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
                     match entry.item() {
@@ -1973,6 +1997,7 @@ impl Catalog {
                             // TODO(clusters): allow configuring logging per
                             // cluster.
                             logging: None,
+                            indexes: HashSet::new(),
                         },
                     );
                     state.compute_instance_names.insert(name.clone(), id);
@@ -2007,6 +2032,23 @@ impl Catalog {
                     }
                 }
 
+                Action::DropComputeInstance { name } => {
+                    let id = state
+                        .compute_instance_names
+                        .remove(&name)
+                        .expect("can only drop known instances");
+
+                    let instance = state
+                        .compute_instances_by_id
+                        .remove(&id)
+                        .expect("can only drop known instances");
+
+                    assert!(
+                        instance.indexes.is_empty(),
+                        "not all items dropped before compute instance"
+                    );
+                }
+
                 Action::DropItem(id) => {
                     let metadata = state.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
@@ -2026,6 +2068,24 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
+
+                    if let CatalogItem::Index(Index {
+                        compute_instance, ..
+                    })
+                    | CatalogItem::Sink(Sink {
+                        compute_instance, ..
+                    }) = metadata.item
+                    {
+                        assert!(
+                            state
+                                .compute_instances_by_id
+                                .get_mut(&compute_instance)
+                                .unwrap()
+                                .indexes
+                                .remove(&id),
+                            "catalog out of sync"
+                        );
+                    };
                 }
 
                 Action::UpdateItem {
@@ -2297,6 +2357,9 @@ pub enum Op {
         schema_name: String,
     },
     DropRole {
+        name: String,
+    },
+    DropComputeInstance {
         name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
@@ -2644,6 +2707,10 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
 
     fn id(&self) -> ComputeInstanceId {
         self.id
+    }
+
+    fn indexes(&self) -> &HashSet<GlobalId> {
+        &self.indexes
     }
 }
 

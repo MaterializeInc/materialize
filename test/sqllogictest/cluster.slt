@@ -44,19 +44,6 @@ CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 statement error VIRTUAL and SIZE options cannot be specified together
 CREATE CLUSTER baz VIRTUAL, SIZE 'small'
 
-# Test invalid DROPs.
-
-statement error active cluster cannot be dropped
-DROP CLUSTER default
-
-statement error unknown cluster 'baz'
-DROP CLUSTER baz
-
-# Test valid DROPs, which aren't yet supported.
-
-statement error cannot yet drop clusters
-DROP CLUSTER foo
-
 # Test `cluster` session variable.
 
 query T
@@ -65,7 +52,14 @@ SHOW cluster
 default
 
 statement ok
-SET cluster = 'foo'
+SET cluster = 'bar'
+
+query T
+SHOW cluster
+----
+bar
+
+#TODO(clusters): show cluster is on bar
 
 statement ok
 CREATE MATERIALIZED VIEW v AS SELECT 1
@@ -94,11 +88,59 @@ statement ok
 CREATE VIEW unmat AS SELECT 1
 
 # Test `CREATE INDEX ... IN CLUSTER`.
+statement ok
+SET cluster = 'default'
+
+query T
+SELECT name FROM mz_indexes;
+----
+v_primary_idx
 
 statement ok
-CREATE DEFAULT INDEX IN CLUSTER foo ON v
+CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
+
+# Test invalid DROPs.
+
+statement error active cluster cannot be dropped
+DROP CLUSTER default
+
+statement error unknown cluster 'baz'
+DROP CLUSTER baz
+
+statement error cannot drop cluster with active indexes or sinks
+DROP CLUSTER bar
+
+statement ok
+DROP INDEX v_primary_idx
+
+statement ok
+DROP INDEX v_primary_idx1
+
+# Test valid DROPs
+
+statement ok
+DROP CLUSTER bar
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER baz
+
+statement ok
+CREATE DEFAULT INDEX IN CLUSTER baz ON v
+
+statement error cannot drop cluster with active indexes or sinks
+DROP CLUSTER baz
+
+statement ok
+DROP CLUSTER baz CASCADE
+
+query T
+SELECT name FROM mz_indexes;
+----
 
 # TODO(clusters): write tests for SHOW CREATE INDEX and mz_indexes.
