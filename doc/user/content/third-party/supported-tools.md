@@ -24,11 +24,11 @@ _How to use the information on this page:_
 
 ### Kafka
 
-Kafka is well-supported in Materialize as a [`SOURCE`](/sql/create-source/) of input data, and as a [`SINK`](/sql/create-sink/), where Materialize produces data *(in the form of change events from a Materialized view)* back out to Kafka.
+Kafka is supported in Materialize as a [`SOURCE`](/sql/create-source/) of input data, and as a [`SINK`](/sql/create-sink/), where Materialize produces data *(in the form of change events from a Materialized view)* back out to Kafka.
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| Apache Kafka | 🟢 Production | Kafka is a well-supported source with multiple [configuration](/sql/create-source/kafka/#with-options) and [security](/sql/create-source/kafka/#authentication) options. | [More Info](/sql/create-source/kafka/) |
+| Apache Kafka | 🟢 Production | Kafka is supported in a variety of [configuration](/sql/create-source/kafka/#with-options) and [security](/sql/create-source/kafka/#authentication) options. | [More Info](/sql/create-source/kafka/) |
 | Confluent Cloud Kafka | 🟢 Production | Use SASL authentication, see [example here](/sql/create-source/kafka/#saslplain). The same config can be used to produce messages to Confluent Kafka via a [SINK](/sql/create-sink/). |  |
 | AWS MSK (Managed Streaming for Kafka) | 🟢 Production | Use SASL/SCRAM Authentication to securely connect to MSK clusters. [MSK SASL Docs](https://docs.aws.amazon.com/msk/latest/developerguide/msk-password.html) *(mTLS connections coming soon.)* |  |
 | Redpanda | 🟢 Beta | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/third-party/redpanda/) for instructions and limitations. | [More Info](/third-party/redpanda/) [](#notify) |
@@ -122,9 +122,6 @@ Frameworks and ORMs tend to make more advanced queries to PostgreSQL behind the 
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| Laravel ORM | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
-| Adonis.JS | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
-| Postgraphile | 🟡 Alpha | TODO: Summarize. Link to GitHub Issue. | [](#notify) |
 | Ruby on Rails | 🔴 Researching | The Rails Active-Record ORM executes many PostgreSQL configuration queries and queries to `pg_catalog` endpoints that are not yet implemented in Materialize. | [](#notify) |
 | Prisma | 🔴 Researching | Prisma executes configuration queries and queries to `pg_catalog` endpoints that are not yet implemented in Materialize. | [](#notify) |
 
@@ -173,6 +170,10 @@ _Is there another data tool you'd like to use with Materialize? [Open a GitHub 
     <em>Subscribe to receive an email when support status is upgraded. No spam!</em>
   </div>
 </div>
+
+<style>
+    td { min-width: 120px;}
+</style>
 
 <script>
 
