@@ -110,7 +110,7 @@ impl<'a> DataflowBuilder<'a> {
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
                 valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
                 valid_indexes.dedup_by_key(|(_, idx)| &idx.keys);
-                for (index_id, idx) in valid_indexes.into_iter() {
+                for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
                         key: idx.keys.to_vec(),
