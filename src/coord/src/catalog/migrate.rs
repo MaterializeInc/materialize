@@ -192,31 +192,15 @@ fn ast_rewrite_index_sink_cluster_default_0_23_0(
 ) -> Result<(), anyhow::Error> {
     match stmt {
         Statement::CreateIndex(CreateIndexStatement {
-            name: _,
-            in_cluster,
-            on_name: _,
-            key_parts: _,
-            with_options: _,
-            if_not_exists: _,
+            in_cluster: in_cluster @ None,
+            ..
+        })
+        | Statement::CreateSink(CreateSinkStatement {
+            in_cluster: in_cluster @ None,
+            ..
         }) => {
             *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
         }
-
-        Statement::CreateSink(CreateSinkStatement {
-            name: _,
-            in_cluster,
-            from: _,
-            connector: _,
-            with_options: _,
-            format: _,
-            envelope: _,
-            with_snapshot: _,
-            as_of: _,
-            if_not_exists: _,
-        }) => {
-            *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
-        }
-
         _ => (),
     };
 

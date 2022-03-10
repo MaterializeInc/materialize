@@ -3883,40 +3883,68 @@ impl<'a> Parser<'a> {
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
             OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
         ]) {
+            let object_type = match object_type {
+                OBJECTS => ObjectType::Object,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTERS => ObjectType::Cluster,
+                SCHEMAS => ObjectType::Schema,
+                SINKS => ObjectType::Sink,
+                SOURCES => ObjectType::Source,
+                TABLES => ObjectType::Table,
+                TYPES => ObjectType::Type,
+                VIEWS => ObjectType::View,
+                SECRETS => ObjectType::Secret,
+                _ => unreachable!(),
+            };
+
+            let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
+                Some(kw) => {
+                    if kw == IN && self.peek_keyword(CLUSTER) {
+                        if matches!(object_type, ObjectType::Sink) {
+                            // put `IN` back
+                            self.prev_token();
+                            (None, self.parse_optional_in_cluster()?)
+                        } else {
+                            return parser_err!(
+                                self,
+                                self.peek_pos(),
+                                "expected object name, found 'cluster'"
+                            );
+                        }
+                    } else {
+                        let from = self.parse_object_name()?;
+                        let in_cluster = self.parse_optional_in_cluster()?;
+                        (Some(from), in_cluster)
+                    }
+                }
+                None => (None, None),
+            };
+
             Ok(Statement::ShowObjects(ShowObjectsStatement {
-                object_type: match object_type {
-                    OBJECTS => ObjectType::Object,
-                    ROLES | USERS => ObjectType::Role,
-                    CLUSTERS => ObjectType::Cluster,
-                    SCHEMAS => ObjectType::Schema,
-                    SINKS => ObjectType::Sink,
-                    SOURCES => ObjectType::Source,
-                    TABLES => ObjectType::Table,
-                    TYPES => ObjectType::Type,
-                    VIEWS => ObjectType::View,
-                    SECRETS => ObjectType::Secret,
-                    val => panic!(
-                        "`parse_one_of_keywords` returned an impossible value: {}",
-                        val
-                    ),
-                },
+                object_type,
                 extended,
                 full,
                 materialized,
-                from: if self.parse_one_of_keywords(&[FROM, IN]).is_some() {
-                    Some(self.parse_object_name()?)
-                } else {
-                    None
-                },
+                from,
+                in_cluster,
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self
             .parse_one_of_keywords(&[INDEX, INDEXES, KEYS])
             .is_some()
         {
-            match self.parse_one_of_keywords(&[FROM, IN]) {
-                Some(_) => {
-                    let table_name = self.parse_raw_name()?;
+            match self.parse_one_of_keywords(&[FROM, IN, ON]) {
+                Some(kw) => {
+                    let (table_name, in_cluster) = if kw == IN && self.peek_keyword(CLUSTER) {
+                        // put `IN` back
+                        self.prev_token();
+                        (None, self.parse_optional_in_cluster()?)
+                    } else {
+                        let table_name = self.parse_raw_name()?;
+                        let in_cluster = self.parse_optional_in_cluster()?;
+                        (Some(table_name), in_cluster)
+                    };
+
                     let filter = if self.parse_keyword(WHERE) {
                         Some(ShowStatementFilter::Where(self.parse_expr()?))
                     } else {
@@ -3924,6 +3952,7 @@ impl<'a> Parser<'a> {
                     };
                     Ok(Statement::ShowIndexes(ShowIndexesStatement {
                         table_name,
+                        in_cluster,
                         extended,
                         filter,
                     }))

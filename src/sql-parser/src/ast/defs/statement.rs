@@ -1123,6 +1123,7 @@ impl_display_t!(ShowDatabasesStatement);
 pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub from: Option<UnresolvedObjectName>,
+    pub in_cluster: Option<T::ClusterName>,
     pub extended: bool,
     pub full: bool,
     pub materialized: bool,
@@ -1170,7 +1171,8 @@ impl_display_t!(ShowObjectsStatement);
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowIndexesStatement<T: AstInfo> {
-    pub table_name: T::ObjectName,
+    pub table_name: Option<T::ObjectName>,
+    pub in_cluster: Option<T::ClusterName>,
     pub extended: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -1181,8 +1183,15 @@ impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
         if self.extended {
             f.write_str("EXTENDED ");
         }
-        f.write_str("INDEXES FROM ");
-        f.write_node(&self.table_name);
+        f.write_str("INDEXES ");
+        if let Some(table_name) = &self.table_name {
+            f.write_str("FROM ");
+            f.write_node(table_name);
+        }
+        if let Some(in_cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(in_cluster);
+        }
         if let Some(filter) = &self.filter {
             f.write_str(" ");
             f.write_node(filter);
