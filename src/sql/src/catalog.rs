@@ -360,17 +360,20 @@ pub enum CatalogType {
     Jsonb,
     List {
         element_id: GlobalId,
+        element_modifiers: Vec<i64>,
     },
     Map {
         key_id: GlobalId,
+        key_modifiers: Vec<i64>,
         value_id: GlobalId,
+        value_modifiers: Vec<i64>,
     },
     Numeric,
     Oid,
     PgLegacyChar,
     Pseudo,
     Record {
-        fields: Vec<(ColumnName, GlobalId)>,
+        fields: Vec<CatalogRecordField>,
     },
     RegClass,
     RegProc,
@@ -382,6 +385,17 @@ pub enum CatalogType {
     Uuid,
     VarChar,
     Int2Vector,
+}
+
+/// A description of a field in a [`CatalogType::Record`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRecordField {
+    /// The name of the field.
+    pub name: ColumnName,
+    /// The ID of the type of the field.
+    pub type_id: GlobalId,
+    /// Modifiers to apply to the type.
+    pub type_modifiers: Vec<i64>,
 }
 
 /// An error returned by the catalog.

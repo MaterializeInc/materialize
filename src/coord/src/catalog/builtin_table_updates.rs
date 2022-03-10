@@ -381,11 +381,21 @@ impl CatalogState {
                 MZ_ARRAY_TYPES.id,
                 vec![id.to_string(), element_id.to_string()],
             ),
-            CatalogType::List { element_id } => (
+            // TODO(benesch): emit modifiers somehow.
+            CatalogType::List {
+                element_id,
+                element_modifiers: _,
+            } => (
                 MZ_LIST_TYPES.id,
                 vec![id.to_string(), element_id.to_string()],
             ),
-            CatalogType::Map { key_id, value_id } => (
+            // TODO(benesch): emit modifiers somehow.
+            CatalogType::Map {
+                key_id,
+                key_modifiers: _,
+                value_id,
+                value_modifiers: _,
+            } => (
                 MZ_MAP_TYPES.id,
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),

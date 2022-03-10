@@ -4370,24 +4370,38 @@ fn scalar_type_from_catalog(
                 CatalogType::Array { element_id } => Ok(ScalarType::Array(Box::new(
                     scalar_type_from_catalog(scx, *element_id, modifiers)?,
                 ))),
-                CatalogType::List { element_id } => Ok(ScalarType::List {
-                    element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
+                CatalogType::List {
+                    element_id,
+                    element_modifiers,
+                } => Ok(ScalarType::List {
+                    element_type: Box::new(scalar_type_from_catalog(
+                        scx,
+                        *element_id,
+                        element_modifiers,
+                    )?),
                     custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
                 }),
                 CatalogType::Map {
                     key_id: _,
+                    key_modifiers: _,
                     value_id,
+                    value_modifiers,
                 } => Ok(ScalarType::Map {
-                    value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
+                    value_type: Box::new(scalar_type_from_catalog(
+                        scx,
+                        *value_id,
+                        value_modifiers,
+                    )?),
                     custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
                         .iter()
-                        .map(|(column, id)| {
-                            let scalar_type = scalar_type_from_catalog(scx, *id, &[])?;
+                        .map(|f| {
+                            let scalar_type =
+                                scalar_type_from_catalog(scx, f.type_id, &f.type_modifiers)?;
                             Ok((
-                                column.clone(),
+                                f.name.clone(),
                                 ColumnType {
                                     scalar_type,
                                     nullable: true,

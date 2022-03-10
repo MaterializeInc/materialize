@@ -72,14 +72,15 @@ use crate::ast::{
     SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
     ViewDefinition, WithOption,
 };
-use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
+use crate::catalog::{
+    CatalogItem, CatalogItemType, CatalogRecordField, CatalogType, CatalogTypeDetails,
+};
 use crate::kafka_util;
 use crate::names::{
     resolve_names_cluster, resolve_names_data_type, DatabaseSpecifier, FullName, ResolvedDataType,
     SchemaName,
 };
 use crate::normalize;
-use crate::normalize::ident;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -2285,41 +2286,32 @@ pub fn plan_create_type(
     stmt: CreateTypeStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
-    let CreateTypeStatement { name, as_type, .. } = stmt;
-    fn ensure_valid_data_type(
-        scx: &StatementContext,
-        data_type: &ResolvedDataType,
-        as_type: &CreateTypeAs<Raw>,
-        key: &str,
-    ) -> Result<(), anyhow::Error> {
-        let item = match data_type {
-            ResolvedDataType::Named {
-                name,
-                id,
-                modifiers,
-                print_id: _,
-            } => {
-                if !modifiers.is_empty() {
-                    bail!(
-                        "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                                {}, you must use the default type",
-                        as_type.to_string().quoted(),
-                        key,
-                        name
-                    );
-                }
-                scx.catalog.get_item_by_id(&id)
-            }
-            d => bail!(
+    let CreateTypeStatement { name, as_type } = stmt;
+
+    let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
+    if scx.catalog.item_exists(&name) {
+        bail!("catalog item {} already exists", name.to_string().quoted());
+    }
+
+    let mut depends_on = vec![];
+
+    let mut resolve_data_type = |data_type, key: &str| {
+        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
+        depends_on.extend(dt_ids);
+
+        let (id, modifiers) = match data_type {
+            ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
+            ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
                 as_type.to_string().quoted(),
                 key,
-                d.to_ast_string(),
+                data_type.to_ast_string(),
             ),
         };
 
-        match scx.catalog.get_item_by_id(&item.id()).type_details() {
+        let item = scx.catalog.get_item_by_id(&id);
+        match item.type_details() {
             None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
@@ -2330,66 +2322,42 @@ pub fn plan_create_type(
                 typ: CatalogType::Char,
                 ..
             }) if matches!(as_type, CreateTypeAs::List { .. }) => {
+                // TODO(benesch): this can actually be supporrted.
+                // See #7613.
                 bail_unsupported!("char list")
             }
             _ => {}
         }
 
-        Ok(())
-    }
+        // TODO: call scalar_type_from_catalog to validate that the
+        // modifiers are actually valid for `id`.
 
-    let mut depends_on = vec![];
-    let mut record_fields = vec![];
-    match &as_type {
-        CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
-            let mut with_options = normalize::option_objects(&with_options);
-            let option_keys = match as_type {
-                CreateTypeAs::List { .. } => vec!["element_type"],
-                CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
-                _ => vec![],
-            };
-
-            for key in option_keys {
-                match with_options.remove(&key.to_string()) {
-                    Some(SqlOption::DataType { data_type, .. }) => {
-                        let (data_type, dt_ids) = resolve_names_data_type(scx, data_type)?;
-                        ensure_valid_data_type(scx, &data_type, &as_type, key)?;
-                        depends_on.extend(dt_ids);
-                    }
-                    Some(_) => bail!("{} must be a data type", key),
-                    None => bail!("{} parameter required", key),
-                };
-            }
-
-            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
-        }
-        CreateTypeAs::Record { ref column_defs } => {
-            for column_def in column_defs {
-                let key = ident(column_def.name.clone());
-                let (data_type, dt_ids) =
-                    resolve_names_data_type(scx, column_def.data_type.clone())?;
-                ensure_valid_data_type(scx, &data_type, &as_type, &key)?;
-                depends_on.extend(dt_ids);
-                if let ResolvedDataType::Named { id, .. } = data_type {
-                    record_fields.push((ColumnName::from(key.clone()), id));
-                } else {
-                    bail!("field {} must be a named type", key)
-                }
-            }
-        }
+        Ok((id, modifiers))
     };
 
-    let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
-    if scx.catalog.item_exists(&name) {
-        bail!("catalog item {} already exists", name.to_string().quoted());
-    }
+    let mut extract_data_type_option =
+        |with_options: &mut BTreeMap<String, SqlOption<Raw>>, key| match with_options.remove(key) {
+            Some(SqlOption::DataType { data_type, .. }) => resolve_data_type(data_type, key),
+            Some(_) => bail!("{key} must be a data type"),
+            None => bail!("{key} parameter required"),
+        };
 
-    let inner = match as_type {
-        CreateTypeAs::List { .. } => CatalogType::List {
-            element_id: *depends_on.get(0).expect("custom type to have element id"),
-        },
-        CreateTypeAs::Map { .. } => {
-            let key_id = *depends_on.get(0).expect("key");
+    let inner = match &as_type {
+        CreateTypeAs::List { with_options } => {
+            let mut with_options = normalize::option_objects(&with_options);
+            let (id, modifiers) = extract_data_type_option(&mut with_options, "element_type")?;
+            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
+            CatalogType::List {
+                element_id: id,
+                element_modifiers: modifiers,
+            }
+        }
+        CreateTypeAs::Map { with_options } => {
+            let mut with_options = normalize::option_objects(&with_options);
+            let (key_id, key_modifiers) = extract_data_type_option(&mut with_options, "key_type")?;
+            let (value_id, value_modifiers) =
+                extract_data_type_option(&mut with_options, "value_type")?;
+            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
             let entry = scx.catalog.get_item_by_id(&key_id);
             match entry.type_details() {
                 Some(CatalogTypeDetails {
@@ -2399,15 +2367,27 @@ pub fn plan_create_type(
                 Some(_) => bail!("key_type must be text, got {}", entry.name()),
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
-
             CatalogType::Map {
                 key_id,
-                value_id: *depends_on.get(1).expect("value"),
+                key_modifiers,
+                value_id,
+                value_modifiers,
             }
         }
-        CreateTypeAs::Record { .. } => CatalogType::Record {
-            fields: record_fields,
-        },
+        CreateTypeAs::Record { ref column_defs } => {
+            let mut fields = vec![];
+            for column_def in column_defs {
+                let name = normalize::column_name(column_def.name.clone());
+                let (id, modifiers) =
+                    resolve_data_type(column_def.data_type.clone(), name.as_str())?;
+                fields.push(CatalogRecordField {
+                    name,
+                    type_id: id,
+                    type_modifiers: modifiers,
+                })
+            }
+            CatalogType::Record { fields }
+        }
     };
 
     Ok(Plan::CreateType(CreateTypePlan {
