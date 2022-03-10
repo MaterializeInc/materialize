@@ -201,7 +201,7 @@ $(function() {
             removeForms();
             window.analytics && window.analytics.identify(email);
             window.analytics && window.analytics.track("Integration Status Subscribed", {
-                subject: subject
+                subject: $(this).parents("tr").find('td').first().text()
             });
             e.preventDefault();
         });
