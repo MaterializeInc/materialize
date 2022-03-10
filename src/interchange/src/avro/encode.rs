@@ -291,6 +291,9 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
         } else {
             let mut val = match &typ.scalar_type {
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
+                ScalarType::PgLegacyChar => {
+                    Value::Fixed(1, datum.unwrap_uint8().to_le_bytes().into())
+                }
                 ScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
                 ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
                 ScalarType::Oid

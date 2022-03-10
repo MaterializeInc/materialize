@@ -224,6 +224,7 @@ enum Tag {
     Int16,
     Int32,
     Int64,
+    UInt8,
     UInt32,
     Float32,
     Float64,
@@ -346,6 +347,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Int64 => {
             let i = i64::from_le_bytes(read_byte_array(data, offset));
             Datum::Int64(i)
+        }
+        Tag::UInt8 => {
+            let i = u8::from_le_bytes(read_byte_array(data, offset));
+            Datum::UInt8(i)
         }
         Tag::UInt32 => {
             let i = u32::from_le_bytes(read_byte_array(data, offset));
@@ -511,6 +516,10 @@ where
             data.push(Tag::Int64.into());
             data.extend_from_slice(&i.to_le_bytes());
         }
+        Datum::UInt8(i) => {
+            data.push(Tag::UInt8.into());
+            data.extend_from_slice(&i.to_le_bytes());
+        }
         Datum::UInt32(i) => {
             data.push(Tag::UInt32.into());
             data.extend_from_slice(&i.to_le_bytes());
@@ -663,6 +672,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Int16(_) => 1 + size_of::<i16>(),
         Datum::Int32(_) => 1 + size_of::<i32>(),
         Datum::Int64(_) => 1 + size_of::<i64>(),
+        Datum::UInt8(_) => 1 + size_of::<u8>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
         Datum::Float32(_) => 1 + size_of::<f32>(),
         Datum::Float64(_) => 1 + size_of::<f64>(),

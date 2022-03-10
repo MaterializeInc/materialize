@@ -27,14 +27,14 @@ relam               false       oid
 reltablespace       false       oid
 reltoastrelid       false       oid
 relhasindex         false       boolean
-relpersistence      false       character
+relpersistence      false       char
 relkind             true        text
 relchecks           false       smallint
 relhasrules         false       boolean
 relhastriggers      false       boolean
 relrowsecurity      false       boolean
 relforcerowsecurity false       boolean
-relreplident        false       character
+relreplident        false       char
 relispartition      false       boolean
 relhasoids          false       boolean
 reloptions          true        text[]
@@ -84,8 +84,8 @@ attnum       false     bigint
 atttypmod    false     integer
 attnotnull   false     boolean
 atthasdef    false     boolean
-attidentity  false     character
-attgenerated false     character
+attidentity  false     char
+attgenerated false     char
 attisdropped false     boolean
 attcollation false     oid
 
@@ -96,7 +96,7 @@ oid                 false   oid
 collname            false   text
 collnamespace       false   oid
 collowner           false   oid
-collprovider        false   character
+collprovider        false   char
 collisdeterministic false   boolean
 collencoding        false   integer
 collcollate         false   text
@@ -109,7 +109,7 @@ name         nullable  type
 oid             false   oid
 polname         false   text
 polrelid        false   oid
-polcmd          false   character
+polcmd          false   char
 polpermissive   false   boolean
 polroles        false   oid[]
 polqual         false   text

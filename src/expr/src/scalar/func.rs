@@ -3282,6 +3282,7 @@ pub enum UnaryFunc {
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
     CastInt32ToOid(CastInt32ToOid),
+    CastInt32ToPgLegacyChar(CastInt32ToPgLegacyChar),
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
@@ -3323,6 +3324,7 @@ pub enum UnaryFunc {
     CastNumericToInt64(CastNumericToInt64),
     CastNumericToString(CastNumericToString),
     CastStringToBool(CastStringToBool),
+    CastStringToPgLegacyChar(CastStringToPgLegacyChar),
     CastStringToBytes(CastStringToBytes),
     CastStringToInt16(CastStringToInt16),
     CastStringToInt32(CastStringToInt32),
@@ -3361,6 +3363,8 @@ pub enum UnaryFunc {
     CastTimestampTzToTimestamp(CastTimestampTzToTimestamp),
     CastTimestampTzToString(CastTimestampTzToString),
     CastTimestampTzToTime(CastTimestampTzToTime),
+    CastPgLegacyCharToString(CastPgLegacyCharToString),
+    CastPgLegacyCharToInt32(CastPgLegacyCharToInt32),
     CastBytesToString(CastBytesToString),
     CastStringToJsonb,
     CastJsonbToString,
@@ -3525,6 +3529,7 @@ derive_unary!(
     CastInt32ToInt64,
     CastInt32ToString,
     CastInt32ToOid,
+    CastInt32ToPgLegacyChar,
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt64ToBool,
@@ -3576,6 +3581,7 @@ derive_unary!(
     CastNumericToInt64,
     CastNumericToString,
     CastStringToBool,
+    CastStringToPgLegacyChar,
     CastStringToBytes,
     CastStringToInt16,
     CastStringToInt32,
@@ -3634,6 +3640,8 @@ derive_unary!(
     CastTimestampTzToTime,
     CastDateToTimestamp,
     CastDateToTimestampTz,
+    CastPgLegacyCharToString,
+    CastPgLegacyCharToInt32,
     CastBytesToString,
     CastVarCharToString,
     Chr
@@ -3724,6 +3732,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -3763,6 +3772,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -3807,6 +3817,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -3823,12 +3835,10 @@ impl UnaryFunc {
             CastRecordToString { ty }
             | CastArrayToString { ty }
             | CastListToString { ty }
-            | CastMapToString { ty } => Ok(cast_collection_to_string(a, ty, temp_storage)),
-            CastInt2VectorToString => Ok(cast_collection_to_string(
-                a,
-                &ScalarType::Int2Vector,
-                temp_storage,
-            )),
+            | CastMapToString { ty } => cast_collection_to_string(a, ty, temp_storage),
+            CastInt2VectorToString => {
+                cast_collection_to_string(a, &ScalarType::Int2Vector, temp_storage)
+            }
             CastList1ToList2 { cast_expr, .. } => cast_list1_to_list2(a, &*cast_expr, temp_storage),
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
@@ -3961,6 +3971,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -4000,6 +4011,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4044,6 +4056,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -4220,6 +4234,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -4259,6 +4274,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4303,6 +4319,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -4499,6 +4517,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -4538,6 +4557,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4582,6 +4602,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -5143,7 +5165,7 @@ fn array_to_string<'a>(
                 out.push_str(delimiter);
             }
         } else {
-            stringify_datum(&mut out, elem, elem_type);
+            stringify_datum(&mut out, elem, elem_type)?;
             out.push_str(delimiter);
         }
     }
@@ -5162,45 +5184,53 @@ fn cast_collection_to_string<'a>(
     a: Datum,
     ty: &ScalarType,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> Result<Datum<'a>, EvalError> {
     let mut buf = String::new();
-    stringify_datum(&mut buf, a, ty);
-    Datum::String(temp_storage.push_string(buf))
+    stringify_datum(&mut buf, a, ty)?;
+    Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
-fn stringify_datum<'a, B>(buf: &mut B, d: Datum<'a>, ty: &ScalarType) -> strconv::Nestable
+fn stringify_datum<'a, B>(
+    buf: &mut B,
+    d: Datum<'a>,
+    ty: &ScalarType,
+) -> Result<strconv::Nestable, EvalError>
 where
     B: FormatBuffer,
 {
     use ScalarType::*;
     match &ty {
-        Bool => strconv::format_bool(buf, d.unwrap_bool()),
-        Int16 => strconv::format_int16(buf, d.unwrap_int16()),
-        Int32 => strconv::format_int32(buf, d.unwrap_int32()),
-        Int64 => strconv::format_int64(buf, d.unwrap_int64()),
-        Oid | RegClass | RegProc | RegType => strconv::format_oid(buf, d.unwrap_uint32()),
-        Float32 => strconv::format_float32(buf, d.unwrap_float32()),
-        Float64 => strconv::format_float64(buf, d.unwrap_float64()),
-        Numeric { .. } => strconv::format_numeric(buf, &d.unwrap_numeric()),
-        Date => strconv::format_date(buf, d.unwrap_date()),
-        Time => strconv::format_time(buf, d.unwrap_time()),
-        Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),
-        TimestampTz => strconv::format_timestamptz(buf, d.unwrap_timestamptz()),
-        Interval => strconv::format_interval(buf, d.unwrap_interval()),
-        Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
-        String | VarChar { .. } => strconv::format_string(buf, d.unwrap_str()),
-        Char { length } => strconv::format_string(
+        Bool => Ok(strconv::format_bool(buf, d.unwrap_bool())),
+        Int16 => Ok(strconv::format_int16(buf, d.unwrap_int16())),
+        Int32 => Ok(strconv::format_int32(buf, d.unwrap_int32())),
+        Int64 => Ok(strconv::format_int64(buf, d.unwrap_int64())),
+        Oid | RegClass | RegProc | RegType => Ok(strconv::format_oid(buf, d.unwrap_uint32())),
+        Float32 => Ok(strconv::format_float32(buf, d.unwrap_float32())),
+        Float64 => Ok(strconv::format_float64(buf, d.unwrap_float64())),
+        Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
+        Date => Ok(strconv::format_date(buf, d.unwrap_date())),
+        Time => Ok(strconv::format_time(buf, d.unwrap_time())),
+        Timestamp => Ok(strconv::format_timestamp(buf, d.unwrap_timestamp())),
+        TimestampTz => Ok(strconv::format_timestamptz(buf, d.unwrap_timestamptz())),
+        Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
+        Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
+        String | VarChar { .. } => Ok(strconv::format_string(buf, d.unwrap_str())),
+        Char { length } => Ok(strconv::format_string(
             buf,
             &mz_repr::adt::char::format_str_pad(d.unwrap_str(), *length),
-        ),
-        Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
-        Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
+        )),
+        PgLegacyChar => {
+            format_pg_legacy_char(buf, d.unwrap_uint8())?;
+            Ok(strconv::Nestable::MayNeedEscaping)
+        }
+        Jsonb => Ok(strconv::format_jsonb(buf, JsonbRef::from_datum(d))),
+        Uuid => Ok(strconv::format_uuid(buf, d.unwrap_uuid())),
         Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
                 if d.is_null() {
-                    buf.write_null()
+                    Ok(buf.write_null())
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, &ty.scalar_type)
                 }
@@ -5212,7 +5242,7 @@ where
             &d.unwrap_array().elements(),
             |buf, d| {
                 if d.is_null() {
-                    buf.write_null()
+                    Ok(buf.write_null())
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, elem_type)
                 }
@@ -5220,14 +5250,14 @@ where
         ),
         List { element_type, .. } => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
             if d.is_null() {
-                buf.write_null()
+                Ok(buf.write_null())
             } else {
                 stringify_datum(buf.nonnull_buffer(), d, element_type)
             }
         }),
         Map { value_type, .. } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
             if d.is_null() {
-                buf.write_null()
+                Ok(buf.write_null())
             } else {
                 stringify_datum(buf.nonnull_buffer(), d, value_type)
             }

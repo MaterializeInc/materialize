@@ -21,12 +21,11 @@ use mz_expr::func;
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
-use crate::func::TypeCategory;
-
 use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
+use crate::func::TypeCategory;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
@@ -189,6 +188,7 @@ lazy_static! {
                 CastInt32ToOid(func::CastInt32ToOid),
                 CastOidToRegType(func::CastOidToRegType),
             ],
+            (Int32, PgLegacyChar) => Explicit: CastInt32ToPgLegacyChar(func::CastInt32ToPgLegacyChar),
             (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
             (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
             (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
@@ -421,6 +421,7 @@ lazy_static! {
                 let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
+            (String, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
             // CHAR
             (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
@@ -431,6 +432,7 @@ lazy_static! {
                 let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
+            (Char, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
@@ -442,6 +444,19 @@ lazy_static! {
                 let length = to_type.unwrap_varchar_max_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
             }),
+            (VarChar, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
+
+            //PG LEGACY CHAR
+            (PgLegacyChar, String) => Implicit: CastPgLegacyCharToString(func::CastPgLegacyCharToString),
+            (PgLegacyChar, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
+            }),
+            (PgLegacyChar, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_varchar_max_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
+            }),
+            (PgLegacyChar, Int32) => Explicit: CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
 
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -890,13 +905,11 @@ pub fn plan_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: HirScalarExpr,
-    cast_to: &ScalarType,
+    to: &ScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
-    use ScalarType::*;
+    let from = ecx.scalar_type(&expr);
 
-    let cast_from = ecx.scalar_type(&expr);
-
-    // Close over ccx, cast_from, and cast_to to simplify error messages in the
+    // Close over `ccx`, `from`, and `to` to simplify error messages in the
     // face of intermediate expressions.
     let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
@@ -908,8 +921,8 @@ pub fn plan_cast(
             } else {
                 ""
             },
-            ecx.humanize_scalar_type(&cast_from),
-            ecx.humanize_scalar_type(&cast_to),
+            ecx.humanize_scalar_type(&from),
+            ecx.humanize_scalar_type(&to),
         ),
     };
 
@@ -918,18 +931,20 @@ pub fn plan_cast(
     //
     // String-like types get special handling to match PostgreSQL.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/src/backend/parser/parse_coerce.c#L3205-L3223
-    match (&cast_from, cast_to) {
-        // Rewrite from char, varchar as from string
-        (Char { .. } | VarChar { .. }, dest) if !dest.is_string_like() => {
-            cast_inner(&String, dest, expr)
-        }
-        // If to is char or varchar, use intermediate string expression.
-        (source, dest @ Char { .. } | dest @ VarChar { .. }) if !source.is_string_like() => {
-            let source_to_str_expr = cast_inner(source, &String, expr)?;
-            cast_inner(&String, dest, source_to_str_expr)
-        }
-        // Standard cast
-        (source, dest) => cast_inner(source, dest, expr),
+    let from_category = TypeCategory::from_type(&from);
+    let to_category = TypeCategory::from_type(&to);
+    if from_category == TypeCategory::String && to_category != TypeCategory::String {
+        // Converting from stringlike to something non-stringlike. Handle as if
+        // `from` were a `ScalarType::String.
+        cast_inner(&ScalarType::String, to, expr)
+    } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
+        // Converting from non-stringlike to something stringlike. Convert to a
+        // `ScalarType::String` and then to the desired type.
+        let expr = cast_inner(&from, &ScalarType::String, expr)?;
+        cast_inner(&ScalarType::String, to, expr)
+    } else {
+        // Standard cast.
+        cast_inner(&from, to, expr)
     }
 }
 
@@ -937,18 +952,15 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: &ScalarType,
-    cast_to: &ScalarType,
+    mut cast_from: &ScalarType,
+    mut cast_to: &ScalarType,
 ) -> bool {
-    // All char values are cast to strings during casts, so this transformation
-    // is equivalent.
-    let cast_from = match cast_from {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
-        from => from,
-    };
-    let cast_to = match cast_to {
-        ScalarType::Char { .. } | ScalarType::VarChar { .. } => &ScalarType::String,
-        to => to,
-    };
+    // All stringlike types are treated like `ScalarType::String` during casts.
+    if TypeCategory::from_type(&cast_from) == TypeCategory::String {
+        cast_from = &ScalarType::String;
+    }
+    if TypeCategory::from_type(&cast_to) == TypeCategory::String {
+        cast_to = &ScalarType::String;
+    }
     get_cast(ecx, ccx, &cast_from, &cast_to).is_some()
 }

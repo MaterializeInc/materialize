@@ -616,7 +616,7 @@ pub const TYPE_CHAR: BuiltinType = BuiltinType {
     id: GlobalId::System(1038),
     oid: 18,
     details: CatalogTypeDetails {
-        typ: CatalogType::Char1,
+        typ: CatalogType::PgLegacyChar,
         array_id: Some(GlobalId::System(1043)),
     },
 };
@@ -1646,7 +1646,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     NULL::pg_catalog.int2 AS typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
-    CASE mztype WHEN 'a' THEN 'b' ELSE mztype END AS typtype,
+    (CASE mztype WHEN 'a' THEN 'b' ELSE mztype END)::pg_catalog.char AS typtype,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
     coalesce(

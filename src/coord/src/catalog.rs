@@ -2471,6 +2471,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
                     .join(",")
             ),
+            PgLegacyChar => "\"char\"".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let res = if self

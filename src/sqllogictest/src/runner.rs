@@ -37,6 +37,7 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
@@ -305,6 +306,9 @@ impl<'a> FromSql<'a> for Slt {
         Ok(match *ty {
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
+            PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
+                types::char_from_sql(raw)?.to_be_bytes(),
+            ))),
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
             PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
@@ -380,6 +384,7 @@ impl<'a> FromSql<'a> for Slt {
             *ty,
             PgType::BOOL
                 | PgType::BYTEA
+                | PgType::CHAR
                 | PgType::DATE
                 | PgType::FLOAT4
                 | PgType::FLOAT8
@@ -502,9 +507,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
-            let mut buf: String = "".into();
+            let mut buf = BytesMut::new();
             d.encode_text(&mut buf);
-            buf
+            String::from_utf8_lossy(&buf).into_owned()
         }
 
         (Type::Oid, Value::Oid(o)) => o.to_string(),

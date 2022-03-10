@@ -3828,6 +3828,7 @@ name = "mz-sqllogictest"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "fallible-iterator",
