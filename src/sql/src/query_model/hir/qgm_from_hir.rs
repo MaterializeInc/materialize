@@ -85,7 +85,7 @@ impl FromHir {
                 } else {
                     // Other id variants should not be present in the HirRelationExpr.
                     // In theory, this should be `unreachable!(...)`, but we return an
-                    // Error just to be safe here.
+                    // `Err` in order to bubble up this to the user without panicking.
                     let expr = HirRelationExpr::Get { id, typ };
                     let explanation = Some(String::from("Unexpected Id variant in Get"));
                     Err(QGMError::from(UnsupportedHirRelationExpr {
@@ -112,12 +112,16 @@ impl FromHir {
                 Ok(body_box_id)
             }
             HirRelationExpr::Constant { rows, typ } => {
-                if typ.arity() == 0 {
+                if typ.arity() == 0 || rows.len() != 1 {
                     let values_box_id = self.model.make_box(BoxType::Values(Values {
                         rows: rows.iter().map(|_| Vec::new()).collect_vec(),
                     }));
                     Ok(values_box_id)
                 } else {
+                    // The only expected constant collection is `{ () }` (the
+                    // singleton collection of a zero-arity tuple).
+                    // In theory, this should be `unreachable!(...)`, but we return an
+                    // `Err` in order to bubble up this to the user without panicking.
                     let expr = HirRelationExpr::Constant { rows, typ };
                     let explanation = String::from("Cannot convert Constant with arity > 0 to QGM");
                     Err(QGMError::from(UnsupportedHirRelationExpr {
@@ -415,7 +419,16 @@ impl FromHir {
                     position: 0,
                 }))
             }
-            scalar => Err(QGMError::from(UnsupportedHirScalarExpr { scalar })),
+            scalar @ HirScalarExpr::Windowing(..) => {
+                Err(QGMError::from(UnsupportedHirScalarExpr { scalar }))
+            }
+            // A Parameter should never be part of the input expression, see
+            // `expr.bind_parameters(&params)?;` calls in `dml::plan_*` and `ddl:plan_*`.
+            // In theory, this should be `unreachable!(...)`, but we return an
+            // `Err` in order to bubble up this to the user without panicking.
+            scalar @ HirScalarExpr::Parameter(..) => {
+                Err(QGMError::from(UnsupportedHirScalarExpr { scalar }))
+            }
         }
     }
 
