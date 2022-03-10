@@ -639,6 +639,9 @@ pre {
         background-color: $light-purple-v2;
     }
 }
+td > .default_button {
+    margin-top: 6px;
+}
 
 #subscribe_dialog {
     display: none;
