@@ -419,9 +419,17 @@ fn show_sinks<'a>(
 
     let query = if full {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
-            FROM mz_catalog.mz_sinks
-            WHERE schema_id = {}",
+            "SELECT
+            clusters.name AS in_cluster,
+            sinks.name,
+            mz_internal.mz_classify_object_id(id) AS type,
+            sinks.volatility
+        FROM
+            mz_catalog.mz_sinks AS sinks
+            JOIN mz_catalog.mz_clusters AS clusters ON
+                    clusters.id = sinks.cluster_id
+        WHERE
+            schema_id = {}",
             schema.id(),
         )
     } else {
@@ -518,6 +526,7 @@ pub fn show_indexes<'a>(
 
     let query = format!(
         "SELECT
+            clusters.name AS in_cluster,
             objs.name AS on_name,
             idxs.name AS key_name,
             idx_cols.index_position AS seq_in_index,
@@ -529,6 +538,7 @@ pub fn show_indexes<'a>(
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
             JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
+            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
             LEFT JOIN mz_catalog.mz_columns AS obj_cols
                 ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
