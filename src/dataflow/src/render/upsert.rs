@@ -305,10 +305,11 @@ fn evaluate(
 }
 
 use timely::communication::message::RefOrMut;
-use timely::dataflow::channels::pact::ParallelizationContract;
+use timely::dataflow::channels::pact::{ParallelizationContract, ParallelizationContractCore};
+use timely::dataflow::operators::generic::{FrontieredInputHandle, FrontieredInputHandleCore};
 
 type RD<E> = Result<Row, E>;
-type DD<E> = ((RD<E>, RD<E>), u64, i64);
+type DD<E, T> = ((RD<E>, RD<E>), T, i64);
 
 /// Internal core upsert logic.
 fn upsert_core<G, P, PF>(
@@ -318,14 +319,26 @@ fn upsert_core<G, P, PF>(
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
-    es: Stream<G, DD<DecodeError>>,
+    es: Stream<G, DD<DecodeError, G::Timestamp>>,
     extra_p: P,
     mut persistence: PF,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
-    P: ParallelizationContract<G::Timestamp, DD<DecodeError>>,
-    PF: FnMut(RefOrMut<Vec<DD<DecodeError>>>, &mut HashMap<Row, RD<DataflowError>>) + 'static,
+    P: ParallelizationContract<Timestamp, DD<DecodeError, Timestamp>>,
+    PF:
+        FnMut(
+                &mut FrontieredInputHandle<
+                    '_,
+                    Timestamp,
+                    DD<DecodeError, Timestamp>,
+                    <P as ParallelizationContractCore<
+                        Timestamp,
+                        Vec<DD<DecodeError, Timestamp>>,
+                    >>::Puller,
+                >,
+                &mut HashMap<RD<DecodeError>, RD<DecodeError>>,
+            ) + 'static,
 {
     let result_stream = stream.binary_frontier(
         &es,
@@ -342,14 +355,15 @@ where
             // this is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along
-            let mut current_values = HashMap::new();
+            let mut current_values: HashMap<Result<_, DecodeError>, _> = HashMap::new();
+            let mut persist_values = HashMap::new();
 
             let mut vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
 
             move |input, state_input, output| {
                 // perform persistence magic :)
-                state_input.for_each(|_cap, data| persistence(data, &mut current_values));
+                persistence(state_input, &mut persist_values);
 
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
@@ -505,7 +519,7 @@ where
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
-                                            .insert(decoded_key.clone(), thinned_value)
+                                            .insert(Ok(decoded_key.clone()), thinned_value)
                                             .map(|res| {
                                                 res.map(|v| {
                                                     rehydrate(
@@ -519,7 +533,7 @@ where
                                                 })
                                             })
                                     } else {
-                                        current_values.remove(&decoded_key).map(|res| {
+                                        current_values.remove(&Ok(decoded_key.clone())).map(|res| {
                                             res.map(|v| {
                                                 rehydrate(
                                                     &upsert_envelope.key_indices,
@@ -572,7 +586,6 @@ where
 
     result_stream
 }
-
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
 fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
@@ -629,6 +642,91 @@ mod persist {
     use timely::dataflow::{Scope, Stream};
     use timely::progress::Antichain;
     use tracing::trace;
+
+    /// Internal core upsert logic.
+    fn upsert_core_persist<G, P, PF>(
+        stream: &Stream<G, DecodeResult>,
+        predicates: Vec<MirScalarExpr>,
+        position_or: Vec<Option<usize>>,
+        as_of_frontier: Antichain<Timestamp>,
+        source_arity: usize,
+        upsert_envelope: UpsertEnvelope,
+        persist_config: PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
+        name: &str,
+    ) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
+    where
+        G: Scope<Timestamp = Timestamp>,
+        P: ParallelizationContract<G::Timestamp, DD<DecodeError, G::Timestamp>>,
+        PF: FnMut(
+                RefOrMut<Vec<DD<DecodeError, G::Timestamp>>>,
+                &mut HashMap<Row, RD<DataflowError>>,
+            ) + 'static,
+    {
+        let (restored_upsert_oks, state_errs) = {
+            let snapshot = persist_config.read_handle.snapshot();
+            let (restored_oks, restored_errs) = stream
+                .scope()
+                .replay(snapshot, &as_of_frontier)
+                .ok_err(split_ok_err);
+            let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
+                name,
+                persist_config.write_handle.clone(),
+                persist_config.upper_seal_ts,
+            );
+            let combined_errs = restored_errs.concat(&retract_errs);
+            (restored_upsert_oks, combined_errs)
+        };
+
+        let mut differential_state_ingester = Some(DifferentialStateIngester::new());
+        let mut state_input_buffer = Vec::new();
+        let operator_name = format!("persistent_upsert({})", name);
+
+        upsert_core(
+            stream,
+            predicates,
+            position_or,
+            as_of_frontier,
+            source_arity,
+            upsert_envelope,
+            restored_upsert_oks,
+            Exchange::new(
+                move |((key, _data), _ts, _diff): &((Result<Row, DecodeError>, _), _, _)| {
+                    key.hashed()
+                },
+            ),
+            move |state_input, current_values| {
+                state_input.for_each(|_time, data| {
+                    data.swap(&mut state_input_buffer);
+                    for state_update in state_input_buffer.drain(..) {
+                        trace!("In {}, restored upsert: {:?}", operator_name, state_update);
+
+                        differential_state_ingester
+                            .as_mut()
+                            .expect("already finished ingesting")
+                            .add_update(state_update);
+                    }
+                });
+
+                // An empty frontier signals that we will never receive data from that input
+                // again because no-one upstream holds any capability anymore.
+                if differential_state_ingester.is_some()
+                    && state_input.frontier.frontier().is_empty()
+                {
+                    let initial_state = differential_state_ingester
+                        .take()
+                        .expect("already finished ingesting")
+                        .finish();
+                    current_values.extend(initial_state.into_iter());
+
+                    trace!(
+                        "In {}, initial (restored) upsert state: {:?}",
+                        operator_name,
+                        current_values.iter().take(10).collect::<Vec<_>>()
+                    );
+                }
+            },
+        )
+    }
 
     /// lalala
     pub fn persistent_upsert<G>(
