@@ -106,7 +106,11 @@ impl<'a> DataflowBuilder<'a> {
             let index_oracle = self.index_oracle();
             let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
-                for (index_id, idx) in valid_indexes {
+                // Deduplicate indexes by keys, in case we have redundant indexes.
+                let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
+                valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
+                valid_indexes.dedup_by_key(|(_, idx)| &idx.keys);
+                for (index_id, idx) in valid_indexes.into_iter() {
                     let index_desc = IndexDesc {
                         on_id: *id,
                         key: idx.keys.to_vec(),
