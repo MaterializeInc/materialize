@@ -486,6 +486,28 @@ The life cycle of each `GlobalId` follows several steps:
 
 The `GlobalId` is never reused.
 
+# Architecture
+
+We've sketched a formal model for how to represent time-varying collections as
+update-set pTVCs, and how we keep track of the current state of those pTVCs
+while appending new records to and compacting old records within them. We next
+discuss where and how in Materialize these pTVCs are stored, where updates
+come from, and how users query them.
+
+![An overall system diagram of Materialize's architecture, showing data flowing from external services into storage and compute, and queries routed through the adapter to storage and compute with the help of the timestamp oracle.](assets/arch.jpg)
+
+Updates flow into Materialize from external systems like Postgres and Kafka.
+They arrive first at the *storage* subsystem, which stores raw update triples
+for pTVCs. From there, they percolate through the *compute* subsystem, which
+uses differential dataflow to maintain materialized views. Each of these
+views is *also* a pTVC. Storage and compute cooperate to ensure pTVC
+correctness always holds.
+
+Users query Materialize using SQL. That SQL is interpreted by an *adapter*,
+which transforms SQL queries into updates or reads of specific TVCs at specific
+times. Those times (where not explicitly specified) are chosen by a *timestamp
+oracle*. The adapter sends writes to storage, and reads values from compute.
+
 # Storage and Compute
 
 Materialize produces and maintains bindings of `GlobalId`s to time-varying collections in two distinct ways:
