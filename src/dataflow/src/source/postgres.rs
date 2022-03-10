@@ -519,8 +519,8 @@ impl PostgresSourceReader {
                                 // Ignore messages for tables we do not know about
                                 None => {
                                     self.metrics.ignored();
-                                    continue
-                                },
+                                    continue;
+                                }
                             }
                         }
                         Origin(_) | Type(_) => {
