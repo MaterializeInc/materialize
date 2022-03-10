@@ -215,6 +215,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::map::Map),
                 Box::new(crate::fusion::negate::Negate),
                 Box::new(crate::fusion::filter::Filter),
+                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),

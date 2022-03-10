@@ -10,6 +10,7 @@
 //! Transformations that fuse together others of their kind.
 
 pub mod filter;
+pub mod flatmap_to_map;
 pub mod join;
 pub mod map;
 pub mod negate;
