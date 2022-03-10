@@ -1850,6 +1850,35 @@ lazy_static! {
                     })
                 }) => Jsonb, 3273;
             },
+            "jsonb_populate_record" => Scalar {
+                params!(Any, Jsonb) => Operation::binary(|ecx, typ, jsonb| {
+                    println!("Exprs in jsonb_populate_record: {:?} and {:?}", typ, jsonb);
+                    match typ {
+                        HirScalarExpr::Literal(_, ColumnType { scalar_type: ScalarType::Record { ref fields, ref custom_oid, ref custom_name }, .. }) => {
+                            let jsonb = typeconv::to_jsonb(ecx, jsonb);
+
+                            println!("jsonb_populate_record, type {:?}, jsonb {:?}", typ, jsonb);
+                            //
+                            // Ok(HirScalarExpr::CallVariadic {
+                            //     func: VariadicFunc::RecordCreate,
+                            //     exprs:
+                            //
+                            // })
+
+                            Ok(HirScalarExpr::CallBinary {
+                                func: BinaryFunc::JsonbPopulateRecord { fields: fields.clone(), custom_oid: *custom_oid, },
+                                expr1: Box::new(typ),
+                                expr2: Box::new(jsonb),
+                            })
+                        }
+                        _ => {
+                            sql_bail!("first argument of jsonb_populate_record must be a row type")
+                        }
+                    }
+
+                    // Ok(HirScalarExpr::literal(Datum::String("hello, world"), ScalarType::Record))
+                }) => Record, 3209;
+            },
             "jsonb_pretty" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbPretty, 3306;
             },
@@ -2051,6 +2080,7 @@ lazy_static! {
             "pg_typeof" => Scalar {
                 params!(Any) => Operation::new(|ecx, exprs, params, _order_by| {
                     // pg_typeof reports the type *before* coercion.
+                    println!("Exprs in pg_typeof: {:?}. Params {:?}", exprs, params);
                     let name = match ecx.scalar_type(&exprs[0]) {
                         None => "unknown".to_string(),
                         Some(ty) => ecx.humanize_scalar_type(&ty),
