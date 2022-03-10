@@ -143,7 +143,6 @@ Many tools in the modern data stack can connect to Materialize via PostgreSQL, b
 | Looker | 🟡 Alpha | TBD @andrioni input. | [](#notify) |
 | Google Data Studio | 🟡 Alpha | Google Data Studio can connect to Materialize Core and Cloud using the PostgreSQL connector. Data is cached hourly but can be manually refreshed. | [](#notify) |
 | Tableau | 🔴 Researching | | [](#notify) |
-
 | Microsoft Power BI | 🔴 Researching | | [](#notify) |
 | Preset | 🔴 Researching | | [](#notify) |
 | Mode Analytics | 🔴 Researching | | [](#notify) |
