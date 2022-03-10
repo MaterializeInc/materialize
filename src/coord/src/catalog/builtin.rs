@@ -1048,7 +1048,8 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("on_id", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
-            .with_column("enabled", ScalarType::Bool.nullable(false)),
+            .with_column("enabled", ScalarType::Bool.nullable(false))
+            .with_column("cluster_id", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4015),
         persistent: false,
     };
@@ -1099,7 +1100,8 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("connector_type", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_column("volatility", ScalarType::String.nullable(false))
+            .with_column("cluster_id", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4023),
         persistent: false,
     };
