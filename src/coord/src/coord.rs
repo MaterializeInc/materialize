@@ -1537,7 +1537,10 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    async fn clear_transaction(
+        &mut self,
+        session: &mut Session,
+    ) -> TransactionStatus<mz_repr::Timestamp> {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
