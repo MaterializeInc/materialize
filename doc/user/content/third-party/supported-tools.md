@@ -176,42 +176,44 @@ _Is there another data tool you'd like to use with Materialize? [Open a GitHub 
 </style>
 
 <script>
-
-  $(function () {
-    if(window.analytics) {
+$(function() {
+    analytics.on('page', function() {
         $('a[href="#notify"]').replaceWith('<button class="default_button" data-js="subscribe_open" title="Get notified when support is upgraded.">Notify Me</button>')
 
-        var removeForms = function(){
+        var removeForms = function() {
             $('.subscribe_dialog_active').removeClass('subscribe_dialog_active');
         };
 
-        $("[data-js='subscribe_open']").on("click", function(){
-        !$(this).hasClass('success') &&
-        $(this).parent()
-            .addClass('subscribe_dialog_active')
-            .append($('#subscribe_dialog'));
-        return false;
+        $("[data-js='subscribe_open']").on("click", function() {
+            !$(this).hasClass('success') &&
+                $(this).parent()
+                .addClass('subscribe_dialog_active')
+                .append($('#subscribe_dialog'));
+            return false;
         });
 
         $("#subscribe_dialog").submit(function(e) {
-        var email = $(this).find('[name="email"]').val(),
-            subject = $(this).siblings("[data-js='subscribe_open']")
-            .addClass('success')
-            .attr('title', 'Subscribed')
-            .text('✔️')
-            .attr('data-subject');
-        removeForms();
-        window.analytics && window.analytics.identify(email);
-        window.analytics && window.analytics.track("Integration Status Subscribed", { subject: subject });
-        e.preventDefault();
-        });
-
-        $("body").on("click", function(e){
-        if(!$(e.target).closest('#subscribe_dialog').length) {
+            var email = $(this).find('[name="email"]').val(),
+                subject = $("[data-js='subscribe_open']").parents("tr").find('td').first().text();
+            $("[data-js='subscribe_open']")
+                .addClass('success')
+                .attr('title', 'Subscribed')
+                .text('✔️')
+                .attr('data-subject');
             removeForms();
-        }
+            window.analytics && window.analytics.identify(email);
+            window.analytics && window.analytics.track("Integration Status Subscribed", {
+                subject: subject
+            });
+            e.preventDefault();
         });
-    }
- });
 
+        $("body").on("click", function(e) {
+            if (!$(e.target).closest('#subscribe_dialog').length) {
+                removeForms();
+            }
+        });
+
+    });
+});
 </script>
