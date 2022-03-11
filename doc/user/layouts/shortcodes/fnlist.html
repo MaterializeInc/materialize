@@ -24,7 +24,9 @@
   </tr>
   {{ range .functions }}
   <tr>
-    <td>
+    {{/*  Print an ID and class that can be used to index in docsearch
+            and deeplink.  */}}
+    <td class="docsearch_l4" id="{{ .signature | urlize }}">
       {{/*  We use clojure highlighting simply because it looks best with the
       components we want to highlight. In the future, this should be customized
       in some way.  */}}
