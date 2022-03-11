@@ -27,7 +27,7 @@ use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::func::jsonb_populate_record_scalar;
+use crate::func::jsonb_pack_datum;
 use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
@@ -899,14 +899,30 @@ fn jsonb_array_elements<'a>(
 }
 
 fn jsonb_populate_record_table<'a>(
+    base_record: Datum<'a>,
     jsonb: Datum<'a>,
     temp_storage: &'a RowArena,
     scalar_type: &ScalarType,
 ) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
-    let datum = jsonb_populate_record_scalar(jsonb, temp_storage, scalar_type)?;
+    let datum = temp_storage.try_make_datum(|packer| -> Result<(), EvalError> {
+        jsonb_pack_datum(packer, temp_storage, jsonb, scalar_type)
+    })?;
 
-    match datum {
-        Datum::List(l) => Ok(vec![(Row::pack(l.iter()), 1)].into_iter()),
+    match (base_record, datum) {
+        (Datum::List(base_list), Datum::List(l)) => {
+            Ok(vec![(
+                Row::pack(l.iter().zip_eq(base_list.iter()).map(|(v, default)| {
+                    if v.is_null() {
+                        default
+                    } else {
+                        v
+                    }
+                })),
+                1,
+            )]
+            .into_iter())
+        }
+        (Datum::Null, Datum::List(l)) => Ok(vec![(Row::pack(l.iter()), 1)].into_iter()),
         _ => unreachable!(
             "jsonb must have been converted into a Record/DatumList, or returned an error"
         ),
@@ -1226,7 +1242,8 @@ impl TableFunc {
                     "Want to call actual table func implementation with {:?}",
                     datums
                 );
-                let r = jsonb_populate_record_table(datums[0], temp_storage, scalar_type)?;
+                let r =
+                    jsonb_populate_record_table(datums[0], datums[1], temp_storage, scalar_type)?;
                 Ok(Box::new(r))
             }
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
@@ -1299,7 +1316,7 @@ impl TableFunc {
                 vec![ScalarType::Jsonb.nullable(false)]
             }
             TableFunc::JsonbPopulateRecord { fields, .. } => {
-                fields.iter().map(|(n, t)| t.clone()).collect_vec()
+                fields.iter().map(|(_, t)| t.clone()).collect_vec()
             }
             TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
@@ -1351,7 +1368,6 @@ impl TableFunc {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
-            | TableFunc::JsonbPopulateRecord { .. }
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
@@ -1362,7 +1378,7 @@ impl TableFunc {
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
-            TableFunc::Wrap { .. } => false,
+            TableFunc::Wrap { .. } | TableFunc::JsonbPopulateRecord { .. } => false,
         }
     }
 

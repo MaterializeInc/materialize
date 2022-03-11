@@ -17,7 +17,6 @@ use std::str::FromStr;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use anyhow::{bail, Error};
 use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
@@ -32,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
+pub use impls::*;
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
@@ -57,8 +57,6 @@ mod macros;
 mod encoding;
 mod format;
 mod impls;
-
-pub use impls::*;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum UnmaterializableFunc {
@@ -1452,7 +1450,116 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     contains(a, b, true).into()
 }
 
-pub fn jsonb_populate_decode<'a>(
+pub fn jsonb_pack_datum(
+    packer: &mut RowPacker,
+    temp_storage: &RowArena,
+    datum: Datum,
+    scalar_type: &ScalarType,
+) -> Result<(), EvalError> {
+    if matches!(datum, Datum::JsonNull) {
+        packer.push(Datum::Null);
+        return Ok(());
+    }
+
+    match scalar_type {
+        ScalarType::Bool
+        | ScalarType::Int16
+        | ScalarType::Int32
+        | ScalarType::Int64
+        | ScalarType::Float32
+        | ScalarType::Float64
+        | ScalarType::Numeric { .. }
+        | ScalarType::Date
+        | ScalarType::Time
+        | ScalarType::Timestamp
+        | ScalarType::TimestampTz
+        | ScalarType::Interval
+        | ScalarType::PgLegacyChar
+        | ScalarType::Bytes
+        | ScalarType::String
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::Jsonb
+        | ScalarType::Uuid => {
+            packer.push(jsonb_get_casted_scalar(temp_storage, datum, scalar_type)?);
+        }
+        ScalarType::Array(scalar_type) => {
+            if !matches!(datum, Datum::List(_)) {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "array".into(),
+                });
+            }
+
+            let datum_list = datum.unwrap_list();
+            let mut datums = vec![];
+            for x in &datum_list {
+                datums.push(jsonb_get_casted_scalar(temp_storage, x, scalar_type)?);
+            }
+
+            packer.push_array(
+                &[ArrayDimension {
+                    lower_bound: 0,
+                    length: datums.len(),
+                }],
+                datums,
+            )?;
+        }
+        ScalarType::List { element_type, .. } => match datum {
+            Datum::List(list) => {
+                return packer.push_list_with(|packer| -> Result<(), EvalError> {
+                    for datum in &list {
+                        packer.push(jsonb_get_casted_scalar(temp_storage, datum, element_type)?)
+                    }
+                    Ok(())
+                })
+            }
+            _ => {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "list".into(),
+                })
+            }
+        },
+        ScalarType::Map {  .. } => {}
+        ScalarType::Record { fields, .. } => {
+            if !matches!(datum, Datum::Map(_)) {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "record".into(),
+                });
+            }
+
+            // The JSONB datum may not have fields in the same order as
+            // our Record type, so we need to index them by their name
+            let name_to_datum: HashMap<&str, Datum> = datum.unwrap_map().iter().collect();
+            packer.push_list_with(|packer| -> Result<(), EvalError> {
+                for (name, field_type) in fields {
+                    match name_to_datum.get(name.to_string().as_str()) {
+                        None => packer.push(Datum::Null),
+                        Some(v) => {
+                            jsonb_pack_datum(packer, temp_storage, *v, &field_type.scalar_type)?
+                        }
+                    };
+                }
+                Ok(())
+            })?;
+        }
+        ScalarType::Oid
+        | ScalarType::RegProc
+        | ScalarType::RegType
+        | ScalarType::RegClass
+        | ScalarType::Int2Vector => {
+            return Err(EvalError::UnsupportedType(String::from(
+                "TODO(phemberger): actual unsupported scalar type errors. Or just support them even if they're weird",
+            )))
+        }
+    }
+
+    Ok(())
+}
+
+pub fn jsonb_get_casted_scalar<'a>(
     temp_storage: &'a RowArena,
     datum: Datum<'a>,
     scalar_type: &'a ScalarType,
@@ -1478,135 +1585,13 @@ pub fn jsonb_populate_decode<'a>(
         ScalarType::Bytes => cast_jsonb_to_bytes(datum),
         ScalarType::Char { .. } | ScalarType::VarChar { .. } | ScalarType::String => {
             // TODO(phemberger): find the functions we use for char/varchar limits
-            if matches!(datum, Datum::String(_)) {
-                Ok(datum)
-            } else {
-                Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_type(datum).into(),
-                    to: "string".into(),
-                })
-            }
+            Ok(jsonb_stringify(datum, temp_storage))
         }
         ScalarType::Uuid => cast_jsonb_to_uuid(datum),
         _ => {
             unreachable!("blah")
         }
     }
-}
-
-pub fn jsonb_populate_r(
-    packer: &mut RowPacker,
-    temp_storage: &RowArena,
-    datum: Datum,
-    scalar_type: &ScalarType,
-) -> Result<(), EvalError> {
-    match scalar_type {
-        ScalarType::Bool
-        | ScalarType::Int16
-        | ScalarType::Int32
-        | ScalarType::Int64
-        | ScalarType::Float32
-        | ScalarType::Float64
-        | ScalarType::Numeric { .. }
-        | ScalarType::Date
-        | ScalarType::Time
-        | ScalarType::Timestamp
-        | ScalarType::TimestampTz
-        | ScalarType::Interval
-        | ScalarType::PgLegacyChar
-        | ScalarType::Bytes
-        | ScalarType::String
-        | ScalarType::Char { .. }
-        | ScalarType::VarChar { .. }
-        | ScalarType::Jsonb
-        | ScalarType::Uuid => {
-            packer.push(jsonb_populate_decode(temp_storage, datum, scalar_type)?);
-        }
-        ScalarType::Array(scalar_type) => {
-            if !matches!(datum, Datum::List(_)) {
-                return Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_type(datum).into(),
-                    to: "array".into(),
-                });
-            }
-
-            let datum_list = datum.unwrap_list();
-            let mut datums = vec![];
-            for x in &datum_list {
-                datums.push(jsonb_populate_decode(temp_storage, x, scalar_type)?);
-            }
-
-            packer.push_array(
-                &[ArrayDimension {
-                    lower_bound: 0,
-                    length: datums.len(),
-                }],
-                datums,
-            )?;
-        }
-        ScalarType::List { element_type, .. } => match datum {
-            Datum::List(list) => {
-                return packer.push_list_with(|packer| -> Result<(), EvalError> {
-                    for datum in &list {
-                        packer.push(jsonb_populate_decode(temp_storage, datum, element_type)?)
-                    }
-                    Ok(())
-                })
-            }
-            _ => {
-                return Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_type(datum).into(),
-                    to: "list".into(),
-                })
-            }
-        },
-        ScalarType::Map { value_type, .. } => {}
-        ScalarType::Record { fields, .. } => {
-            if !matches!(datum, Datum::Map(_)) {
-                return Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_type(datum).into(),
-                    to: "record".into(),
-                });
-            }
-
-            // The JSONB datum may not have fields in the same order as
-            // our Record type, so we need to index them by their name
-            let name_to_datum: HashMap<&str, Datum> = datum.unwrap_map().iter().collect();
-            packer.push_list_with(|packer| -> Result<(), EvalError> {
-                for (name, field_type) in fields {
-                    match name_to_datum.get(name.to_string().as_str()) {
-                        None => packer.push(Datum::Null),
-                        Some(v) => {
-                            jsonb_populate_r(packer, temp_storage, *v, &field_type.scalar_type)?
-                        }
-                    };
-                }
-                Ok(())
-            })?;
-        }
-        ScalarType::Oid
-        | ScalarType::RegProc
-        | ScalarType::RegType
-        | ScalarType::RegClass
-        | ScalarType::Int2Vector => {
-            return Err(EvalError::UnsupportedType(String::from(
-                "TODO: actual unsupported method. Or just support them even if they're weird",
-            )))
-        }
-        _ => unreachable!("should not be reachable"),
-    }
-
-    Ok(())
-}
-
-pub fn jsonb_populate_record_scalar<'a>(
-    jsonb: Datum<'a>,
-    temp_storage: &'a RowArena,
-    scalar_type: &ScalarType,
-) -> Result<Datum<'a>, EvalError> {
-    temp_storage.try_make_datum(|packer| -> Result<(), EvalError> {
-        jsonb_populate_r(packer, temp_storage, jsonb, scalar_type)
-    })
 }
 
 fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
