@@ -260,9 +260,9 @@ struct PendingPeek {
 }
 
 /// State provided to a catalog transaction closure.
-pub struct CatalogTxn<'a> {
+pub struct CatalogTxn<'a, T> {
     dataflow_client:
-        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
+        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client<T>>>,
     catalog: &'a CatalogState,
     persister: &'a PersisterWithConfig,
 }
@@ -1537,7 +1537,10 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    async fn clear_transaction(
+        &mut self,
+        session: &mut Session,
+    ) -> TransactionStatus<mz_repr::Timestamp> {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
@@ -3967,7 +3970,7 @@ impl Coordinator {
     /// [`CatalogState`]: crate::catalog::CatalogState
     async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
     where
-        F: FnOnce(CatalogTxn) -> Result<R, CoordError>,
+        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
     {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
@@ -5268,3 +5271,10 @@ mod timeline {
         }
     }
 }
+
+pub trait CoordTimestamp:
+    timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug
+{
+}
+
+impl CoordTimestamp for mz_repr::Timestamp {}
