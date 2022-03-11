@@ -27,33 +27,17 @@ impl crate::Transform for FlatMapToMap {
     }
 }
 
-//fn row_count(exp : MirScalarExpr) -> Option<u64> {
-//    /// Returns the number of rows produced by this expression
-//    match exp {
-//
-//    }
-//}
-
 impl FlatMapToMap {
-    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
+    /// Turns a FlatMap that produces only one row into a map
     fn action(&self, relation: &mut MirRelationExpr) {
-        let outstr = relation.json();
-        if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
-            if let TableFunc::Wrap { types: _, width } = func {
-                // Each expression must yield a scalar.
-                assert!(exprs.len() % *width == 0);
+        if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
+            if let TableFunc::Wrap { width, .. } = func {
                 if *width == exprs.len() {
-                    //println!("Performing FlatMap -> Map Rewrite on {}", outstr);
-                    *relation = MirRelationExpr::Map {
-                        input: input.clone(),
-                        scalars: exprs.clone(),
-                    };
-                    //relation.take_dangerous();
-                    //*relation = mapExp;
+                    if let MirRelationExpr::FlatMap { exprs, input, .. } = relation.take_dangerous()
+                    {
+                        *relation = input.map(exprs);
+                    }
                 }
-
-                //println!("!!! Found FlatMap with wrap! {:#?}   exprs=", relation);
-                //println!("## wrap width = {:?}", width);
             }
         }
     }
