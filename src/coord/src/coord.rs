@@ -108,7 +108,7 @@ use mz_expr::{
     MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
 use mz_ore::task;
@@ -400,8 +400,12 @@ impl Coordinator {
         self.global_timeline.write_ts()
     }
 
+    fn now(&self) -> EpochMillis {
+        (self.catalog.config().now)()
+    }
+
     fn now_datetime(&self) -> DateTime<Utc> {
-        to_datetime((self.catalog.config().now)())
+        to_datetime(self.now())
     }
 
     /// Initialize the storage read policies.
@@ -688,7 +692,7 @@ impl Coordinator {
             // close on a regular interval. This roughly tracks the behaivor of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "coordinator_serve", async move {
+            task::spawn(|| "coordinator_advance_local_inputs", async move {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
                 loop {
                     interval.tick().await;
@@ -740,8 +744,7 @@ impl Coordinator {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    self.global_timeline
-                        .fast_forward((self.catalog.config().now)());
+                    self.global_timeline.fast_forward(self.now());
                 }
             }
 
@@ -1538,7 +1541,7 @@ impl Coordinator {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
-        // Release this transaaction's compaction hold on collections.
+        // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
             self.release_read_hold(txn_reads.read_holds).await;
         }
