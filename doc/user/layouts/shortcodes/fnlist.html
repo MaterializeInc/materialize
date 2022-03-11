@@ -49,3 +49,10 @@
 {{end}}
 
 {{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}
+
+{{/*  When someone is deeplinked to a td on the page, highlight the tr  */}}
+<script type="text/javascript">
+  $(function() {
+    $(location.hash).parents('tr').css('background-color', '#FFFF5522');
+   });
+</script>
