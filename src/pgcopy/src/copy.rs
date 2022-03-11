@@ -17,8 +17,7 @@ use csv::ReaderBuilder;
 use mz_repr::{Datum, RelationType, Row, RowArena};
 use mz_sql::plan::{CopyFormat, CopyParams};
 
-// This is equivalent to a backslash followed by a dot, i.e "\."
-static END_OF_COPY_MARKER: [u8; 2] = [92, 46];
+const END_OF_COPY_MARKER: &[u8] = b"\\.";
 
 #[derive(Debug)]
 pub struct CopyErrorNotSupportedResponse {
@@ -143,12 +142,8 @@ impl<'a> CopyTextFormatParser<'a> {
         self.peek().is_none() || self.is_end_of_copy_marker()
     }
 
-    fn end_of_copy_marker() -> &'static [u8] {
-        &END_OF_COPY_MARKER
-    }
-
     pub fn is_end_of_copy_marker(&self) -> bool {
-        self.check_bytes(Self::end_of_copy_marker())
+        self.check_bytes(END_OF_COPY_MARKER)
     }
 
     fn is_end_of_line(&self) -> bool {
