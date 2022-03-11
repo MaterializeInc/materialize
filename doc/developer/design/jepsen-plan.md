@@ -3,18 +3,20 @@
 When Materialize is ready, we'd like to test it with Jepsen. What properties
 should we try to verify? Where should they hold? How should we measure them?
 
-From conversations with Frank, it sounds like Materialize is aiming to offer up
-to strict serializability. Niftily, this property should hold not only within
-Materialize but also together with the upstream systems which feed Materialize
-data. We should expect that if we issue a write to, say, Postgres, receive
-acknowledgement from Postgres, and then query Materialize, that write *must*
-appear.
+From conversations with Frank, it sounds like Materialize is aiming to offer
+serializability, and possibly up to strong session serializability or strong
+serializability. Niftily, this property should hold not only within Materialize
+but also together with the upstream systems which feed Materialize data. We
+should expect that the union of the histories against (e.g.) Postgres *and*
+Materialize is still serializable. If Materialize winds up building
+strong-session or strong serializability, we can verify those real-time
+properties as well.
 
-The natural choice for testing a strict-serializable system with Jepsen is to
-use [Elle](https://github.com/jepsen-io/elle), and most likely the list-append
-workload. This workload is efficient, supports the strongest forms of anomaly
-inference, and comes with helpful visualizations. It should also, I think, be
-easy to implement on top of Materialize.
+The natural choice for testing a transactional system like this with Jepsen is
+to use [Elle](https://github.com/jepsen-io/elle), and most likely the
+list-append workload. This workload is efficient, supports the strongest forms
+of anomaly inference, and comes with helpful visualizations. It should also, I
+think, be easy to implement on top of Materialize.
 
 ## Writes
 
@@ -77,9 +79,9 @@ tables/rows.
 
 ## Analysis
 
-The neat thing about Materialize is that it ought to provide strict
-serializability across *all* of these transactions, which means we shouldn't
-have to do any special processing around deriving separate orders for Postgres,
-Kafka, Materialize, etc. We can, I think, shovel the entire history of
-transactions across all n services right into Elle, and it'll tell us whether
-or not strict serializability actually held.
+The neat thing about Materialize is that it ought to provide serializability
+across *all* of these transactions, which means we shouldn't have to do any
+special processing around deriving separate orders for Postgres, Kafka,
+Materialize, etc. We can, I think, shovel the entire history of transactions
+across all n services right into Elle, and it'll tell us whether or not strict
+serializability actually held!
