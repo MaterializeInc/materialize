@@ -15,12 +15,13 @@ use std::sync::Arc;
 use derivative::Derivative;
 use serde::Serialize;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 use mz_ore::str::StrExt;
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
-use tokio::sync::watch;
 
 use crate::coord::PeekResponseUnary;
 use crate::error::CoordError;
@@ -180,7 +181,7 @@ pub enum ExecuteResponse {
     CopyFrom {
         id: GlobalId,
         columns: Vec<usize>,
-        params: mz_sql::plan::CopyParams,
+        params: CopyFormatParams<'static>,
     },
     /// The requested connection was created.
     CreatedConnection {

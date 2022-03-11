@@ -12,12 +12,14 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
+use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::AstInfo;
@@ -36,8 +38,8 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{query, QueryContext};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
-    Plan, ReadThenWritePlan, TailFrom, TailPlan,
+    CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
+    ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -398,8 +400,69 @@ fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedObjectName,
     columns: Vec<Ident>,
-    params: CopyParams,
+    format: CopyFormat,
+    options: CopyOptionExtracted,
 ) -> Result<Plan, anyhow::Error> {
+    fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), anyhow::Error> {
+        match option {
+            Some(_) => bail!("COPY {} available only in CSV mode", param),
+            None => Ok(()),
+        }
+    }
+
+    fn extract_byte_param_value(
+        v: Option<String>,
+        default: u8,
+        param_name: &str,
+    ) -> Result<u8, anyhow::Error> {
+        match v {
+            Some(v) if v.len() == 1 => Ok(v.as_bytes()[0]),
+            Some(..) => bail!("COPY {} must be a single one-byte character", param_name),
+            None => Ok(default),
+        }
+    }
+
+    let params = match format {
+        CopyFormat::Text => {
+            only_available_with_csv(options.quote, "quote")?;
+            only_available_with_csv(options.escape, "escape")?;
+            only_available_with_csv(options.header, "HEADER")?;
+            let delimiter = match options.delimiter {
+                Some(delimiter) if delimiter.len() > 1 => {
+                    bail!("COPY delimiter must be a single one-byte character");
+                }
+                Some(delimiter) => Cow::from(delimiter),
+                None => Cow::from("\t"),
+            };
+            let null = match options.null {
+                Some(null) => Cow::from(null),
+                None => Cow::from("\\N"),
+            };
+            CopyFormatParams::Text(CopyTextFormatParams { null, delimiter })
+        }
+        CopyFormat::Csv => {
+            let quote = extract_byte_param_value(options.quote, b'"', "quote")?;
+            let escape = extract_byte_param_value(options.escape, quote, "escape")?;
+            let header = options.header.unwrap_or(false);
+            let delimiter = extract_byte_param_value(options.delimiter, b',', "delimiter")?;
+            if delimiter == quote {
+                bail!("COPY delimiter and quote must be different");
+            }
+            let null = match options.null {
+                Some(null) => Cow::from(null),
+                None => Cow::from(""),
+            };
+            CopyFormatParams::Csv(CopyCsvFormatParams {
+                delimiter,
+                quote,
+                escape,
+                null,
+                header,
+            })
+        }
+        CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+    };
+
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
@@ -427,51 +490,32 @@ pub fn plan_copy(
         options,
     }: CopyStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let CopyOptionExtracted {
-        format,
-        delimiter,
-        null,
-        escape,
-        quote,
-        header,
-    } = CopyOptionExtracted::try_from(options)?;
-
-    let copy_params = CopyParams {
-        format: match format.to_lowercase().as_str() {
-            "text" => CopyFormat::Text,
-            "csv" => CopyFormat::Csv,
-            "binary" => CopyFormat::Binary,
-            _ => bail!("unknown FORMAT: {}", format),
-        },
-        delimiter,
-        null,
-        escape,
-        quote,
-        header,
+    let options = CopyOptionExtracted::try_from(options)?;
+    let format = match options.format.to_lowercase().as_str() {
+        "text" => CopyFormat::Text,
+        "csv" => CopyFormat::Csv,
+        "binary" => CopyFormat::Binary,
+        _ => bail!("unknown FORMAT: {}", options.format),
     };
-
     if let CopyDirection::To = direction {
-        if copy_params.delimiter.is_some() {
+        if options.delimiter.is_some() {
             bail!("COPY TO does not support DELIMITER option yet");
         }
-        if copy_params.null.is_some() {
+        if options.null.is_some() {
             bail!("COPY TO does not support NULL option yet");
         }
     }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
             CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
-            CopyRelation::Select(stmt) => Ok(plan_select(
-                scx,
-                stmt,
-                &Params::empty(),
-                Some(copy_params.format),
-            )?),
-            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(copy_params.format))?),
+            CopyRelation::Select(stmt) => {
+                Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
+            }
+            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(format))?),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {
-                plan_copy_from(scx, name, columns, copy_params)
+                plan_copy_from(scx, name, columns, format, options)
             }
             _ => bail!("COPY FROM {} not supported", target),
         },
