@@ -131,7 +131,7 @@ impl Action for SqlAction {
                 .max_duration(state.timeout),
             false => Retry::default().max_tries(1),
         }
-        .retry_async(|retry_state| async move {
+        .retry_async_canceling(|retry_state| async move {
             match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {

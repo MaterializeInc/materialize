@@ -29,7 +29,7 @@ SERVICES = [
     SchemaRegistry(kafka_servers=[("kafka", f"{KAFKA_SINK_PORT}")]),
     Materialized(),
     Toxiproxy(),
-    Testdrive(kafka_url="toxiproxy:9093"),
+    Testdrive(kafka_url="toxiproxy:9093", default_timeout="120s"),
 ]
 
 #

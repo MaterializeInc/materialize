@@ -57,7 +57,7 @@ impl Action for VerifyTimestampCompactionAction {
             Retry::default()
                 .initial_backoff(Duration::from_secs(1))
                 .max_duration(Duration::from_secs(30))
-                .retry_async(|retry_state| {
+                .retry_async_canceling(|retry_state| {
                     let initial_highest = Arc::clone(&initial_highest_base);
                     async move {
                         let mut catalog = Catalog::open_debug(path, NOW_ZERO.clone())

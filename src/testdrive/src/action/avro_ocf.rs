@@ -141,7 +141,7 @@ impl Action for VerifyAction {
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = Retry::default()
             .max_duration(state.default_timeout)
-            .retry_async(|_| async {
+            .retry_async_canceling(|_| async {
                 let row = state
                     .pgclient
                     .query_one(
