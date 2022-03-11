@@ -37,6 +37,7 @@ use mz_dataflow_types::sinks::{SinkConnectionBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
@@ -334,7 +335,7 @@ pub struct SendRowsPlan {
 pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
-    pub params: CopyParams,
+    pub params: CopyFormatParams<'static>,
 }
 
 #[derive(Debug)]
@@ -557,16 +558,6 @@ pub enum CopyFormat {
     Text,
     Csv,
     Binary,
-}
-
-#[derive(Debug, Clone)]
-pub struct CopyParams {
-    pub format: CopyFormat,
-    pub null: Option<String>,
-    pub delimiter: Option<String>,
-    pub quote: Option<String>,
-    pub escape: Option<String>,
-    pub header: Option<bool>,
 }
 
 #[derive(Debug, Copy, Clone)]

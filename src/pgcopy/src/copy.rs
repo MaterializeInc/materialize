@@ -15,20 +15,8 @@ use csv::ByteRecord;
 use csv::ReaderBuilder;
 
 use mz_repr::{Datum, RelationType, Row, RowArena};
-use mz_sql::plan::{CopyFormat, CopyParams};
 
-const END_OF_COPY_MARKER: &[u8] = b"\\.";
-
-#[derive(Debug)]
-pub struct CopyErrorNotSupportedResponse {
-    pub message: String,
-}
-
-impl CopyErrorNotSupportedResponse {
-    fn new(message: String) -> CopyErrorNotSupportedResponse {
-        CopyErrorNotSupportedResponse { message }
-    }
-}
+static END_OF_COPY_MARKER: &[u8] = b"\\.";
 
 pub fn encode_copy_row_binary(
     row: Row,
@@ -367,32 +355,10 @@ impl<'a> RawIterator<'a> {
     }
 }
 
-/// `CopyFormatParams` expresses valid conversions from [`CopyParams`] to the
-/// parameters supported by different `COPY FROM...WITH (FORMAT...)` options.
-///
-/// The circuitous path the conversions take let us error when executing the
-/// statement for the first time, before we've received any of the data.
+#[derive(Debug)]
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
-}
-
-impl<'a> TryFrom<CopyParams> for CopyFormatParams<'a> {
-    type Error = CopyErrorNotSupportedResponse;
-
-    fn try_from(params: CopyParams) -> Result<CopyFormatParams<'a>, Self::Error> {
-        match params.format {
-            CopyFormat::Text => {
-                let params: CopyTextFormatParams = params.try_into()?;
-                Ok(CopyFormatParams::Text(params))
-            }
-            CopyFormat::Csv => {
-                let params: CopyCsvFormatParams = params.try_into()?;
-                Ok(CopyFormatParams::Csv(params))
-            }
-            CopyFormat::Binary => unreachable!(),
-        }
-    }
 }
 
 pub fn decode_copy_format<'a>(
@@ -406,59 +372,10 @@ pub fn decode_copy_format<'a>(
     }
 }
 
+#[derive(Debug)]
 pub struct CopyTextFormatParams<'a> {
-    null: Cow<'a, str>,
-    delimiter: Cow<'a, str>,
-}
-
-impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
-    type Error = CopyErrorNotSupportedResponse;
-
-    fn try_from(
-        CopyParams {
-            format,
-            null,
-            delimiter,
-            quote,
-            escape,
-            header,
-        }: CopyParams,
-    ) -> Result<Self, Self::Error> {
-        fn only_available_with_csv<T>(
-            option: Option<T>,
-            param: &str,
-        ) -> Result<(), CopyErrorNotSupportedResponse> {
-            match option {
-                Some(..) => Err(CopyErrorNotSupportedResponse::new(format!(
-                    "COPY {} available only in CSV mode",
-                    param
-                ))),
-                None => Ok(()),
-            }
-        }
-
-        assert_eq!(format, CopyFormat::Text);
-        only_available_with_csv(quote, "quote")?;
-        only_available_with_csv(escape, "escape")?;
-        only_available_with_csv(header, "HEADER")?;
-        let null = match null {
-            Some(null) => Cow::from(null),
-            None => Cow::from("\\N"),
-        };
-        let delimiter = match delimiter {
-            Some(delimiter) => {
-                if delimiter.len() > 1 {
-                    return Err(CopyErrorNotSupportedResponse::new(
-                        "COPY delimiter must be a single one-byte character".to_string(),
-                    ));
-                }
-                Cow::from(delimiter)
-            }
-            None => Cow::from("\t"),
-        };
-
-        Ok(CopyTextFormatParams { null, delimiter })
-    }
+    pub null: Cow<'a, str>,
+    pub delimiter: Cow<'a, str>,
 }
 
 pub fn decode_copy_format_text(
@@ -497,69 +414,13 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
+#[derive(Debug)]
 pub struct CopyCsvFormatParams<'a> {
-    delimiter: u8,
-    quote: u8,
-    escape: u8,
-    header: bool,
-    null: Cow<'a, str>,
-}
-
-impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
-    type Error = CopyErrorNotSupportedResponse;
-
-    fn try_from(
-        CopyParams {
-            format,
-            null,
-            delimiter,
-            quote,
-            escape,
-            header,
-        }: CopyParams,
-    ) -> Result<Self, Self::Error> {
-        assert_eq!(format, CopyFormat::Csv);
-
-        fn extract_byte_param_value(
-            v: Option<String>,
-            default: u8,
-            param_name: &str,
-        ) -> Result<u8, CopyErrorNotSupportedResponse> {
-            Ok(match v {
-                Some(v) if v.len() == 1 => v.as_bytes()[0],
-                Some(..) => {
-                    return Err(CopyErrorNotSupportedResponse::new(format!(
-                        "COPY {} must be a single one-byte character",
-                        param_name
-                    )))
-                }
-                None => default,
-            })
-        }
-
-        let null = match null {
-            Some(null) => Cow::from(null),
-            None => Cow::from(""),
-        };
-        let delimiter = extract_byte_param_value(delimiter, b',', "delimiter")?;
-        let quote = extract_byte_param_value(quote, b'"', "quote")?;
-        let escape = extract_byte_param_value(escape, quote, "escape")?;
-        let header = header.unwrap_or(false);
-
-        if delimiter == quote {
-            return Err(CopyErrorNotSupportedResponse::new(
-                "COPY delimiter and quote must be different".to_string(),
-            ));
-        }
-
-        Ok(CopyCsvFormatParams {
-            delimiter,
-            quote,
-            escape,
-            null,
-            header,
-        })
-    }
+    pub delimiter: u8,
+    pub quote: u8,
+    pub escape: u8,
+    pub header: bool,
+    pub null: Cow<'a, str>,
 }
 
 pub fn decode_copy_format_csv(

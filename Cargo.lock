@@ -3068,6 +3068,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-types",
+ "mz-pgcopy",
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
@@ -3667,7 +3668,6 @@ dependencies = [
  "csv",
  "mz-pgrepr",
  "mz-repr",
- "mz-sql",
 ]
 
 [[package]]
@@ -3900,6 +3900,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-lowertest",
  "mz-ore",
+ "mz-pgcopy",
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
