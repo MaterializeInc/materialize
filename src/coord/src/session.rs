@@ -17,6 +17,7 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_dataflow_types::PeekResponseUnary;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
@@ -27,6 +28,7 @@ use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
+use crate::command::RowsFuture;
 use crate::coord::CoordTimestamp;
 use crate::error::CoordError;
 
@@ -503,19 +505,17 @@ impl InProgressRows {
             remaining,
         }
     }
-
-    /// Creates a new InProgressRows from a single batch of rows.
-    pub fn single_batch(rows: Vec<Row>) -> Self {
-        let (_tx, rx) = unbounded_channel();
-        Self {
-            current: Some(rows),
-            remaining: rx,
-        }
-    }
 }
 
 /// A channel of batched rows.
-pub type RowBatchStream = UnboundedReceiver<Vec<Row>>;
+pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+
+/// Converts a RowsFuture to a RowBatchStream.
+pub async fn row_future_to_stream(rows: RowsFuture) -> RowBatchStream {
+    let (tx, rx) = unbounded_channel();
+    tx.send(rows.await).expect("send must succeed");
+    rx
+}
 
 /// The transaction status of a session.
 ///
