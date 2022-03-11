@@ -37,12 +37,13 @@ impl crate::Transform for FlatMapToMap {
 impl FlatMapToMap {
     /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
     fn action(&self, relation: &mut MirRelationExpr) {
+        let outstr = relation.json();
         if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
             if let TableFunc::Wrap { types: _, width } = func {
                 // Each expression must yield a scalar.
                 assert!(exprs.len() % *width == 0);
                 if *width == exprs.len() {
-                    println!("Performing FlatMap -> Map Rewrite!");
+                    //println!("Performing FlatMap -> Map Rewrite on {}", outstr);
                     *relation = MirRelationExpr::Map {
                         input: input.clone(),
                         scalars: exprs.clone(),

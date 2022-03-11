@@ -235,6 +235,7 @@ mod tests {
             "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
                 limit: None,
             })),
+            "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::map_lifting::LiteralLifting::default(),
@@ -416,6 +417,7 @@ mod tests {
 
     #[test]
     fn run() {
+        println!("HERE HERE HERE 1");
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
