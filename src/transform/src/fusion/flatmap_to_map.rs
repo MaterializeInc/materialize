@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Turns `FlatMap` into `Flat` if only one row is produced by flatmap.
+//! Turns `FlatMap` into `Map` if only one row is produced by flatmap.
 //!
 
 use crate::TransformArgs;
 use mz_expr::{MirRelationExpr, TableFunc};
 
-/// Fuses multiple `Filter` operators into one and deduplicates predicates.
+/// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
 #[derive(Debug)]
 pub struct FlatMapToMap;
 
@@ -28,7 +28,6 @@ impl crate::Transform for FlatMapToMap {
 }
 
 impl FlatMapToMap {
-    /// Turns a FlatMap that produces only one row into a map
     fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
             if let TableFunc::Wrap { width, .. } = func {

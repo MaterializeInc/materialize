@@ -417,7 +417,6 @@ mod tests {
 
     #[test]
     fn run() {
-        println!("HERE HERE HERE 1");
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
