@@ -14,6 +14,7 @@
 // #![warn(missing_docs)]
 
 use async_trait::async_trait;
+use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,7 @@ use crate::{
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_repr::Row;
 
 pub mod controller;
@@ -274,8 +276,9 @@ impl<T: timely::progress::Timestamp> Command<T> {
                 }
                 Command::Storage(StorageCommand::Insert { id, updates }) => {
                     let mut updates_parts = vec![Vec::new(); parts];
-                    for (index, update) in updates.into_iter().enumerate() {
-                        updates_parts[index % parts].push(update);
+                    for update in updates {
+                        let part = usize::cast_from(update.row.hashed()) % parts;
+                        updates_parts[part].push(update);
                     }
                     updates_parts
                         .into_iter()
