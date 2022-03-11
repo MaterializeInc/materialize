@@ -15,6 +15,7 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use futures::pin_mut;
 use md5::{Digest, Md5};
 use postgres_array::Array;
 use regex::Regex;
@@ -217,9 +218,17 @@ impl SqlAction {
             .prepare(query)
             .await
             .context("preparing query failed")?;
-        let mut actual: Vec<_> = state
-            .pgclient
-            .query(&stmt, &[])
+        let query = state.pgclient.query(&stmt, &[]);
+
+        pin_mut!(query);
+        if let Err(_) = tokio::time::timeout(state.timeout, &mut query).await {
+            // As Retry does not distinguish between retriable and non-retriable errors,
+            // our safest bet is to panic! here. Otherwise, on a permanently-wedged Mz
+            // the next execution can get permanently wedged in prepare() above.
+            panic!("Query didn't execute() within {:?}", state.timeout);
+        }
+
+        let mut actual: Vec<_> = query
             .await
             .context("executing query failed")?
             .into_iter()
