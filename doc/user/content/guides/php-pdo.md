@@ -1,5 +1,5 @@
 ---
-title: "PHP PDO and Materialize"
+title: "PHP and Materialize"
 description: "Use PHP PDO to connect, insert, manage, query and stream from Materialize."
 weight:
 menu:
@@ -7,11 +7,11 @@ menu:
     parent: guides
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that PHP applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use PDO_PGSQL driver to connect to Materialize and issue PostgreSQL commands.
+Materialize is **PostgreSQL-compatible**, which means that PHP applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use [PDO_PGSQL driver](https://www.php.net/manual/en/ref.pdo-pgsql.php) to connect to Materialize and issue PostgreSQL commands.
 
 ## Connect
 
-You connect to Materialize the same way you [connect to PostgreSQL with `PDO_PGSQL`](https://www.php.net/manual/en/ref.pdo-pgsql.php).
+You connect to Materialize the same way you [connect to PostgreSQL with `PDO_PGSQL`](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php).
 
 ### Local Instance
 
