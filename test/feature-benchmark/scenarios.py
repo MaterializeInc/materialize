@@ -177,6 +177,40 @@ class Update(DML):
         )
 
 
+class UpdateMultiNoIndex(DML):
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+
+    SCALE = 5
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE TABLE t1 (f1 BIGINT);
+
+> INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        updates = 10 * f"> UPDATE t1 SET f1 = f1 + {self.n()}\n"
+        return Td(
+            f"""
+> SELECT 1
+  /* A */
+1
+
+{updates}
+
+> SELECT 1
+  /* B */
+1
+"""
+        )
+
+
 class InsertAndSelect(DML):
     """Measure the time it takes for an INSERT statement to return
     AND for a follow-up SELECT to return data, that is, for the
