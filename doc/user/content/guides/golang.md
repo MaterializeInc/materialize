@@ -94,7 +94,7 @@ createSource := `CREATE SOURCE current_predictions
 ```
 Find more helpful Kafka source information [here](/sql/create-source/kafka/).
 {{< /tab >}}
-{{< tab "Kenisis">}}
+{{< tab "Kinesis">}}
 ```go
 createSource := `CREATE SOURCE text_source
   FROM KINESIS ARN 'arn:aws:kinesis:aws-region::stream/fake-stream'
@@ -102,7 +102,7 @@ createSource := `CREATE SOURCE text_source
          secret_access_key = 'secret_access_key' )
   FORMAT TEXT;'`
 ```
-Find more helpful Kenisis source information [here](/sql/create-source/kinesis/).
+Find more helpful Kinesis source information [here](/sql/create-source/kinesis/).
 {{< /tab >}}
 {{< tab "File">}}
 ```go
@@ -126,7 +126,7 @@ createSource := `CREATE SOURCE market_orders_raw FROM PUBNUB
 SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe
 CHANNEL 'pubnub-market-orders'`
 ```
-Find more helpful pubnub source information [here](/sql/create-source/text-pubnub/).
+Find more helpful PubNub source information [here](/sql/create-source/text-pubnub/).
 
 {{< /tab >}}
 {{< /tabs >}}
