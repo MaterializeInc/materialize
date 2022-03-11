@@ -7,13 +7,13 @@ menu:
     parent: guides
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that Go applications can use the standard library's [`database/sql`](https://pkg.go.dev/database/sql) package with a postgres driver to access Materialize as if it were a PostgreSQL database. 
+Materialize is **PostgreSQL-compatible**, which means that Go applications can use the standard library's [`database/sql`](https://pkg.go.dev/database/sql) package with a postgres driver to access Materialize as if it were a PostgreSQL database.
  [`pq`](https://github.com/lib/pq) was the standard by default, but is no longer in active development. In this guide we'll use [`pgx`](https://github.com/jackc/pgx).
 
 ## Connect
 {{< tabs >}}
 {{< tab "Local Instance">}}
-Connect to a local Materialize instance with code that uses the connection URI shorthand `postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`. 
+Connect to a local Materialize instance with code that uses the connection URI shorthand `postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`.
 ```go
 package main
 
@@ -24,10 +24,10 @@ import (
 )
 
 func main() {
-	
+
 	ctx := context.Background()
 	connStr := "postgres://materialize@localhost:6875/materialize?sslmode=disable"
-    
+
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
 		log.Fatal(err)
@@ -38,7 +38,7 @@ func main() {
 {{< /tab >}}
 {{< tab "Materialize Cloud Instance">}}
 
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl). 
+Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl).
 We'll specify our connection parameters explicitly here. Replace `MY_INSTANCE_ID` in the property with a Materialize Cloud instance ID.
 ```go
 package main
@@ -51,7 +51,7 @@ import (
 )
 
 func main() {
-	
+
 	ctx := context.Background()
 	connStr := fmt.Sprint(
 		" host=MY_INSTANCE_ID.materialize.cloud",
@@ -63,7 +63,7 @@ func main() {
 		" sslkey=materialize.key",
 		" sslcert=materialize.crt",
 	)
-	
+
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
 		log.Fatal("Trouble Connecting to the database:", err)
@@ -74,12 +74,12 @@ func main() {
 {{< /tab >}}
 {{< /tabs >}}
 
-To create a concurrency-safe connection pool, import [`github.com/jackc/pgx/v4/pgxpool`](https://pkg.go.dev/github.com/jackc/pgx/v4/pgxpool) and use pgxpool.Connect(). 
-These two interfaces can be used interchangeably in the rest of this guide. 
+To create a concurrency-safe connection pool, import [`github.com/jackc/pgx/v4/pgxpool`](https://pkg.go.dev/github.com/jackc/pgx/v4/pgxpool) and use pgxpool.Connect().
+These two interfaces can be used interchangeably in the rest of this guide.
 
 ## Surface Data
 
-Materialize ingests streams of data from Kafka, Kinesis, PostgreSQL, S3, or local files that we declare as “sources”. 
+Materialize ingests streams of data from Kafka, Kinesis, PostgreSQL, S3, or local files that we declare as “sources”.
 These sources monitor changes in the upstream data and automatically pull new records into our Materialize instance.
 We'll use our [`*pgx.Conn`](https://pkg.go.dev/github.com/jackc/pgx#Conn) connection handle from above to interact with our database.
 
@@ -118,7 +118,7 @@ createSource := `CREATE SOURCE csv_source
   WITH (region = 'us-east-2')
   FORMAT CSV WITH 1 COLUMNS;`
 ```
-Find more helpful S3 source information [here](/sql/create-source/s3/). 
+Find more helpful S3 source information [here](/sql/create-source/s3/).
 {{< /tab >}}
 {{< tab "PubNub">}}
 ```go
@@ -159,7 +159,7 @@ if _, err := conn.Exec(ctx, insertQuery, "GH", "GHANA"); err != nil {
 ## Transform Data
 
 ### Create a view
-A [`MATERIALIZED VIEW`](/sql/create-materialized-view/) embeds a query like a traditional SQL view, but —unlike a SQL view— computes and incrementally updates the results of the embedded query. 
+A [`MATERIALIZED VIEW`](/sql/create-materialized-view/) embeds a query like a traditional SQL view, but —unlike a SQL view— computes and incrementally updates the results of the embedded query.
 This will later on let us read from materialized views and receive fresh answers with incredibly low latencies.
 **Importantly**, Materialize supports views over multi-way joins with complex aggregations, and can do incremental updates in the presence of arbitrary inserts, updates, and deletes in the input streams.
 ```go
@@ -245,7 +245,7 @@ if err != nil {
 }
 ```
 
-The [TAIL Output format](/sql/tail/#output) contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update. 
+The [TAIL Output format](/sql/tail/#output) contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.
 An `MzDiff` value of `-1` indicates Materialize is deleting one row with the included values. When a row of a tailed view is **updated,** two objects will show up in our result set: a deletion (`MzDiff:-1`) and an insertion (`MzDiff:1`) with the same `MzTimestamp`.
 
 ```go
@@ -254,7 +254,7 @@ An `MzDiff` value of `-1` indicates Materialize is deleting one row with the inc
 ```
 
 ## Extra Credit
-Use Golang to feed your source. 
+Use Golang to feed your source.
 
 Intermediary System | Notes
 -------------|-------------
