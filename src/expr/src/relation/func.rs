@@ -14,6 +14,7 @@ use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
+use itertools::Itertools;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use regex::Regex;
@@ -26,6 +27,7 @@ use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
+use crate::func::jsonb_populate_record_scalar;
 use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
@@ -896,6 +898,21 @@ fn jsonb_array_elements<'a>(
     })
 }
 
+fn jsonb_populate_record_table<'a>(
+    jsonb: Datum<'a>,
+    temp_storage: &'a RowArena,
+    scalar_type: &ScalarType,
+) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
+    let datum = jsonb_populate_record_scalar(jsonb, temp_storage, scalar_type)?;
+
+    match datum {
+        Datum::List(l) => Ok(vec![(Row::pack(l.iter()), 1)].into_iter()),
+        _ => unreachable!(
+            "jsonb must have been converted into a Record/DatumList, or returned an error"
+        ),
+    }
+}
+
 fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     let r = r.inner();
     let a = a.unwrap_str();
@@ -1155,6 +1172,11 @@ pub enum TableFunc {
     JsonbArrayElements {
         stringify: bool,
     },
+    JsonbPopulateRecord {
+        scalar_type: ScalarType,
+        fields: Vec<(ColumnName, ColumnType)>,
+        custom_oid: Option<u32>,
+    },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
@@ -1199,6 +1221,14 @@ impl TableFunc {
                 temp_storage,
                 *stringify,
             ))),
+            TableFunc::JsonbPopulateRecord { scalar_type, .. } => {
+                println!(
+                    "Want to call actual table func implementation with {:?}",
+                    datums
+                );
+                let r = jsonb_populate_record_table(datums[0], temp_storage, scalar_type)?;
+                Ok(Box::new(r))
+            }
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
             TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
             TableFunc::GenerateSeriesInt32 => {
@@ -1268,6 +1298,9 @@ impl TableFunc {
             TableFunc::JsonbArrayElements { stringify: false } => {
                 vec![ScalarType::Jsonb.nullable(false)]
             }
+            TableFunc::JsonbPopulateRecord { fields, .. } => {
+                fields.iter().map(|(n, t)| t.clone()).collect_vec()
+            }
             TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
                 .map(|cg| ScalarType::String.nullable(cg.nullable))
@@ -1298,6 +1331,7 @@ impl TableFunc {
             TableFunc::JsonbEach { .. } => 2,
             TableFunc::JsonbObjectKeys => 1,
             TableFunc::JsonbArrayElements { .. } => 1,
+            TableFunc::JsonbPopulateRecord { fields, .. } => fields.len(),
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
@@ -1317,6 +1351,7 @@ impl TableFunc {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
+            | TableFunc::JsonbPopulateRecord { .. }
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
@@ -1339,6 +1374,7 @@ impl TableFunc {
             TableFunc::JsonbEach { .. } => true,
             TableFunc::JsonbObjectKeys => true,
             TableFunc::JsonbArrayElements { .. } => true,
+            TableFunc::JsonbPopulateRecord { .. } => true,
             TableFunc::RegexpExtract(_) => true,
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
@@ -1360,6 +1396,7 @@ impl fmt::Display for TableFunc {
             TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbPopulateRecord { .. } => f.write_str("jsonb_populate_record"),
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),

@@ -1293,6 +1293,7 @@ pub enum EvalError {
         dims: Option<(usize, usize)>,
     },
     TypeFromOid(String),
+    UnsupportedType(String),
 }
 
 impl fmt::Display for EvalError {
@@ -1364,6 +1365,9 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
             EvalError::UnknownUnits(units) => write!(f, "unit '{}' not recognized", units),
+            EvalError::UnsupportedType(s) => {
+                write!(f, "unsupported {}", s)
+            }
             EvalError::UnsupportedUnits(units, typ) => {
                 write!(f, "unit '{}' not supported for type {}", units, typ)
             }

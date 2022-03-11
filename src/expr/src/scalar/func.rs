@@ -280,6 +280,76 @@ fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+fn cast_jsonb_to_date(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Date(strconv::parse_date(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "date".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_time(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Time(strconv::parse_time(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "time".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_timestamp(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Timestamp(strconv::parse_timestamp(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "timestamp".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_timestamptz(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::TimestampTz(strconv::parse_timestamptz(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "timestamptz".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_interval(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Interval(strconv::parse_interval(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "interval".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_bytes(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Bytes(s.as_bytes())),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "bytes".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_uuid(a: Datum) -> Result<Datum, EvalError> {
+    match a {
+        Datum::String(s) => Ok(Datum::Uuid(strconv::parse_uuid(s)?)),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "uuid".into(),
+        }),
+    }
+}
+
 fn jsonb_type(d: Datum<'_>) -> &'static str {
     match d {
         Datum::JsonNull => "null",
@@ -1387,11 +1457,8 @@ pub fn jsonb_populate_decode<'a>(
     datum: Datum<'a>,
     scalar_type: &'a ScalarType,
 ) -> Result<Datum<'a>, EvalError> {
-    match datum {
-        Datum::JsonNull => {
-            return Ok(Datum::Null);
-        }
-        _ => {}
+    if matches!(datum, Datum::JsonNull) {
+        return Ok(Datum::Null);
     }
 
     match scalar_type {
@@ -1402,12 +1469,25 @@ pub fn jsonb_populate_decode<'a>(
         ScalarType::Float32 => cast_jsonb_to_float32(datum),
         ScalarType::Float64 => cast_jsonb_to_float64(datum),
         ScalarType::Numeric { max_scale } => cast_jsonb_to_numeric(datum, *max_scale),
-        ScalarType::Date => {
-            // TODO(phemberger): gentler error states here if not a string
-            Ok(Datum::Date(strconv::parse_date(datum.unwrap_str())?))
-        }
+        ScalarType::Date => cast_jsonb_to_date(datum),
+        ScalarType::Time => cast_jsonb_to_time(datum),
+        ScalarType::Timestamp => cast_jsonb_to_timestamp(datum),
+        ScalarType::TimestampTz => cast_jsonb_to_timestamptz(datum),
+        ScalarType::Interval => cast_jsonb_to_interval(datum),
         ScalarType::Jsonb => Ok(datum),
-        ScalarType::String => Ok(cast_jsonb_to_string(datum, temp_storage)),
+        ScalarType::Bytes => cast_jsonb_to_bytes(datum),
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } | ScalarType::String => {
+            // TODO(phemberger): find the functions we use for char/varchar limits
+            if matches!(datum, Datum::String(_)) {
+                Ok(datum)
+            } else {
+                Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "string".into(),
+                })
+            }
+        }
+        ScalarType::Uuid => cast_jsonb_to_uuid(datum),
         _ => {
             unreachable!("blah")
         }
@@ -1443,128 +1523,90 @@ pub fn jsonb_populate_r(
             packer.push(jsonb_populate_decode(temp_storage, datum, scalar_type)?);
         }
         ScalarType::Array(scalar_type) => {
-            let datum_list = datum.unwrap_list();
-            let mut data = vec![];
-            for x in &datum_list {
-                data.push(jsonb_populate_decode(temp_storage, x, scalar_type)?);
+            if !matches!(datum, Datum::List(_)) {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "array".into(),
+                });
             }
+
+            let datum_list = datum.unwrap_list();
+            let mut datums = vec![];
+            for x in &datum_list {
+                datums.push(jsonb_populate_decode(temp_storage, x, scalar_type)?);
+            }
+
             packer.push_array(
                 &[ArrayDimension {
                     lower_bound: 0,
-                    length: data.len(),
+                    length: datums.len(),
                 }],
-                data,
-            );
+                datums,
+            )?;
         }
-        ScalarType::List { element_type, .. } => {}
-        ScalarType::Record { fields, .. } => {
-            let map = datum.unwrap_map();
-            let mut data = HashMap::new();
-            for (name, datum) in map.into_iter() {
-                data.insert(name, datum);
+        ScalarType::List { element_type, .. } => match datum {
+            Datum::List(list) => {
+                return packer.push_list_with(|packer| -> Result<(), EvalError> {
+                    for datum in &list {
+                        packer.push(jsonb_populate_decode(temp_storage, datum, element_type)?)
+                    }
+                    Ok(())
+                })
             }
+            _ => {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "list".into(),
+                })
+            }
+        },
+        ScalarType::Map { value_type, .. } => {}
+        ScalarType::Record { fields, .. } => {
+            if !matches!(datum, Datum::Map(_)) {
+                return Err(EvalError::InvalidJsonbCast {
+                    from: jsonb_type(datum).into(),
+                    to: "record".into(),
+                });
+            }
+
+            // The JSONB datum may not have fields in the same order as
+            // our Record type, so we need to index them by their name
+            let name_to_datum: HashMap<&str, Datum> = datum.unwrap_map().iter().collect();
             packer.push_list_with(|packer| -> Result<(), EvalError> {
                 for (name, field_type) in fields {
-                    match data.get(name.to_string().as_str()) {
-                        None => {
-                            packer.push(Datum::Null);
-                        }
+                    match name_to_datum.get(name.to_string().as_str()) {
+                        None => packer.push(Datum::Null),
                         Some(v) => {
-                            jsonb_populate_r(packer, temp_storage, *v, &field_type.scalar_type)?;
+                            jsonb_populate_r(packer, temp_storage, *v, &field_type.scalar_type)?
                         }
-                    }
+                    };
                 }
                 Ok(())
             })?;
         }
-        ScalarType::Oid => {}
-        ScalarType::Map { .. } => {}
-        ScalarType::RegProc => {}
-        ScalarType::RegType => {}
-        ScalarType::RegClass => {}
-        ScalarType::Int2Vector => {}
+        ScalarType::Oid
+        | ScalarType::RegProc
+        | ScalarType::RegType
+        | ScalarType::RegClass
+        | ScalarType::Int2Vector => {
+            return Err(EvalError::UnsupportedType(String::from(
+                "TODO: actual unsupported method. Or just support them even if they're weird",
+            )))
+        }
         _ => unreachable!("should not be reachable"),
     }
 
     Ok(())
 }
 
-fn jsonb_populate_record_temp<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    a_expr: &'a MirScalarExpr,
-    b_expr: &'a MirScalarExpr,
-) -> Result<Datum<'a>, EvalError> {
-    println!(
-        "jsonb_populate_record_temp got {:?} || {:?} || {:?}",
-        datums, a_expr, b_expr
-    );
-    let a = a_expr.eval(datums, temp_storage)?;
-    let b = b_expr.eval(datums, temp_storage)?;
-    // Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
-    let mut name_to_type = HashMap::new();
-    let mut names = vec![];
-    match a_expr {
-        MirScalarExpr::Literal(
-            _,
-            ColumnType {
-                scalar_type: ScalarType::Record { fields, .. },
-                ..
-            },
-        ) => {
-            for (name, field) in fields {
-                names.push(name.to_string().clone());
-                name_to_type.insert(name.to_string(), field.scalar_type.clone());
-            }
-        }
-        _ => {
-            unreachable!("not valid type")
-        }
-    }
-
-    let mut datums = HashMap::new();
-    match b {
-        Datum::Map(m) => {
-            for (name, datum) in m.iter() {
-                datums.insert(name, datum);
-            }
-        }
-        _ => panic!("top-level jsonb must be a map: {:?}", b),
-    }
-
-    println!("A datum {:?}", a);
-    println!("B datum {:?}", b);
-
-    let mut data = vec![];
-    for name in names {
-        let scalar_type = name_to_type.get(&name).unwrap();
-        let datum = datums.get(&*name);
-
-        match datum {
-            None => data.push(Datum::Null),
-            Some(d) => {
-                let v = temp_storage.try_make_datum(|packer| {
-                    jsonb_populate_r(packer, temp_storage, *d, scalar_type)
-                })?;
-                data.push(v);
-            }
-        }
-    }
-
-    Ok(temp_storage.make_datum(|packer| packer.push_list(data)))
-}
-
-fn jsonb_populate_record<'a>(
-    a: Datum<'a>,
+pub fn jsonb_populate_record_scalar<'a>(
     jsonb: Datum<'a>,
     temp_storage: &'a RowArena,
+    scalar_type: &ScalarType,
 ) -> Result<Datum<'a>, EvalError> {
-    println!(
-        "jsonb_populate_record actual function call: got a {:?} and b {:?}",
-        a, jsonb,
-    );
-    Err(EvalError::DivisionByZero)
-    // Ok(true.into())
+    temp_storage.try_make_datum(|packer| -> Result<(), EvalError> {
+        jsonb_populate_r(packer, temp_storage, jsonb, scalar_type)
+    })
 }
 
 fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2487,12 +2529,8 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     LikeEscape,
-    IsLikeMatch {
-        case_insensitive: bool,
-    },
-    IsRegexpMatch {
-        case_insensitive: bool,
-    },
+    IsLikeMatch { case_insensitive: bool },
+    IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
     DateBinTimestamp,
@@ -2511,31 +2549,19 @@ pub enum BinaryFunc {
     DateTruncInterval,
     TimezoneTimestamp,
     TimezoneTimestampTz,
-    TimezoneTime {
-        wall_time: NaiveDateTime,
-    },
+    TimezoneTime { wall_time: NaiveDateTime },
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
     TextConcat,
-    JsonbGetInt64 {
-        stringify: bool,
-    },
-    JsonbGetString {
-        stringify: bool,
-    },
-    JsonbGetPath {
-        stringify: bool,
-    },
+    JsonbGetInt64 { stringify: bool },
+    JsonbGetString { stringify: bool },
+    JsonbGetPath { stringify: bool },
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
     JsonbDeleteInt64,
     JsonbDeleteString,
-    JsonbPopulateRecord {
-        fields: Vec<(ColumnName, ColumnType)>,
-        custom_oid: Option<u32>,
-    },
     MapContainsKey,
     MapGetValue,
     MapGetValues,
@@ -2551,9 +2577,7 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListLengthMax {
-        max_layer: usize,
-    },
+    ListLengthMax { max_layer: usize },
     ArrayContains,
     ArrayLength,
     ArrayLower,
@@ -2782,9 +2806,6 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::JsonbPopulateRecord { .. } => {
-                jsonb_populate_record_temp(datums, temp_storage, a_expr, b_expr)
-            }
             BinaryFunc::MapContainsKey => Ok(eager!(map_contains_key)),
             BinaryFunc::MapGetValue => Ok(eager!(map_get_value)),
             BinaryFunc::MapGetValues => Ok(eager!(map_get_values, temp_storage)),
@@ -2919,13 +2940,6 @@ impl BinaryFunc {
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
-
-            JsonbPopulateRecord { fields, custom_oid } => ScalarType::Record {
-                fields: fields.clone(),
-                custom_oid: *custom_oid,
-                custom_name: None,
-            }
-            .nullable(true),
 
             JsonbContainsString | JsonbContainsJsonb | MapContainsKey | MapContainsAllKeys
             | MapContainsAnyKeys | MapContainsMap => ScalarType::Bool.nullable(in_nullable),
@@ -3174,7 +3188,6 @@ impl BinaryFunc {
             | DateTruncInterval
             | DateTruncTimestamp
             | DateTruncTimestampTz
-            | JsonbPopulateRecord { .. }
             | TimezoneTimestamp
             | TimezoneTimestampTz
             | TimezoneTime { .. }
@@ -3340,7 +3353,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
-            BinaryFunc::JsonbPopulateRecord { .. } => f.write_str("jsonb_populate_record"),
             BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),

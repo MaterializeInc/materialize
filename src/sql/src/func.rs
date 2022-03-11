@@ -1850,35 +1850,24 @@ lazy_static! {
                     })
                 }) => Jsonb, 3273;
             },
-            "jsonb_populate_record" => Scalar {
-                params!(Any, Jsonb) => Operation::binary(|ecx, typ, jsonb| {
-                    println!("Exprs in jsonb_populate_record: {:?} and {:?}", typ, jsonb);
-                    match typ {
-                        HirScalarExpr::Literal(_, ColumnType { scalar_type: ScalarType::Record { ref fields, ref custom_oid, ref custom_name }, .. }) => {
-                            let jsonb = typeconv::to_jsonb(ecx, jsonb);
-
-                            println!("jsonb_populate_record, type {:?}, jsonb {:?}", typ, jsonb);
-                            //
-                            // Ok(HirScalarExpr::CallVariadic {
-                            //     func: VariadicFunc::RecordCreate,
-                            //     exprs:
-                            //
-                            // })
-
-                            Ok(HirScalarExpr::CallBinary {
-                                func: BinaryFunc::JsonbPopulateRecord { fields: fields.clone(), custom_oid: *custom_oid, },
-                                expr1: Box::new(typ),
-                                expr2: Box::new(jsonb),
-                            })
-                        }
-                        _ => {
-                            sql_bail!("first argument of jsonb_populate_record must be a row type")
-                        }
-                    }
-
-                    // Ok(HirScalarExpr::literal(Datum::String("hello, world"), ScalarType::Record))
-                }) => Record, 3209;
-            },
+            // "jsonb_populate_record" => Scalar {
+            //     params!(Any, Jsonb) => Operation::binary(|ecx, typ, jsonb| {
+            //         println!("Exprs in jsonb_populate_record: {:?} and {:?}", typ, jsonb);
+            //         match typ {
+            //             HirScalarExpr::Literal(_, ColumnType { scalar_type: ScalarType::Record { ref fields, ref custom_oid, ref custom_name }, .. }) => {
+            //                 let jsonb = typeconv::to_jsonb(ecx, jsonb);
+            //                 Ok(HirScalarExpr::CallBinary {
+            //                         func: BinaryFunc::JsonbPopulateRecord { fields: fields.clone(), custom_oid: *custom_oid },
+            //                         expr1: Box::new(typ),
+            //                         expr2: Box::new(jsonb),
+            //                     })
+            //             }
+            //             _ => {
+            //                 sql_bail!("first argument of jsonb_populate_record must be a row type")
+            //             }
+            //         }
+            //     }) => Record, 3209;
+            // },
             "jsonb_pretty" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbPretty, 3306;
             },
@@ -2544,6 +2533,26 @@ lazy_static! {
                         column_names: vec!["jsonb_object_keys".into()],
                     })
                 }), 3931;
+            },
+            "jsonb_populate_record" => Table {
+                params!(Any, Jsonb) => Operation::binary(|ecx, typ, jsonb| {
+                    println!("Exprs in table jsonb_populate_record: {:?} and {:?}", typ, jsonb);
+                    match typ {
+                        HirScalarExpr::Literal(_, ColumnType { scalar_type: ref scalar_type @ ScalarType::Record { ref fields, ref custom_oid, ref custom_name }, .. }) => {
+                            // let jsonb = typeconv::to_jsonb(ecx, jsonb);
+                            Ok(TableFuncPlan {
+                                expr: HirRelationExpr::CallTable {
+                                    func: TableFunc::JsonbPopulateRecord { scalar_type: scalar_type.clone(), fields: fields.clone(), custom_oid: *custom_oid, },
+                                    exprs: vec![jsonb],
+                                },
+                                column_names: fields.iter().map(|(n, t)| n.clone()).collect_vec(),
+                            })
+                        }
+                        _ => {
+                            sql_bail!("first argument of jsonb_populate_record must be a row type")
+                        }
+                    }
+                }) => ReturnType::scalar(RecordAny.into()), 3209;
             },
             // Note that these implementations' input to `generate_series` is
             // contrived to match Flink's expected values. There are other,
