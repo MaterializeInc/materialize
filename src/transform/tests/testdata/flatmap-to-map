@@ -14,6 +14,7 @@ cat
 ----
 ok
 
+# Rewrite is possible in this case
 build apply=FlatMapToMap
 (FlatMap
     (get x)
@@ -22,3 +23,21 @@ build apply=FlatMapToMap
 %0 =
 | Get x (u0)
 | Map "a_string"
+
+# Rewrite possible
+build apply=FlatMapToMap
+(FlatMap
+    (get x)
+    (Wrap [(String false)] 3) [("a_string" String) ("another" String) ("test" String)])
+----
+%0 =
+| Get x (u0)
+| Map "a_string", "another", "test"
+
+# Produces more than one row, must not rewrite this
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false)] 1) [(0 Int32) (1 Int32) (2 Int32)])
+----
+%0 =
+| Get x (u0)
+| FlatMap wrap1(0, 1, 2)
