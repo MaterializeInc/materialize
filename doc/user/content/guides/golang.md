@@ -1,5 +1,5 @@
 ---
-title: "Golang"
+title: "Golang and Materialize"
 description: "Use Go to connect, insert, manage, query and stream from Materialize."
 weight:
 menu:
