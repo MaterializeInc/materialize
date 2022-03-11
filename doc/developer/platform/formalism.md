@@ -382,15 +382,18 @@ that preserves the intersection of the update's downstream effects with the
 ![The previous lattice, but with pink update slid forward by two times, and green slid forward by one](assets/compact-2.jpeg)
 
 When sliding an update to a new time, which time is optimal? By "optimal", we
-mean the time which minimizes the number of downstream effects before `since`:
-in short, how "close" can we slide an update at time `t` to the frontier
-`since` while preserving correctness? As [Appendix A of the K-Pg SIGMOD
+mean the time which minimizes the number of downstream times which are *not* at
+or after `since`--in essence, how close can we slide an update at time `t` to
+the frontier `since` while preserving correctness? As [Appendix A of the K-Pg
+SIGMOD
 paper](https://github.com/TimelyDataflow/differential-dataflow/blob/master/sigmod2019-submission.pdf)
 shows, the answer is:
 
 ```
 t' = meet (for all s in since) join(t, s)
 ```
+
+![A diagram showing the join of the pink time p with s1 and s2, then the meet of those times](assets/compact-join-meet.jpeg)
 
 Given our two `since` frontier times of `s1` and `s2`, we found the optimal
 time for the pink update at `p` by finding the first time where pink's effects
