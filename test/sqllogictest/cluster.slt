@@ -29,6 +29,18 @@ SELECT * FROM mz_clusters
 2 foo
 3 bar
 
+query T rowsort
+SHOW CLUSTERS
+----
+bar
+default
+foo
+
+query T rowsort
+SHOW CLUSTERS LIKE 'd%'
+----
+default
+
 # Creating a sized cluster should be rejected.
 statement error SIZE not yet supported
 CREATE CLUSTER baz SIZE 'small'
