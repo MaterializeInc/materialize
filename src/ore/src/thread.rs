@@ -29,14 +29,32 @@ impl<T> Drop for JoinOnDropHandle<T> {
     }
 }
 
+/// Wraps a [`JoinHandle`] so that the child thread is unparked (and then
+/// detached as usual) when the handle is dropped.
+#[derive(Debug)]
+pub struct UnparkOnDropHandle<T>(JoinHandle<T>);
+
+impl<T> Drop for UnparkOnDropHandle<T> {
+    fn drop(&mut self) {
+        self.0.thread().unpark();
+    }
+}
+
 /// Extension methods for [`JoinHandle`].
 pub trait JoinHandleExt<T> {
     /// Converts a [`JoinHandle`] into a [`JoinOnDropHandle`].
     fn join_on_drop(self) -> JoinOnDropHandle<T>;
+
+    /// Converts a [`JoinHandle`] into an [`UnparkOnDropHandle`].
+    fn unpark_on_drop(self) -> UnparkOnDropHandle<T>;
 }
 
 impl<T> JoinHandleExt<T> for JoinHandle<T> {
     fn join_on_drop(self) -> JoinOnDropHandle<T> {
         JoinOnDropHandle(Some(self))
+    }
+
+    fn unpark_on_drop(self) -> UnparkOnDropHandle<T> {
+        UnparkOnDropHandle(self)
     }
 }

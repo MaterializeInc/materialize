@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread;
 use std::time::Duration;
 
 use mz_dataflow_types::sources::AwsExternalId;
@@ -20,6 +20,8 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
@@ -27,9 +29,8 @@ use mz_dataflow_types::sources::{
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -67,15 +68,7 @@ pub struct KafkaSourceReader {
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
-    _metadata_thread_handle: UnparkOnDrop<()>,
-}
-
-struct UnparkOnDrop<T>(JoinHandle<T>);
-
-impl<T> Drop for UnparkOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.thread().unpark();
-    }
+    _metadata_thread_handle: UnparkOnDropHandle<()>,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -159,21 +152,21 @@ impl SourceReader for KafkaSourceReader {
                 // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 .unwrap_or_else(|| Duration::from_secs(300));
 
-            let handle = std::thread::Builder::new()
+            thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
                     while let Some(partition_info) = partition_info.upgrade() {
                         match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
-                                std::thread::park_timeout(metadata_refresh_frequency);
+                                thread::park_timeout(metadata_refresh_frequency);
                             }
-                            Err(_) => std::thread::park_timeout(Duration::from_secs(30)),
+                            Err(_) => thread::park_timeout(Duration::from_secs(30)),
                         }
                     }
                 })
-                .unwrap();
-            UnparkOnDrop(handle)
+                .unwrap()
+                .unpark_on_drop()
         };
 
         Ok(KafkaSourceReader {
