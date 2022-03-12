@@ -1091,172 +1091,8 @@ impl Coordinator {
                 session,
                 tx,
             } => {
-                let result = session
-                    .get_portal(&portal_name)
-                    .ok_or(CoordError::UnknownCursor(portal_name));
-                let portal = match result {
-                    Ok(portal) => portal,
-                    Err(e) => {
-                        let _ = tx.send(Response {
-                            result: Err(e),
-                            session,
-                        });
-                        return;
-                    }
-                };
-                let stmt = portal.stmt.clone();
-                let params = portal.parameters.clone();
-
-                match stmt {
-                    Some(stmt) => {
-                        // Verify that this statetement type can be executed in the current
-                        // transaction state.
-                        match session.transaction() {
-                            // By this point we should be in a running transaction.
-                            &TransactionStatus::Default => unreachable!(),
-
-                            // Started is almost always safe (started means there's a single statement
-                            // being executed). Failed transactions have already been checked in pgwire for
-                            // a safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
-                            &TransactionStatus::Started(_) | &TransactionStatus::Failed(_) => {
-                                if let Statement::Declare(_) = stmt {
-                                    // Declare is an exception. Although it's not against any spec to execute
-                                    // it, it will always result in nothing happening, since all portals will be
-                                    // immediately closed. Users don't know this detail, so this error helps them
-                                    // understand what's going wrong. Postgres does this too.
-                                    let _ = tx.send(Response {
-                                        result: Err(CoordError::OperationRequiresTransaction(
-                                            "DECLARE CURSOR".into(),
-                                        )),
-                                        session,
-                                    });
-                                    return;
-                                }
-                            }
-
-                            // Implicit or explicit transactions.
-                            //
-                            // Implicit transactions happen when a multi-statement query is executed
-                            // (a "simple query"). However if a "BEGIN" appears somewhere in there,
-                            // then the existing implicit transaction will be upgraded to an explicit
-                            // transaction. Thus, we should not separate what implicit and explicit
-                            // transactions can do unless there's some additional checking to make sure
-                            // something disallowed in explicit transactions did not previously take place
-                            // in the implicit portion.
-                            &TransactionStatus::InTransactionImplicit(_)
-                            | &TransactionStatus::InTransaction(_) => match stmt {
-                                // Statements that are safe in a transaction. We still need to verify that we
-                                // don't interleave reads and writes since we can't perform those serializably.
-                                Statement::Close(_)
-                                | Statement::Commit(_)
-                                | Statement::Copy(_)
-                                | Statement::Deallocate(_)
-                                | Statement::Declare(_)
-                                | Statement::Discard(_)
-                                | Statement::Execute(_)
-                                | Statement::Explain(_)
-                                | Statement::Fetch(_)
-                                | Statement::Prepare(_)
-                                | Statement::Rollback(_)
-                                | Statement::Select(_)
-                                | Statement::SetTransaction(_)
-                                | Statement::ShowColumns(_)
-                                | Statement::ShowCreateIndex(_)
-                                | Statement::ShowCreateSink(_)
-                                | Statement::ShowCreateSource(_)
-                                | Statement::ShowCreateTable(_)
-                                | Statement::ShowCreateView(_)
-                                | Statement::ShowDatabases(_)
-                                | Statement::ShowIndexes(_)
-                                | Statement::ShowObjects(_)
-                                | Statement::ShowVariable(_)
-                                | Statement::SetVariable(_)
-                                | Statement::StartTransaction(_)
-                                | Statement::Tail(_)
-                                | Statement::Raise(_) => {
-                                    // Always safe.
-                                }
-
-                                Statement::Insert(ref insert_statment)
-                                    if matches!(
-                                        insert_statment.source,
-                                        InsertSource::Query(Query {
-                                            body: SetExpr::Values(..),
-                                            ..
-                                        }) | InsertSource::DefaultValues
-                                    ) =>
-                                {
-                                    // Inserting from default? values statements
-                                    // is always safe.
-                                }
-
-                                // Statements below must by run singly (in Started).
-                                Statement::AlterIndex(_)
-                                | Statement::AlterObjectRename(_)
-                                | Statement::CreateDatabase(_)
-                                | Statement::CreateIndex(_)
-                                | Statement::CreateRole(_)
-                                | Statement::CreateCluster(_)
-                                | Statement::CreateSchema(_)
-                                | Statement::CreateSecret(_)
-                                | Statement::CreateSink(_)
-                                | Statement::CreateSource(_)
-                                | Statement::CreateTable(_)
-                                | Statement::CreateType(_)
-                                | Statement::CreateView(_)
-                                | Statement::CreateViews(_)
-                                | Statement::Delete(_)
-                                | Statement::DropDatabase(_)
-                                | Statement::DropObjects(_)
-                                | Statement::Insert(_)
-                                | Statement::Update(_) => {
-                                    let _ = tx.send(Response {
-                                        result: Err(CoordError::OperationProhibitsTransaction(
-                                            stmt.to_string(),
-                                        )),
-                                        session,
-                                    });
-                                    return;
-                                }
-                            },
-                        }
-
-                        if self.catalog.config().safe_mode {
-                            if let Err(e) = check_statement_safety(&stmt) {
-                                let _ = tx.send(Response {
-                                    result: Err(e),
-                                    session,
-                                });
-                                return;
-                            }
-                        }
-
-                        let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        let purify_fut = mz_sql::pure::purify(
-                            self.now(),
-                            self.catalog.config().aws_external_id.clone(),
-                            stmt,
-                        );
-                        let conn_id = session.conn_id();
-                        task::spawn(|| format!("purify:{conn_id}"), async move {
-                            let result = purify_fut.await.map_err(|e| e.into());
-                            internal_cmd_tx
-                                .send(Message::StatementReady(StatementReady {
-                                    session,
-                                    tx: ClientTransmitter::new(tx, internal_cmd_tx.clone()),
-                                    result,
-                                    params,
-                                }))
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        });
-                    }
-                    None => {
-                        let _ = tx.send(Response {
-                            result: Ok(ExecuteResponse::EmptyQuery),
-                            session,
-                        });
-                    }
-                }
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.handle_execute(portal_name, session, tx).await;
             }
 
             Command::Declare {
@@ -1485,6 +1321,161 @@ impl Coordinator {
         } else {
             Ok(())
         }
+    }
+
+    /// Handles an execute command.
+    async fn handle_execute(
+        &mut self,
+        portal_name: String,
+        session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+    ) {
+        let portal = match session.get_portal(&portal_name) {
+            Some(portal) => portal,
+            None => return tx.send(Err(CoordError::UnknownCursor(portal_name)), session),
+        };
+
+        let stmt = match &portal.stmt {
+            Some(stmt) => stmt,
+            None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
+        };
+
+        // Verify that this statetement type can be executed in the current
+        // transaction state.
+        match session.transaction() {
+            // By this point we should be in a running transaction.
+            TransactionStatus::Default => unreachable!(),
+
+            // Started is almost always safe (started means there's a single statement
+            // being executed). Failed transactions have already been checked in pgwire for
+            // a safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
+            TransactionStatus::Started(_) | TransactionStatus::Failed(_) => {
+                if let Statement::Declare(_) = stmt {
+                    // Declare is an exception. Although it's not against any spec to execute
+                    // it, it will always result in nothing happening, since all portals will be
+                    // immediately closed. Users don't know this detail, so this error helps them
+                    // understand what's going wrong. Postgres does this too.
+                    return tx.send(
+                        Err(CoordError::OperationRequiresTransaction(
+                            "DECLARE CURSOR".into(),
+                        )),
+                        session,
+                    );
+                }
+            }
+
+            // Implicit or explicit transactions.
+            //
+            // Implicit transactions happen when a multi-statement query is executed
+            // (a "simple query"). However if a "BEGIN" appears somewhere in there,
+            // then the existing implicit transaction will be upgraded to an explicit
+            // transaction. Thus, we should not separate what implicit and explicit
+            // transactions can do unless there's some additional checking to make sure
+            // something disallowed in explicit transactions did not previously take place
+            // in the implicit portion.
+            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+                match stmt {
+                    // Statements that are safe in a transaction. We still need to verify that we
+                    // don't interleave reads and writes since we can't perform those serializably.
+                    Statement::Close(_)
+                    | Statement::Commit(_)
+                    | Statement::Copy(_)
+                    | Statement::Deallocate(_)
+                    | Statement::Declare(_)
+                    | Statement::Discard(_)
+                    | Statement::Execute(_)
+                    | Statement::Explain(_)
+                    | Statement::Fetch(_)
+                    | Statement::Prepare(_)
+                    | Statement::Rollback(_)
+                    | Statement::Select(_)
+                    | Statement::SetTransaction(_)
+                    | Statement::ShowColumns(_)
+                    | Statement::ShowCreateIndex(_)
+                    | Statement::ShowCreateSink(_)
+                    | Statement::ShowCreateSource(_)
+                    | Statement::ShowCreateTable(_)
+                    | Statement::ShowCreateView(_)
+                    | Statement::ShowDatabases(_)
+                    | Statement::ShowIndexes(_)
+                    | Statement::ShowObjects(_)
+                    | Statement::ShowVariable(_)
+                    | Statement::SetVariable(_)
+                    | Statement::StartTransaction(_)
+                    | Statement::Tail(_)
+                    | Statement::Raise(_) => {
+                        // Always safe.
+                    }
+
+                    Statement::Insert(ref insert_statment)
+                        if matches!(
+                            insert_statment.source,
+                            InsertSource::Query(Query {
+                                body: SetExpr::Values(..),
+                                ..
+                            }) | InsertSource::DefaultValues
+                        ) =>
+                    {
+                        // Inserting from default? values statements
+                        // is always safe.
+                    }
+
+                    // Statements below must by run singly (in Started).
+                    Statement::AlterIndex(_)
+                    | Statement::AlterObjectRename(_)
+                    | Statement::CreateDatabase(_)
+                    | Statement::CreateIndex(_)
+                    | Statement::CreateRole(_)
+                    | Statement::CreateCluster(_)
+                    | Statement::CreateSchema(_)
+                    | Statement::CreateSecret(_)
+                    | Statement::CreateSink(_)
+                    | Statement::CreateSource(_)
+                    | Statement::CreateTable(_)
+                    | Statement::CreateType(_)
+                    | Statement::CreateView(_)
+                    | Statement::CreateViews(_)
+                    | Statement::Delete(_)
+                    | Statement::DropDatabase(_)
+                    | Statement::DropObjects(_)
+                    | Statement::Insert(_)
+                    | Statement::Update(_) => {
+                        return tx.send(
+                            Err(CoordError::OperationProhibitsTransaction(stmt.to_string())),
+                            session,
+                        )
+                    }
+                }
+            }
+        }
+
+        if self.catalog.config().safe_mode {
+            if let Err(e) = check_statement_safety(&stmt) {
+                return tx.send(Err(e), session);
+            }
+        }
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let purify_fut = mz_sql::pure::purify(
+            self.now(),
+            self.catalog.config().aws_external_id.clone(),
+            stmt.clone(),
+        );
+        let params = portal.parameters.clone();
+        let conn_id = session.conn_id();
+        task::spawn(|| format!("purify:{conn_id}"), {
+            async move {
+                let result = purify_fut.err_into().await;
+                internal_cmd_tx
+                    .send(Message::StatementReady(StatementReady {
+                        session,
+                        tx,
+                        result,
+                        params,
+                    }))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            }
+        });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
