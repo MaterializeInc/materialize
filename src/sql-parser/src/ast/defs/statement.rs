@@ -1690,6 +1690,8 @@ pub enum ExplainStage {
     OptimizedPlan,
     /// The render::plan::Plan
     PhysicalPlan,
+    /// The dependent and selected timestamps
+    Timestamp,
 }
 
 impl AstDisplay for ExplainStage {
@@ -1701,6 +1703,7 @@ impl AstDisplay for ExplainStage {
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
             ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            ExplainStage::Timestamp => f.write_str("TIMESTAMP"),
         }
     }
 }
