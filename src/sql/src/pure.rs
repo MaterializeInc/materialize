@@ -12,7 +12,6 @@
 //! See the [crate-level documentation](crate) for details.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -41,7 +40,6 @@ use crate::ast::{
     CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, SqlOption, Statement, Value,
     WithOption, WithOptionValue,
 };
-use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -54,150 +52,143 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
 /// locking access to the catalog for an unbounded amount of time.
-pub fn purify(
-    catalog: &dyn SessionCatalog,
+pub async fn purify(
+    now: u64,
+    aws_external_id: AwsExternalId,
     mut stmt: Statement<Raw>,
-) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
-    let now = catalog.now();
-    let aws_external_id = catalog.config().aws_external_id.clone();
+) -> Result<Statement<Raw>, anyhow::Error> {
+    if let Statement::CreateSource(CreateSourceStatement {
+        connector,
+        format,
+        envelope,
+        with_options,
+        include_metadata: _,
+        ..
+    }) = &mut stmt
+    {
+        let mut with_options_map = normalize::options(with_options);
+        let mut config_options = BTreeMap::new();
 
-    async move {
-        if let Statement::CreateSource(CreateSourceStatement {
-            connector,
-            format,
-            envelope,
-            with_options,
-            include_metadata: _,
-            ..
-        }) = &mut stmt
-        {
-            let mut with_options_map = normalize::options(with_options);
-            let mut config_options = BTreeMap::new();
+        let mut file = None;
+        match connector {
+            CreateSourceConnector::Kafka { broker, topic, .. } => {
+                if !broker.contains(':') {
+                    *broker += ":9092";
+                }
 
-            let mut file = None;
-            match connector {
-                CreateSourceConnector::Kafka { broker, topic, .. } => {
-                    if !broker.contains(':') {
-                        *broker += ":9092";
+                // Verify that the provided security options are valid and then test them.
+                config_options = kafka_util::extract_config(&mut with_options_map)?;
+                let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                    .await
+                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+
+                // Translate `kafka_time_offset` to `start_offset`.
+                match kafka_util::lookup_start_offsets(
+                    Arc::clone(&consumer),
+                    &topic,
+                    &with_options_map,
+                    now,
+                )
+                .await?
+                {
+                    Some(start_offsets) => {
+                        // Drop `kafka_time_offset`
+                        with_options.retain(|val| match val {
+                            mz_sql_parser::ast::SqlOption::Value { name, .. } => {
+                                name.as_str() != "kafka_time_offset"
+                            }
+                            _ => true,
+                        });
+
+                        // Add `start_offset`
+                        with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                            name: mz_sql_parser::ast::Ident::new("start_offset"),
+                            value: mz_sql_parser::ast::Value::Array(
+                                start_offsets
+                                    .iter()
+                                    .map(|offset| Value::Number(offset.to_string()))
+                                    .collect(),
+                            ),
+                        });
                     }
-
-                    // Verify that the provided security options are valid and then test them.
-                    config_options = kafka_util::extract_config(&mut with_options_map)?;
-                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                        .await
-                        .map_err(|e| {
-                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
-                        })?;
-
-                    // Translate `kafka_time_offset` to `start_offset`.
-                    match kafka_util::lookup_start_offsets(
-                        Arc::clone(&consumer),
-                        &topic,
-                        &with_options_map,
-                        now,
-                    )
-                    .await?
-                    {
-                        Some(start_offsets) => {
-                            // Drop `kafka_time_offset`
-                            with_options.retain(|val| match val {
-                                mz_sql_parser::ast::SqlOption::Value { name, .. } => {
-                                    name.as_str() != "kafka_time_offset"
-                                }
-                                _ => true,
-                            });
-
-                            // Add `start_offset`
-                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                                name: mz_sql_parser::ast::Ident::new("start_offset"),
-                                value: mz_sql_parser::ast::Value::Array(
-                                    start_offsets
-                                        .iter()
-                                        .map(|offset| Value::Number(offset.to_string()))
-                                        .collect(),
-                                ),
-                            });
-                        }
-                        _ => {}
-                    }
+                    _ => {}
                 }
-                CreateSourceConnector::AvroOcf { path, .. } => {
-                    let path = path.clone();
-                    task::block_in_place(|| {
-                        // mz_avro::Reader has no async equivalent, so we're stuck
-                        // using blocking calls here.
-                        let f = std::fs::File::open(path)?;
-                        let r = mz_avro::Reader::new(f)?;
-                        if !with_options_map.contains_key("reader_schema") {
-                            let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                                name: mz_sql_parser::ast::Ident::new("reader_schema"),
-                                value: mz_sql_parser::ast::Value::String(schema),
-                            });
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    })?;
-                }
-                // Report an error if a file cannot be opened, or if it is a directory.
-                CreateSourceConnector::File { path, .. } => {
-                    let f = File::open(&path).await?;
-                    if f.metadata().await?.is_dir() {
-                        bail!("Expected a regular file, but {} is a directory.", path);
-                    }
-                    file = Some(f);
-                }
-                CreateSourceConnector::S3 { .. } => {
-                    let aws_config = normalize::aws_config(&mut with_options_map, None)?;
-                    validate_aws_credentials(&aws_config, aws_external_id).await?;
-                }
-                CreateSourceConnector::Kinesis { arn } => {
-                    let region = arn
-                        .parse::<ARN>()
-                        .context("Unable to parse provided ARN")?
-                        .region
-                        .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
-                    let aws_config =
-                        normalize::aws_config(&mut with_options_map, Some(region.into()))?;
-                    validate_aws_credentials(&aws_config, aws_external_id).await?;
-                }
-                CreateSourceConnector::Postgres {
-                    conn,
-                    publication,
-                    slot,
-                    details,
-                } => {
-                    slot.get_or_insert_with(|| {
-                        format!(
-                            "materialize_{}",
-                            Uuid::new_v4().to_string().replace('-', "")
-                        )
-                    });
-
-                    // verify that we can connect upstream and snapshot publication metadata
-                    let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
-
-                    let details_proto = PostgresSourceDetails {
-                        tables: tables.into_iter().map(|t| t.into()).collect(),
-                        slot: slot.clone().expect("slot must exist"),
-                    };
-                    *details = Some(hex::encode(details_proto.encode_to_vec()));
-                }
-                CreateSourceConnector::PubNub { .. } => (),
             }
+            CreateSourceConnector::AvroOcf { path, .. } => {
+                let path = path.clone();
+                task::block_in_place(|| {
+                    // mz_avro::Reader has no async equivalent, so we're stuck
+                    // using blocking calls here.
+                    let f = std::fs::File::open(path)?;
+                    let r = mz_avro::Reader::new(f)?;
+                    if !with_options_map.contains_key("reader_schema") {
+                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
+                        with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                            name: mz_sql_parser::ast::Ident::new("reader_schema"),
+                            value: mz_sql_parser::ast::Value::String(schema),
+                        });
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })?;
+            }
+            // Report an error if a file cannot be opened, or if it is a directory.
+            CreateSourceConnector::File { path, .. } => {
+                let f = File::open(&path).await?;
+                if f.metadata().await?.is_dir() {
+                    bail!("Expected a regular file, but {} is a directory.", path);
+                }
+                file = Some(f);
+            }
+            CreateSourceConnector::S3 { .. } => {
+                let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+                validate_aws_credentials(&aws_config, aws_external_id).await?;
+            }
+            CreateSourceConnector::Kinesis { arn } => {
+                let region = arn
+                    .parse::<ARN>()
+                    .context("Unable to parse provided ARN")?
+                    .region
+                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            purify_source_format(
-                format,
-                connector,
-                &envelope,
-                file,
-                &config_options,
-                with_options,
-            )
-            .await?;
+                let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+                validate_aws_credentials(&aws_config, aws_external_id).await?;
+            }
+            CreateSourceConnector::Postgres {
+                conn,
+                publication,
+                slot,
+                details,
+            } => {
+                slot.get_or_insert_with(|| {
+                    format!(
+                        "materialize_{}",
+                        Uuid::new_v4().to_string().replace('-', "")
+                    )
+                });
+
+                // verify that we can connect upstream and snapshot publication metadata
+                let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
+
+                let details_proto = PostgresSourceDetails {
+                    tables: tables.into_iter().map(|t| t.into()).collect(),
+                    slot: slot.clone().expect("slot must exist"),
+                };
+                *details = Some(hex::encode(details_proto.encode_to_vec()));
+            }
+            CreateSourceConnector::PubNub { .. } => (),
         }
-        Ok(stmt)
+
+        purify_source_format(
+            format,
+            connector,
+            &envelope,
+            file,
+            &config_options,
+            with_options,
+        )
+        .await?;
     }
+    Ok(stmt)
 }
 
 async fn purify_source_format(

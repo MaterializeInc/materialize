@@ -1232,8 +1232,11 @@ impl Coordinator {
                         }
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        let catalog = self.catalog.for_session(&session);
-                        let purify_fut = mz_sql::pure::purify(&catalog, stmt);
+                        let purify_fut = mz_sql::pure::purify(
+                            self.now(),
+                            self.catalog.config().aws_external_id.clone(),
+                            stmt,
+                        );
                         let conn_id = session.conn_id();
                         task::spawn(|| format!("purify:{conn_id}"), async move {
                             let result = purify_fut.await.map_err(|e| e.into());
