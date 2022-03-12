@@ -618,13 +618,19 @@ Adjusts the SQL timeout for tests that contain queries that may take a long time
 
 ## Actions on Avro OCF files
 
-#### `$ avro-ocf-write path=... schema=... codec=(snapy|null)`
+#### `$ avro-ocf-write path=... schema=... codec=(snapy|null) [repeat=N]`
 
 Writes the data following the action into the specified file using the specified schema. The schema is traditionally provided using a variable that is defined elsewhere in the test.
 
-#### `$ avro-ocf-append path=...`
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
+
+#### `$ avro-ocf-append path=... [repeat=N]`
 
 Appends the data provided to an already-existing file
+
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
 
 #### `$ avro-ocf-verify sink=...`
 
@@ -640,9 +646,12 @@ $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
 
 ## Actions on local files
 
-#### `$ file-append path=file.name [compression=gzip]`
+#### `$ file-append path=file.name [compression=gzip] [repeat=N]`
 
 Writes the data provided to a file on disk. The file will be created inside the temporary directory of the test.
+
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
 
 #### `$ file-delete path=file.name`
 
