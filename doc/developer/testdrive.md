@@ -612,9 +612,14 @@ Instructs Mz to sleep for the specified number of seconds. `mz_sleep()` returns 
 
 ## Controlling timeouts and retries
 
-#### `$ set-sql-timeout duration=N(ms|s|m)`
+#### `$ set-sql-timeout duration=N(ms|s|m) [force=true]`
 
 Adjusts the SQL timeout for tests that contain queries that may take a long time to run. Alternatively, the `--default-timeout` setting can be passed to `testdrive`.
+
+The command will be ignored if it sets a timeout that is smaller than the
+default timeout, unless you specify `force=true`. Use this override with
+caution! It may cause the test to fail in test environments that introduce
+overhead and need a larger `--default-timeout` to succeed.
 
 ## Actions on Avro OCF files
 
