@@ -24,6 +24,7 @@ pub struct AppendAction {
     path: String,
     contents: Vec<u8>,
     compression: Compression,
+    repeat: usize,
 }
 
 pub enum Compression {
@@ -64,6 +65,7 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Err
     let path = build_path(&mut cmd)?;
     let compression = build_compression(&mut cmd)?;
     let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
+    let repeat = cmd.args.opt_parse("repeat")?.unwrap_or(1);
     cmd.args.done()?;
     let mut contents = vec![];
     for line in cmd.input {
@@ -77,6 +79,7 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Err
         path,
         contents,
         compression,
+        repeat,
     })
 }
 
@@ -102,7 +105,9 @@ impl Action for AppendAction {
             Compression::None => Box::new(file),
         };
 
-        file.write_all(&self.contents).await?;
+        for _ in 0..self.repeat {
+            file.write_all(&self.contents).await?;
+        }
         file.shutdown().await?;
 
         Ok(ControlFlow::Continue)
