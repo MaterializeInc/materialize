@@ -3560,6 +3560,90 @@ impl Coordinator {
                 }
                 explanation.to_string()
             }
+            ExplainStage::Timestamp => {
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
+                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+                self.validate_timeline(optimized_plan.depends_on())?;
+                let source_ids = optimized_plan.depends_on();
+                let id_bundle = self
+                    .index_oracle(compute_instance)
+                    .sufficient_collections(&source_ids);
+                // TODO: determine_timestamp takes a mut self to track table linearizability,
+                // so explaining a plan involving tables has side effects. Removing those side
+                // effects would be good.
+                let timestamp = self.determine_timestamp(
+                    &session,
+                    &id_bundle,
+                    QueryWhen::Immediately,
+                    compute_instance,
+                )?;
+                let since = self
+                    .least_valid_read(&id_bundle, compute_instance)
+                    .elements()
+                    .to_vec();
+                let upper = self
+                    .least_valid_write(&id_bundle, compute_instance)
+                    .elements()
+                    .to_vec();
+                let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
+                let table_read_ts = if has_table {
+                    Some(self.get_local_read_ts())
+                } else {
+                    None
+                };
+                let mut sources = Vec::new();
+                {
+                    let storage = self.dataflow_client.storage();
+                    for id in id_bundle.storage_ids.iter() {
+                        let state = storage.collection(*id).unwrap();
+                        let name = self
+                            .catalog
+                            .try_get_by_id(*id)
+                            .map(|item| item.name().to_string())
+                            .unwrap_or_else(|| id.to_string());
+                        sources.push(mz_dataflow_types::TimestampSource {
+                            name: format!("{name} ({id}, storage)"),
+                            read_frontier: state.implied_capability.elements().to_vec(),
+                            write_frontier: state
+                                .write_frontier
+                                .frontier()
+                                .to_owned()
+                                .elements()
+                                .to_vec(),
+                        });
+                    }
+                }
+                {
+                    let compute = self.dataflow_client.compute(compute_instance).unwrap();
+                    for id in id_bundle.compute_ids.iter() {
+                        let state = compute.collection(*id).unwrap();
+                        let name = self
+                            .catalog
+                            .try_get_by_id(*id)
+                            .map(|item| item.name().to_string())
+                            .unwrap_or_else(|| id.to_string());
+                        sources.push(mz_dataflow_types::TimestampSource {
+                            name: format!("{name} ({id}, compute)"),
+                            read_frontier: state.implied_capability.elements().to_vec(),
+                            write_frontier: state
+                                .write_frontier
+                                .frontier()
+                                .to_owned()
+                                .elements()
+                                .to_vec(),
+                        });
+                    }
+                }
+                let explanation = mz_dataflow_types::TimestampExplanation {
+                    timestamp,
+                    since,
+                    upper,
+                    has_table,
+                    table_read_ts,
+                    sources,
+                };
+                explanation.to_string()
+            }
         };
         if options.timing {
             if let Some(decorrelation) = &timings.decorrelation {
