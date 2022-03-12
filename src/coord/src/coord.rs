@@ -76,7 +76,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, FutureExt, TryFutureExt};
+use futures::future::{FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
 use rand::Rng;
 use timely::order::PartialOrder;
@@ -169,7 +169,7 @@ mod prometheus;
 pub enum Message {
     Command(Command),
     Worker(mz_dataflow_types::client::Response),
-    StatementReady(StatementReady),
+    CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
     SendDiffs(SendDiffs),
@@ -190,11 +190,11 @@ pub struct SendDiffs {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct StatementReady {
+pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<mz_sql::ast::Statement<Raw>, CoordError>,
+    pub result: Result<CreateSourceStatement<Raw>, CoordError>,
     pub params: Params,
 }
 
@@ -724,7 +724,9 @@ impl Coordinator {
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
                 Message::Worker(worker) => self.message_worker(worker).await,
-                Message::StatementReady(ready) => self.message_statement_ready(ready).await,
+                Message::CreateSourceStatementReady(ready) => {
+                    self.message_create_source_statement_ready(ready).await
+                }
                 Message::SinkConnectorReady(ready) => {
                     self.message_sink_connector_ready(ready).await
                 }
@@ -914,22 +916,31 @@ impl Coordinator {
         }
     }
 
-    async fn message_statement_ready(
+    async fn message_create_source_statement_ready(
         &mut self,
-        StatementReady {
+        CreateSourceStatementReady {
             mut session,
             tx,
             result,
             params,
-        }: StatementReady,
+        }: CreateSourceStatementReady,
     ) {
-        match future::ready(result)
-            .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
+        let stmt = match result {
+            Ok(stmt) => stmt,
+            Err(e) => return tx.send(Err(e), session),
+        };
+
+        let plan = match self
+            .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
             .await
         {
-            Ok(plan) => self.sequence_plan(tx, session, plan).await,
-            Err(e) => tx.send(Err(e), session),
-        }
+            Ok(Plan::CreateSource(plan)) => plan,
+            Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
+            Err(e) => return tx.send(Err(e), session),
+        };
+
+        let result = self.sequence_create_source(&mut session, plan).await;
+        tx.send(result, session);
     }
 
     async fn message_sink_connector_ready(
@@ -1327,7 +1338,7 @@ impl Coordinator {
     async fn handle_execute(
         &mut self,
         portal_name: String,
-        session: Session,
+        mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
         let portal = match session.get_portal(&portal_name) {
@@ -1455,27 +1466,41 @@ impl Coordinator {
             }
         }
 
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let purify_fut = mz_sql::pure::purify(
-            self.now(),
-            self.catalog.config().aws_external_id.clone(),
-            stmt.clone(),
-        );
+        let stmt = stmt.clone();
         let params = portal.parameters.clone();
-        let conn_id = session.conn_id();
-        task::spawn(|| format!("purify:{conn_id}"), {
-            async move {
-                let result = purify_fut.err_into().await;
-                internal_cmd_tx
-                    .send(Message::StatementReady(StatementReady {
-                        session,
-                        tx,
-                        result,
-                        params,
-                    }))
-                    .expect("sending to internal_cmd_tx cannot fail");
+        match stmt {
+            // `CREATE SOURCE` statements must be purified off the main
+            // coordinator thread of control.
+            Statement::CreateSource(stmt) => {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                let params = portal.parameters.clone();
+                let purify_fut = mz_sql::pure::purify_create_source(
+                    self.now(),
+                    self.catalog.config().aws_external_id.clone(),
+                    stmt,
+                );
+                task::spawn(|| format!("purify:{conn_id}"), async move {
+                    let result = purify_fut.err_into().await;
+                    internal_cmd_tx
+                        .send(Message::CreateSourceStatementReady(
+                            CreateSourceStatementReady {
+                                session,
+                                tx,
+                                result,
+                                params,
+                            },
+                        ))
+                        .expect("sending to internal_cmd_tx cannot fail");
+                });
             }
-        });
+
+            // All other statements are handled immediately.
+            _ => match self.handle_statement(&mut session, stmt, &params).await {
+                Ok(plan) => self.sequence_plan(tx, session, plan).await,
+                Err(e) => tx.send(Err(e), session),
+            },
+        }
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -1635,12 +1660,7 @@ impl Coordinator {
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
-            Plan::CreateSource(plan) => {
-                tx.send(
-                    self.sequence_create_source(&mut session, plan).await,
-                    session,
-                );
-            }
+            Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(session, plan, tx).await;
             }
