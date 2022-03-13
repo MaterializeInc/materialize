@@ -22,7 +22,7 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
 
 1. The Materialize replica will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the replica's IP address in the security group for the RDS instance.
 
-    If you are using Materialize Cloud, you will need to make the RDS instance publicly accessible; Materialize Cloud instances do not have static IP addresses.
+    If you are using Materialize Cloud, you can follow the steps here to get your [Materialize instace static IP address](/docs/cloud/security/#static-ip-addresses).
 
 1. Restart the database so all changes can take effect.
 
@@ -71,7 +71,7 @@ As a superuser, make these changes to the upstream database:
 
 1. The Materialize replica will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the replica's IP address in the security group for the DB instance.
 
-    If you are using Materialize Cloud, you will need to make the DB instance publicly accessible; Materialize Cloud instances do not have static IP addresses.
+    If you are using Materialize Cloud, you can follow the steps here to get your [Materialize instace static IP address](/docs/cloud/security/#static-ip-addresses).
 
 1. Restart the database so all changes can take effect.
 
@@ -99,9 +99,7 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
 
 1. In the Google Cloud Console, set the `cloudsql.logical_decoding` to `on`. This enables logical replication.
 
-1. The Materialize replica will need access to connect to the upstream database. In the Google Cloud Console, enable access on the upstream database for the Materialize replica's IP address.
-
-      If you are using Materialize Cloud, you will need to make the Cloud SQL instance publically accessible; Materialize Cloud instances do not have static IP addresses.
+1. The Materialize replica will need access to connect to the upstream database. In the Google Cloud Console, enable access on the upstream database for the [Materialize instace static IP address](/docs/cloud/security/#static-ip-addresses).
 
 1. Restart the database to apply your changes.
 
@@ -122,6 +120,24 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
     The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation.
+
+## DigitalOcean Managed Postgres
+
+Connect to the DigitalOcean Managed Postgres with the `doadmin` user and make the following:
+
+1. The Materialize replica will need access to connect to the upstream database. In your DigitalOcean Managed Postgres console, add your [Materialize instance IP address](/docs/cloud/security/#static-ip-addresses) to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls).
+
+1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
+
+    ```sql
+    CREATE PUBLICATION mz_source FOR TABLE table1, table2;
+    ```
+
+     As the `doadmin` user, is not a superuser, you will not be able to create a publication for all tables.
+
+     The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
+
+For more information, see the [Managed Postgres](https://docs.digitalocean.com/products/databases/postgresql/) documentation.
 
 ## Related pages
 
