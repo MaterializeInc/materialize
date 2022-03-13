@@ -9,7 +9,7 @@
 
 //! Implementations around supporting the TAIL protocol with the dataflow layer
 
-use mz_dataflow_types::TailResponse;
+use mz_dataflow_types::{PeekResponseUnary, TailResponse};
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 use tokio::sync::mpsc;
@@ -18,8 +18,8 @@ use tokio::sync::mpsc;
 pub(crate) struct PendingTail {
     /// Channel to send responses to the client
     ///
-    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
-    channel: mpsc::UnboundedSender<Vec<Row>>,
+    /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
+    channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted
     emit_progress: bool,
     /// Number of columns in the output
@@ -28,11 +28,11 @@ pub(crate) struct PendingTail {
 
 impl PendingTail {
     /// Create a new [PendingTail].
-    /// * The `channel` receives batches of finalized rows.
+    /// * The `channel` receives batches of finalized PeekResponses.
     /// * If `emit_progress` is true, the finalized rows are either data or progress updates
     /// * `arity` is the arity of the sink relation.
     pub(crate) fn new(
-        channel: mpsc::UnboundedSender<Vec<Row>>,
+        channel: mpsc::UnboundedSender<PeekResponseUnary>,
         emit_progress: bool,
         arity: usize,
     ) -> Self {
@@ -64,7 +64,7 @@ impl PendingTail {
                         packer.push(Datum::Null);
                     }
 
-                    let result = self.channel.send(vec![row_buf]);
+                    let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
                     if result.is_err() {
                         // TODO(benesch): we should actually drop the sink if the
                         // receiver has gone away. E.g. form a DROP SINK command?
@@ -101,7 +101,7 @@ impl PendingTail {
                     .collect();
                 // TODO(benesch): the lack of backpressure here can result in
                 // unbounded memory usage.
-                let result = self.channel.send(rows);
+                let result = self.channel.send(PeekResponseUnary::Rows(rows));
                 if result.is_err() {
                     // TODO(benesch): we should actually drop the sink if the
                     // receiver has gone away. E.g. form a DROP SINK command?
