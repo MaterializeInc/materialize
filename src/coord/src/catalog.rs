@@ -1924,6 +1924,20 @@ impl Catalog {
                         to_item,
                     }]
                 }
+                Op::AddTimestampBindings {
+                    source_id,
+                    bindings,
+                } => {
+                    for (partition, timestamp, offset) in bindings {
+                        tx.insert_timestamp_binding(
+                            &source_id,
+                            &partition.to_string(),
+                            timestamp,
+                            offset.offset,
+                        )?;
+                    }
+                    vec![]
+                }
             });
         }
 
@@ -2373,6 +2387,10 @@ pub enum Op {
     UpdateItem {
         id: GlobalId,
         to_item: CatalogItem,
+    },
+    AddTimestampBindings {
+        source_id: GlobalId,
+        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
     },
 }
 

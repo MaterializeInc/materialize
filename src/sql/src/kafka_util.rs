@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
+use mz_dataflow_types::sources::{KafkaOffset, MzOffset};
+use mz_expr::PartitionId;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::task;
 use rdkafka::client::ClientContext;
@@ -405,6 +407,34 @@ pub async fn lookup_start_offsets(
             }
 
             Ok(Some(start_offsets))
+        }
+    })
+    .await?
+}
+
+/// Fetches the existing parts and their maximum offsets.
+pub async fn fetch_max_offsets(
+    consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
+    topic: &str,
+) -> Result<Vec<(PartitionId, MzOffset)>, anyhow::Error> {
+    task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            // There cannot be more than i32 partitions
+            let parts = mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                Duration::from_secs(10),
+            )?;
+
+            let mut max_offsets = Vec::with_capacity(parts.len());
+            for pid in parts {
+                let (_low, high) =
+                    consumer.fetch_watermarks(&topic, pid, Duration::from_secs(10))?;
+                max_offsets.push((PartitionId::Kafka(pid), KafkaOffset { offset: high }.into()));
+            }
+
+            Ok(max_offsets)
         }
     })
     .await?

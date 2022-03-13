@@ -29,7 +29,8 @@ use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
-use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::sources::{AwsConfig, AwsExternalId, MzOffset};
+use mz_expr::PartitionId;
 use mz_repr::strconv;
 
 use prost::Message;
@@ -43,6 +44,17 @@ use crate::ast::{
 use crate::kafka_util;
 use crate::normalize;
 
+/// The output of [`purify_create_source`].
+#[derive(Debug)]
+pub struct PurifiedCreateSource<T> {
+    /// The purified statement, with all dependencies on external state removed.
+    pub statement: CreateSourceStatement<Raw>,
+    /// Initial timestamp bindings to record for the source.
+    ///
+    /// TODO: move this logic to STORAGE.
+    pub initial_timestamp_bindings: Vec<(PartitionId, T, MzOffset)>,
+}
+
 /// Purifies a statement, removing any dependencies on external state.
 ///
 /// See the section on [purification](crate#purification) in the crate
@@ -52,11 +64,12 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
 /// locking access to the catalog for an unbounded amount of time.
-pub async fn purify_create_source(
+pub async fn purify_create_source<T: Clone>(
     now: u64,
+    initial_timestamp: T,
     aws_external_id: AwsExternalId,
     mut stmt: CreateSourceStatement<Raw>,
-) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
+) -> Result<PurifiedCreateSource<T>, anyhow::Error> {
     let CreateSourceStatement {
         connector,
         format,
@@ -70,7 +83,7 @@ pub async fn purify_create_source(
     let mut config_options = BTreeMap::new();
 
     let mut file = None;
-    match connector {
+    let initial_timestamp_bindings = match connector {
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             if !broker.contains(':') {
                 *broker += ":9092";
@@ -113,6 +126,12 @@ pub async fn purify_create_source(
                 }
                 _ => {}
             }
+
+            kafka_util::fetch_max_offsets(Arc::clone(&consumer), &topic)
+                .await?
+                .into_iter()
+                .map(|(pid, offset)| (pid, initial_timestamp.clone(), offset))
+                .collect::<Vec<_>>()
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
             let path = path.clone();
@@ -130,6 +149,8 @@ pub async fn purify_create_source(
                 }
                 Ok::<_, anyhow::Error>(())
             })?;
+
+            vec![] // TODO
         }
         // Report an error if a file cannot be opened, or if it is a directory.
         CreateSourceConnector::File { path, .. } => {
@@ -138,10 +159,14 @@ pub async fn purify_create_source(
                 bail!("Expected a regular file, but {} is a directory.", path);
             }
             file = Some(f);
+
+            vec![] // TODO
         }
         CreateSourceConnector::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
+
+            vec![] // TODO
         }
         CreateSourceConnector::Kinesis { arn } => {
             let region = arn
@@ -152,6 +177,10 @@ pub async fn purify_create_source(
 
             let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
+
+            // Kinesis sources are not definite, so no initial timestamp
+            // bindings necessary.
+            vec![] // TODO
         }
         CreateSourceConnector::Postgres {
             conn,
@@ -174,9 +203,20 @@ pub async fn purify_create_source(
                 slot: slot.clone().expect("slot must exist"),
             };
             *details = Some(hex::encode(details_proto.encode_to_vec()));
+
+            // No need for initial timestamp bindings for PostgreSQL sources.
+            // The source is careful to report the entire initial snapshot
+            // at the first bound time.
+            //
+            // TODO: check this.
+            vec![]
         }
-        CreateSourceConnector::PubNub { .. } => (),
-    }
+        CreateSourceConnector::PubNub { .. } => {
+            // PubNub sources are not definite, so no initial timestamp bindings
+            // necessary.
+            vec![]
+        }
+    };
 
     purify_source_format(
         format,
@@ -188,7 +228,10 @@ pub async fn purify_create_source(
     )
     .await?;
 
-    Ok(stmt)
+    Ok(PurifiedCreateSource {
+        statement: stmt,
+        initial_timestamp_bindings,
+    })
 }
 
 async fn purify_source_format(

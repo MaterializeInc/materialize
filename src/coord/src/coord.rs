@@ -97,7 +97,8 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ExternalSourceConnector, MzOffset, PostgresSourceConnector, SourceConnector,
+    Timeline,
 };
 use mz_dataflow_types::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
@@ -105,7 +106,7 @@ use mz_dataflow_types::{
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    MirScalarExpr, OptimizedMirRelationExpr, PartitionId, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -136,6 +137,7 @@ use mz_sql::plan::{
     ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
+use mz_sql::pure::PurifiedCreateSource;
 use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
@@ -194,7 +196,7 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Raw>, CoordError>,
+    pub result: Result<PurifiedCreateSource<mz_repr::Timestamp>, CoordError>,
     pub params: Params,
 }
 
@@ -925,13 +927,17 @@ impl Coordinator {
             params,
         }: CreateSourceStatementReady,
     ) {
-        let stmt = match result {
-            Ok(stmt) => stmt,
+        let purified = match result {
+            Ok(purified) => purified,
             Err(e) => return tx.send(Err(e), session),
         };
 
         let plan = match self
-            .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
+            .handle_statement(
+                &mut session,
+                Statement::CreateSource(purified.statement),
+                &params,
+            )
             .await
         {
             Ok(Plan::CreateSource(plan)) => plan,
@@ -939,7 +945,9 @@ impl Coordinator {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let result = self.sequence_create_source(&mut session, plan).await;
+        let result = self
+            .sequence_create_source(&mut session, plan, purified.initial_timestamp_bindings)
+            .await;
         tx.send(result, session);
     }
 
@@ -1477,6 +1485,8 @@ impl Coordinator {
                 let params = portal.parameters.clone();
                 let purify_fut = mz_sql::pure::purify_create_source(
                     self.now(),
+                    // TODO: Determine this based on timeline?
+                    self.get_local_write_ts(),
                     self.catalog.config().aws_external_id.clone(),
                     stmt,
                 );
@@ -2076,6 +2086,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
+        initial_timestamp_bindings: Vec<(PartitionId, mz_repr::Timestamp, MzOffset)>,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id()?;
@@ -2096,6 +2107,10 @@ impl Coordinator {
             oid: source_oid,
             name: plan.name.clone(),
             item: CatalogItem::Source(source.clone()),
+        });
+        ops.push(catalog::Op::AddTimestampBindings {
+            source_id,
+            bindings: initial_timestamp_bindings,
         });
         let index = if plan.materialized {
             let compute_instance = self
