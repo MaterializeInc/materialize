@@ -12,7 +12,7 @@ docker==5.0.3
 ec2instanceconnectcli==1.0.2
 flake8==4.0.1
 isort==5.10.1
-mypy==0.931
+mypy==0.940
 numpy==1.22.2
 pandas==1.4.1
 parameterized==0.8.1
