@@ -19,6 +19,8 @@ $ set writer-schema={
 $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 {"a": 1, "b": "dog"}
 
+$ set-regex match=u\d+ replacement=UID
+
 # Create library of objects and verify names
 > CREATE MATERIALIZED SOURCE mz_data
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
@@ -186,7 +188,6 @@ View                                "Create View"
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
-$ set-regex match=u\d+ replacement=UID
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
