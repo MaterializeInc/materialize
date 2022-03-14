@@ -83,7 +83,7 @@ Materialize can ingest archived events from append-only log files in object stor
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| Amazon S3 | 🟢 Beta | The [AWS S3 Source](/sql/create-source/text-s3/) can be used to do one-time loads of archived events. [SQS notifications can be configured](/sql/create-source/text-s3/#listening-to-sqs-notifications) to prompt Materialize to ingest new events as they appear. | [More Info](/sql/create-source/text-s3/) [](#notify) |
+| Amazon S3 | 🟢 Beta | The [AWS S3 Source](/sql/create-source/s3/) can be used to do one-time loads of archived events. [SQS notifications can be configured](/sql/create-source/s3/#listening-to-sqs-notifications) to prompt Materialize to ingest new events as they appear. | [More Info](/sql/create-source/s3/) [](#notify) |
 | GCP Cloud Storage | 🔴 Researching | Direct integration requires development of a Google Cloud Storage source. | [](#notify) |
 | Azure Blob Storage | 🔴 Researching | Direct integration requires development of an Azure Blob Storage source. | [](#notify) |
 | MinIO Object Storage | 🔴 Researching | MinIO Object Storage has an [S3 compatible API](https://min.io/product/s3-compatibility), but the Materialize S3 source needs to be updated with additional configuration options for MinIO to work. | [](#notify) |
