@@ -58,14 +58,14 @@ EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false, timing: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } })
 
 parse-statement
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: true, timing: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } })
 
 parse-statement
 EXPLAIN (TIMING false) TYPED OPTIMIZED PLAN FOR VIEW foo
@@ -93,28 +93,28 @@ EXPLAIN (TIMING false) VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false, timing: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } })
 
 parse-statement
 EXPLAIN (TIMING false, TIMING true) VIEW foo
 ----
 EXPLAIN (TIMING true) OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false, timing: true } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } })
 
 parse-statement
 EXPLAIN (TIMING false, TIMING true) DECORRELATED PLAN FOR VIEW foo
 ----
 EXPLAIN (TIMING true) DECORRELATED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false, timing: true } })
+Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } })
 
 parse-statement
 EXPLAIN TYPED (TIMING false) OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: true, timing: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } })
 
 parse-statement
 EXPLAIN ((SELECT 1))

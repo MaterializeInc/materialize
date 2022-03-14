@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::ast::{Expr, Raw};
+use crate::ast::Expr;
 use crate::catalog::{
     CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
     CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
 use crate::plan::StatementDesc;
 use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
@@ -131,7 +131,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+    fn table_details(&self) -> Option<&[Expr<Aug>]> {
         unimplemented!()
     }
 

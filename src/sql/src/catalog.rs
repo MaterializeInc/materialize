@@ -24,11 +24,11 @@ use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, Raw};
+use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
 use crate::func::Func;
-use crate::names::{FullName, PartialName, SchemaName};
+use crate::names::{Aug, FullName, PartialName, SchemaName};
 use crate::plan::statement::StatementDesc;
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -287,7 +287,7 @@ pub trait CatalogItem {
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr<Raw>]>;
+    fn table_details(&self) -> Option<&[Expr<Aug>]>;
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.

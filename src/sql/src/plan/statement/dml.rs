@@ -20,16 +20,18 @@ use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
+use mz_sql_parser::ast::AstInfo;
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailRelation, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
+    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement,
+    Statement, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
-use crate::plan::query;
+use crate::names::{resolve_names, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::{query, QueryContext};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
     Plan, ReadThenWritePlan, TailFrom, TailPlan,
@@ -48,7 +50,7 @@ pub fn describe_insert(
         columns,
         source,
         ..
-    }: InsertStatement<Raw>,
+    }: InsertStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     query::plan_insert_query(scx, table_name, columns, source)?;
     Ok(StatementDesc::new(None))
@@ -60,7 +62,7 @@ pub fn plan_insert(
         table_name,
         columns,
         source,
-    }: InsertStatement<Raw>,
+    }: InsertStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
@@ -72,7 +74,7 @@ pub fn plan_insert(
 
 pub fn describe_delete(
     scx: &StatementContext,
-    stmt: DeleteStatement<Raw>,
+    stmt: DeleteStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     query::plan_delete_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
@@ -80,7 +82,7 @@ pub fn describe_delete(
 
 pub fn plan_delete(
     scx: &StatementContext,
-    stmt: DeleteStatement<Raw>,
+    stmt: DeleteStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
@@ -89,7 +91,7 @@ pub fn plan_delete(
 
 pub fn describe_update(
     scx: &StatementContext,
-    stmt: UpdateStatement<Raw>,
+    stmt: UpdateStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     query::plan_update_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
@@ -97,7 +99,7 @@ pub fn describe_update(
 
 pub fn plan_update(
     scx: &StatementContext,
-    stmt: UpdateStatement<Raw>,
+    stmt: UpdateStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
@@ -135,16 +137,16 @@ pub fn plan_read_then_write(
 
 pub fn describe_select(
     scx: &StatementContext,
-    SelectStatement { query, .. }: SelectStatement<Raw>,
+    stmt: SelectStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let query::PlannedQuery { desc, .. } =
-        query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+        query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_select(
     scx: &StatementContext,
-    SelectStatement { query, as_of }: SelectStatement<Raw>,
+    SelectStatement { query, as_of }: SelectStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
@@ -164,7 +166,7 @@ pub fn describe_explain(
     scx: &StatementContext,
     ExplainStatement {
         stage, explainee, ..
-    }: ExplainStatement<Raw>,
+    }: ExplainStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
@@ -199,13 +201,13 @@ pub fn plan_explain(
         stage,
         explainee,
         options,
-    }: ExplainStatement<Raw>,
+    }: ExplainStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
     let query = match explainee {
         Explainee::View(name) => {
-            let view = scx.resolve_item(name.clone())?;
+            let view = scx.get_item_by_name(&name)?;
             if view.item_type() != CatalogItemType::View {
                 bail!("Expected {} to be a view, not a {}", name, view.item_type());
             }
@@ -218,11 +220,12 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            query
+            let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            resolve_names(&mut qcx, query)?
         }
         Explainee::Query(query) => query,
     };
-    // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+    // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     let query::PlannedQuery {
         mut expr,
@@ -252,7 +255,7 @@ pub fn plan_explain(
 /// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
-    query: Query<Raw>,
+    query: Query<Aug>,
     params: &Params,
     lifetime: QueryLifetime,
 ) -> Result<query::PlannedQuery<MirRelationExpr>, anyhow::Error> {
@@ -280,19 +283,17 @@ with_options! {
 
 pub fn describe_tail(
     scx: &StatementContext,
-    TailStatement {
-        relation, options, ..
-    }: TailStatement<Raw>,
+    stmt: TailStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let relation_desc = match relation {
-        TailRelation::Name(name) => scx.resolve_item(name)?.desc()?.clone(),
+    let relation_desc = match stmt.relation {
+        TailRelation::Name(name) => scx.get_item_by_name(&name)?.desc()?.clone(),
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
             desc
         }
     };
-    let options = TailOptions::try_from(options)?;
+    let options = TailOptions::try_from(stmt.options)?;
     let progress = options.progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
@@ -311,7 +312,7 @@ pub fn describe_tail(
         }
         desc = desc.with_column(name, ty);
     }
-    Ok(StatementDesc::new(Some(desc)))
+    return Ok(StatementDesc::new(Some(desc)));
 }
 
 pub fn plan_tail(
@@ -320,12 +321,12 @@ pub fn plan_tail(
         relation,
         options,
         as_of,
-    }: TailStatement<Raw>,
+    }: TailStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let from = match relation {
         TailRelation::Name(name) => {
-            let entry = scx.resolve_item(name)?;
+            let entry = scx.get_item_by_name(&name)?;
             match entry.item_type() {
                 CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
                     TailFrom::Id(entry.id())
@@ -374,7 +375,7 @@ pub fn plan_tail(
 
 pub fn describe_table(
     scx: &StatementContext,
-    table_name: UnresolvedObjectName,
+    table_name: <Aug as AstInfo>::ObjectName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
@@ -394,7 +395,7 @@ with_options! {
 
 pub fn describe_copy(
     scx: &StatementContext,
-    CopyStatement { relation, .. }: CopyStatement<Raw>,
+    CopyStatement { relation, .. }: CopyStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(match relation {
         CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
@@ -406,7 +407,7 @@ pub fn describe_copy(
 
 fn plan_copy_from(
     scx: &StatementContext,
-    table_name: UnresolvedObjectName,
+    table_name: ResolvedObjectName,
     columns: Vec<Ident>,
     params: CopyParams,
 ) -> Result<Plan, anyhow::Error> {
@@ -425,7 +426,7 @@ pub fn plan_copy(
         direction,
         target,
         options,
-    }: CopyStatement<Raw>,
+    }: CopyStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let options = CopyOptions::try_from(options)?;
     let mut copy_params = CopyParams {

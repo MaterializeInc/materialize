@@ -286,11 +286,9 @@ pub fn sql_impl(
         );
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
+        let mut expr = resolve_names_expr(&mut qcx, expr.clone())?;
         // Desugar the expression
-        let mut expr = expr.clone();
         transform_ast::transform_expr(&scx, &mut expr)?;
-
-        let expr = resolve_names_expr(&mut qcx, expr)?;
 
         let ecx = ExprContext {
             qcx: &qcx,
@@ -366,10 +364,9 @@ fn sql_impl_table_func_inner(
         );
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
-        let mut query = query.clone();
+        let query = query.clone();
+        let mut query = resolve_names(&mut qcx, query)?;
         transform_ast::transform_query(&scx, &mut query)?;
-
-        let query = resolve_names(&mut qcx, query)?;
 
         query::plan_nested_query(&mut qcx, &query)
     };
