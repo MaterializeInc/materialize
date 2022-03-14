@@ -76,14 +76,6 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
 }
 
-struct UnparkOnDrop<T>(JoinHandle<T>);
-
-impl<T> Drop for UnparkOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.thread().unpark();
-    }
-}
-
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
