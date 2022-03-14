@@ -85,3 +85,30 @@ special processing around deriving separate orders for Postgres, Kafka,
 Materialize, etc. We can, I think, shovel the entire history of transactions
 across all n services right into Elle, and it'll tell us whether or not strict
 serializability actually held!
+
+## Moving Parts
+
+Our Jepsen DB will probably have several objects and run them on distinct
+sub-clusters. I imagine we'll likely start with:
+
+1. An external DB (e.g. Postgres), where we'll write new data
+2. A Materialize cluster
+
+The Materialize cluster might have different subsystems on different nodes--if
+so, we may need a composite DB that runs, say, a timestamp oracle, a collection
+of storage nodes, a collection of compute nodes, etc.
+
+In later tests, we might want to add additional external systems--for instance, a Kafka instance.
+
+## Faults
+
+To start, I think we'll use the standard Jepsen nemeses for partitions, pauses,
+crashes, and clock skew across all nodes equally.
+
+As a second pass, we'll scope each of those failure modes to a specific subset
+of nodes--for instance, a crash which affects only postgres, or a pause of only
+some Materialize nodes. After that, we can then discuss partitions *between*
+Materialize and Postgres, or between Materialize subsystems, if appropriate.
+
+If there are plans to support cluster membership changes (e.g. adding/removing
+nodes to and from Materialize), we can look at those as well.
