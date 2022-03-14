@@ -396,9 +396,10 @@ where
                                         Result<_, DataflowError>,
                                     ) = match decoded_key {
                                         Err(key_decode_error) => {
-                                            // placeholder value that will not be used
                                             (
                                                 Err(key_decode_error.clone()),
+                                                // `DecodeError` converted to a `DataflowError`
+                                                // that we will eventually emit later below
                                                 Err(key_decode_error.into()),
                                             )
                                         }
@@ -486,9 +487,9 @@ where
                                                 res.map(|v| {
                                                     rehydrate(
                                                         &upsert_envelope.key_indices,
-                                                        // The value is never Ok
+                                                        // The value is never `Ok`
                                                         // unless the key is also
-                                                        &decoded_key.as_ref().unwrap(),
+                                                        decoded_key.as_ref().unwrap(),
                                                         &v,
                                                         &mut row_packer,
                                                     )
@@ -499,9 +500,9 @@ where
                                             res.map(|v| {
                                                 rehydrate(
                                                     &upsert_envelope.key_indices,
-                                                    // The value is never Ok
+                                                    // The value is never `Ok`
                                                     // unless the key is also
-                                                    &decoded_key.as_ref().unwrap(),
+                                                    decoded_key.as_ref().unwrap(),
                                                     &v,
                                                     &mut row_packer,
                                                 )
@@ -512,6 +513,11 @@ where
                                     if let Some(old_value) = old_value {
                                         // Ensure we put the source in a permanently error'd state
                                         // than to keep on trucking with wrong results.
+                                        //
+                                        // TODO(guswynn): consider changing the key-type of
+                                        // the `current_values` map to allow us to retract
+                                        // errors. Currently, the `DecodeError` key type would
+                                        // retract unrelated errors with the same message.
                                         if !decoded_key.is_err() {
                                             // retract old value
                                             session.give((old_value, cap.time().clone(), -1));
