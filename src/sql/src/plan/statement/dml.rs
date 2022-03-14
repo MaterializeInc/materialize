@@ -174,6 +174,7 @@ pub fn describe_explain(
             ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
             ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
             ExplainStage::PhysicalPlan => "Physical Plan",
+            ExplainStage::Timestamp => "Timestamp",
         },
         ScalarType::String.nullable(false),
     )))

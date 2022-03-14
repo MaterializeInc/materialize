@@ -4460,6 +4460,7 @@ impl<'a> Parser<'a> {
             PHYSICAL,
             PLAN,
             QUERY,
+            TIMESTAMP,
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
@@ -4489,6 +4490,10 @@ impl<'a> Parser<'a> {
             Some(PHYSICAL) => {
                 self.expect_keywords(&[PLAN, FOR])?;
                 ExplainStage::PhysicalPlan
+            }
+            Some(TIMESTAMP) => {
+                self.expect_keywords(&[FOR])?;
+                ExplainStage::Timestamp
             }
             None => ExplainStage::OptimizedPlan,
             _ => unreachable!(),

@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use postgres::Row;
+use regex::Regex;
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -1021,6 +1022,38 @@ fn test_linearizable() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    Ok(())
+}
+
+// Test EXPLAIN TIMESTAMP. This cannot be in testdrive because it needs to do
+// a regex replacement of both timestamps and globalids, but testdrive only
+// allows one replacement. We don't need to do the globalid replacement here
+// because this test starts its own server, so generated ids don't change.
+#[test]
+fn test_explain_timestamp() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+    let timestamp_re = Regex::new(r"\d{13}").unwrap();
+
+    client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
+    let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
+    let explain: String = row.get(0);
+    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    assert_eq!(
+        explain,
+        "     timestamp: <TIMESTAMP>
+         since:[            0]
+         upper:[            0]
+     has table: true
+ table read ts: <TIMESTAMP>
+
+source materialize.public.t1 (u1, storage):
+ read frontier:[            0]
+write frontier:[            0]\n",
+    );
 
     Ok(())
 }

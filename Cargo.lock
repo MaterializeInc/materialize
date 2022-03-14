@@ -2719,6 +2719,7 @@ dependencies = [
  "prometheus",
  "rand",
  "rdkafka-sys",
+ "regex",
  "reqwest",
  "rlimit",
  "semver",
