@@ -32,7 +32,7 @@ Kafka is supported in Materialize as a [`SOURCE`](/sql/create-source/) of input
 | Confluent Cloud Kafka | 🟢 Production | Use SASL authentication, see [example here](/sql/create-source/kafka/#saslplain). The same config can be used to produce messages to Confluent Kafka via a [SINK](/sql/create-sink/). |  |
 | AWS MSK (Managed Streaming for Kafka) | 🟢 Production | Use SASL/SCRAM Authentication to securely connect to MSK clusters. [MSK SASL Docs](https://docs.aws.amazon.com/msk/latest/developerguide/msk-password.html) *(mTLS connections coming soon.)* |  |
 | Redpanda | 🟢 Beta | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/third-party/redpanda/) for instructions and limitations. | [More Info](/third-party/redpanda/) [](#notify) |
-| Heroku Kafka | 🟢 Alpha | Use [SSL Authentication](https://materialize.com/docs/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, [preventing SINKs from working](https://github.com/MaterializeInc/materialize/issues/8378). | [](#notify) |
+| Heroku Kafka | 🟡 Alpha | Use [SSL Authentication](https://materialize.com/docs/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, [preventing SINKs from working](https://github.com/MaterializeInc/materialize/issues/8378). | [](#notify) |
 
 
 ### Other Message Brokers
@@ -66,7 +66,7 @@ Materialize has a [direct PostgreSQL source](/sql/create-source/postgres/) tha
 
 ### Other Databases
 
-Currently, it is only possible to use Materialize with other databases via an intermediary service like Debezium that can handle extracting change-data-capture events. This may change in the future
+Currently, it is only possible to use Materialize with other databases via an intermediary service like Debezium that can handle extracting change-data-capture events. This may change in the future.
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
