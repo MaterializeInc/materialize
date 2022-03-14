@@ -4269,7 +4269,6 @@ pub fn scalar_type_from_sql(
             id,
             modifiers,
             name: _,
-            print_id: _,
         } => scalar_type_from_catalog(scx, *id, modifiers),
     }
 }

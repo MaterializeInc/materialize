@@ -23,6 +23,8 @@ use crate::ast::{
 };
 use crate::names::FullName;
 
+// TODO(jkosh44) Once we move to storing only Ids in create statements instead of names, we
+// shouldn't need this.
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
 /// items.
@@ -67,13 +69,15 @@ pub fn create_stmt_rename_refs(
     to_item_name: String,
 ) -> Result<(), String> {
     let from_object = UnresolvedObjectName::from(from_name.clone());
-    let maybe_update_object_name = |object_name: &mut UnresolvedObjectName| {
-        if object_name.0 == from_object.0 {
-            // The last name in an ObjectName is the item name. The item name
-            // does not have a fixed index.
-            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
-            let object_name_len = object_name.0.len() - 1;
-            object_name.0[object_name_len] = Ident::new(to_item_name.clone());
+    let maybe_update_object_name = |object_name: Option<&mut UnresolvedObjectName>| {
+        if let Some(object_name) = object_name {
+            if object_name.0 == from_object.0 {
+                // The last name in an ObjectName is the item name. The item name
+                // does not have a fixed index.
+                // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+                let object_name_len = object_name.0.len() - 1;
+                object_name.0[object_name_len] = Ident::new(to_item_name.clone());
+            }
         }
     };
 
@@ -265,7 +269,8 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
 
     fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ObjectName) {
         match object_name {
-            RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name(n),
+            RawName::Name(n) | RawName::IdAndName(_, n) => self.visit_unresolved_object_name(n),
+            RawName::Id(_) => {}
         }
     }
 }
@@ -329,7 +334,9 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
         object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
     ) {
         match object_name {
-            RawName::Name(n) | RawName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawName::Name(n) | RawName::IdAndName(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            // We don't need to rename Ids
+            RawName::Id(_) => {}
         }
     }
 }

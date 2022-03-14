@@ -38,6 +38,7 @@ use mz_sql::names::resolve_names_stmt;
 use mz_sql::plan::StatementContext;
 use mz_sql_parser::ast::CreateTypeAs;
 
+use crate::catalog::builtin::{TYPE_CHAR, TYPE_TEXT};
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 use crate::catalog::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
@@ -369,22 +370,45 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
     struct TypeNormalizer;
 
     lazy_static! {
-        static ref CHAR_REFERENCE: UnresolvedObjectName =
-            UnresolvedObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), Ident::new("char")]);
-        static ref TEXT_REFERENCE: UnresolvedObjectName =
-            UnresolvedObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), Ident::new("text")]);
+        static ref CHAR_NAME_REFERENCE: UnresolvedObjectName = UnresolvedObjectName(vec![
+            Ident::new(PG_CATALOG_SCHEMA),
+            Ident::new(TYPE_CHAR.name)
+        ]);
+        static ref CHAR_ID_REFERENCE: String = format!("{}", TYPE_CHAR.id);
+        static ref TEXT_NAME_REFERENCE: UnresolvedObjectName = UnresolvedObjectName(vec![
+            Ident::new(PG_CATALOG_SCHEMA),
+            Ident::new(TYPE_TEXT.name)
+        ]);
+        static ref TEXT_ID_REFERENCE: String = format!("{}", TYPE_TEXT.id);
     }
 
     impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
         fn visit_data_type_mut(&mut self, data_type: &'ast mut UnresolvedDataType) {
             if let UnresolvedDataType::Other { name, typ_mod } = data_type {
-                if name.name() == &*CHAR_REFERENCE {
-                    let t = TEXT_REFERENCE.clone();
-                    *name = match name {
-                        RawName::Name(_) => RawName::Name(t),
-                        RawName::Id(id, _) => RawName::Id(id.clone(), t),
-                    };
-                    *typ_mod = vec![];
+                match name {
+                    RawName::Name(name) => {
+                        if name == &*CHAR_NAME_REFERENCE {
+                            let t = TEXT_NAME_REFERENCE.clone();
+                            *name = t;
+                            *typ_mod = vec![];
+                        }
+                    }
+                    RawName::Id(id) => {
+                        if id == &*CHAR_ID_REFERENCE {
+                            let t = TEXT_ID_REFERENCE.clone();
+                            *id = t;
+                            *typ_mod = vec![];
+                        }
+                    }
+                    RawName::IdAndName(id, name) => {
+                        if id == &*CHAR_ID_REFERENCE || name == &*CHAR_NAME_REFERENCE {
+                            let t_name = TEXT_NAME_REFERENCE.clone();
+                            let t_id = TEXT_ID_REFERENCE.clone();
+                            *name = t_name;
+                            *id = t_id;
+                            *typ_mod = vec![];
+                        }
+                    }
                 }
             }
         }
@@ -649,16 +673,21 @@ fn ast_rewrite_type_references_0_6_1(
     impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
         fn visit_data_type_mut(&mut self, data_type: &'ast mut UnresolvedDataType) {
             if let UnresolvedDataType::Other { name, .. } = data_type {
-                let mut unresolved_name = name.name().clone();
-                if unresolved_name.0.len() == 1 {
-                    unresolved_name = UnresolvedObjectName(vec![
-                        Ident::new(PG_CATALOG_SCHEMA),
-                        unresolved_name.0.remove(0),
-                    ]);
-                }
-                *name = match name {
-                    RawName::Name(_) => RawName::Name(unresolved_name),
-                    RawName::Id(id, _) => RawName::Id(id.clone(), unresolved_name),
+                if let Some(unresolved_name) = name.name_mut() {
+                    let mut unresolved_name = unresolved_name.clone();
+                    if unresolved_name.0.len() == 1 {
+                        unresolved_name = UnresolvedObjectName(vec![
+                            Ident::new(PG_CATALOG_SCHEMA),
+                            unresolved_name.0.remove(0),
+                        ]);
+                    }
+                    *name = match name {
+                        RawName::Name(_) => RawName::Name(unresolved_name),
+                        RawName::Id(id) => RawName::Id(id.clone()),
+                        RawName::IdAndName(id, _) => {
+                            RawName::IdAndName(id.clone(), unresolved_name)
+                        }
+                    }
                 }
             }
         }

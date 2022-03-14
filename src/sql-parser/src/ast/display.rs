@@ -63,8 +63,8 @@ pub enum FormatMode {
     // necessary.
     Simple,
     // Stable prints out the AST in a form more suitable for persistence. All identifiers are
-    // quoted, even if not necessary. This mode is used when persisting table information to the
-    // catalog.
+    // quoted, even if not necessary. Additionally object IDs are printed instead of object names
+    // where applicable. This mode is used when persisting table information to the catalog.
     Stable,
 }
 

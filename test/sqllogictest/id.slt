@@ -36,23 +36,23 @@ SELECT a FROM [u1 AS materialize.public.y]
 
 # Renaming the table to something different.
 
-# Referring to it by its "true" name should not work.
-statement error column "x.a" does not exist
-SELECT x.a FROM [u1 AS materialize.public.y]
-
-# Referring to it by its assigned name should work.
+# Referring to it by its "true" name should work.
 query I
-SELECT y.a FROM [u1 AS materialize.public.y]
+SELECT x.a FROM [u1 AS materialize.public.y]
 ----
 1
 2
 3
 
+# Referring to it by its assigned name should not work.
+statement error column "y.a" does not exist
+SELECT y.a FROM [u1 AS materialize.public.y]
+
 statement error invalid id
-SELECT y.a FROM [u6 AS materialize.public.y]
+SELECT a FROM [u6 AS materialize.public.y]
 
 statement error invalid digit
-SELECT y.a FROM [xx AS materialize.public.y]
+SELECT a FROM [xx AS materialize.public.y]
 
 statement ok
 CREATE VIEW foo AS SELECT * FROM x

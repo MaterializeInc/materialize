@@ -20,15 +20,14 @@ use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedObjectName;
 
-use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, Value,
 };
-use crate::catalog::CatalogItemType;
-use crate::names::{resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier};
+use crate::catalog::{CatalogItem, CatalogItemType};
+use crate::names::{resolve_names_stmt_show, Aug};
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan, SendRowsPlan};
@@ -50,22 +49,7 @@ pub fn plan_show_create_view(
 ) -> Result<Plan, anyhow::Error> {
     let view = scx.get_item_by_name(&view_name)?;
     if let CatalogItemType::View = view.item_type() {
-        let name = view.name().to_string();
-        let view_sql = view.create_sql();
-        let parsed = parse::parse(view_sql)?;
-        let parsed = parsed[0].clone();
-        let mut resolved = resolve_names_stmt(scx, parsed)?;
-        let mut s = NameSimplifier {
-            catalog: scx.catalog,
-        };
-        s.visit_statement_mut(&mut resolved);
-
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&name),
-                Datum::String(&resolved.to_ast_string_stable()),
-            ])],
-        }))
+        plan_show_create(scx, view)
     } else {
         bail!("{} is not a view", view.name());
     }
@@ -88,19 +72,7 @@ pub fn plan_show_create_table(
 ) -> Result<Plan, anyhow::Error> {
     let table = scx.get_item_by_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
-        let name = table.name().to_string();
-        let parsed = parse::parse(table.create_sql())?.into_element();
-        let mut resolved = resolve_names_stmt(scx, parsed)?;
-        let mut s = NameSimplifier {
-            catalog: scx.catalog,
-        };
-        s.visit_statement_mut(&mut resolved);
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&name),
-                Datum::String(&resolved.to_ast_string_stable()),
-            ])],
-        }))
+        plan_show_create(scx, table)
     } else {
         bail!("{} is not a table", table.name());
     }
@@ -118,17 +90,12 @@ pub fn describe_show_create_source(
 }
 
 pub fn plan_show_create_source(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let source = scx.get_item_by_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&source.name().to_string()),
-                Datum::String(source.create_sql()),
-            ])],
-        }))
+        plan_show_create(scx, source)
     } else {
         bail!("{} is not a source", source.name());
     }
@@ -146,17 +113,12 @@ pub fn describe_show_create_sink(
 }
 
 pub fn plan_show_create_sink(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let sink = scx.get_item_by_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&sink.name().to_string()),
-                Datum::String(sink.create_sql()),
-            ])],
-        }))
+        plan_show_create(scx, sink)
     } else {
         bail!("'{}' is not a sink", sink.name());
     }
@@ -174,20 +136,27 @@ pub fn describe_show_create_index(
 }
 
 pub fn plan_show_create_index(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let index = scx.get_item_by_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&index.name().to_string()),
-                Datum::String(index.create_sql()),
-            ])],
-        }))
+        plan_show_create(scx, index)
     } else {
         bail!("'{}' is not an index", index.name());
     }
+}
+
+fn plan_show_create(scx: &StatementContext, item: &dyn CatalogItem) -> Result<Plan, anyhow::Error> {
+    let name = item.name().to_string();
+    let parsed = parse::parse(item.create_sql())?.into_element();
+    let resolved = resolve_names_stmt_show(scx, parsed)?;
+    Ok(Plan::SendRows(SendRowsPlan {
+        rows: vec![Row::pack_slice(&[
+            Datum::String(&name),
+            Datum::String(&resolved.to_ast_string()),
+        ])],
+    }))
 }
 
 pub fn show_databases<'a>(

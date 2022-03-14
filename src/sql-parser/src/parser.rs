@@ -3326,18 +3326,22 @@ impl<'a> Parser<'a> {
                 Some(Token::Ident(id)) => id,
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
-            self.expect_keyword(AS)?;
-            let name = self.parse_object_name()?;
-            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() < 2 {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "table name in square brackets must be fully qualified"
-                );
+            if self.parse_keyword(AS) {
+                let name = self.parse_object_name()?;
+                // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+                if name.0.len() < 2 {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "table name in square brackets must be fully qualified"
+                    );
+                }
+                self.expect_token(&Token::RBracket)?;
+                Ok(RawName::IdAndName(id, name))
+            } else {
+                self.expect_token(&Token::RBracket)?;
+                Ok(RawName::Id(id))
             }
-            self.expect_token(&Token::RBracket)?;
-            Ok(RawName::Id(id, name))
         } else {
             Ok(RawName::Name(self.parse_object_name()?))
         }

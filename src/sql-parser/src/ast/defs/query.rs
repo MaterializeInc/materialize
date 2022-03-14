@@ -57,21 +57,17 @@ pub struct Raw;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RawName {
     Name(UnresolvedObjectName),
-    Id(String, UnresolvedObjectName),
+    Id(String),
+    // needed for backwards compatibility, name part is always ignored
+    IdAndName(String, UnresolvedObjectName),
 }
 
 impl RawName {
-    pub fn name(&self) -> &UnresolvedObjectName {
+    pub fn name_mut(&mut self) -> Option<&mut UnresolvedObjectName> {
         match self {
-            RawName::Name(name) => name,
-            RawName::Id(_, name) => name,
-        }
-    }
-
-    pub fn name_mut(&mut self) -> &mut UnresolvedObjectName {
-        match self {
-            RawName::Name(name) => name,
-            RawName::Id(_, name) => name,
+            RawName::Name(name) => Some(name),
+            RawName::Id(_) => None,
+            RawName::IdAndName(_, name) => Some(name),
         }
     }
 }
@@ -80,7 +76,8 @@ impl AstDisplay for RawName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawName::Name(o) => f.write_node(o),
-            RawName::Id(id, o) => {
+            RawName::Id(id) => f.write_str(format!("[{}]", id)),
+            RawName::IdAndName(id, o) => {
                 f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
                 f.write_str("]");

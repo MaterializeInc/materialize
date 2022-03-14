@@ -18,7 +18,7 @@ SELECT * FROM [u123 AS materialize.public.foo]
 ----
 SELECT * FROM [u123 AS materialize.public.foo]
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123", UnresolvedObjectName([Ident("materialize"), Ident("public"), Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: IdAndName("u123", UnresolvedObjectName([Ident("materialize"), Ident("public"), Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM [u123 AS foo]
@@ -30,9 +30,9 @@ SELECT * FROM [u123 AS foo]
 parse-statement
 SELECT * FROM [u123]
 ----
-error: Expected AS, found right square bracket
 SELECT * FROM [u123]
-                   ^
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123"), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM [u123 AS materialize.public.foo
@@ -40,3 +40,10 @@ SELECT * FROM [u123 AS materialize.public.foo
 error: Expected right square bracket, found EOF
 SELECT * FROM [u123 AS materialize.public.foo
                                              ^
+
+parse-statement
+SELECT * FROM [u123
+----
+error: Expected right square bracket, found EOF
+SELECT * FROM [u123
+                   ^

@@ -20,12 +20,11 @@ use mz_ore::str::StrExt;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
-use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawName, Statement, UnresolvedDataType,
     UnresolvedObjectName,
 };
-use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
+use crate::catalog::{CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::{PlanError, QueryContext, StatementContext};
 
@@ -164,6 +163,16 @@ impl From<FullName> for PartialName {
     }
 }
 
+impl Default for PartialName {
+    fn default() -> Self {
+        PartialName {
+            database: None,
+            schema: None,
+            item: "".to_string(),
+        }
+    }
+}
+
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
 // names, and local IDs assigned to CTE definitions and references.
@@ -174,29 +183,23 @@ pub struct Aug;
 pub struct ResolvedObjectName {
     pub id: Id,
     pub raw_name: PartialName,
-    // Whether this object, when printed out, should use [id AS name] syntax. We
-    // want this for things like tables and sources, but not for things like
-    // types.
-    pub print_id: bool,
 }
 
 impl AstDisplay for ResolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if self.print_id {
-            f.write_str(format!("[{} AS ", self.id));
-        }
-        let n = self.raw_name();
-        if let Some(database) = n.database {
-            f.write_node(&Ident::new(database));
-            f.write_str(".");
-        }
-        if let Some(schema) = n.schema {
-            f.write_node(&Ident::new(schema));
-            f.write_str(".");
-        }
-        f.write_node(&Ident::new(n.item));
-        if self.print_id {
-            f.write_str("]");
+        if f.stable() {
+            f.write_str(format!("[{}]", self.id));
+        } else {
+            let n = self.raw_name();
+            if let Some(database) = n.database {
+                f.write_node(&Ident::new(database));
+                f.write_str(".");
+            }
+            if let Some(schema) = n.schema {
+                f.write_node(&Ident::new(schema));
+                f.write_str(".");
+            }
+            f.write_node(&Ident::new(n.item));
         }
     }
 }
@@ -233,7 +236,6 @@ pub enum ResolvedDataType {
         id: GlobalId,
         name: PartialName,
         modifiers: Vec<i64>,
-        print_id: bool,
     },
 }
 
@@ -258,27 +260,24 @@ impl AstDisplay for ResolvedDataType {
                 id,
                 name,
                 modifiers,
-                print_id,
             } => {
-                if *print_id {
-                    f.write_str(format!("[{} AS ", id));
-                }
-                if let Some(database) = &name.database {
-                    f.write_node(&Ident::new(database));
-                    f.write_str(".");
-                }
-                if let Some(schema) = &name.schema {
-                    f.write_node(&Ident::new(schema));
-                    f.write_str(".");
-                }
-                f.write_node(&Ident::new(&name.item));
-                if *print_id {
-                    f.write_str("]");
-                }
-                if modifiers.len() > 0 {
-                    f.write_str("(");
-                    f.write_node(&ast::display::comma_separated(modifiers));
-                    f.write_str(")");
+                if f.stable() {
+                    f.write_str(format!("[{}]", id))
+                } else {
+                    if let Some(database) = &name.database {
+                        f.write_node(&Ident::new(database));
+                        f.write_str(".");
+                    }
+                    if let Some(schema) = &name.schema {
+                        f.write_node(&Ident::new(schema));
+                        f.write_str(".");
+                    }
+                    f.write_node(&Ident::new(&name.item));
+                    if modifiers.len() > 0 {
+                        f.write_str("(");
+                        f.write_node(&ast::display::comma_separated(modifiers));
+                        f.write_str(")");
+                    }
                 }
             }
         }
@@ -366,7 +365,6 @@ impl<'a> NameResolver<'a> {
                             id: array_item.id(),
                             name: array_item.name().clone().into(),
                             modifiers,
-                            print_id: true,
                         })
                     }
                 }
@@ -393,11 +391,10 @@ impl<'a> NameResolver<'a> {
                         let item = self.catalog.resolve_item(&name)?;
                         (item.name().clone().into(), item)
                     }
-                    RawName::Id(id, name) => {
-                        let name = normalize::unresolved_object_name(name).unwrap();
+                    RawName::Id(id) | RawName::IdAndName(id, _) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item_by_id(&gid);
-                        (name, item)
+                        (item.name().clone().into(), item)
                     }
                 };
                 self.ids.insert(item.id());
@@ -405,7 +402,6 @@ impl<'a> NameResolver<'a> {
                     id: item.id(),
                     name,
                     modifiers: typ_mod,
-                    print_id: true,
                 })
             }
         }
@@ -484,7 +480,6 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
                             raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
-                            print_id: false,
                         };
                     }
                 }
@@ -493,14 +488,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match self.catalog.resolve_item(&name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
-                        let print_id = !matches!(
-                            item.item_type(),
-                            CatalogItemType::Func | CatalogItemType::Type
-                        );
                         ResolvedObjectName {
                             id: Id::Global(item.id()),
                             raw_name: item.name().clone().into(),
-                            print_id,
                         }
                     }
                     Err(e) => {
@@ -510,27 +500,35 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         ResolvedObjectName {
                             id: Id::Local(LocalId::new(0)),
                             raw_name: name,
-                            print_id: false,
                         }
                     }
                 }
             }
-            RawName::Id(id, raw_name) => {
+            RawName::Id(id) | RawName::IdAndName(id, _) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
                         self.status = Err(e.into());
-                        GlobalId::User(0)
+                        return ResolvedObjectName {
+                            id: Id::Global(GlobalId::User(0)),
+                            raw_name: PartialName::default(),
+                        };
                     }
                 };
-                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
-                    self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
-                }
+
+                let item = self.catalog.try_get_item_by_id(&gid);
+                let name: PartialName = if let Some(item) = item {
+                    item.name().clone().into()
+                } else {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                    }
+                    PartialName::default()
+                };
                 self.ids.insert(gid.clone());
                 ResolvedObjectName {
                     id: Id::Global(gid),
-                    raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
-                    print_id: true,
+                    raw_name: name,
                 }
             }
         }
@@ -554,7 +552,6 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         item: "ignored".into(),
                     },
                     modifiers: vec![],
-                    print_id: false,
                 }
             }
         }
@@ -670,34 +667,4 @@ where
     n.status?;
     qcx.extend_ids(&n.ids);
     Ok(result)
-}
-
-// Used when displaying a view's source for human creation. If the name
-// specified is the same as the name in the catalog, we don't use the ID format.
-#[derive(Debug)]
-pub struct NameSimplifier<'a> {
-    pub catalog: &'a dyn SessionCatalog,
-}
-
-impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
-    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
-        if let Id::Global(id) = name.id {
-            let item = self.catalog.get_item_by_id(&id);
-            if PartialName::from(item.name().clone()) == name.raw_name() {
-                name.print_id = false;
-            }
-        }
-    }
-
-    fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
-        if let ResolvedDataType::Named {
-            id, name, print_id, ..
-        } = name
-        {
-            let item = self.catalog.get_item_by_id(id);
-            if PartialName::from(item.name().clone()) == *name {
-                *print_id = false;
-            }
-        }
-    }
 }
