@@ -35,6 +35,7 @@ use mz_sql::ast::{
     UnresolvedDataType, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::names::resolve_names_stmt;
+use mz_sql::plan::StatementContext;
 use mz_sql_parser::ast::CreateTypeAs;
 
 use crate::catalog::storage::Transaction;
@@ -811,7 +812,7 @@ fn semantic_use_id_for_table_format_0_7_1(
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     // Resolve Statement<Raw> to Statement<Aug>
-    let resolved = resolve_names_stmt(cat, stmt.clone()).unwrap();
+    let resolved = resolve_names_stmt(&mut StatementContext::new(None, cat), stmt.clone()).unwrap();
     // Use consistent intermediary format between Aug and Raw.
     let create_sql = resolved.to_ast_string_stable();
     // Convert Statement<Aug> to Statement<Raw> (Aug is a subset of Raw's

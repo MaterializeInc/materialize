@@ -40,12 +40,12 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::Timestamp;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw};
+use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use mz_sql::names::{Aug, DatabaseSpecifier, FullName, PartialName, SchemaName};
 use mz_sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
@@ -417,7 +417,7 @@ pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr<Raw>>,
+    pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub persist_name: Option<String>,
@@ -2763,7 +2763,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+    fn table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

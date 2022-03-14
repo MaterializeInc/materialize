@@ -67,6 +67,13 @@ impl RawName {
             RawName::Id(_, name) => name,
         }
     }
+
+    pub fn name_mut(&mut self) -> &mut UnresolvedObjectName {
+        match self {
+            RawName::Name(name) => name,
+            RawName::Id(_, name) => name,
+        }
+    }
 }
 
 impl AstDisplay for RawName {

@@ -136,6 +136,7 @@ use mz_sql::plan::{
     ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
+use mz_sql_parser::ast::RawName;
 use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
@@ -4686,9 +4687,11 @@ pub fn index_sql(
 ) -> String {
     use mz_sql::ast::{Expr, Value};
 
+    // TODO(jkosh44): we should be able to use CreateIndexStatement<Aug> since we always no the ID
+    // for view_name
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: mz_sql::normalize::unresolve(view_name),
+        on_name: RawName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawIdent::Resolved(compute_instance.to_string())),
         key_parts: Some(
             keys.iter()

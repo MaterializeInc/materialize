@@ -26,11 +26,11 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function,
-    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Raw, SqlOption, Statement, TableFactor,
+    FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption, Statement, TableFactor,
     TableFunction, UnresolvedObjectName, Value, ViewDefinition,
 };
 
-use crate::names::{resolve_names_stmt, Aug, DatabaseSpecifier, FullName, PartialName};
+use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
@@ -98,7 +98,7 @@ pub fn options<T: AstInfo>(options: &[SqlOption<T>]) -> BTreeMap<String, Value> 
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
 /// values.
-pub fn option_objects(options: &[SqlOption<Raw>]) -> BTreeMap<String, SqlOption<Raw>> {
+pub fn option_objects(options: &[SqlOption<Aug>]) -> BTreeMap<String, SqlOption<Aug>> {
     options
         .iter()
         .map(|o| (ident(o.name().clone()), o.clone()))
@@ -128,10 +128,8 @@ pub fn unresolve(name: FullName) -> UnresolvedObjectName {
 /// objects that are persisted in the catalog.
 pub fn create_statement(
     scx: &StatementContext,
-    stmt: Statement<Raw>,
+    mut stmt: Statement<Aug>,
 ) -> Result<String, anyhow::Error> {
-    let mut stmt = resolve_names_stmt(scx.catalog, stmt)?;
-
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(
             scx.allocate_name(unresolved_object_name(name.clone())?),
@@ -142,11 +140,6 @@ pub fn create_statement(
         Ok(unresolve(scx.allocate_temporary_name(
             unresolved_object_name(name.clone())?,
         )))
-    };
-
-    let resolve_item = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        let item = scx.resolve_item(name.clone())?;
-        Ok(unresolve(item.name().clone()))
     };
 
     fn normalize_function_name(
@@ -238,23 +231,6 @@ pub fn create_statement(
                 _ => visit_mut::visit_table_factor_mut(self, table_factor),
             }
         }
-
-        fn visit_unresolved_object_name_mut(
-            &mut self,
-            unresolved_object_name: &'ast mut UnresolvedObjectName,
-        ) {
-            // Single-part object names can refer to CTEs in addition to
-            // catalog objects.
-            if let [ident] = unresolved_object_name.0.as_slice() {
-                if self.ctes.contains(ident) {
-                    return;
-                }
-            }
-            match self.scx.resolve_item(unresolved_object_name.clone()) {
-                Ok(full_name) => *unresolved_object_name = unresolve(full_name.name().clone()),
-                Err(e) => self.err = Some(e),
-            };
-        }
     }
 
     // Think very hard before changing any of the branches in this match
@@ -310,7 +286,6 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
-            from,
             connector: _,
             with_options: _,
             in_cluster: _,
@@ -319,9 +294,9 @@ pub fn create_statement(
             with_snapshot: _,
             as_of: _,
             if_not_exists,
+            ..
         }) => {
             *name = allocate_name(name)?;
-            *from = resolve_item(from)?;
             *if_not_exists = false;
         }
 
@@ -355,13 +330,12 @@ pub fn create_statement(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
-            on_name,
             in_cluster: _,
             key_parts,
             with_options: _,
             if_not_exists,
+            ..
         }) => {
-            *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer::new(scx);
             if let Some(key_parts) = key_parts {
                 for key_part in key_parts {
@@ -588,20 +562,23 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
+    use crate::names::resolve_names_stmt;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &StatementContext::new(None, &DummyCatalog);
+        let scx = &mut StatementContext::new(None, &DummyCatalog);
 
         let parsed = mz_sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",
         )?
         .into_element();
 
+        let stmt = resolve_names_stmt(scx, parsed)?;
+
         // Ensure that all identifiers are quoted.
         assert_eq!(
             r#"CREATE VIEW "dummy"."public"."foo" AS SELECT 1 AS "bar""#,
-            create_statement(scx, parsed)?,
+            create_statement(scx, stmt)?,
         );
 
         Ok(())
