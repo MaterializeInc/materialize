@@ -32,6 +32,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 
 use mz_build_info::BuildInfo;
 use mz_coord::LoggingConfig;
+use mz_dataflow_types::client::test_clients::DuplicatingClient;
 use mz_dataflow_types::client::InstanceConfig;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -281,6 +282,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         persister: persister.runtime.clone(),
         aws_external_id: config.aws_external_id.clone(),
     })?;
+
+    let dataflow_client = DuplicatingClient::new(dataflow_client);
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {

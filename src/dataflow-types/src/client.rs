@@ -977,3 +977,55 @@ pub mod process_local {
         }
     }
 }
+
+pub mod test_clients {
+    use crate::client::{Client, Command, Response};
+    use async_trait::async_trait;
+    use fail::fail_point;
+
+    pub struct DuplicatingClient<C> {
+        client: C,
+        response: Option<Response>,
+    }
+
+    impl<C> DuplicatingClient<C> {
+        pub fn new(client: C) -> Self {
+            Self {
+                client,
+                response: None,
+            }
+        }
+    }
+
+    fn duplicate_command() -> bool {
+        fail_point!("client-command-duplicate", |_| true);
+        false
+    }
+
+    fn duplicate_response() -> bool {
+        fail_point!("client-response-duplicate", |_| true);
+        false
+    }
+
+    #[async_trait(?Send)]
+    impl<C: Client> Client for DuplicatingClient<C> {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+            if duplicate_command() {
+                self.client.send(cmd.clone()).await?;
+            }
+            self.client.send(cmd).await
+        }
+
+        async fn recv(&mut self) -> Option<Response> {
+            if let Some(response) = self.response.take() {
+                Some(response)
+            } else {
+                let response = self.client.recv().await;
+                if duplicate_response() {
+                    self.response = response.clone();
+                }
+                response
+            }
+        }
+    }
+}
