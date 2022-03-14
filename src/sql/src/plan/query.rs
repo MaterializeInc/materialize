@@ -59,6 +59,7 @@ use mz_sql_parser::ast::{
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
     TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -69,7 +70,8 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
@@ -3955,7 +3957,7 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    Function {
+    f @ Function {
         name,
         args,
         filter,
@@ -3981,50 +3983,7 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
-            if !ecx.allow_windows {
-                sql_bail!("window functions are not allowed in {}", ecx.name);
-            }
-
-            // Various things are duplicated here and below, but done this way to improve
-            // error messages.
-
-            if *distinct {
-                sql_bail!(
-                    "DISTINCT specified, but {} is not an aggregate function",
-                    name
-                );
-            }
-
-            if filter.is_some() {
-                bail_unsupported!("FILTER in window functions");
-            }
-
-            let window_spec = match over.as_ref() {
-                Some(over) => over,
-                None => sql_bail!("window function {} requires an OVER clause", name),
-            };
-            if window_spec.window_frame.is_some() {
-                bail_unsupported!("window frames");
-            }
-            let mut partition = Vec::new();
-            for expr in &window_spec.partition_by {
-                partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
-            }
-
-            let scalar_args = match &args {
-                FunctionArgs::Star => {
-                    sql_bail!("* argument is invalid with non-aggregate function {}", name)
-                }
-                FunctionArgs::Args { args, order_by } => {
-                    if !order_by.is_empty() {
-                        sql_bail!(
-                            "ORDER BY specified, but {} is not an aggregate function",
-                            name
-                        );
-                    }
-                    plan_exprs(ecx, args)?
-                }
-            };
+            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
 
             let func = func::select_impl(
                 ecx,
@@ -4039,6 +3998,29 @@ fn plan_function<'a>(
             return Ok(HirScalarExpr::Windowing(WindowExpr {
                 func: WindowExprType::Scalar(ScalarWindowExpr {
                     func,
+                    order_by: col_orders,
+                }),
+                partition,
+                order_by,
+            }));
+        }
+        Func::ValueWindow(impls) => {
+            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
+
+            let (expr, func) = func::select_impl(
+                ecx,
+                FuncSpec::Func(&unresolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+
+            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
+
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Value(ValueWindowExpr {
+                    func,
+                    expr: Box::new(expr),
                     order_by: col_orders,
                 }),
                 partition,
@@ -4253,6 +4235,70 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
+}
+
+fn validate_window_function_plan<'a>(
+    ecx: &ExprContext,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &'a Function<Aug>,
+) -> Result<
+    (
+        &'a WindowSpec<Aug>,
+        Vec<CoercibleScalarExpr>,
+        Vec<HirScalarExpr>,
+    ),
+    PlanError,
+> {
+    if !ecx.allow_windows {
+        sql_bail!("window functions are not allowed in {}", ecx.name);
+    }
+
+    // Various things are duplicated here and in `plan_function` to improve error messages.
+
+    if *distinct {
+        sql_bail!(
+            "DISTINCT specified, but {} is not an aggregate function",
+            name
+        );
+    }
+
+    if filter.is_some() {
+        bail_unsupported!("FILTER in non-aggregate window functions");
+    }
+
+    let window_spec = match over.as_ref() {
+        Some(over) => over,
+        None => sql_bail!("window function {} requires an OVER clause", name),
+    };
+    if window_spec.window_frame.is_some() {
+        bail_unsupported!("window frames");
+    }
+    let mut partition = Vec::new();
+    for expr in &window_spec.partition_by {
+        partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
+    }
+
+    let scalar_args = match &args {
+        FunctionArgs::Star => {
+            sql_bail!("* argument is invalid with non-aggregate function {}", name)
+        }
+        FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                sql_bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, args)?
+        }
+    };
+
+    Ok((window_spec, scalar_args, partition))
 }
 
 // Implement these as two identical enums without From/Into impls so that they

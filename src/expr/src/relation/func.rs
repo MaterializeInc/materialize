@@ -14,6 +14,7 @@ use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
+use itertools::Itertools;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use regex::Regex;
@@ -637,6 +638,67 @@ where
     })
 }
 
+// The expected input is in the format of [((OriginalRow, EncodedArgs), OrderByExprs...)]
+fn lag<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, EncodedArgs) record
+    let datums = order_aggregate_datums(datums, order_by);
+
+    // Decode the input (OriginalRow, EncodedArgs) into separate datums
+    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag
+    let datums = datums
+        .into_iter()
+        .map(|d| {
+            let mut iter = d.unwrap_list().iter();
+            let original_row = iter.next().unwrap();
+            let mut encoded_args = iter.next().unwrap().unwrap_list().iter();
+            let (input_value, offset, default_value) = (
+                encoded_args.next().unwrap(),
+                encoded_args.next().unwrap(),
+                encoded_args.next().unwrap(),
+            );
+
+            (input_value, offset, default_value, original_row)
+        })
+        .collect_vec();
+
+    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(datums.len());
+    for (idx, (_, offset, default_value, original_row)) in datums.iter().enumerate() {
+        // Null offsets are acceptable, and always return null
+        if offset.is_null() {
+            result.push((*offset, *original_row));
+            continue;
+        }
+
+        let idx = i64::try_from(idx).expect("Array index does not fit in i64");
+        let offset = i64::from(offset.unwrap_int32());
+        let vec_offset = idx - offset;
+
+        let lagged_value = if vec_offset >= 0 {
+            datums
+                .get(vec_offset as usize)
+                .map(|d| d.0)
+                .unwrap_or(*default_value)
+        } else {
+            *default_value
+        };
+
+        result.push((lagged_value, *original_row));
+    }
+
+    let result = result.into_iter().map(|(lag, original_row)| {
+        temp_storage.make_datum(|packer| {
+            packer.push_list(vec![lag, original_row]);
+        })
+    });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
@@ -707,6 +769,9 @@ pub enum AggregateFunc {
     DenseRank {
         order_by: Vec<ColumnOrder>,
     },
+    Lag {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -760,6 +825,7 @@ impl AggregateFunc {
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
             AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
             AggregateFunc::DenseRank { order_by } => dense_rank(datums, temp_storage, order_by),
+            AggregateFunc::Lag { order_by } => lag(datums, temp_storage, order_by),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -787,6 +853,7 @@ impl AggregateFunc {
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             AggregateFunc::DenseRank { .. } => Datum::empty_list(),
+            AggregateFunc::Lag { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -862,6 +929,29 @@ impl AggregateFunc {
                 },
                 _ => unreachable!(),
             },
+            AggregateFunc::Lag { .. } => {
+                // The input type for Lag is a ((OriginalRow, EncodedArgs), OrderByExprs...)
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let value_type = fields[0].unwrap_record_element_type()[1]
+                    .unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(true);
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (ColumnName::from("?lag?"), value_type),
+                            (ColumnName::from("?record?"), original_row_type),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                }
+            }
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -1150,6 +1240,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
             AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
             AggregateFunc::DenseRank { .. } => f.write_str("dense_rank"),
+            AggregateFunc::Lag { .. } => f.write_str("lag"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

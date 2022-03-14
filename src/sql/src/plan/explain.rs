@@ -509,6 +509,11 @@ impl<'a> Explanation<'a> {
                     WindowExprType::Scalar(scalar) => {
                         write!(f, "{}()", scalar.clone().into_expr())?
                     }
+                    WindowExprType::Value(scalar) => {
+                        write!(f, "{}(", scalar.clone().into_expr())?;
+                        self.fmt_scalar_expr(f, &scalar.expr)?;
+                        write!(f, ")")?
+                    }
                 }
                 write!(f, " over (")?;
                 for (i, e) in expr.partition.iter().enumerate() {

@@ -207,15 +207,21 @@ impl WindowExpr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// A window function with its parameters.
 ///
-/// There are two types of window functions: scalar window functions, that
-/// return a different scalar value for each row within a partition, and
-/// aggregate window functions, that return the same value for all the tuples
-/// within the same partition. Aggregate window functions can be computed
-/// by joinining the input relation with a reduction over the same relation
-/// that computes the aggregation using the partition key as its grouping
-/// key.
+/// There are three types of window functions:
+/// - scalar window functions, that return a different scalar value for each
+/// row within a partition that depends exclusively on the position of the row
+/// within the partition;
+/// - value window functions, that return a scalar value for each row within a
+/// partition that might be computed based on a single previous, current or
+/// following row;
+/// - aggregate window functions, that return a computed value for the row that
+/// depends on multiple other rows within the same partition. Aggregate window
+/// functions can be in some cases be computed by joining the input relation
+/// with a reduction over the same relation that computes the aggregation using
+/// the partition key as its grouping key.
 pub enum WindowExprType {
     Scalar(ScalarWindowExpr),
+    Value(ValueWindowExpr),
 }
 
 impl WindowExprType {
@@ -225,6 +231,7 @@ impl WindowExprType {
     {
         match self {
             Self::Scalar(expr) => expr.visit_expressions(f),
+            Self::Value(expr) => expr.visit_expressions(f),
         }
     }
 
@@ -234,6 +241,7 @@ impl WindowExprType {
     {
         match self {
             Self::Scalar(expr) => expr.visit_expressions_mut(f),
+            Self::Value(expr) => expr.visit_expressions_mut(f),
         }
     }
 
@@ -245,6 +253,7 @@ impl WindowExprType {
     ) -> ColumnType {
         match self {
             Self::Scalar(expr) => expr.typ(outers, inner, params),
+            Self::Value(expr) => expr.typ(outers, inner, params),
         }
     }
 }
@@ -311,6 +320,65 @@ impl ScalarWindowFunc {
         match self {
             ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
             ScalarWindowFunc::DenseRank => ScalarType::Int64.nullable(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ValueWindowExpr {
+    pub func: ValueWindowFunc,
+    pub expr: Box<HirScalarExpr>,
+    pub order_by: Vec<ColumnOrder>,
+}
+
+impl ValueWindowExpr {
+    pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
+    {
+        f(&self.expr)
+    }
+
+    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
+    {
+        f(&mut self.expr)
+    }
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        self.func.output_type(self.expr.typ(outers, inner, params))
+    }
+
+    pub fn into_expr(self) -> mz_expr::AggregateFunc {
+        match self.func {
+            ValueWindowFunc::Lag => mz_expr::AggregateFunc::Lag {
+                order_by: self.order_by,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Value Window functions
+pub enum ValueWindowFunc {
+    Lag,
+}
+
+impl ValueWindowFunc {
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        match self {
+            ValueWindowFunc::Lag => {
+                // The input is a (value, offset, default) record, so extract the type of the first arg
+                input_type.scalar_type.unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(true)
+            }
         }
     }
 }

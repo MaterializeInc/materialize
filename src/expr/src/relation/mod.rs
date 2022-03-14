@@ -2035,6 +2035,48 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type for Lag is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
+            AggregateFunc::Lag { .. } => {
+                let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Extract the original row
+                let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Extract the encoded args
+                let encoded_args = tuple.call_unary(UnaryFunc::RecordGet(1));
+                let expr = encoded_args.clone().call_unary(UnaryFunc::RecordGet(0));
+                let offset = encoded_args.clone().call_unary(UnaryFunc::RecordGet(1));
+                let default_value = encoded_args.call_unary(UnaryFunc::RecordGet(2));
+
+                // In this case, the window always has only one element, so if the offset is not zero,
+                // the default value should be returned instead.
+                let value = offset
+                    .call_binary(
+                        MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
+                        crate::BinaryFunc::Eq,
+                    )
+                    .if_then_else(expr, default_value);
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: self
+                            .typ(input_type)
+                            .scalar_type
+                            .unwrap_list_element_type()
+                            .clone(),
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?lag?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
