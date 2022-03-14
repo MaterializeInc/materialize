@@ -339,7 +339,34 @@ impl FromHir {
             // } => todo!(),
             // HirRelationExpr::Negate { input } => todo!(),
             // HirRelationExpr::Threshold { input } => todo!(),
-            // HirRelationExpr::Union { base, inputs } => todo!(),
+            HirRelationExpr::Union { base, inputs } => {
+                use QuantifierType::Foreach;
+
+                // recurse to inputs
+                let mut input_ids = vec![self.generate_internal(*base)?];
+                for input in inputs {
+                    input_ids.push(self.generate_internal(input)?);
+                }
+
+                // create Union box and connect inputs
+                let union_id = self.model.make_box(BoxType::Union);
+                let quant_ids = input_ids
+                    .iter()
+                    .map(|input_id| self.model.make_quantifier(Foreach, *input_id, union_id))
+                    .collect::<Vec<_>>();
+
+                // project all columns from the first input (convention-based constraint)
+                let columns_len = self.model.get_box(input_ids[0]).columns.len();
+                let mut union_box = self.model.get_mut_box(union_id);
+                for n in 0..columns_len {
+                    union_box.add_column(BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: quant_ids[0],
+                        position: n,
+                    }));
+                }
+
+                Ok(union_id)
+            }
             // HirRelationExpr::DeclareKeys { input, keys } => todo!(),
             expr => Err(QGMError::from(UnsupportedHirRelationExpr {
                 expr,
