@@ -60,7 +60,7 @@ by the Apache License, Version 2.0.  */}}
           $('pre.chroma span.copy_button').click(function(e) {
             var _this = $(this),
                 copyHex = document.createElement('textarea');
-            copyHex.value = _this.parent().text().trim();
+            copyHex.value = _this.parent().find('code').text().trim();
             document.body.appendChild(copyHex);
             copyHex.select();
             document.execCommand('copy');
