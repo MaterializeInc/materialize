@@ -7,18 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-
 use mz_dataflow_types::sources::AwsExternalId;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
+use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
+use serde::ser::StdError;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use timely::scheduling::activate::SyncActivator;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -190,7 +191,7 @@ impl SourceReader for KafkaSourceReader {
             partition_info,
             _metadata_thread_handle: metadata_thread_handle,
             partition_metrics: KafkaPartitionMetrics::new(
-                &base_metrics,
+                &base_metrics.partition_specific,
                 partition_ids,
                 topic,
                 source_name,
@@ -404,25 +405,29 @@ impl KafkaSourceReader {
                 });
                 self.last_stats = Some(stats.clone());
             }
-            if let Some(obj) = stats.as_ref().to_serde_json().as_object() {
-                // The high watermark is per partition, get the per partition map from the json stats with the path topics.$topic_name.partitions
-                if let Some(partitions) = obj
-                    .get("topics")
-                    .and_then(|v| v.get(self.topic_name.clone()))
-                    .and_then(|v| v.get("partitions"))
-                    .and_then(|v| v.as_object())
-                {
-                    partitions.iter().for_each(|i| {
-                        if let Ok(id) = str::parse::<i32>(i.0) {
-                            if let Some(offset) = i.1.as_i64() {
-                                self.partition_metrics.set_offset_max(id, offset);
-                            } else {
-                                error!("unable to get hi_offset for {}", id);
-                            }
-                        } else {
-                            error!("unable to get partition id from {:?}", i.0);
-                        }
+            let mut writer = vec![];
+            let write_res = stats.as_ref().to_writer(&mut writer);
+            // If the write failed log an error and continue to the next loop iteration
+            if let Err(e) = write_res {
+                error!("error serializing rdkafka stats: {}", e);
+                continue;
+            }
+
+            // This temp var is required to satisfy the type checker
+            let res: Result<Statistics, serde_json::Error> =
+                serde_json::from_reader(writer.as_slice());
+            match res {
+                Ok(statistics) => {
+                    statistics.topics.get(&self.topic_name).and_then(|topic| {
+                        topic.partitions.iter().for_each(|(id, partition)| {
+                            self.partition_metrics
+                                .set_offset_max(*id, partition.hi_offset);
+                        });
+                        Some(())
                     });
+                }
+                Err(e) => {
+                    error!("{}", e);
                 }
             }
         }
