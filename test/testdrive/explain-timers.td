@@ -12,6 +12,7 @@ $ set-sql-timeout duration=125ms
 $ set-regex match=(\s\(u\d+\)|materialize\.public\.|\s\d\d:\d\d:\d\d\.\d\d\d\d\d\d) replacement=
 
 > CREATE TABLE t1 (col_null INTEGER, col_not_null INTEGER NOT NULL);
+> CREATE DEFAULT INDEX on t1
 
 ? EXPLAIN (TIMING true) SELECT * FROM t1;
 %0 =

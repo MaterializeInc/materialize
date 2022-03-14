@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::error::Error;
 use std::fmt;
 
 use lazy_static::lazy_static;
@@ -25,6 +26,21 @@ use crate::oid;
 /// [`VARHDRSZ`]: https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627
 const VARHDRSZ: i32 = 4;
 
+/// Mirror of PostgreSQL's [`MAX_INTERVAL_PRECISION`] constant.
+///
+/// See: <https://github.com/postgres/postgres/blob/27b77ecf9/src/include/datatype/timestamp.h#L54>
+const MAX_INTERVAL_PRECISION: i32 = 6;
+
+/// Mirror of PostgreSQL's [`MAX_TIMESTAMP_PRECISION`] constant.
+///
+/// See: <https://github.com/postgres/postgres/blob/27b77ecf9/src/include/datatype/timestamp.h#L53>
+const MAX_TIMESTAMP_PRECISION: i32 = 6;
+
+/// Mirror of PostgreSQL's [`MAX_TIME_PRECISION`] constant.
+///
+/// See: <https://github.com/postgres/postgres/blob/27b77ecf9/src/include/utils/date.h#L51>
+const MAX_TIME_PRECISION: i32 = 6;
+
 /// The type of a [`Value`](crate::Value).
 ///
 /// The [`Display`](fmt::Display) representation of a type is guaranteed to be
@@ -37,6 +53,8 @@ pub enum Type {
     Bool,
     /// A byte array, i.e., a variable-length binary string.
     Bytea,
+    /// A single-byte character.
+    Char,
     /// A date.
     Date,
     /// A 4-byte floating point number.
@@ -50,7 +68,10 @@ pub enum Type {
     /// An 8-byte signed integer.
     Int8,
     /// A time interval.
-    Interval,
+    Interval {
+        /// Optional constraints on the type.
+        constraints: Option<IntervalConstraints>,
+    },
     /// A textual JSON blob.
     Json,
     /// A binary JSON blob.
@@ -74,7 +95,7 @@ pub enum Type {
     /// A variable-length string.
     Text,
     /// A (usually) fixed-length string.
-    Char {
+    BpChar {
         /// The length of the string.
         ///
         /// If unspecified, the type represents a variable-length string.
@@ -86,13 +107,25 @@ pub enum Type {
         max_length: Option<CharLength>,
     },
     /// A time of day without a day.
-    Time,
+    Time {
+        /// An optional precision for the fractional digits in the second field.
+        precision: Option<TimePrecision>,
+    },
     /// A time with a time zone.
-    TimeTz,
+    TimeTz {
+        /// An optional precision for the fractional digits in the second field.
+        precision: Option<TimePrecision>,
+    },
     /// A date and time, without a timezone.
-    Timestamp,
+    Timestamp {
+        /// An optional precision for the fractional digits in the second field.
+        precision: Option<TimestampPrecision>,
+    },
     /// A date and time, with a timezone.
-    TimestampTz,
+    TimestampTz {
+        /// An optional precision for the fractional digits in the second field.
+        precision: Option<TimestampPrecision>,
+    },
     /// A universally unique identifier.
     Uuid,
     /// A function name.
@@ -108,7 +141,7 @@ pub enum Type {
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
 pub trait TypeConstraint: fmt::Display {
     /// Unpacks the type constraint from a typmod value.
-    fn from_typmod(typmod: i32) -> Option<Self>
+    fn from_typmod(typmod: i32) -> Result<Option<Self>, String>
     where
         Self: Sized;
 
@@ -121,12 +154,12 @@ pub trait TypeConstraint: fmt::Display {
 pub struct CharLength(i32);
 
 impl TypeConstraint for CharLength {
-    fn from_typmod(typmod: i32) -> Option<CharLength> {
+    fn from_typmod(typmod: i32) -> Result<Option<CharLength>, String> {
         // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/varchar.c#L139
         if typmod >= VARHDRSZ {
-            Some(CharLength(typmod - VARHDRSZ))
+            Ok(Some(CharLength(typmod - VARHDRSZ)))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -166,6 +199,103 @@ impl fmt::Display for CharLength {
     }
 }
 
+/// Constraints associated with [`Type::Interval`]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct IntervalConstraints {
+    /// The range of the interval.
+    range: i32,
+    /// The precision of the interval.
+    precision: i32,
+}
+
+impl TypeConstraint for IntervalConstraints {
+    fn from_typmod(typmod: i32) -> Result<Option<IntervalConstraints>, String> {
+        if typmod < 0 {
+            Ok(None)
+        } else {
+            // https://github.com/postgres/postgres/blob/27b77ecf9/src/include/utils/timestamp.h#L53-L54
+            let range = typmod >> 16 & 0x7fff;
+            let precision = typmod & 0xffff;
+            if precision > MAX_INTERVAL_PRECISION {
+                return Err(format!(
+                    "exceeds maximum interval precision {MAX_INTERVAL_PRECISION}"
+                ));
+            }
+            Ok(Some(IntervalConstraints { range, precision }))
+        }
+    }
+
+    fn into_typmod(&self) -> i32 {
+        (self.range << 16) | self.precision
+    }
+}
+
+impl fmt::Display for IntervalConstraints {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // https://github.com/postgres/postgres/blob/27b77ecf9/src/include/utils/timestamp.h#L52
+        // TODO: handle output of range.
+        write!(f, "({})", self.precision)
+    }
+}
+
+/// A precision associated with [`Type::Time`] and [`Type::TimeTz`].
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TimePrecision(i32);
+
+impl TypeConstraint for TimePrecision {
+    fn from_typmod(typmod: i32) -> Result<Option<TimePrecision>, String> {
+        if typmod > MAX_TIME_PRECISION {
+            Err(format!(
+                "exceeds maximum time precision {MAX_TIME_PRECISION}"
+            ))
+        } else if typmod >= 0 {
+            Ok(Some(TimePrecision(typmod)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn into_typmod(&self) -> i32 {
+        self.0
+    }
+}
+
+impl fmt::Display for TimePrecision {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // https://github.com/postgres/postgres/blob/27b77ecf9/src/backend/utils/adt/date.c#L97
+        write!(f, "({})", self.0)
+    }
+}
+
+/// A precision associated with [`Type::Timestamp`] and [`Type::TimestampTz`].
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TimestampPrecision(i32);
+
+impl TypeConstraint for TimestampPrecision {
+    fn from_typmod(typmod: i32) -> Result<Option<TimestampPrecision>, String> {
+        if typmod > MAX_TIMESTAMP_PRECISION {
+            Err(format!(
+                "exceeds maximum timestamp precision {MAX_TIMESTAMP_PRECISION}"
+            ))
+        } else if typmod >= 0 {
+            Ok(Some(TimestampPrecision(typmod)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn into_typmod(&self) -> i32 {
+        self.0
+    }
+}
+
+impl fmt::Display for TimestampPrecision {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // https://github.com/postgres/postgres/blob/54bd1e43c/src/backend/utils/adt/timestamp.c#L131
+        write!(f, "({})", self.0)
+    }
+}
+
 /// Constraints on [`Type::Numeric`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct NumericConstraints {
@@ -176,15 +306,15 @@ pub struct NumericConstraints {
 }
 
 impl TypeConstraint for NumericConstraints {
-    fn from_typmod(typmod: i32) -> Option<NumericConstraints> {
+    fn from_typmod(typmod: i32) -> Result<Option<NumericConstraints>, String> {
         // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/numeric.c#L829-L862
         if typmod >= VARHDRSZ {
-            Some(NumericConstraints {
+            Ok(Some(NumericConstraints {
                 max_precision: ((typmod - VARHDRSZ) >> 16) & 0xffff,
                 max_scale: (((typmod - VARHDRSZ) & 0x7ff) ^ 1024) - 1024,
-            })
+            }))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -226,8 +356,8 @@ lazy_static! {
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
-    pub fn from_oid(oid: u32) -> Option<Type> {
-        Type::from_oid_and_typmod(oid, 0)
+    pub fn from_oid(oid: u32) -> Result<Type, TypeFromOidError> {
+        Type::from_oid_and_typmod(oid, -1)
     }
 
     /// Returns the `Type` corresponding to the provided OID and packed type
@@ -239,76 +369,120 @@ impl Type {
     ///
     /// Returns an error if the OID is unknown or if the typmod is invalid for
     /// the type.
-    pub fn from_oid_and_typmod(oid: u32, typmod: i32) -> Option<Type> {
-        let ty = postgres_types::Type::from_oid(oid)?;
-        match ty {
-            postgres_types::Type::BOOL => Some(Type::Bool),
-            postgres_types::Type::BYTEA => Some(Type::Bytea),
-            postgres_types::Type::DATE => Some(Type::Date),
-            postgres_types::Type::FLOAT4 => Some(Type::Float4),
-            postgres_types::Type::FLOAT8 => Some(Type::Float8),
-            postgres_types::Type::INT2 => Some(Type::Int2),
-            postgres_types::Type::INT4 => Some(Type::Int4),
-            postgres_types::Type::INT8 => Some(Type::Int8),
-            postgres_types::Type::INTERVAL => Some(Type::Interval),
-            postgres_types::Type::JSON => Some(Type::Json),
-            postgres_types::Type::JSONB => Some(Type::Jsonb),
-            postgres_types::Type::NUMERIC => Some(Type::Numeric {
-                constraints: NumericConstraints::from_typmod(typmod),
-            }),
-            postgres_types::Type::OID => Some(Type::Oid),
-            postgres_types::Type::TEXT => Some(Type::Text),
-            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => Some(Type::Char {
-                length: CharLength::from_typmod(typmod),
-            }),
-            postgres_types::Type::VARCHAR => Some(Type::VarChar {
-                max_length: CharLength::from_typmod(typmod),
-            }),
-            postgres_types::Type::TIME => Some(Type::Time),
-            postgres_types::Type::TIMETZ => Some(Type::TimeTz),
-            postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
-            postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
-            postgres_types::Type::UUID => Some(Type::Uuid),
-            postgres_types::Type::REGCLASS => Some(Type::RegClass),
-            postgres_types::Type::REGPROC => Some(Type::RegProc),
-            postgres_types::Type::REGTYPE => Some(Type::RegType),
-            postgres_types::Type::BOOL_ARRAY => Some(Type::Array(Box::new(Type::Bool))),
-            postgres_types::Type::BYTEA_ARRAY => Some(Type::Array(Box::new(Type::Bytea))),
-            postgres_types::Type::BPCHAR_ARRAY => Some(Type::Array(Box::new(Type::Char {
-                length: CharLength::from_typmod(typmod),
-            }))),
-            postgres_types::Type::DATE_ARRAY => Some(Type::Array(Box::new(Type::Date))),
-            postgres_types::Type::FLOAT4_ARRAY => Some(Type::Array(Box::new(Type::Float4))),
-            postgres_types::Type::FLOAT8_ARRAY => Some(Type::Array(Box::new(Type::Float8))),
-            postgres_types::Type::INT2_ARRAY => Some(Type::Array(Box::new(Type::Int2))),
-            postgres_types::Type::INT4_ARRAY => Some(Type::Array(Box::new(Type::Int4))),
-            postgres_types::Type::INT8_ARRAY => Some(Type::Array(Box::new(Type::Int8))),
-            postgres_types::Type::INTERVAL_ARRAY => Some(Type::Array(Box::new(Type::Interval))),
-            postgres_types::Type::JSON_ARRAY => Some(Type::Array(Box::new(Type::Json))),
-            postgres_types::Type::JSONB_ARRAY => Some(Type::Array(Box::new(Type::Jsonb))),
-            postgres_types::Type::NUMERIC_ARRAY => Some(Type::Array(Box::new(Type::Numeric {
-                constraints: NumericConstraints::from_typmod(typmod),
-            }))),
-            postgres_types::Type::OID_ARRAY => Some(Type::Array(Box::new(Type::Oid))),
-            postgres_types::Type::TEXT_ARRAY => Some(Type::Array(Box::new(Type::Text))),
-            postgres_types::Type::TIME_ARRAY => Some(Type::Array(Box::new(Type::Time))),
-            postgres_types::Type::TIMETZ_ARRAY => Some(Type::Array(Box::new(Type::TimeTz))),
-            postgres_types::Type::TIMESTAMP_ARRAY => Some(Type::Array(Box::new(Type::Timestamp))),
+    pub fn from_oid_and_typmod(oid: u32, typmod: i32) -> Result<Type, TypeFromOidError> {
+        let typ = postgres_types::Type::from_oid(oid).ok_or(TypeFromOidError::UnknownOid(oid))?;
+        let mut typ = match typ {
+            postgres_types::Type::BOOL => Type::Bool,
+            postgres_types::Type::BYTEA => Type::Bytea,
+            postgres_types::Type::DATE => Type::Date,
+            postgres_types::Type::FLOAT4 => Type::Float4,
+            postgres_types::Type::FLOAT8 => Type::Float8,
+            postgres_types::Type::INT2 => Type::Int2,
+            postgres_types::Type::INT4 => Type::Int4,
+            postgres_types::Type::INT8 => Type::Int8,
+            postgres_types::Type::INTERVAL => Type::Interval { constraints: None },
+            postgres_types::Type::JSON => Type::Json,
+            postgres_types::Type::JSONB => Type::Jsonb,
+            postgres_types::Type::NUMERIC => Type::Numeric { constraints: None },
+            postgres_types::Type::OID => Type::Oid,
+            postgres_types::Type::TEXT => Type::Text,
+            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => {
+                Type::BpChar { length: None }
+            }
+            postgres_types::Type::VARCHAR => Type::VarChar { max_length: None },
+            postgres_types::Type::TIME => Type::Time { precision: None },
+            postgres_types::Type::TIMETZ => Type::TimeTz { precision: None },
+            postgres_types::Type::TIMESTAMP => Type::Timestamp { precision: None },
+            postgres_types::Type::TIMESTAMPTZ => Type::TimestampTz { precision: None },
+            postgres_types::Type::UUID => Type::Uuid,
+            postgres_types::Type::REGCLASS => Type::RegClass,
+            postgres_types::Type::REGPROC => Type::RegProc,
+            postgres_types::Type::REGTYPE => Type::RegType,
+            postgres_types::Type::BOOL_ARRAY => Type::Array(Box::new(Type::Bool)),
+            postgres_types::Type::BYTEA_ARRAY => Type::Array(Box::new(Type::Bytea)),
+            postgres_types::Type::BPCHAR_ARRAY => {
+                Type::Array(Box::new(Type::BpChar { length: None }))
+            }
+            postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
+            postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
+            postgres_types::Type::FLOAT8_ARRAY => Type::Array(Box::new(Type::Float8)),
+            postgres_types::Type::INT2_ARRAY => Type::Array(Box::new(Type::Int2)),
+            postgres_types::Type::INT4_ARRAY => Type::Array(Box::new(Type::Int4)),
+            postgres_types::Type::INT8_ARRAY => Type::Array(Box::new(Type::Int8)),
+            postgres_types::Type::INTERVAL_ARRAY => {
+                Type::Array(Box::new(Type::Interval { constraints: None }))
+            }
+            postgres_types::Type::JSON_ARRAY => Type::Array(Box::new(Type::Json)),
+            postgres_types::Type::JSONB_ARRAY => Type::Array(Box::new(Type::Jsonb)),
+            postgres_types::Type::NUMERIC_ARRAY => {
+                Type::Array(Box::new(Type::Numeric { constraints: None }))
+            }
+            postgres_types::Type::OID_ARRAY => Type::Array(Box::new(Type::Oid)),
+            postgres_types::Type::TEXT_ARRAY => Type::Array(Box::new(Type::Text)),
+            postgres_types::Type::TIME_ARRAY => {
+                Type::Array(Box::new(Type::Time { precision: None }))
+            }
+            postgres_types::Type::TIMETZ_ARRAY => {
+                Type::Array(Box::new(Type::TimeTz { precision: None }))
+            }
+            postgres_types::Type::TIMESTAMP_ARRAY => {
+                Type::Array(Box::new(Type::Timestamp { precision: None }))
+            }
             postgres_types::Type::TIMESTAMPTZ_ARRAY => {
-                Some(Type::Array(Box::new(Type::TimestampTz)))
+                Type::Array(Box::new(Type::TimestampTz { precision: None }))
             }
-            postgres_types::Type::UUID_ARRAY => Some(Type::Array(Box::new(Type::Uuid))),
-            postgres_types::Type::VARCHAR_ARRAY => Some(Type::Array(Box::new(Type::VarChar {
-                max_length: CharLength::from_typmod(typmod),
-            }))),
-            postgres_types::Type::REGCLASS_ARRAY => Some(Type::Array(Box::new(Type::RegClass))),
-            postgres_types::Type::REGPROC_ARRAY => Some(Type::Array(Box::new(Type::RegProc))),
-            postgres_types::Type::REGTYPE_ARRAY => Some(Type::Array(Box::new(Type::RegType))),
-            postgres_types::Type::INT2_VECTOR => Some(Type::Int2Vector),
-            postgres_types::Type::INT2_VECTOR_ARRAY => {
-                Some(Type::Array(Box::new(Type::Int2Vector)))
+            postgres_types::Type::UUID_ARRAY => Type::Array(Box::new(Type::Uuid)),
+            postgres_types::Type::VARCHAR_ARRAY => {
+                Type::Array(Box::new(Type::VarChar { max_length: None }))
             }
-            _ => None,
+            postgres_types::Type::REGCLASS_ARRAY => Type::Array(Box::new(Type::RegClass)),
+            postgres_types::Type::REGPROC_ARRAY => Type::Array(Box::new(Type::RegProc)),
+            postgres_types::Type::REGTYPE_ARRAY => Type::Array(Box::new(Type::RegType)),
+            postgres_types::Type::INT2_VECTOR => Type::Int2Vector,
+            postgres_types::Type::INT2_VECTOR_ARRAY => Type::Array(Box::new(Type::Int2Vector)),
+            _ => return Err(TypeFromOidError::UnknownOid(oid)),
+        };
+
+        // Apply the typmod. For arrays, the typmod applies to the element type.
+        // We use a funny-looking immediately-invoked closure to share the
+        // construction of the invalid typmod error across all error paths.
+        let res = ({
+            let typ = &mut typ;
+            || {
+                let elem_typ = match typ {
+                    Type::Array(typ) => &mut **typ,
+                    typ => typ,
+                };
+                match elem_typ {
+                    Type::BpChar { length } => *length = CharLength::from_typmod(typmod)?,
+                    Type::Numeric { constraints } => {
+                        *constraints = NumericConstraints::from_typmod(typmod)?
+                    }
+                    Type::Interval { constraints } => {
+                        *constraints = IntervalConstraints::from_typmod(typmod)?
+                    }
+                    Type::Time { precision } => *precision = TimePrecision::from_typmod(typmod)?,
+                    Type::TimeTz { precision } => *precision = TimePrecision::from_typmod(typmod)?,
+                    Type::Timestamp { precision } => {
+                        *precision = TimestampPrecision::from_typmod(typmod)?
+                    }
+                    Type::TimestampTz { precision } => {
+                        *precision = TimestampPrecision::from_typmod(typmod)?
+                    }
+                    Type::VarChar { max_length } => *max_length = CharLength::from_typmod(typmod)?,
+                    _ if typmod != -1 => return Err("type does not support type modifiers".into()),
+                    _ => (),
+                }
+                Ok(())
+            }
+        })();
+        match res {
+            Ok(()) => Ok(typ),
+            Err(detail) => Err(TypeFromOidError::InvalidTypmod {
+                typ,
+                typmod,
+                detail,
+            }),
         }
     }
 
@@ -318,13 +492,14 @@ impl Type {
                 Type::Array(_) => unreachable!(),
                 Type::Bool => &postgres_types::Type::BOOL_ARRAY,
                 Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
+                Type::Char => &postgres_types::Type::CHAR_ARRAY,
                 Type::Date => &postgres_types::Type::DATE_ARRAY,
                 Type::Float4 => &postgres_types::Type::FLOAT4_ARRAY,
                 Type::Float8 => &postgres_types::Type::FLOAT8_ARRAY,
                 Type::Int2 => &postgres_types::Type::INT2_ARRAY,
                 Type::Int4 => &postgres_types::Type::INT4_ARRAY,
                 Type::Int8 => &postgres_types::Type::INT8_ARRAY,
-                Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
+                Type::Interval { .. } => &postgres_types::Type::INTERVAL_ARRAY,
                 Type::Json => &postgres_types::Type::JSON_ARRAY,
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
@@ -333,12 +508,12 @@ impl Type {
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Text => &postgres_types::Type::TEXT_ARRAY,
-                Type::Char { .. } => &postgres_types::Type::BPCHAR_ARRAY,
+                Type::BpChar { .. } => &postgres_types::Type::BPCHAR_ARRAY,
                 Type::VarChar { .. } => &postgres_types::Type::VARCHAR_ARRAY,
-                Type::Time => &postgres_types::Type::TIME_ARRAY,
-                Type::TimeTz => &postgres_types::Type::TIMETZ_ARRAY,
-                Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
-                Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
+                Type::Time { .. } => &postgres_types::Type::TIME_ARRAY,
+                Type::TimeTz { .. } => &postgres_types::Type::TIMETZ_ARRAY,
+                Type::Timestamp { .. } => &postgres_types::Type::TIMESTAMP_ARRAY,
+                Type::TimestampTz { .. } => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
                 Type::RegClass => &postgres_types::Type::REGCLASS_ARRAY,
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
@@ -347,13 +522,14 @@ impl Type {
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
+            Type::Char => &postgres_types::Type::CHAR,
             Type::Date => &postgres_types::Type::DATE,
             Type::Float4 => &postgres_types::Type::FLOAT4,
             Type::Float8 => &postgres_types::Type::FLOAT8,
             Type::Int2 => &postgres_types::Type::INT2,
             Type::Int4 => &postgres_types::Type::INT4,
             Type::Int8 => &postgres_types::Type::INT8,
-            Type::Interval => &postgres_types::Type::INTERVAL,
+            Type::Interval { .. } => &postgres_types::Type::INTERVAL,
             Type::Json => &postgres_types::Type::JSON,
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
@@ -362,12 +538,12 @@ impl Type {
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Text => &postgres_types::Type::TEXT,
-            Type::Char { .. } => &postgres_types::Type::BPCHAR,
+            Type::BpChar { .. } => &postgres_types::Type::BPCHAR,
             Type::VarChar { .. } => &postgres_types::Type::VARCHAR,
-            Type::Time => &postgres_types::Type::TIME,
-            Type::TimeTz => &postgres_types::Type::TIMETZ,
-            Type::Timestamp => &postgres_types::Type::TIMESTAMP,
-            Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
+            Type::Time { .. } => &postgres_types::Type::TIME,
+            Type::TimeTz { .. } => &postgres_types::Type::TIMETZ,
+            Type::Timestamp { .. } => &postgres_types::Type::TIMESTAMP,
+            Type::TimestampTz { .. } => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
             Type::RegClass => &postgres_types::Type::REGCLASS,
             Type::RegProc => &postgres_types::Type::REGPROC,
@@ -428,7 +604,7 @@ impl Type {
     /// Returns the constraint on the type, if any.
     pub fn constraint(&self) -> Option<&dyn TypeConstraint> {
         match self {
-            Type::Char {
+            Type::BpChar {
                 length: Some(length),
             } => Some(length),
             Type::VarChar {
@@ -437,17 +613,33 @@ impl Type {
             Type::Numeric {
                 constraints: Some(constraints),
             } => Some(constraints),
+            Type::Interval {
+                constraints: Some(constraints),
+            } => Some(constraints),
+            Type::Time {
+                precision: Some(precision),
+            } => Some(precision),
+            Type::TimeTz {
+                precision: Some(precision),
+            } => Some(precision),
+            Type::Timestamp {
+                precision: Some(precision),
+            } => Some(precision),
+            Type::TimestampTz {
+                precision: Some(precision),
+            } => Some(precision),
             Type::Array(_)
             | Type::Bool
             | Type::Bytea
-            | Type::Char { length: None }
+            | Type::BpChar { length: None }
+            | Type::Char
             | Type::Date
             | Type::Float4
             | Type::Float8
             | Type::Int2
             | Type::Int4
             | Type::Int8
-            | Type::Interval
+            | Type::Interval { constraints: None }
             | Type::Json
             | Type::Jsonb
             | Type::List(_)
@@ -460,10 +652,10 @@ impl Type {
             | Type::RegProc
             | Type::RegType
             | Type::Text
-            | Type::Time
-            | Type::TimeTz
-            | Type::Timestamp
-            | Type::TimestampTz
+            | Type::Time { precision: None }
+            | Type::TimeTz { precision: None }
+            | Type::Timestamp { precision: None }
+            | Type::TimestampTz { precision: None }
             | Type::Uuid
             | Type::VarChar { max_length: None } => None,
         }
@@ -476,13 +668,14 @@ impl Type {
             Type::Array(_) => -1,
             Type::Bool => 1,
             Type::Bytea => -1,
+            Type::Char => 1,
             Type::Date => 4,
             Type::Float4 => 4,
             Type::Float8 => 8,
             Type::Int2 => 2,
             Type::Int4 => 4,
             Type::Int8 => 8,
-            Type::Interval => 16,
+            Type::Interval { .. } => 16,
             Type::Json => -1,
             Type::Jsonb => -1,
             Type::List(_) => -1,
@@ -491,12 +684,12 @@ impl Type {
             Type::Oid => 4,
             Type::Record(_) => -1,
             Type::Text => -1,
-            Type::Char { .. } => -1,
+            Type::BpChar { .. } => -1,
             Type::VarChar { .. } => -1,
-            Type::Time => 4,
-            Type::TimeTz => 4,
-            Type::Timestamp => 8,
-            Type::TimestampTz => 8,
+            Type::Time { .. } => 4,
+            Type::TimeTz { .. } => 4,
+            Type::Timestamp { .. } => 8,
+            Type::TimestampTz { .. } => 8,
             Type::Uuid => 16,
             Type::RegClass => 4,
             Type::RegProc => 4,
@@ -539,13 +732,14 @@ impl TryFrom<&Type> for ScalarType {
             Type::Array(t) => Ok(ScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
             Type::Bool => Ok(ScalarType::Bool),
             Type::Bytea => Ok(ScalarType::Bytes),
+            Type::Char => Ok(ScalarType::PgLegacyChar),
             Type::Date => Ok(ScalarType::Date),
             Type::Float4 => Ok(ScalarType::Float32),
             Type::Float8 => Ok(ScalarType::Float64),
             Type::Int2 => Ok(ScalarType::Int16),
             Type::Int4 => Ok(ScalarType::Int32),
             Type::Int8 => Ok(ScalarType::Int64),
-            Type::Interval => Ok(ScalarType::Interval),
+            Type::Interval { .. } => Ok(ScalarType::Interval),
             Type::Json => Err(TypeConversionError::UnsupportedType(Type::Json)),
             Type::Jsonb => Ok(ScalarType::Jsonb),
             Type::List(t) => Ok(ScalarType::List {
@@ -584,9 +778,12 @@ impl TryFrom<&Type> for ScalarType {
                 custom_name: None,
             }),
             Type::Text => Ok(ScalarType::String),
-            Type::Time => Ok(ScalarType::Time),
-            Type::TimeTz => Err(TypeConversionError::UnsupportedType(Type::TimeTz)),
-            Type::Char { length } => Ok(ScalarType::Char {
+            Type::Time { precision: None } => Ok(ScalarType::Time),
+            Type::Time { precision: Some(_) } => {
+                Err(TypeConversionError::UnsupportedType(typ.clone()))
+            }
+            Type::TimeTz { .. } => Err(TypeConversionError::UnsupportedType(typ.clone())),
+            Type::BpChar { length } => Ok(ScalarType::Char {
                 length: match length {
                     Some(length) => Some(AdtCharLength::try_from(i64::from(length.into_i32()))?),
                     None => None,
@@ -600,8 +797,14 @@ impl TryFrom<&Type> for ScalarType {
                     None => None,
                 },
             }),
-            Type::Timestamp => Ok(ScalarType::Timestamp),
-            Type::TimestampTz => Ok(ScalarType::TimestampTz),
+            Type::Timestamp { precision: None } => Ok(ScalarType::Timestamp),
+            Type::Timestamp { precision: Some(_) } => {
+                Err(TypeConversionError::UnsupportedType(typ.clone()))
+            }
+            Type::TimestampTz { precision: None } => Ok(ScalarType::TimestampTz),
+            Type::TimestampTz { precision: Some(_) } => {
+                Err(TypeConversionError::UnsupportedType(typ.clone()))
+            }
             Type::Uuid => Ok(ScalarType::Uuid),
             Type::RegClass => Ok(ScalarType::RegClass),
             Type::RegProc => Ok(ScalarType::RegProc),
@@ -610,6 +813,43 @@ impl TryFrom<&Type> for ScalarType {
         }
     }
 }
+
+/// An error that can occur when constructing a [`Type`] from an OID.
+#[derive(Debug, Clone)]
+pub enum TypeFromOidError {
+    /// The OID does not specify a known type.
+    UnknownOid(u32),
+    /// The specified typmod is invalid for the type.
+    InvalidTypmod {
+        /// The type.
+        typ: Type,
+        /// The type modifier.
+        typmod: i32,
+        /// Details about the nature of the invalidity.
+        detail: String,
+    },
+}
+
+impl fmt::Display for TypeFromOidError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TypeFromOidError::UnknownOid(oid) => write!(f, "type with OID {oid} is unknown"),
+            TypeFromOidError::InvalidTypmod {
+                typ,
+                typmod,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "typmod {typmod} is invalid for type {}: {detail}",
+                    typ.name()
+                )
+            }
+        }
+    }
+}
+
+impl Error for TypeFromOidError {}
 
 /// An error that can occur when converting a [`Type`] to a [`ScalarType`].
 #[derive(Debug, Clone)]
@@ -642,6 +882,8 @@ impl fmt::Display for TypeConversionError {
     }
 }
 
+impl Error for TypeConversionError {}
+
 impl From<InvalidNumericMaxScaleError> for TypeConversionError {
     fn from(e: InvalidNumericMaxScaleError) -> TypeConversionError {
         TypeConversionError::InvalidNumericMaxScale(e)
@@ -666,13 +908,14 @@ impl From<&ScalarType> for Type {
             ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
+            ScalarType::PgLegacyChar => Type::Char,
             ScalarType::Date => Type::Date,
             ScalarType::Float64 => Type::Float8,
             ScalarType::Float32 => Type::Float4,
             ScalarType::Int16 => Type::Int2,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
-            ScalarType::Interval => Type::Interval,
+            ScalarType::Interval => Type::Interval { constraints: None },
             ScalarType::Jsonb => Type::Jsonb,
             ScalarType::List { element_type, .. } => {
                 Type::List(Box::new(From::from(&**element_type)))
@@ -688,15 +931,15 @@ impl From<&ScalarType> for Type {
                     .collect(),
             ),
             ScalarType::String => Type::Text,
-            ScalarType::Char { length } => Type::Char {
+            ScalarType::Char { length } => Type::BpChar {
                 length: (*length).map(CharLength::from),
             },
             ScalarType::VarChar { max_length } => Type::VarChar {
                 max_length: (*max_length).map(CharLength::from),
             },
-            ScalarType::Time => Type::Time,
-            ScalarType::Timestamp => Type::Timestamp,
-            ScalarType::TimestampTz => Type::TimestampTz,
+            ScalarType::Time => Type::Time { precision: None },
+            ScalarType::Timestamp => Type::Timestamp { precision: None },
+            ScalarType::TimestampTz => Type::TimestampTz { precision: None },
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { max_scale } => Type::Numeric {
                 constraints: Some(NumericConstraints {

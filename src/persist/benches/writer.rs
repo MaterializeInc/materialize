@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::s3::{S3Blob, S3BlobConfig};
@@ -30,8 +31,9 @@ use mz_persist::client::WriteReqBuilder;
 use mz_persist::error::Error;
 use mz_persist::file::{FileBlob, FileLog};
 use mz_persist::gen::persist::ProtoBatchFormat;
+use mz_persist::indexed::background::{CompactTraceReq, Maintainer};
 use mz_persist::indexed::cache::BlobCache;
-use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobUnsealedBatch, Id};
+use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobUnsealedBatch, Id, TraceBatchMeta};
 use mz_persist::indexed::metrics::Metrics;
 use mz_persist::indexed::{Cmd, Indexed};
 use mz_persist::mem::MemRegistry;
@@ -229,6 +231,82 @@ fn bench_set_unsealed_batch<B: Blob>(
     })
 }
 
+// Benchmark the write throughput of Maintainer::compact_trace_blocking.
+fn bench_compact_trace_blocking<B: Blob>(
+    b: &mut Bencher,
+    maintainer: &Maintainer<B>,
+    blob: &mut BlobCache<B>,
+    data: &[ColumnarRecords],
+) {
+    let (batches0, batches1) = data.split_at(data.len() / 2);
+
+    let mut b0_time = 0;
+    let mut b0_keys = vec![];
+    for batch in batches0.iter() {
+        b0_time += u64::cast_from(batch.len());
+    }
+    let mut b1_time = b0_time;
+    let mut b1_keys = vec![];
+    for batch in batches1.iter() {
+        b1_time += u64::cast_from(batch.len());
+    }
+
+    let b0_desc = desc_from(0, b0_time, 0);
+    let b1_desc = desc_from(b0_time, b1_time, 0);
+    let since = Antichain::from_elem(b1_time);
+    let format = ProtoBatchFormat::ParquetKvtd;
+
+    let mut b0_size_bytes = 0;
+    for (idx, batch_part) in batches0.into_iter().enumerate() {
+        let batch_part = BlobTraceBatchPart {
+            desc: b0_desc.clone(),
+            index: u64::cast_from(idx),
+            updates: vec![batch_part.clone()],
+        };
+        let key = format!("b0-{}", idx);
+        b0_size_bytes += blob
+            .set_trace_batch(key.clone(), batch_part.clone(), format)
+            .expect("failed to set trace batch");
+        b0_keys.push(key);
+    }
+    let mut b1_size_bytes = 0;
+    for (idx, batch_part) in batches1.into_iter().enumerate() {
+        let batch_part = BlobTraceBatchPart {
+            desc: b1_desc.clone(),
+            index: u64::cast_from(idx),
+            updates: vec![batch_part.clone()],
+        };
+        let key = format!("b1-{}", idx);
+        b1_size_bytes += blob
+            .set_trace_batch(key.clone(), batch_part.clone(), format)
+            .expect("failed to set trace batch");
+        b1_keys.push(key);
+    }
+    let req = CompactTraceReq {
+        b0: TraceBatchMeta {
+            keys: b0_keys,
+            format,
+            desc: b0_desc,
+            level: 0,
+            size_bytes: b0_size_bytes,
+        },
+        b1: TraceBatchMeta {
+            keys: b1_keys,
+            format,
+            desc: b1_desc,
+            level: 0,
+            size_bytes: b1_size_bytes,
+        },
+        since,
+    };
+    b.iter(move || {
+        maintainer
+            .compact_trace(req.clone())
+            .recv()
+            .expect("compacting a trace failed");
+    })
+}
+
 fn bench_writes_indexed_inner<B: Blob, L: Log>(
     data: &DataGenerator,
     g: &mut BenchmarkGroup<WallTime>,
@@ -388,4 +466,107 @@ pub fn bench_blob_cache_set_unsealed_batch(
         },
     );
     mem_blob_cache.close().expect("failed to close mem_blob");
+}
+
+fn desc_from(lower: u64, upper: u64, since: u64) -> Description<u64> {
+    Description::new(
+        Antichain::from_elem(lower),
+        Antichain::from_elem(upper),
+        Antichain::from_elem(since),
+    )
+}
+pub fn bench_compact_trace(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+    // Limit the sample size and measurement time of this benchmark group to both
+    // limit the overall runtime to a reasonable length and bound the memory
+    // utilization.
+    //
+    // Criterion tries to fit as many iterations as possible within `measurement_time`,
+    // but chooses some minimum number of iterations based on `sample_size`. So,
+    // because we want to have a tight limit on the number of iterations, as each
+    // incurs substantial memory usage for both file and mem blobs (because of how
+    // caching is currently implemented), we have to manually specify both.
+    g.sample_size(10);
+    g.warm_up_time(Duration::from_secs(1));
+    g.measurement_time(Duration::from_secs(1));
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
+    let batches = data.batches().collect::<Vec<_>>();
+
+    let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create runtime"));
+    let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
+
+    let mem_blob = MemRegistry::new()
+        .blob_no_reentrance()
+        .expect("creating a MemBlob cannot fail");
+    let mut blob_cache = BlobCache::new(
+        mz_build_info::DUMMY_BUILD_INFO,
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
+        mem_blob,
+        None,
+    );
+    let maintainer = Maintainer::new(
+        blob_cache.clone(),
+        Arc::clone(&async_runtime),
+        Arc::clone(&metrics),
+    );
+
+    g.bench_with_input(
+        BenchmarkId::new("mem", data.goodput_pretty()),
+        &batches,
+        |b, batches| {
+            bench_compact_trace_blocking(b, &maintainer, &mut blob_cache, batches);
+        },
+    );
+    blob_cache.close().expect("failed to close mem_blob cache");
+
+    // Create a directory that will automatically be dropped after the test finishes.
+    let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+    let file_blob = new_file_blob("file_blob_compact_trace", temp_dir.path());
+    let mut blob_cache = BlobCache::new(
+        mz_build_info::DUMMY_BUILD_INFO,
+        Arc::clone(&metrics),
+        Arc::clone(&async_runtime),
+        file_blob,
+        None,
+    );
+    let maintainer = Maintainer::new(
+        blob_cache.clone(),
+        Arc::clone(&async_runtime),
+        Arc::clone(&metrics),
+    );
+    g.bench_with_input(
+        BenchmarkId::new("file", data.goodput_pretty()),
+        &batches,
+        |b, batches| {
+            bench_compact_trace_blocking(b, &maintainer, &mut blob_cache, batches);
+        },
+    );
+    blob_cache.close().expect("failed to close file_blob cache");
+
+    // Only run s3 benchmarks if the magic env vars are set.
+    if let Some(config) =
+        futures_executor::block_on(S3BlobConfig::new_for_test()).expect("failed to load s3 config")
+    {
+        let async_guard = async_runtime.enter();
+        let s3_blob =
+            S3Blob::open_exclusive(config, LockInfo::new_no_reentrance("s3_blob_set".into()))
+                .expect("failed to create S3Blob");
+        let mut blob_cache = BlobCache::new(
+            mz_build_info::DUMMY_BUILD_INFO,
+            Arc::clone(&metrics),
+            Arc::clone(&async_runtime),
+            s3_blob,
+            None,
+        );
+        let maintainer = Maintainer::new(blob_cache.clone(), Arc::clone(&async_runtime), metrics);
+        g.bench_with_input(
+            BenchmarkId::new("s3", data.goodput_pretty()),
+            &batches,
+            |b, batches| {
+                bench_compact_trace_blocking(b, &maintainer, &mut blob_cache, batches);
+            },
+        );
+        blob_cache.close().expect("failed to close s3_blob cache");
+        drop(async_guard);
+    }
 }

@@ -27,6 +27,11 @@ CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = #1), (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123), (#0 = #1)
@@ -38,13 +43,22 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 
 %2 =
@@ -60,6 +74,15 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
@@ -69,7 +92,7 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 
 %3 = Let l1 =
@@ -93,6 +116,15 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
@@ -102,7 +134,7 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project (#1)
 
@@ -134,13 +166,22 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 
 %2 =
@@ -154,18 +195,31 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t3 (u3):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 | Filter (#0 = 123)
 
 %3 =
@@ -179,6 +233,15 @@ EOF
 query T multiline
 EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
@@ -186,7 +249,7 @@ EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 
@@ -204,8 +267,17 @@ EOF
 query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 
@@ -244,6 +316,14 @@ EOF
 query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Project (#0)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Project (#0)
@@ -261,7 +341,7 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 | Union %0 %1
 
 %3 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 | ArrangeBy ()
@@ -293,13 +373,22 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 
@@ -312,19 +401,32 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Source materialize.public.t3 (u3):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.t3 (u5)
+| Get materialize.public.t3 (u3)
 | Filter (#0 = 123)
 | Project ()
 
@@ -337,13 +439,22 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123)
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project (#0)
 
@@ -356,17 +467,24 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 
 %2 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -385,18 +503,26 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project ()
 
 %2 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -423,8 +549,13 @@ CREATE TABLE t4 (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1, f2));
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
 ----
+Source materialize.public.t4 (u4):
+| Filter (#0 = 123), (#1 = 234)
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t4 (u7)
+| Get materialize.public.t4 (u4)
 | Filter (#0 = 123), (#1 = 234)
 | Project (#0, #1, #0, #1)
 
@@ -433,8 +564,13 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
+Source materialize.public.t4 (u4):
+| Filter (#0 = 123), (#1 = 234)
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t4 (u7)
+| Get materialize.public.t4 (u4)
 | Filter (#0 = 123), (#1 = 234)
 
 EOF
@@ -446,8 +582,13 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
+Source materialize.public.t4 (u4):
+| Filter (#0 = 123), (#1 = 234)
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t4 (u7)
+| Get materialize.public.t4 (u4)
 | Filter (#0 = 123), (#1 = 234)
 
 EOF
@@ -471,6 +612,15 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123), (#0 = 234)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (#0 = 123), (#0 = 234)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123), (#0 = 234)
@@ -478,7 +628,7 @@ EXPLAIN SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (#0 = 123), (#0 = 234)
 | Project (#1)
 
@@ -495,13 +645,22 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 ----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 123)
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Filter (123 > #0)
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Filter (123 > #0)
 
 %2 =
@@ -521,16 +680,24 @@ create table int_table(int_col integer NOT NULL);
 query T multiline
 explain select * from int_table, double_table where int_table.int_col = double_table.double_col;
 ----
+Source materialize.public.double_table (u5):
+| Filter !(isnull(#0))
+| Project (#0)
+
+Source materialize.public.int_table (u6):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.int_table (u11)
+| Get materialize.public.int_table (u6)
+| ArrangeBy (i32tof64(#0))
 
 %1 =
-| Get materialize.public.double_table (u9)
-| ArrangeBy (#0)
+| Get materialize.public.double_table (u5)
+| Filter !(isnull(#0))
 
 %2 =
 | Join %0 %1 (= #1 i32tof64(#0))
-| | implementation = Differential %0 %1.(#0)
-| Filter !(isnull(#1))
+| | implementation = Differential %1 %0.(i32tof64(#0))
 
 EOF

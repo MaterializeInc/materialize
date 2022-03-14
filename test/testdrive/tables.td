@@ -53,13 +53,16 @@ name
 ----
 
 > SHOW INDEXES FROM t;
+
+> CREATE DEFAULT INDEX on t
+
+> SHOW INDEXES FROM t
 on_name  key_name       seq_in_index  column_name  expression  nullable enabled
 -------------------------------------------------------------------------------
 t        t_primary_idx  1             a            <null>      true     true
 t        t_primary_idx  2             b            <null>      false    true
 
-! DROP INDEX t_primary_idx
-contains:cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
+> DROP INDEX t_primary_idx
 
 > SHOW COLUMNS in t;
 name       nullable  type
@@ -169,6 +172,8 @@ contains:column "a" is of type integer but expression is of type text
 
 # ...but not when impossible.
 ! INSERT INTO t VALUES (DATE '2020-01-01', 'bad')
+contains:column "a" is of type integer but expression is of type date
+! INSERT INTO t (b, a) VALUES ('bad', DATE '2020-01-01')
 contains:column "a" is of type integer but expression is of type date
 
 # Attempting to insert JSON into an int column is particularly interesting.

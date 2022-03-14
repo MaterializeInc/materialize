@@ -20,7 +20,7 @@ use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::str::StrExt;
 use mz_repr::{Row, ScalarType};
-use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
+use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
 
@@ -188,6 +188,10 @@ pub enum ExecuteResponse {
     },
     /// The requested role was created.
     CreatedRole,
+    /// The requested compute instance was created.
+    CreatedComputeInstance {
+        existed: bool,
+    },
     /// The requested index was created.
     CreatedIndex {
         existed: bool,
@@ -224,6 +228,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
+    /// The requested compute instance was dropped.
+    DroppedComputeInstance,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.
@@ -274,6 +280,10 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// Raise a warning.
+    Raise {
+        severity: NoticeSeverity,
+    },
 }
 
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).

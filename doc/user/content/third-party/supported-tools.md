@@ -34,6 +34,7 @@ Kafka is supported in Materialize as a [`SOURCE`](/sql/create-source/) of input
 | Redpanda | 🟢 Beta | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/third-party/redpanda/) for instructions and limitations. | [More Info](/third-party/redpanda/) [](#notify) |
 | Heroku Kafka | 🟢 Alpha | Use [SSL Authentication](https://materialize.com/docs/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, [preventing SINKs from working](https://github.com/MaterializeInc/materialize/issues/8378). | [](#notify) |
 
+
 ### Other Message Brokers
 
 | Service | Materialize Support | Notes |  |

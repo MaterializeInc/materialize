@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::process;
+use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use mz_dataflow::DummyBoundary;
 use mz_dataflow_types::sources::AwsExternalId;
 use tokio::net::TcpListener;
 use tokio::select;
@@ -21,6 +23,16 @@ use tracing_subscriber::EnvFilter;
 use mz_dataflow_types::client::Client;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+
+#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+enum RuntimeType {
+    /// Host only the compute portion of the dataflow.
+    Compute,
+    /// Host host storage and compute portions of the dataflow.
+    LegacyMultiplexed,
+    /// Host only the storage portion of the dataflow.
+    Storage,
+}
 
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
@@ -69,6 +81,19 @@ struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
+    /// The type of runtime hosted by this dataflowd
+    #[clap(arg_enum, long, default_value = "legacy-multiplexed")]
+    runtime: RuntimeType,
+    /// The address of the storage server to bind or connect to.
+    #[clap(
+        long,
+        env = "DATAFLOWD_STORAGE_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6877"
+    )]
+    storage_addr: String,
+    #[clap(long, default_value = "0")]
+    storage_workers: usize,
 }
 
 #[tokio::main]
@@ -111,7 +136,14 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
             }
         }
 
-        assert!(processes == addresses.len());
+        assert!(
+            matches!(
+                args.runtime,
+                RuntimeType::LegacyMultiplexed | RuntimeType::Compute
+            ),
+            "Storage runtime with TCP boundary doesn't yet horizontally scaled Timely"
+        );
+        assert_eq!(processes, addresses.len());
         Ok(timely::CommunicationConfig::Cluster {
             threads,
             process,
@@ -154,10 +186,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         listener.local_addr()?
     );
 
-    let (conn, _addr) = listener.accept().await?;
-    info!("coordinator connection accepted");
-
-    let (_server, mut client) = mz_dataflow::serve(mz_dataflow::Config {
+    let config = mz_dataflow::Config {
         workers: args.workers,
         timely_config,
         experimental_mode: false,
@@ -168,14 +197,52 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
-    })?;
+    };
+
+    let (_server, mut client) = match args.runtime {
+        RuntimeType::LegacyMultiplexed => mz_dataflow::serve(config),
+        RuntimeType::Compute => {
+            assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
+            let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
+                args.storage_addr,
+                config.workers,
+                args.storage_workers,
+            )
+            .await?;
+            let boundary = (0..config.workers)
+                .into_iter()
+                .map(|_| Some((DummyBoundary, storage_client.clone())))
+                .collect::<Vec<_>>();
+            let boundary = Arc::new(Mutex::new(boundary));
+            let workers = config.workers;
+            mz_dataflow::serve_boundary(config, move |index| {
+                boundary.lock().unwrap()[index % workers].take().unwrap()
+            })
+        }
+        RuntimeType::Storage => {
+            let (storage_server, _thread) =
+                mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
+            let boundary = (0..config.workers)
+                .into_iter()
+                .map(|_| Some((storage_server.clone(), DummyBoundary)))
+                .collect::<Vec<_>>();
+            let boundary = Arc::new(Mutex::new(boundary));
+            let workers = config.workers;
+            mz_dataflow::serve_boundary(config, move |index| {
+                boundary.lock().unwrap()[index % workers].take().unwrap()
+            })
+        }
+    }?;
+
+    let (conn, _addr) = listener.accept().await?;
+    info!("coordinator connection accepted");
 
     let mut conn = mz_dataflowd::tcp::framed_server(conn);
     loop {
         select! {
             cmd = conn.try_next() => match cmd? {
                 None => break,
-                Some(cmd) => client.send(cmd).await,
+                Some(cmd) => client.send(cmd).await.unwrap(),
             },
             Some(response) = client.recv() => conn.send(response).await?,
         }

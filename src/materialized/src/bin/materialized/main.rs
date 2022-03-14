@@ -22,7 +22,6 @@ use std::env;
 use std::ffi::CStr;
 use std::fmt;
 use std::fs;
-use std::io;
 use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
@@ -42,18 +41,16 @@ use clap::{AppSettings, Parser};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
-use mz_dataflow_types::sources::AwsExternalId;
-use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::metric;
-use mz_ore::metrics::ThirdPartyMetric;
-use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
+use mz_ore::now::SYSTEM_TIME;
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
-use self::tracing::MetricsRecorderLayer;
 use materialized::TlsMode;
+use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
+use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::metrics::MetricsRegistry;
 
 mod sys;
 mod tracing;
@@ -68,9 +65,9 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 }
 
 /// The streaming SQL materialized view engine.
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
-struct Args {
+pub struct Args {
     // === Special modes. ===
     /// Print version information and exit.
     ///
@@ -377,6 +374,26 @@ struct Args {
     #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 
+    /// The endpoint to send opentelemetry traces to.
+    /// If not provided, tracing is not sent.
+    ///
+    /// You most likely also need to provide
+    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// depending on the collector you are talking to.
+    #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
+    opentelemetry_endpoint: Option<String>,
+
+    /// Comma separated headers of the form `KEY=VALUE`
+    /// to pass through to the opentelemetry
+    /// collector
+    #[clap(
+        long,
+        env = "MZ_OPENTELEMETRY_HEADERS",
+        requires = "opentelemetry-endpoint",
+        hide = true
+    )]
+    opentelemetry_headers: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -386,6 +403,7 @@ struct Args {
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
 /// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
+#[derive(Debug)]
 struct WorkerCount(usize);
 
 impl Default for WorkerCount {
@@ -424,14 +442,40 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
-    panic::set_hook(Box::new(handle_panic));
-
+    // Configure signal handling as soon as possible. We want signals to be
+    // handled to our liking ASAP.
     if !args.no_sigbus_sigsegv_backtraces {
         sys::enable_sigbus_sigsegv_backtraces()?;
     }
-
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Start Tokio runtime.
+
+    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(ncpus_useful)
+            // The default thread name exceeds the Linux limit on thread name
+            // length, so pick something shorter.
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("tokio:work-{}", id)
+            })
+            .enable_all()
+            .build()?,
+    );
+
+    // Install a custom panic handler that instructs users to file a bug report.
+    // This requires that we configure tracing, so that the panic can be
+    // reported as a trace event.
+    //
+    // Avoid adding code above this point, because panics in that code won't get
+    // handled by the custom panic handler.
+    let metrics_registry = MetricsRegistry::new();
+    runtime.block_on(tracing::configure(&args, &metrics_registry))?;
+    panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -509,11 +553,13 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let frontegg = args
         .frontegg_tenant
         .map(|tenant_id| {
-            FronteggAuthentication::new(
-                args.frontegg_api_token_url.unwrap(),
-                args.frontegg_jwk.unwrap().as_bytes(),
+            FronteggAuthentication::new(FronteggConfig {
+                admin_api_token_url: args.frontegg_api_token_url.unwrap(),
+                jwk_rsa_pem: args.frontegg_jwk.unwrap().as_bytes(),
                 tenant_id,
-            )
+                now: mz_ore::now::SYSTEM_TIME.clone(),
+                refresh_before_secs: 60,
+            })
         })
         .transpose()?;
 
@@ -545,102 +591,11 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
-    let metrics_registry = MetricsRegistry::new();
-    // Configure tracing.
-    {
-        use tracing_subscriber::filter::{LevelFilter, Targets};
-        use tracing_subscriber::fmt;
-        use tracing_subscriber::layer::{Layer, SubscriberExt};
-        use tracing_subscriber::util::SubscriberInitExt;
-
-        let filter = Targets::from_str(&args.log_filter)
-            .context("parsing --log-filter option")?
-            // Ensure panics are logged, even if the user has specified
-            // otherwise.
-            .with_target("panic", LevelFilter::ERROR);
-
-        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
-            .register_third_party_visible(metric!(
-                name: "mz_log_message_total",
-                help: "The number of log messages produced by this materialized instance",
-                var_labels: ["severity"],
-            ));
-
-        match args.log_file.as_deref() {
-            Some("stderr") => {
-                // The user explicitly directed logs to stderr. Log only to
-                // stderr with the user-specified `filter`.
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-            log_file => {
-                // Logging to a file. If the user did not explicitly specify
-                // a file, bubble up warnings and errors to stderr.
-                let stderr_level = match log_file {
-                    Some(_) => LevelFilter::OFF,
-                    None => LevelFilter::WARN,
-                };
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with({
-                        let path = match log_file {
-                            Some(log_file) => PathBuf::from(log_file),
-                            None => data_directory.join("materialized.log"),
-                        };
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent).with_context(|| {
-                                format!("creating log file directory: {}", parent.display())
-                            })?;
-                        }
-                        let file = fs::OpenOptions::new()
-                            .append(true)
-                            .create(true)
-                            .open(&path)
-                            .with_context(|| format!("creating log file: {}", path.display()))?;
-                        fmt::layer()
-                            .with_ansi(false)
-                            .with_writer(move || {
-                                file.try_clone().expect("failed to clone log file")
-                            })
-                            .with_filter(filter.clone())
-                    })
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(stderr_level)
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-        }
-    }
-
     // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector(&metrics_registry);
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
-    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
         max: None,
         swap_max: None,
@@ -715,21 +670,6 @@ dataflow workers: {workers}",
         &differential_dataflow::Config {
             idle_merge_effort: args.differential_idle_merge_effort,
         },
-    );
-
-    // Start Tokio runtime.
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(ncpus_useful)
-            // The default thread name exceeds the Linux limit on thread name
-            // length, so pick something shorter.
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("tokio:work-{}", id)
-            })
-            .enable_all()
-            .build()?,
     );
 
     // Configure persistence core.
@@ -829,6 +769,7 @@ dataflow workers: {workers}",
             .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
         persist: persist_config,
+        now: SYSTEM_TIME.clone(),
     }))?;
 
     eprintln!(

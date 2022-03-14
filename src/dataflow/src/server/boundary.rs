@@ -3,8 +3,9 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-/// Traits and types for capturing and replaying collections of data.
+//! Traits and types for capturing and replaying collections of data.
 use std::any::Any;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
@@ -29,6 +30,37 @@ pub trait StorageCapture {
     );
 }
 
+impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
+    fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        id: SourceInstanceKey,
+        ok: Collection<G, Row, Diff>,
+        err: Collection<G, DataflowError, Diff>,
+        token: Rc<dyn Any>,
+        name: &str,
+        dataflow_id: GlobalId,
+    ) {
+        self.borrow_mut()
+            .capture(id, ok, err, token, name, dataflow_id)
+    }
+}
+
+impl<CR: ComputeReplay> ComputeReplay for Rc<RefCell<CR>> {
+    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        id: SourceInstanceKey,
+        scope: &mut G,
+        name: &str,
+        dataflow_id: GlobalId,
+    ) -> (
+        Collection<G, Row, Diff>,
+        Collection<G, DataflowError, Diff>,
+        Rc<dyn Any>,
+    ) {
+        self.borrow_mut().replay(id, scope, name, dataflow_id)
+    }
+}
+
 /// A type that can replay specific sources
 pub trait ComputeReplay {
     /// Replays the source bound to `id`.
@@ -47,6 +79,39 @@ pub trait ComputeReplay {
         Collection<G, DataflowError, Diff>,
         Rc<dyn Any>,
     );
+}
+
+/// A boundary implementation that panics on use.
+pub struct DummyBoundary;
+
+impl ComputeReplay for DummyBoundary {
+    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        _id: SourceInstanceKey,
+        _scope: &mut G,
+        _name: &str,
+        _dataflow_id: GlobalId,
+    ) -> (
+        Collection<G, Row, Diff>,
+        Collection<G, DataflowError, Diff>,
+        Rc<dyn Any>,
+    ) {
+        panic!("DummyBoundary cannot replay")
+    }
+}
+
+impl StorageCapture for DummyBoundary {
+    fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        _id: SourceInstanceKey,
+        _ok: Collection<G, Row, Diff>,
+        _err: Collection<G, DataflowError, Diff>,
+        _token: Rc<dyn Any>,
+        _name: &str,
+        _dataflow_id: GlobalId,
+    ) {
+        panic!("DummyBoundary cannot capture")
+    }
 }
 
 pub use event_link::EventLinkBoundary;
@@ -82,6 +147,7 @@ mod event_link {
     }
 
     impl EventLinkBoundary {
+        /// Create a new boundary, initializing the state to be empty.
         pub fn new() -> Self {
             Self {
                 send: BTreeMap::new(),

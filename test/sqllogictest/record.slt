@@ -16,6 +16,10 @@ INSERT INTO t1 values (1, 2)
 query T multiline
 EXPLAIN SELECT (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
+Source materialize.public.t1 (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Map #0
@@ -26,6 +30,10 @@ EOF
 query T multiline
 EXPLAIN SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
+Source materialize.public.t1 (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Map record_create(#0, #0), record_get[1](#2)
@@ -36,6 +44,10 @@ EOF
 query T multiline
 EXPLAIN SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS record FROM t1)
 ----
+Source materialize.public.t1 (u1):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Map #0

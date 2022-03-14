@@ -12,7 +12,7 @@ HTTP proxy adapters that respect the system's proxy configuration.
 ```toml
 # Cargo.toml
 [dependencies]
-mz-http-proxy = { version = "0.1", features = ["hyper", "reqwest"] }
+mz-http-proxy = { version = "0.2", features = ["hyper", "reqwest"] }
 ```
 
-[docs]: https://docs.rs/mz-http-proxy/0.1.0/
+[docs]: https://docs.rs/mz-http-proxy/0.2.0/

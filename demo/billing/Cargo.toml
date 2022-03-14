@@ -3,14 +3,14 @@ name = "mz-billing-demo"
 description = "Microservice demo using Materialize to power a real-time billing usecase"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.55"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.1.2", features = ["derive"] }
+clap = { version = "3.1.6", features = ["derive"] }
 csv = "1.1.6"
 futures = "0.3.21"
 futures-channel = "0.3.16"
@@ -24,7 +24,7 @@ rand = "0.8.5"
 rand_distr = "0.4.3"
 tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.31"
+tracing = "0.1.32"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 

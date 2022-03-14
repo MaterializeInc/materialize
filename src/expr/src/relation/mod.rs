@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -46,6 +46,21 @@ pub mod join_input_mapper;
 ///
 /// Until we fix those, we need to stick with the larger recursion limit.
 pub const RECURSION_LIMIT: usize = 2048;
+
+/// A trait for types that describe how to build a collection.
+pub trait CollectionPlan {
+    /// Appends global identifiers on which this plan depends to `out`.
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>);
+
+    /// Returns the global identifiers on which this plan depends.
+    ///
+    /// See [`CollectionPlan::depends_on_into`] to reuse an existing `BTreeSet`.
+    fn depends_on(&self) -> BTreeSet<GlobalId> {
+        let mut out = BTreeSet::new();
+        self.depends_on_into(&mut out);
+        out
+    }
+}
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -817,6 +832,14 @@ impl MirRelationExpr {
         }
     }
 
+    /// Append to each row a single `scalar`.
+    pub fn map_one(self, scalar: MirScalarExpr) -> Self {
+        MirRelationExpr::Map {
+            input: Box::new(self),
+            scalars: vec![scalar],
+        }
+    }
+
     /// Like `map`, but yields zero-or-more output rows per input row
     pub fn flat_map(self, func: TableFunc, exprs: Vec<MirScalarExpr>) -> Self {
         MirRelationExpr::FlatMap {
@@ -1031,32 +1054,6 @@ impl MirRelationExpr {
         }
     }
 
-    /// Returns the distinct global identifiers on which this expression
-    /// depends.
-    ///
-    /// See [`MirRelationExpr::global_uses_into`] to reuse an existing vector.
-    pub fn global_uses(&self) -> Vec<GlobalId> {
-        let mut out = vec![];
-        self.global_uses_into(&mut out);
-        out.sort();
-        out.dedup();
-        out
-    }
-
-    /// Appends global identifiers on which this expression depends to `out`.
-    ///
-    /// Unlike [`MirRelationExpr::global_uses`], this method does not deduplicate
-    /// the global identifiers.
-    pub fn global_uses_into(&self, out: &mut Vec<GlobalId>) {
-        if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
-        } = self
-        {
-            out.push(*id);
-        }
-        self.visit_children(|expr| expr.global_uses_into(out))
-    }
-
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate
@@ -1146,9 +1143,13 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum, ColumnType)>,
+        default: Vec<(Datum, ScalarType)>,
     ) -> MirRelationExpr {
-        assert_eq!(keys_and_values.arity() - self.arity(), default.len());
+        let (data, column_types): (Vec<_>, Vec<_>) = default
+            .into_iter()
+            .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
+            .unzip();
+        assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
             MirRelationExpr::join(
                 vec![
@@ -1171,8 +1172,8 @@ impl MirRelationExpr {
             // potential predicate pushdown and elision in the
             // optimizer.
             .product(MirRelationExpr::constant(
-                vec![default.iter().map(|(datum, _)| *datum).collect()],
-                RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+                vec![data],
+                RelationType::new(column_types),
             ))
         })
     }
@@ -1187,7 +1188,7 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum<'static>, ColumnType)>,
+        default: Vec<(Datum<'static>, ScalarType)>,
     ) -> MirRelationExpr {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
             get_keys_and_values.clone().union(self.anti_lookup(
@@ -1360,6 +1361,18 @@ impl MirRelationExpr {
         F: FnMut(&mut MirScalarExpr),
     {
         MirRelationExprVisitor::new().visit_scalars_mut(self, f)
+    }
+}
+
+impl CollectionPlan for MirRelationExpr {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        if let MirRelationExpr::Get {
+            id: Id::Global(id), ..
+        } = self
+        {
+            out.insert(*id);
+        }
+        self.visit_children(|expr| expr.depends_on_into(out))
     }
 }
 

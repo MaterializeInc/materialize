@@ -1,0 +1,33 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package postgres_source;
+
+message PostgresTable {
+    string name = 1;
+    string namespace = 2;
+    uint32 relation_id = 3;
+    repeated PostgresColumn columns = 4;
+}
+
+message PostgresColumn {
+    string name = 1;
+    // NOTE: no hard questions about how to string-format the type; we just store its OID.
+    int32 type_oid = 2;
+    int32 type_mod = 3;
+    bool nullable = 4;
+    bool primary_key = 5;
+}
+
+message PostgresSourceDetails {
+    repeated PostgresTable tables = 1;
+    string slot = 2;
+}

@@ -202,13 +202,14 @@ data_view  data_view_primary_idx   2             a            <null>      false 
 > SHOW CREATE INDEX data_view_primary_idx
 Index                                    "Create Index"
 --------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
+materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" IN CLUSTER [1] ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
 
 > CREATE TABLE foo (
     a int NOT NULL,
     b decimal(13, 1),
     z text
   )
+> CREATE DEFAULT INDEX ON foo
 > CREATE INDEX ON foo (a + b)
 > CREATE INDEX ON foo (substr(z, 3))
 > SHOW INDEXES FROM foo

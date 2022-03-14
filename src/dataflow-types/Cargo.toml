@@ -3,7 +3,7 @@ name = "mz-dataflow-types"
 description = "Types for the dataflow crate."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
@@ -15,6 +15,7 @@ aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.2"
+derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
@@ -29,8 +30,11 @@ mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
-num_enum = "0.5.6"
+num_enum = "0.5.7"
+prost = "0.9.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -38,6 +42,9 @@ serde_json = "1.0.79"
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.17.0"
-tracing = "0.1.31"
+tracing = "0.1.32"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+
+[build-dependencies]
+prost-build = "0.9.0"

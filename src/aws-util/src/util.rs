@@ -9,7 +9,9 @@
 
 use aws_smithy_client::erase::DynConnector;
 use aws_smithy_client::hyper_ext::Adapter;
+use hyper_tls::HttpsConnector;
 
 pub fn connector() -> DynConnector {
-    DynConnector::new(Adapter::builder().build(mz_http_proxy::hyper::connector()))
+    let connector = mz_http_proxy::hyper::connector(HttpsConnector::new());
+    DynConnector::new(Adapter::builder().build(connector))
 }

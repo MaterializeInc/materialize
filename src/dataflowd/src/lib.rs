@@ -14,9 +14,17 @@
 
 #![deny(missing_docs)]
 
+use anyhow::anyhow;
+use anyhow::Context;
 use async_trait::async_trait;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
+use std::collections::HashMap;
 
-use mz_dataflow_types::client::{partitioned::Partitioned, Client, Command, Response};
+use mz_dataflow_types::client::{
+    partitioned::Partitioned, Client, Command, ComputeCommand, ComputeInstanceId, InstanceConfig,
+    Response,
+};
 use tracing::trace;
 
 /// A convenience type for compatibility.
@@ -26,10 +34,16 @@ pub struct RemoteClient {
 
 impl RemoteClient {
     /// Construct a client backed by multiple tcp connections
-    pub async fn connect(addrs: &[impl tokio::net::ToSocketAddrs]) -> Result<Self, anyhow::Error> {
+    pub async fn connect(
+        addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display],
+    ) -> Result<Self, anyhow::Error> {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
-            remotes.push(tcp::TcpClient::connect(addr).await?);
+            remotes.push(
+                tcp::TcpClient::connect(addr)
+                    .await
+                    .with_context(|| format!("Connecting to {addr}"))?,
+            );
         }
         Ok(Self {
             client: Partitioned::new(remotes),
@@ -39,12 +53,102 @@ impl RemoteClient {
 
 #[async_trait(?Send)]
 impl Client for RemoteClient {
-    async fn send(&mut self, cmd: Command) {
-        trace!("Broadcasting dataflow command: {:?}", cmd);
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+        trace!("Sending dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
-        self.client.recv().await
+        let response = self.client.recv().await;
+        trace!("Receiving dataflow response: {:?}", response);
+        response
+    }
+}
+
+/// Types of compute clients we manage.
+pub enum ComputeClientFlavor {
+    /// A virtual compute client, hosted on the storage server.
+    Virtual,
+    /// A remote compute client, likely a network connection away.
+    Remote(Box<dyn Client + Send + 'static>),
+}
+
+/// A [Client] backed by separate clients for storage and compute.
+pub struct SplitClient<S> {
+    /// Client on which storage commands are executed, and where virtual compute instances are created.
+    storage_client: S,
+    /// A map of remote compute instances.
+    compute_clients: HashMap<ComputeInstanceId, ComputeClientFlavor>,
+}
+
+impl<S: Client> SplitClient<S> {
+    /// Construct a new split client
+    pub fn new(storage_client: S) -> Self {
+        Self {
+            storage_client,
+            compute_clients: Default::default(),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl<S: Client> Client for SplitClient<S> {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+        trace!("SplitClient: Sending dataflow command: {:?}", cmd);
+        // Ensure that a client exists, if we are asked to create one.
+        if let Command::Compute(ComputeCommand::CreateInstance(config, _logging), instance) = &cmd {
+            assert!(self.compute_clients.get(instance).is_none());
+            let client = match config {
+                InstanceConfig::Virtual => ComputeClientFlavor::Virtual,
+                InstanceConfig::Remote(addr) => {
+                    ComputeClientFlavor::Remote(Box::new(RemoteClient::connect(&addr).await?))
+                }
+            };
+            self.compute_clients.insert(*instance, client);
+        }
+
+        // Notice whether we should drop the instance as a result of the command.
+        let drop_instance = if let Command::Compute(ComputeCommand::DropInstance, instance) = &cmd {
+            Some(*instance)
+        } else {
+            None
+        };
+
+        // Route the command appropriately
+        match cmd {
+            Command::Compute(inner, instance) => match self.compute_clients.get_mut(&instance) {
+                Some(ComputeClientFlavor::Virtual) => {
+                    self.storage_client
+                        .send(Command::Compute(inner, instance))
+                        .await?;
+                }
+                Some(ComputeClientFlavor::Remote(client)) => {
+                    client.send(Command::Compute(inner, instance)).await?;
+                }
+                None => {
+                    Err(anyhow!("Unknown compute instance: {instance:?}"))?;
+                }
+            },
+            cmd @ Command::Storage(_) => self.storage_client.send(cmd).await?,
+        }
+
+        if let Some(instance) = drop_instance {
+            self.compute_clients.remove(&instance);
+        }
+
+        Ok(())
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        // TODO: We currently don't have a good way to receive from many clients
+        let mut futures = FuturesUnordered::new();
+        for client in self.compute_clients.values_mut() {
+            if let ComputeClientFlavor::Remote(client) = client {
+                futures.push(client.recv());
+            }
+        }
+        tokio::select! {
+            response = futures.select_next_some() => response,
+            response = self.storage_client.recv() => response,
+        }
     }
 }
 
@@ -59,7 +163,7 @@ pub mod tcp {
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
-    use mz_dataflow_types::client::{Command, Response};
+    use mz_dataflow_types::client::{Client, Command, Response};
 
     /// A client to a remote dataflow server.
     pub struct TcpClient {
@@ -75,16 +179,13 @@ pub mod tcp {
     }
 
     #[async_trait(?Send)]
-    impl mz_dataflow_types::client::Client for TcpClient {
-        async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
+    impl Client for TcpClient {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             // TODO: something better than panicking.
-            self.connection
-                .send(cmd)
-                .await
-                .expect("worker command receiver should not drop first");
+            self.connection.send(cmd).await.map_err(|err| err.into())
         }
 
-        async fn recv(&mut self) -> Option<mz_dataflow_types::client::Response> {
+        async fn recv(&mut self) -> Option<Response> {
             // TODO: something better than panicking.
             self.connection
                 .next()

@@ -17,7 +17,7 @@ use std::fmt;
 use mz_ore::str::separated;
 use mz_repr::*;
 
-use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+use crate::plan::expr::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use crate::query_model::model::{QuantifierId, QuantifierSet};
 use mz_expr::AggregateFunc;
 
@@ -47,7 +47,7 @@ pub(crate) enum BoxScalarExpr {
     /// A literal value.
     /// (A single datum stored as a row, because we can't own a Datum)
     Literal(Row, ColumnType),
-    CallNullary(NullaryFunc),
+    CallUnmaterializable(UnmaterializableFunc),
     CallUnary {
         func: UnaryFunc,
         expr: Box<BoxScalarExpr>,
@@ -100,7 +100,7 @@ impl fmt::Display for BoxScalarExpr {
             BoxScalarExpr::Literal(row, _) => {
                 write!(f, "{}", row.unpack_first())
             }
-            BoxScalarExpr::CallNullary(func) => {
+            BoxScalarExpr::CallUnmaterializable(func) => {
                 write!(f, "{}()", func)
             }
             BoxScalarExpr::CallUnary { func, expr } => {
@@ -143,7 +143,7 @@ impl BoxScalarExpr {
     {
         use BoxScalarExpr::*;
         match self {
-            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -192,7 +192,7 @@ impl BoxScalarExpr {
     {
         use BoxScalarExpr::*;
         match self {
-            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -212,6 +212,14 @@ impl BoxScalarExpr {
                 f(expr);
             }
         }
+    }
+
+    pub fn visit_post<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        self.visit_children(|e| e.visit_post(f));
+        f(self);
     }
 
     pub fn visit_mut_post<F>(&mut self, f: &mut F)

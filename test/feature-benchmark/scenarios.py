@@ -72,7 +72,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 100)
+            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
@@ -157,6 +157,8 @@ class Update(DML):
                 f"""
 > CREATE TABLE t1 (f1 BIGINT);
 
+> CREATE DEFAULT INDEX ON t1;
+
 > INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
 """
             ),
@@ -171,6 +173,40 @@ class Update(DML):
 
 > UPDATE t1 SET f1 = f1 + {self.n()}
   /* B */
+"""
+        )
+
+
+class UpdateMultiNoIndex(DML):
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+
+    SCALE = 5
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE TABLE t1 (f1 BIGINT);
+
+> INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        updates = 10 * f"> UPDATE t1 SET f1 = f1 + {self.n()}\n"
+        return Td(
+            f"""
+> SELECT 1
+  /* A */
+1
+
+{updates}
+
+> SELECT 1
+  /* B */
+1
 """
         )
 
@@ -551,12 +587,13 @@ true
 
 class KafkaEnvelopeNoneBytes(Kafka):
     def shared(self) -> Action:
+        data = "a" * 512
         return TdAction(
             f"""
 $ kafka-create-topic topic=kafka-envelope-none-bytes
 
 $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
-12345678901234567890123456789012345678901234567890
+{data}
 """
         )
 
@@ -630,12 +667,12 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         return Td(
             f"""
 > DROP SOURCE IF EXISTS s1;
+  /* A */
 
 > CREATE MATERIALIZED SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE UPSERT
-  /* A */
 
 > SELECT COUNT(*) FROM s1;
   /* B */

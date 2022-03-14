@@ -22,6 +22,9 @@ use uuid::Uuid;
 use materialized::http;
 use materialized::mux::Mux;
 use materialized::server_metrics::Metrics;
+use mz_coord::LoggingConfig;
+use mz_dataflow_types::client::{Client, InstanceConfig};
+use mz_dataflowd::{RemoteClient, SplitClient};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
@@ -40,16 +43,9 @@ struct Args {
     /// The address of the dataflowd servers to connect to.
     #[clap()]
     dataflowd_addr: Vec<String>,
-    /// Number of dataflow worker threads. This must match the number of
-    /// workers that the targeted dataflowd was started with.
-    #[clap(
-        short,
-        long,
-        env = "COORDD_DATAFLOWD_WORKERS",
-        value_name = "N",
-        default_value = "1"
-    )]
-    workers: usize,
+    /// The address of the storage dataflowd servers to connect to.
+    #[clap(long)]
+    storaged_addr: Vec<String>,
     /// Where to store data.
     #[clap(
         short = 'D',
@@ -80,12 +76,24 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .init();
 
-    info!(
-        "connecting to dataflowd server at {:?}...",
-        args.dataflowd_addr
-    );
-
-    let dataflow_client = mz_dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+    let (dataflow_client, dataflow_instance): (Box<dyn Client + Send + 'static>, _) =
+        if args.storaged_addr.is_empty() {
+            info!(
+                "connecting to dataflowd server at {:?}...",
+                args.dataflowd_addr
+            );
+            let client = RemoteClient::connect(&args.dataflowd_addr).await?;
+            (Box::new(client), InstanceConfig::Virtual)
+        } else {
+            info!(
+                "connecting to dataflowd server at {:?} and storaged server at {:?}...",
+                args.dataflowd_addr, args.storaged_addr
+            );
+            let storage_client = RemoteClient::connect(&args.storaged_addr).await?;
+            let client = SplitClient::new(storage_client);
+            let config = InstanceConfig::Remote(args.dataflowd_addr);
+            (Box::new(client), config)
+        };
 
     let experimental_mode = false;
     let mut metrics_registry = MetricsRegistry::new();
@@ -104,9 +112,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &metrics_registry,
         )
         .await?;
+    // TODO: expose as a parameter
+    let granularity = Duration::from_secs(1);
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
-        dataflow_client: Box::new(dataflow_client),
-        logging: None,
+        dataflow_client,
+        dataflow_instance,
+        logging: Some(LoggingConfig {
+            log_logging: false,
+            granularity,
+            retain_readings_for: granularity,
+            metrics_scraping_interval: Some(granularity),
+        }),
         storage: coord_storage,
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: Some(Duration::from_millis(1)),
@@ -126,7 +142,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Metrics::register_with(
         &mut metrics_registry,
-        args.workers,
+        usize::MAX,
         coord_handle.start_instant(),
     );
 

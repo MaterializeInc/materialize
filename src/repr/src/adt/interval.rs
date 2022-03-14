@@ -12,7 +12,8 @@
 use std::fmt::{self, Write};
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
+use lazy_static::lazy_static;
 use num_traits::CheckedMul;
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +60,22 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
             None
         }
     }
+}
+
+lazy_static! {
+    static ref MONTH_OVERFLOW_ERROR: String = format!(
+        "Overflows maximum months; cannot exceed {}/{} microseconds",
+        i32::MAX,
+        i32::MIN,
+    );
+    static ref DAY_OVERFLOW_ERROR: String = format!(
+        "Overflows maximum days; cannot exceed {}/{} microseconds",
+        i32::MAX,
+        i32::MIN,
+    );
+    static ref USECS_PER_DAY: i64 =
+        Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64)
+            .unwrap();
 }
 
 impl Interval {
@@ -348,7 +365,6 @@ impl Interval {
     }
 
     /// Converts this `Interval`'s duration into `chrono::Duration`.
-    // TODO: would be best to remove usage of chrono::Duration and replace with native functions
     pub fn duration_as_chrono(&self) -> chrono::Duration {
         use chrono::Duration;
         Duration::days(self.days.into()) + Duration::microseconds(self.micros)
@@ -401,6 +417,21 @@ impl Interval {
     ) -> Result<(), anyhow::Error> {
         use DateTimeField::*;
         match f {
+            Millennium => {
+                self.months -= self.months % (12 * 1000);
+                self.days = 0;
+                self.micros = 0;
+            }
+            Century => {
+                self.months -= self.months % (12 * 100);
+                self.days = 0;
+                self.micros = 0;
+            }
+            Decade => {
+                self.months -= self.months % (12 * 10);
+                self.days = 0;
+                self.micros = 0;
+            }
             Year => {
                 self.months -= self.months % 12;
                 self.days = 0;
@@ -444,11 +475,8 @@ impl Interval {
             Day => {
                 self.micros = 0;
             }
-            Hour | Minute => {
+            Hour | Minute | Milliseconds | Microseconds => {
                 self.micros -= self.micros % f.micros_multiplier();
-            }
-            Millennium | Century | Decade | Milliseconds | Microseconds => {
-                unreachable!("Cannot truncate interval by {f}");
             }
         }
         Ok(())
@@ -550,6 +578,94 @@ impl Interval {
         }
 
         Some(res)
+    }
+
+    /// Adjust interval so 'days' contains less than 30 days, adding the excess to 'months'.
+    pub fn justify_days(&self) -> Result<Self, anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let (mut months, mut days) = Self::justify_days_inner(self.months, self.days)?;
+        if months > 0 && days < 0 {
+            days += days_per_month;
+            months -= 1;
+        } else if months < 0 && days > 0 {
+            days -= days_per_month;
+            months += 1;
+        }
+
+        Self::new(months, days, self.micros)
+    }
+
+    fn justify_days_inner(months: i32, days: i32) -> Result<(i32, i32), anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let whole_month = days / days_per_month;
+        let days = days - whole_month * days_per_month;
+
+        let months = months
+            .checked_add(whole_month)
+            .ok_or(anyhow!(&*MONTH_OVERFLOW_ERROR))?;
+
+        Ok((months, days))
+    }
+
+    /// Adjust interval so 'micros' contains less than a whole day, adding the excess to 'days'.
+    pub fn justify_hours(&self) -> Result<Self, anyhow::Error> {
+        let (mut days, mut micros) = Self::justify_hours_inner(self.days, self.micros)?;
+        if days > 0 && micros < 0 {
+            micros += &*USECS_PER_DAY;
+            days -= 1;
+        } else if days < 0 && micros > 0 {
+            micros -= &*USECS_PER_DAY;
+            days += 1;
+        }
+
+        Self::new(self.months, days, micros)
+    }
+
+    fn justify_hours_inner(days: i32, micros: i64) -> Result<(i32, i64), anyhow::Error> {
+        let days = i32::try_from(micros / &*USECS_PER_DAY)
+            .ok()
+            .and_then(|d| days.checked_add(d))
+            .ok_or(anyhow!(&*DAY_OVERFLOW_ERROR))?;
+        let micros = micros % &*USECS_PER_DAY;
+
+        Ok((days, micros))
+    }
+
+    /// Adjust interval so 'days' contains less than 30 days, adding the excess to 'months'.
+    /// Adjust interval so 'micros' contains less than a whole day, adding the excess to 'days'.
+    /// Also, the sign bit on all three fields is made equal, so either all three fields are negative or all are positive.
+    pub fn justify_interval(&self) -> Result<Self, anyhow::Error> {
+        let days_per_month = i32::from(Self::DAY_PER_MONTH);
+        let mut months = self.months;
+        let mut days = self.days;
+        let micros = self.micros;
+        // We justify days twice to try to avoid an intermediate overflow of days if it would be
+        // able to fit in months.
+        if (days > 0 && micros > 0) || (days < 0 && micros < 0) {
+            let (m, d) = Self::justify_days_inner(self.months, self.days)?;
+            months = m;
+            days = d;
+        }
+        let (days, mut micros) = Self::justify_hours_inner(days, micros)?;
+        let (mut months, mut days) = Self::justify_days_inner(months, days)?;
+
+        if months > 0 && (days < 0 || (days == 0 && micros < 0)) {
+            days += days_per_month;
+            months -= 1;
+        } else if months < 0 && (days > 0 || (days == 0 && micros > 0)) {
+            days -= days_per_month;
+            months += 1;
+        }
+
+        if days > 0 && micros < 0 {
+            micros += &*USECS_PER_DAY;
+            days -= 1;
+        } else if days < 0 && micros > 0 {
+            micros -= &*USECS_PER_DAY;
+            days += 1;
+        }
+
+        Self::new(months, days, micros)
     }
 }
 

@@ -93,6 +93,10 @@ class Tables(Generator):
 
 
 class Indexes(Generator):
+    COUNT = min(
+        Generator.COUNT, 100
+    )  # https://github.com/MaterializeInc/materialize/issues/11134
+
     @classmethod
     def body(cls) -> None:
         print(

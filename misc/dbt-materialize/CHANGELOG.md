@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## 1.0.3 - 2021-02-27
+
+* Upgrade to `dbt-postgres` v1.0.3.
+
 ## 1.0.1.post3 - 2021-02-17
 
 * Fix a bug introduced in v1.0.1.post1 that prevented use of the custom

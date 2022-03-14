@@ -26,7 +26,7 @@ use crate::adt::array::Array;
 use crate::adt::char::{Char, CharLength};
 use crate::adt::interval::Interval;
 use crate::adt::numeric::{Numeric, NumericMaxScale};
-use crate::adt::system::{Oid, RegClass, RegProc, RegType};
+use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -47,6 +47,8 @@ pub enum Datum<'a> {
     Int32(i32),
     /// A 64-bit signed integer.
     Int64(i64),
+    /// An 8-bit unsigned integer.
+    UInt8(u8),
     /// A 32-bit unsigned integer.
     UInt32(u32),
     /// A 32-bit floating point number.
@@ -317,11 +319,24 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the 8-bit integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::UInt8`].
+    #[track_caller]
+    pub fn unwrap_uint8(&self) -> u8 {
+        match self {
+            Datum::UInt8(u) => *u,
+            _ => panic!("Datum::unwrap_uint8 called on {:?}", self),
+        }
+    }
+
     /// Unwraps the 64-bit integer value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int64`].
+    /// Panics if the datum is not [`Datum::UInt32`].
     #[track_caller]
     pub fn unwrap_uint32(&self) -> u32 {
         match self {
@@ -562,6 +577,8 @@ impl<'a> Datum<'a> {
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
+                    (Datum::UInt8(_), ScalarType::PgLegacyChar) => true,
+                    (Datum::UInt8(_), _) => false,
                     (Datum::UInt32(_), ScalarType::Oid) => true,
                     (Datum::UInt32(_), ScalarType::RegClass) => true,
                     (Datum::UInt32(_), ScalarType::RegProc) => true,
@@ -791,6 +808,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Int16(num) => write!(f, "{}", num),
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
+            Datum::UInt8(num) => write!(f, "{}", num),
             Datum::UInt32(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
@@ -881,6 +899,11 @@ pub enum ScalarType {
     TimestampTz,
     /// The type of [`Datum::Interval`].
     Interval,
+    /// A single byte character type backed by a [`Datum::UInt8`].
+    ///
+    /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
+    /// it from the type `ScalarType::Char`.
+    PgLegacyChar,
     /// The type of [`Datum::Bytes`].
     Bytes,
     /// The type of [`Datum::String`].
@@ -1210,6 +1233,29 @@ impl<'a, E> DatumType<'a, E> for Numeric {
     }
 }
 
+impl AsColumnType for PgLegacyChar {
+    fn as_column_type() -> ColumnType {
+        ScalarType::PgLegacyChar.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for PgLegacyChar {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::UInt8(a)) => Ok(PgLegacyChar(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::UInt8(self.0))
+    }
+}
+
 impl AsColumnType for Oid {
     fn as_column_type() -> ColumnType {
         ScalarType::Oid.nullable(false)
@@ -1457,24 +1503,24 @@ impl<'a> ScalarType {
         layers
     }
 
-    /// Returns `self` with any embedded values set to a value appropriate for a
-    /// collection of the type. Namely, this should set optional scales or
-    /// limits to `None`.
-    pub fn default_embedded_value(&self) -> ScalarType {
+    /// Returns `self` with any type modifiers removed.
+    ///
+    /// Namely, this should set optional scales or limits to `None`.
+    pub fn without_modifiers(&self) -> ScalarType {
         use ScalarType::*;
         match self {
             List {
                 element_type,
                 custom_oid: None,
             } => List {
-                element_type: Box::new(element_type.default_embedded_value()),
+                element_type: Box::new(element_type.without_modifiers()),
                 custom_oid: None,
             },
             Map {
                 value_type,
                 custom_oid: None,
             } => Map {
-                value_type: Box::new(value_type.default_embedded_value()),
+                value_type: Box::new(value_type.without_modifiers()),
                 custom_oid: None,
             },
             Record {
@@ -1482,25 +1528,25 @@ impl<'a> ScalarType {
                 custom_oid: None,
                 custom_name: None,
             } => {
-                let default_embedded_field_values = fields
+                let fields = fields
                     .iter()
                     .map(|(column_name, column_type)| {
                         (
                             column_name.clone(),
                             ColumnType {
-                                scalar_type: column_type.scalar_type.default_embedded_value(),
+                                scalar_type: column_type.scalar_type.without_modifiers(),
                                 nullable: column_type.nullable,
                             },
                         )
                     })
                     .collect_vec();
                 Record {
-                    fields: default_embedded_field_values,
+                    fields,
                     custom_name: None,
                     custom_oid: None,
                 }
             }
-            Array(a) => Array(Box::new(a.default_embedded_value())),
+            Array(a) => Array(Box::new(a.without_modifiers())),
             Numeric { .. } => Numeric { max_scale: None },
             // Char's default length should not be `Some(1)`, but instead `None`
             // to support Char values of different lengths in e.g. lists.
@@ -1682,13 +1728,6 @@ impl<'a> ScalarType {
                         .all(|(a, b)| a.0 == b.0 && a.1.scalar_type.base_eq(&b.1.scalar_type))
             }
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
-        }
-    }
-
-    pub fn is_string_like(&self) -> bool {
-        match self {
-            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,
-            _ => false,
         }
     }
 }

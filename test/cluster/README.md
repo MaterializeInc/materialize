@@ -41,7 +41,7 @@ docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest --workers 2 --
 On `coord`, run:
 
 ```
-docker run -v /share/mzdata -p 6875:6875 materialize/coordd:latest -D /share/mzdata --workers 4 dataflow1:6876 dataflow2:6876
+docker run -v /share/mzdata -p 6875:6875 materialize/coordd:latest -D /share/mzdata dataflow1:6876 dataflow2:6876
 ```
 
 Then connect to the coordinator via psql:
@@ -67,7 +67,6 @@ To launch the coordinator:
 
 ```
 docker run -p 6875:6875 materialize/coordd:latest \
-    --workers <W*N> \
     --dataflowd-addr dataflow1:2101 dataflow2:2101 ... dataflow<N>:2101
 ```
 

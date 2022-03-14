@@ -19,11 +19,15 @@ pub mod plan;
 
 mod errors;
 mod explain;
+mod gen;
 mod types;
 
 pub use errors::*;
 pub use explain::DataflowGraphFormatter;
 pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
+pub use explain::TimestampExplanation;
+pub use explain::TimestampSource;
+pub use gen::*;
 pub use plan::Plan;
 pub use types::*;

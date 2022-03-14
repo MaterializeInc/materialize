@@ -116,23 +116,46 @@ impl<A: AttributeKey> TypeMapKey for AsKey<A> {
     type Value = A::Value;
 }
 
-/// derive attributes for the entire model before each transform
-pub(crate) fn derive_dft_attributes(
-    model: &mut Model,
-    attributes: &Vec<Box<dyn Attribute>>,
-    root: BoxId,
-) {
-    if !attributes.is_empty() {
-        let _ = model.try_visit_mut_pre_post_descendants(
-            &mut |_, _| -> Result<(), ()> { Ok(()) },
-            &mut |m, box_id| -> Result<(), ()> {
-                for attr in attributes.iter() {
-                    attr.derive(m, *box_id);
-                }
-                Ok(())
-            },
-            root,
-        );
+/// A struct that represents an [`Attribute`] set that needs
+/// to be present for some follow-up logic (most likely
+/// transformation, but can also be pretty-printing or something
+/// else).
+pub(crate) struct RequiredAttributes {
+    attributes: Vec<Box<dyn Attribute>>,
+}
+
+impl From<HashSet<Box<dyn Attribute>>> for RequiredAttributes {
+    /// Completes the set attributes with transitive dependencies
+    /// and wraps the result in a representation that is suitable
+    /// for attribute derivation in a minimum number of passes.
+    fn from(mut attributes: HashSet<Box<dyn Attribute>>) -> Self {
+        // add missing dependencies required to derive this set of attributes
+        transitive_closure(&mut attributes);
+        // order transitive closure topologically based on dependency order
+        let attributes = dependency_order(attributes);
+        // wrap resulting vector a new RequiredAttributes instance
+        RequiredAttributes { attributes }
+    }
+}
+
+impl RequiredAttributes {
+    /// Derive attributes for the entire model.
+    ///
+    /// The currently implementation assumes that all attributes
+    /// can be derived in a single bottom up pass.
+    pub(crate) fn derive(&self, model: &mut Model, root: BoxId) {
+        if !self.attributes.is_empty() {
+            let _ = model.try_visit_mut_pre_post_descendants(
+                &mut |_, _| -> Result<(), ()> { Ok(()) },
+                &mut |m, box_id| -> Result<(), ()> {
+                    for attr in self.attributes.iter() {
+                        attr.derive(m, *box_id);
+                    }
+                    Ok(())
+                },
+                root,
+            );
+        }
     }
 }
 
@@ -143,16 +166,10 @@ pub(crate) fn derive_dft_attributes(
 /// We use Kahn's algorithm[^1] to sort the input.
 ///
 /// [^1]: <https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm>
-pub(crate) fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<Box<dyn Attribute>> {
+fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<Box<dyn Attribute>> {
     let mut rest = attributes.into_iter().collect::<Vec<_>>();
     let mut seen = HashSet::new() as HashSet<&'static str>;
     let mut sort = vec![] as Vec<Box<dyn Attribute>>;
-
-    // TODO: remove this
-    // let mut i = 0 as usize;
-    // println!("sort[T{}] = {:?}", i, sort);
-    // println!("seen[T{}] = {:?}", i, seen);
-    // println!("rest[T{}] = {:?}", i, rest);
 
     while !rest.is_empty() {
         let (tail, head) = rest.into_iter().partition::<Vec<_>, _>(|attr| {
@@ -165,19 +182,13 @@ pub(crate) fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<B
         rest = tail;
         seen.extend(head.iter().map(|attr| attr.attr_id()));
         sort.extend(head);
-
-        // TODO: remove this
-        // i += 1;
-        // println!("sort[T{}] = {:?}", i, sort);
-        // println!("seen[T{}] = {:?}", i, seen);
-        // println!("rest[T{}] = {:?}", i, rest);
     }
 
     sort
 }
 
 /// Compute the transitive closure of the given set of attributes.
-pub(crate) fn transitive_closure(attributes: &mut HashSet<Box<dyn Attribute>>) {
+fn transitive_closure(attributes: &mut HashSet<Box<dyn Attribute>>) {
     let mut diff = requirements(&attributes);
 
     // iterate until no new attributes can be discovered

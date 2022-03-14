@@ -117,10 +117,16 @@ contains:catalog item 'temp_t' already exists
 > INSERT INTO temp_t VALUES (1, 'testing')
 
 > SHOW INDEXES FROM temp_t
- on_name    key_name            seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
- temp_t     temp_t_primary_idx  1             a            <null>      true     true
- temp_t     temp_t_primary_idx  2             b            <null>      false    true
+
+# Blocked on https://github.com/MaterializeInc/materialize/issues/3105.
+#
+# > CREATE TEMPORARY DEFAULT INDEX ON temp_t
+#
+# > SHOW INDEXES FROM temp_t
+#  on_name    key_name            seq_in_index  column_name  expression  nullable enabled
+# ---------------------------------------------------------------------------------------
+#  temp_t     temp_t_primary_idx  1             a            <null>      true     true
+#  temp_t     temp_t_primary_idx  2             b            <null>      false    true
 
 > DROP TABLE temp_t
 
@@ -206,14 +212,14 @@ $ set schema={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SOURCE
+contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SOURCE
 
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SINK
+contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SINK
 
 #####################################################################
 

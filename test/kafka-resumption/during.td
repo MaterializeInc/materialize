@@ -8,4 +8,5 @@
 # by the Apache License, Version 2.0.
 
 $ file-append path=dynamic.csv
+San Francisco,CA,94114
 Brooklyn,NY,11217

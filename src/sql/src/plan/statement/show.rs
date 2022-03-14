@@ -216,6 +216,8 @@ pub fn show_objects<'a>(
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
+        ObjectType::Cluster => show_clusters(scx, filter),
+        ObjectType::Secret => bail_unsupported!("SHOW SECRETS"),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -230,7 +232,7 @@ fn show_schemas<'a>(
     let database = if let Some(from) = from {
         scx.resolve_database(from)?
     } else {
-        scx.resolve_default_database()?
+        scx.resolve_active_database()?
     };
     let query = if !full & !extended {
         format!(
@@ -272,7 +274,7 @@ fn show_tables<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(
@@ -302,7 +304,7 @@ fn show_sources<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = match (full, materialized) {
@@ -364,7 +366,7 @@ fn show_views<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = if !full & !materialized {
@@ -410,7 +412,7 @@ fn show_sinks<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let query = if full {
@@ -439,7 +441,7 @@ fn show_types<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(
@@ -469,7 +471,7 @@ fn show_all_objects<'a>(
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
-        scx.resolve_default_schema()?
+        scx.resolve_active_schema()?
     };
 
     let mut query = format!(
@@ -569,6 +571,17 @@ pub fn show_columns<'a>(
         Some("position"),
         Some(&["name", "nullable", "type"]),
     ))
+}
+
+pub fn show_clusters<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Raw>>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    scx.require_experimental_mode("SHOW CLUSTERS")?;
+
+    let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
+
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 /// An intermediate result when planning a `SHOW` query.

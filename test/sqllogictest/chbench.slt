@@ -258,7 +258,7 @@ GROUP BY ol_number
 ORDER BY ol_number
 ----
 %0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | Filter (datetots(#6) > 2007-01-02 00:00:00)
 | Project (#3, #7, #8)
 | Reduce group=(#0)
@@ -301,47 +301,59 @@ AND i_id = m_i_id
 AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
+Source materialize.public.item (u17):
+| Filter "%b" ~~(padchar(#4))
+| Project (#0, #2, #4)
+
+Source materialize.public.region (u26):
+| Filter "EUROP%" ~~(padchar(#1))
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.region (u37)
+| Get materialize.public.region (u26)
+| Filter "EUROP%" ~~(padchar(#1))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter "%b" ~~(padchar(#4))
+| Project (#0, #2)
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.supplier (u34)
+| Get materialize.public.supplier (u24)
+| Project (#0..=#4, #6)
 | ArrangeBy (#0)
 
 %3 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
 | Filter !(isnull(#2))
 | Project (#0, #2, #17)
 
 %4 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0..=#2)
 | ArrangeBy (#0)
 
 %5 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
 | ArrangeBy (#17)
 
 %6 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0) (#3)
+| Get materialize.public.supplier (u24)
+| Project (#0, #3)
+| ArrangeBy (#0)
 
 %7 =
-| Get materialize.public.nation (u31)
-| ArrangeBy (#0) (#2)
+| Get materialize.public.nation (u22)
+| Project (#0, #2)
+| ArrangeBy (#0)
 
 %8 =
-| Join %5 %6 %7 %0 (= #17 #18) (= #21 #25) (= #27 #29)
-| | implementation = DeltaQuery
-| |   delta %5 %6.(#0) %7.(#0) %0.(#0)
-| |   delta %6 %7.(#0) %0.(#0) %5.(#17)
-| |   delta %7 %0.(#0) %6.(#3) %5.(#17)
-| |   delta %0 %7.(#2) %6.(#3) %5.(#17)
-| Filter "EUROP%" ~~(padchar(#30))
+| Join %5 %6 %7 %0 (= #17 #18) (= #19 #20) (= #21 #22)
+| | implementation = Differential %5.(#17) %6.(#0) %7.(#0) %0.(#0)
 | Project (#0, #2)
 | Reduce group=(#0)
 | | agg min(#1)
@@ -349,10 +361,9 @@ ORDER BY n_name, su_name, i_id
 | ArrangeBy (#0, #1)
 
 %9 =
-| Join %1 %2 %3 %4 %0 %8 (= #0 #12 #22) (= #5 #14) (= #8 #15) (= #13 #23) (= #17 #19)
+| Join %1 %2 %3 %4 %0 %8 (= #0 #8 #15) (= #2 #10) (= #5 #11) (= #9 #16) (= #13 #14)
 | | implementation = Differential %3 %8.(#0, #1) %1.(#0) %2.(#0) %4.(#0) %0.(#0)
-| Filter "%b" ~~(padchar(#4)), "EUROP%" ~~(padchar(#20))
-| Project (#5, #6, #16, #0, #2, #7, #9, #11)
+| Project (#2, #3, #12, #0, #1, #4, #6, #7)
 
 Finish order_by=(#2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..=#7)
 
@@ -377,31 +388,34 @@ AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
 ORDER BY revenue DESC, o_entry_d
 ----
+Source materialize.public.neworder (u10):
+| Project (#0..=#2)
+
+Query:
 %0 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
+| Filter "A%" ~~(padchar(#9))
+| Project (#0..=#2)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.neworder (u14)
+| Get materialize.public.neworder (u10)
 | ArrangeBy (#0, #1, #2)
 
 %2 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3)), (datetots(#4) > 2007-01-02 00:00:00)
+| Project (#0..=#4)
+| ArrangeBy (#0, #1, #2)
 
 %3 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0)
+| Get materialize.public.orderline (u13)
+| Project (#0..=#2, #8)
 
 %4 =
-| Join %0 %1 %2 %3 (= #0 #28) (= #1 #23 #26 #34) (= #2 #24 #27 #35) (= #22 #25 #33)
-| | implementation = DeltaQuery
-| |   delta %0 %2.(#2, #1, #3) %1.(#0, #1, #2) %3.(#2, #1, #0)
-| |   delta %1 %2.(#0, #1, #2) %0.(#0, #1, #2) %3.(#2, #1, #0)
-| |   delta %2 %0.(#0, #1, #2) %1.(#0, #1, #2) %3.(#2, #1, #0)
-| |   delta %3 %1.(#0, #1, #2) %2.(#0, #1, #2) %0.(#0, #1, #2)
-| Filter "A%" ~~(padchar(#9)), (datetots(#29) > 2007-01-02 00:00:00)
-| Project (#1, #2, #22, #29, #41)
+| Join %0 %1 %2 %3 (= #0 #9) (= #1 #4 #7 #12) (= #2 #5 #8 #13) (= #3 #6 #11)
+| | implementation = Differential %3 %1.(#0, #1, #2) %2.(#0, #1, #2) %0.(#0, #1, #2)
+| Project (#1..=#3, #10, #14)
 | Reduce group=(#2, #1, #0, #3)
 | | agg sum(#4)
 | Project (#0..=#2, #4, #3)
@@ -428,32 +442,36 @@ AND EXISTS (
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
-%0 =
-| Get materialize.public.order (u16)
+%0 = Let l0 =
+| Get materialize.public.order (u11)
 | Filter (datetots(#4) < 2012-01-02 00:00:00), (datetots(#4) >= 2007-01-02 00:00:00)
-| Project (#0..=#2, #4, #6)
 
 %1 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2)
+| Get %0 (l0)
+| Project (#0..=#2, #4, #6)
 
 %2 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0)
+| Get %0 (l0)
+| Project (#0..=#2, #4)
+| ArrangeBy (#0, #1, #2)
 
 %3 =
-| Join %1 %2 (= #0 #8) (= #1 #9) (= #2 #10)
+| Get materialize.public.orderline (u13)
+| ArrangeBy (#2, #1, #0)
+
+%4 =
+| Join %2 %3 (= #0 #4) (= #1 #5) (= #2 #6)
 | | implementation = DeltaQuery
-| |   delta %1 %2.(#2, #1, #0)
-| |   delta %2 %1.(#0, #1, #2)
-| Filter (datetots(#4) < 2012-01-02 00:00:00), (#14 >= #4), (datetots(#4) >= 2007-01-02 00:00:00)
-| Project (#0..=#2, #4)
+| |   delta %2 %3.(#2, #1, #0)
+| |   delta %3 %2.(#0, #1, #2)
+| Filter (#10 >= #3)
+| Project (#0..=#3)
 | Distinct group=(#0, #1, #2, #3)
 | ArrangeBy (#0, #1, #2, #3)
 
-%4 =
-| Join %0 %3 (= #0 #5) (= #1 #6) (= #2 #7) (= #3 #8)
-| | implementation = Differential %0 %3.(#0, #1, #2, #3)
+%5 =
+| Join %1 %4 (= #0 #5) (= #1 #6) (= #2 #7) (= #3 #8)
+| | implementation = Differential %1 %4.(#0, #1, #2, #3)
 | Project (#4)
 | Reduce group=(#0)
 | | agg count(true)
@@ -486,41 +504,53 @@ AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY n_name
 ORDER BY revenue DESC
 ----
+Source materialize.public.region (u26):
+| Filter (#1 = "EUROPE")
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
+| Filter !(isnull(#21))
+| Project (#0..=#2, #21)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3)), (datetots(#4) >= 2007-01-02 00:00:00)
+| Project (#0..=#3)
 | ArrangeBy (#0, #1, #2)
 
 %2 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | Filter !(isnull(#4))
 | Project (#0..=#2, #4, #8)
 
 %3 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
+| Project (#0, #1, #17)
 | ArrangeBy (#0, #1)
 
 %4 =
-| Get materialize.public.supplier (u34)
+| Get materialize.public.supplier (u24)
 | Project (#0, #3)
 | ArrangeBy (#0, #1)
 
 %5 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0..=#2)
 | ArrangeBy (#0)
 
 %6 =
-| Get materialize.public.region (u37)
+| Get materialize.public.region (u26)
+| Filter (#1 = "EUROPE")
+| Project (#0)
 | ArrangeBy (#0)
 
 %7 =
-| Join %0 %1 %2 %3 %4 %5 %6 (= #0 #25) (= #1 #23 #31) (= #2 #24 #32 #36) (= #21 #54 #55) (= #22 #30) (= #33 #35) (= #52 #53) (= #57 #59)
+| Join %0 %1 %2 %3 %4 %5 %6 (= #0 #7) (= #1 #5 #9) (= #2 #6 #10 #14) (= #3 #17 #18) (= #4 #8) (= #11 #13) (= #15 #16) (= #20 #21)
 | | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0, #1) %4.(#0, #1) %5.(#0) %6.(#0)
-| Filter (#60 = "EUROPE"), (datetots(#26) >= 2007-01-02 00:00:00)
-| Project (#34, #56)
+| Project (#12, #19)
 | Reduce group=(#1)
 | | agg sum(#0)
 
@@ -538,7 +568,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
 AND ol_quantity BETWEEN 1 AND 100000
 ----
 %0 = Let l0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | Filter (#7 <= 100000), (#7 >= 1), (datetots(#6) < 2020-01-01 00:00:00), (datetots(#6) >= 1999-01-01 00:00:00)
 | Project (#8)
 | Reduce group=()
@@ -591,41 +621,42 @@ GROUP BY su_nationkey, substr(c_state, 1, 1), EXTRACT(year FROM o_entry_d)
 ORDER BY su_nationkey, cust_nation, l_year
 ----
 %0 = Let l0 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0, #1)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0) (#3)
+| Get materialize.public.supplier (u24)
+| Project (#0, #3)
+| ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.stock (u26)
-| ArrangeBy (#0, #1) (#17)
+| Get materialize.public.stock (u18)
+| Project (#0, #1, #17)
+| ArrangeBy (#0, #1)
 
 %3 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0) (#5, #4)
+| Get materialize.public.orderline (u13)
+| Filter !(isnull(#4)), !(isnull(#5)), (datetots(#6) <= 2012-01-02 00:00:00), (datetots(#6) >= 2007-01-02 00:00:00)
+| Project (#0..=#2, #4, #5, #8)
 
 %4 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3))
+| Project (#0..=#4)
+| ArrangeBy (#0, #1, #2)
 
 %5 =
-| Get materialize.public.customer (u6)
-| ArrangeBy (#0, #1, #2) (#21)
+| Get materialize.public.customer (u4)
+| Filter !(isnull(#21))
+| Project (#0..=#2, #9, #21)
+| ArrangeBy (#0, #1, #2)
 
 %6 =
-| Join %1 %2 %3 %4 %5 %0 %0 (= #0 #24) (= #3 #65) (= #7 #29) (= #8 #30) (= #25 #35) (= #26 #36 #44) (= #27 #37 #45) (= #38 #43) (= #64 #69)
-| | implementation = DeltaQuery
-| |   delta %1 %0.(#0) %2.(#17) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %0.(#0)
-| |   delta %2 %1.(#0) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %0.(#0)
-| |   delta %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %1.(#0) %0.(#0) %0.(#0)
-| |   delta %4 %5.(#0, #1, #2) %0.(#0) %3.(#2, #1, #0) %2.(#0, #1) %1.(#0) %0.(#0)
-| |   delta %5 %0.(#0) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %1.(#0) %0.(#0)
-| |   delta %0 %1.(#3) %2.(#17) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %0.(#0)
-| |   delta %0 %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %1.(#0) %0.(#0)
-| Filter (datetots(#31) <= 2012-01-02 00:00:00), (datetots(#31) >= 2007-01-02 00:00:00), (((#66 = "GERMANY") && (#70 = "CAMBODIA")) || ((#66 = "CAMBODIA") && (#70 = "GERMANY")))
-| Project (#3, #33, #39, #52)
+| Join %1 %2 %3 %4 %5 %0 %0 (= #0 #4) (= #1 #21) (= #2 #8) (= #3 #9) (= #5 #11) (= #6 #12 #17) (= #7 #13 #18) (= #14 #16) (= #20 #23)
+| | implementation = Differential %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %1.(#0) %0.(#0) %0.(#0)
+| Filter (((#22 = "GERMANY") && (#24 = "CAMBODIA")) || ((#22 = "CAMBODIA") && (#24 = "GERMANY")))
+| Project (#1, #10, #15, #19)
 | Reduce group=(#0, substr(chartostr(#3), 1, 1), extract_year_d(#2))
 | | agg sum(#1)
 
@@ -661,56 +692,69 @@ AND i_id = ol_i_id
 GROUP BY EXTRACT(year FROM o_entry_d)
 ORDER BY l_year
 ----
+Source materialize.public.item (u17):
+| Filter "%b" ~~(padchar(#4)), (#0 < 1000)
+| Project (#0, #4)
+
+Source materialize.public.region (u26):
+| Filter (#1 = "EUROPE")
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter (#0 < 1000), "%b" ~~(padchar(#4))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0) (#3)
+| Get materialize.public.supplier (u24)
+| Project (#0, #3)
+| ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.stock (u26)
-| ArrangeBy (#0) (#0, #1) (#17)
+| Get materialize.public.stock (u18)
+| Filter (#0 < 1000)
+| Project (#0, #1, #17)
+| ArrangeBy (#0, #1)
 
 %3 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0) (#5, #4)
+| Get materialize.public.orderline (u13)
+| Filter (#4 < 1000), !(isnull(#5))
+| Project (#0..=#2, #4, #5, #8)
 
 %4 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3)), (datetots(#4) <= 2012-01-02 00:00:00), (datetots(#4) >= 2007-01-02 00:00:00)
+| Project (#0..=#4)
+| ArrangeBy (#0, #1, #2)
 
 %5 =
-| Get materialize.public.customer (u6)
-| ArrangeBy (#0, #1, #2) (#21)
+| Get materialize.public.customer (u4)
+| Filter !(isnull(#21))
+| Project (#0..=#2, #21)
+| ArrangeBy (#0, #1, #2)
 
 %6 =
-| Get materialize.public.nation (u31)
-| ArrangeBy (#0) (#2)
+| Get materialize.public.nation (u22)
+| Project (#0, #2)
+| ArrangeBy (#0)
 
 %7 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0, #1)
 | ArrangeBy (#0)
 
 %8 =
-| Get materialize.public.region (u37)
+| Get materialize.public.region (u26)
+| Filter (#1 = "EUROPE")
+| Project (#0)
 | ArrangeBy (#0)
 
 %9 =
-| Join %0 %1 %2 %3 %4 %5 %6 %7 %8 (= #0 #12 #34) (= #5 #29) (= #8 #74) (= #13 #35) (= #30 #40) (= #31 #41 #49) (= #32 #42 #50) (= #43 #48) (= #69 #70) (= #72 #78)
-| | implementation = DeltaQuery
-| |   delta %0 %2.(#0) %1.(#0) %7.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0)
-| |   delta %1 %7.(#0) %2.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0)
-| |   delta %2 %0.(#0) %1.(#0) %7.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0)
-| |   delta %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %0.(#0) %1.(#0) %6.(#0) %7.(#0) %8.(#0)
-| |   delta %4 %5.(#0, #1, #2) %6.(#0) %8.(#0) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
-| |   delta %5 %6.(#0) %8.(#0) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
-| |   delta %6 %8.(#0) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
-| |   delta %7 %1.(#3) %2.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0)
-| |   delta %8 %6.(#2) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
-| Filter (#79 = "EUROPE"), (#0 < 1000), "%b" ~~(padchar(#4)), (datetots(#44) <= 2012-01-02 00:00:00), (datetots(#44) >= 2007-01-02 00:00:00)
-| Project (#38, #44, #75)
+| Join %0 %1 %2 %3 %4 %5 %6 %7 %8 (= #0 #3 #9) (= #1 #5) (= #2 #23) (= #4 #10) (= #6 #12) (= #7 #13 #18) (= #8 #14 #19) (= #15 #17) (= #20 #21) (= #22 #25)
+| | implementation = Differential %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %0.(#0) %1.(#0) %6.(#0) %7.(#0) %8.(#0)
+| Project (#11, #16, #24)
 | Reduce group=(extract_year_d(#1))
 | | agg sum(if (#2 = "GERMANY") then {#0} else {0})
 | | agg sum(#0)
@@ -740,41 +784,46 @@ AND i_data like '%BB'
 GROUP BY n_name, EXTRACT(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
+Source materialize.public.item (u17):
+| Filter "%BB" ~~(padchar(#4))
+| Project (#0, #4)
+
+Query:
 %0 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter "%BB" ~~(padchar(#4))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.stock (u26)
-| ArrangeBy (#0) (#0, #1) (#17)
+| Get materialize.public.stock (u18)
+| Project (#0, #1, #17)
+| ArrangeBy (#0, #1)
 
 %2 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0) (#3)
+| Get materialize.public.supplier (u24)
+| Project (#0, #3)
+| ArrangeBy (#0)
 
 %3 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0) (#5, #4)
+| Get materialize.public.orderline (u13)
+| Filter !(isnull(#4)), !(isnull(#5))
+| Project (#0..=#2, #4, #5, #8)
 
 %4 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
+| Project (#0..=#2, #4)
 | ArrangeBy (#0, #1, #2)
 
 %5 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0, #1)
 | ArrangeBy (#0)
 
 %6 =
-| Join %0 %1 %2 %3 %4 %5 (= #0 #5 #34) (= #6 #35) (= #22 #23) (= #26 #48) (= #30 #40) (= #31 #41) (= #32 #42)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0) %5.(#0) %3.(#5, #4) %4.(#0, #1, #2)
-| |   delta %1 %0.(#0) %2.(#0) %5.(#0) %3.(#5, #4) %4.(#0, #1, #2)
-| |   delta %2 %5.(#0) %1.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2)
-| |   delta %3 %4.(#0, #1, #2) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0)
-| |   delta %4 %3.(#2, #1, #0) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0)
-| |   delta %5 %2.(#3) %1.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2)
-| Filter "%BB" ~~(padchar(#4))
-| Project (#38, #44, #49)
+| Join %0 %1 %2 %3 %4 %5 (= #0 #1 #9) (= #2 #10) (= #3 #4) (= #5 #16) (= #6 #12) (= #7 #13) (= #8 #14)
+| | implementation = Differential %3 %4.(#0, #1, #2) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0)
+| Project (#11, #15, #17)
 | Reduce group=(#2, extract_year_d(#1))
 | | agg sum(#0)
 
@@ -801,30 +850,31 @@ GROUP BY c_id, c_last, c_city, c_phone, n_name
 ORDER BY revenue DESC
 ----
 %0 =
-| Get materialize.public.customer (u6)
-| ArrangeBy (#0, #1, #2) (#21)
+| Get materialize.public.customer (u4)
+| Filter !(isnull(#21))
+| Project (#0..=#2, #5, #8, #11, #21)
+| ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3)), (datetots(#4) >= 2007-01-02 00:00:00)
+| Project (#0..=#4)
+| ArrangeBy (#0, #1, #2)
 
 %2 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0)
+| Get materialize.public.orderline (u13)
+| Project (#0..=#2, #6, #8)
 
 %3 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Project (#0, #1)
 | ArrangeBy (#0)
 
 %4 =
-| Join %0 %1 %2 %3 (= #0 #25) (= #1 #23 #31) (= #2 #24 #32) (= #21 #40) (= #22 #30)
-| | implementation = DeltaQuery
-| |   delta %0 %3.(#0) %1.(#2, #1, #3) %2.(#2, #1, #0)
-| |   delta %1 %0.(#0, #1, #2) %3.(#0) %2.(#2, #1, #0)
-| |   delta %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0)
-| |   delta %3 %0.(#21) %1.(#2, #1, #3) %2.(#2, #1, #0)
-| Filter (#26 <= #36), (datetots(#26) >= 2007-01-02 00:00:00)
-| Project (#0, #5, #8, #11, #38, #41)
+| Join %0 %1 %2 %3 (= #0 #10) (= #1 #8 #13) (= #2 #9 #14) (= #6 #17) (= #7 #12)
+| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0)
+| Filter (#11 <= #15)
+| Project (#0, #3..=#5, #16, #18)
 | Reduce group=(#0, #1, #2, #3, #5)
 | | agg sum(#4)
 | Project (#0, #1, #5, #2..=#4)
@@ -852,24 +902,23 @@ HAVING sum(s_order_cnt) > (
 ORDER BY ordercount DESC
 ----
 %0 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
 | ArrangeBy (#17)
 
 %1 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0) (#3)
+| Get materialize.public.supplier (u24)
+| Project (#0, #3)
+| ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Filter (#1 = "GERMANY")
+| Project (#0)
 | ArrangeBy (#0)
 
 %3 = Let l0 =
-| Join %0 %1 %2 (= #17 #18) (= #21 #25)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0)
-| |   delta %1 %2.(#0) %0.(#17)
-| |   delta %2 %1.(#3) %0.(#17)
-| Filter (#26 = "GERMANY")
+| Join %0 %1 %2 (= #17 #18) (= #19 #20)
+| | implementation = Differential %0.(#17) %1.(#0) %2.(#0)
 | Project (#0, #14)
 
 %4 =
@@ -912,20 +961,21 @@ GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
 %0 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
+| Project (#0..=#2, #4..=#6)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#2, #1, #0)
 
 %2 =
-| Join %0 %1 (= #0 #8) (= #1 #9) (= #2 #10)
+| Join %0 %1 (= #0 #6) (= #1 #7) (= #2 #8)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#2, #1, #0)
 | |   delta %1 %0.(#0, #1, #2)
-| Filter (datetots(#14) < 2020-01-01 00:00:00), (#4 <= #14)
-| Project (#5, #6)
+| Filter (datetots(#12) < 2020-01-01 00:00:00), (#3 <= #12)
+| Project (#4, #5)
 | Reduce group=(#1)
 | | agg sum(if ((#0 = 1) || (#0 = 2)) then {1} else {0})
 | | agg sum(if ((#0 != 1) && (#0 != 2)) then {1} else {0})
@@ -951,11 +1001,11 @@ GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
 %0 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
 | ArrangeBy (#2, #1, #3)
 
 %2 = Let l0 =
@@ -978,7 +1028,7 @@ ORDER BY custdist DESC, c_count DESC
 | Negate
 
 %5 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
 | Project (#0)
 
 %6 =
@@ -1007,12 +1057,17 @@ WHERE ol_i_id = i_id
 AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
+Source materialize.public.item (u17):
+| Project (#0, #4)
+
+Query:
 %0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#4)
 
 %1 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Project (#0, #4)
 | ArrangeBy (#0)
 
 %2 = Let l0 =
@@ -1021,7 +1076,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
 | Filter (datetots(#6) < 2020-01-02 00:00:00), (datetots(#6) >= 2007-01-02 00:00:00)
-| Project (#8, #14)
+| Project (#8, #11)
 | Reduce group=()
 | | agg sum(if "PR%" ~~(padchar(#1)) then {#0} else {0})
 | | agg sum(#0)
@@ -1078,11 +1133,12 @@ AND total_revenue = (
 ORDER BY su_suppkey
 ----
 %0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#5, #4)
 
 %1 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
+| Project (#0, #1, #17)
 | ArrangeBy (#0, #1)
 
 %2 = Let l0 =
@@ -1091,13 +1147,13 @@ ORDER BY su_suppkey
 | |   delta %0 %1.(#0, #1)
 | |   delta %1 %0.(#5, #4)
 | Filter (datetots(#6) >= 2007-01-02 00:00:00)
-| Project (#8, #27)
+| Project (#8, #12)
 | Reduce group=(#1)
 | | agg sum(#0)
 
 %3 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0)
+| Get materialize.public.supplier (u24)
+| Project (#0..=#2, #4)
 
 %4 =
 | Get %2 (l0)
@@ -1112,9 +1168,9 @@ ORDER BY su_suppkey
 | ArrangeBy (#0)
 
 %6 =
-| Join %3 %4 %5 (= #0 #7) (= #8 #9)
-| | implementation = Differential %3.(#0) %4.(#0) %5.(#0)
-| Project (#0..=#2, #4, #8)
+| Join %3 %4 %5 (= #0 #4) (= #5 #6)
+| | implementation = Differential %3 %4.(#0) %5.(#0)
+| Project (#0..=#3, #5)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#4)
 
@@ -1137,12 +1193,19 @@ AND (
 GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
+Source materialize.public.item (u17):
+| Filter !("zz%" ~~(padchar(#4)))
+| Project (#0, #2..=#4)
+
+Query:
 %0 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter !("zz%" ~~(padchar(#4)))
+| Project (#0, #2..=#4)
 | ArrangeBy (#0)
 
 %2 = Let l0 =
@@ -1150,8 +1213,7 @@ ORDER BY supplier_cnt DESC
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter !("zz%" ~~(padchar(#22)))
-| Project (#17, #20..=#22)
+| Project (#17, #19..=#21)
 
 %3 = Let l1 =
 | Get %2 (l0)
@@ -1167,15 +1229,13 @@ ORDER BY supplier_cnt DESC
 | ArrangeBy (#0)
 
 %6 =
-| Get materialize.public.supplier (u34)
-| ArrangeBy (#0)
+| Get materialize.public.supplier (u24)
+| Filter "%bad%" ~~(padchar(#6))
+| Project (#0)
 
 %7 =
 | Join %5 %6 (= #0 #1)
-| | implementation = DeltaQuery
-| |   delta %5 %6.(#0)
-| |   delta %6 %5.(#0)
-| Filter "%bad%" ~~(padchar(#7))
+| | implementation = Differential %6 %5.(#0)
 | Project (#0)
 | Negate
 
@@ -1209,21 +1269,27 @@ FROM
 WHERE ol_i_id = t.i_id
 AND ol_quantity < t.a
 ----
+Source materialize.public.item (u17):
+| Filter "%b" ~~(padchar(#4))
+| Project (#0, #4)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#4)
 
 %1 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter "%b" ~~(padchar(#4))
+| Project (#0)
 | ArrangeBy (#0)
 
 %2 =
-| Join %1 %0 (= #0 #9)
+| Join %1 %0 (= #0 #5)
 | | implementation = DeltaQuery
 | |   delta %1 %0.(#4)
 | |   delta %0 %1.(#0)
-| Filter "%b" ~~(padchar(#4))
-| Project (#0, #12)
+| Project (#0, #8)
 | Reduce group=(#0)
 | | agg sum(#1)
 | | agg count(#1)
@@ -1274,24 +1340,24 @@ HAVING sum(ol_amount) > 200
 ORDER BY sum(ol_amount) DESC, o_entry_d
 ----
 %0 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
+| Project (#0..=#2, #5)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+| Get materialize.public.order (u11)
+| Filter !(isnull(#3))
+| Project (#0..=#4, #6)
+| ArrangeBy (#0, #1, #2)
 
 %2 =
-| Get materialize.public.orderline (u19)
-| ArrangeBy (#2, #1, #0)
+| Get materialize.public.orderline (u13)
+| Project (#0..=#2, #8)
 
 %3 =
-| Join %0 %1 %2 (= #0 #25) (= #1 #23 #31) (= #2 #24 #32) (= #22 #30)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#2, #1, #3) %2.(#2, #1, #0)
-| |   delta %1 %0.(#0, #1, #2) %2.(#2, #1, #0)
-| |   delta %2 %1.(#0, #1, #2) %0.(#0, #1, #2)
-| Project (#0..=#2, #5, #22, #26, #28, #38)
+| Join %0 %1 %2 (= #0 #7) (= #1 #5 #11) (= #2 #6 #12) (= #4 #10)
+| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2)
+| Project (#0..=#4, #8, #9, #13)
 | Reduce group=(#4, #2, #1, #0, #3, #5, #6)
 | | agg sum(#7)
 | Filter (#7 > 200)
@@ -1329,12 +1395,19 @@ WHERE (
     AND ol_w_id in (1, 5, 3)
 )
 ----
+Source materialize.public.item (u17):
+| Filter (#3 <= 400000), (#3 >= 1)
+| Project (#0, #3, #4)
+
+Query:
 %0 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#4)
 
 %1 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter (#3 <= 400000), (#3 >= 1)
+| Project (#0, #4)
 | ArrangeBy (#0)
 
 %2 = Let l0 =
@@ -1342,9 +1415,9 @@ WHERE (
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Filter (#7 <= 10), (#13 <= 400000), (#7 >= 1), (#13 >= 1)
-| Map padchar(#14), (#2 = 1), (#2 = 3), (#16 || (#2 = 2))
-| Filter (("%c" ~~(#15) && (#17 || (#16 || (#2 = 5)))) || (("%a" ~~(#15) && (#17 || #18)) || ("%b" ~~(#15) && (#18 || (#2 = 4)))))
+| Filter (#7 <= 10), (#7 >= 1)
+| Map padchar(#11), (#2 = 1), (#2 = 3), (#13 || (#2 = 2))
+| Filter (("%c" ~~(#12) && (#14 || (#13 || (#2 = 5)))) || (("%a" ~~(#12) && (#14 || #15)) || ("%b" ~~(#12) && (#15 || (#2 = 4)))))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -1385,12 +1458,19 @@ AND su_nationkey = n_nationkey
 AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
+Source materialize.public.item (u17):
+| Filter "co%" ~~(padchar(#4))
+| Project (#0, #4)
+
+Query:
 %0 =
-| Get materialize.public.supplier (u34)
+| Get materialize.public.supplier (u24)
 | ArrangeBy (#3)
 
 %1 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Filter (#1 = "GERMANY")
+| Project (#0)
 | ArrangeBy (#0)
 
 %2 = Let l0 =
@@ -1398,7 +1478,6 @@ ORDER BY su_name
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#3)
-| Filter (#8 = "GERMANY")
 | Project (#0..=#2)
 
 %3 =
@@ -1407,21 +1486,23 @@ ORDER BY su_name
 | ArrangeBy ()
 
 %4 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
 | ArrangeBy (#0)
 
 %5 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#4)
 
 %6 =
-| Get materialize.public.item (u24)
+| Get materialize.public.item (u17)
+| Filter "co%" ~~(padchar(#4))
+| Project (#0)
 | ArrangeBy (#0)
 
 %7 =
 | Join %3 %4 %5 %6 (= #1 #23 #29)
 | | implementation = Differential %4.(#0) %6.(#0) %5.(#4) %3.()
-| Filter "co%" ~~(padchar(#33)), (datetots(#25) > 2010-05-23 12:00:00)
+| Filter (datetots(#25) > 2010-05-23 12:00:00)
 | Project (#0..=#3, #26)
 | Reduce group=(#0, #1, #2, #3)
 | | agg sum(#4)
@@ -1467,31 +1548,36 @@ GROUP BY su_name
 ORDER BY numwait DESC, su_name
 ----
 %0 =
-| Get materialize.public.supplier (u34)
+| Get materialize.public.supplier (u24)
+| Project (#0, #1, #3)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | Filter !(isnull(#4))
 | Project (#0..=#2, #4, #6)
 
 %2 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
+| Project (#0..=#2, #4)
 | ArrangeBy (#0, #1, #2)
 
 %3 =
-| Get materialize.public.stock (u26)
+| Get materialize.public.stock (u18)
+| Project (#0, #1, #17)
 | ArrangeBy (#0, #1)
 
 %4 =
-| Get materialize.public.nation (u31)
+| Get materialize.public.nation (u22)
+| Filter (#1 = "GERMANY")
+| Project (#0)
 | ArrangeBy (#0)
 
 %5 = Let l0 =
-| Join %0 %1 %2 %3 %4 (= #0 #37) (= #3 #38) (= #7 #12) (= #8 #13) (= #9 #14 #21) (= #10 #20)
+| Join %0 %1 %2 %3 %4 (= #0 #14) (= #2 #15) (= #3 #8) (= #4 #9) (= #5 #10 #13) (= #6 #12)
 | | implementation = Differential %1 %2.(#0, #1, #2) %3.(#0, #1) %0.(#0) %4.(#0)
-| Filter (#39 = "GERMANY"), (#11 > #16)
-| Project (#1, #7..=#9, #11)
+| Filter (#7 > #11)
+| Project (#1, #3..=#5, #7)
 
 %6 = Let l1 =
 | Get %5 (l0)
@@ -1503,7 +1589,7 @@ ORDER BY numwait DESC, su_name
 | ArrangeBy (#1, #2, #3, #4)
 
 %8 =
-| Get materialize.public.orderline (u19)
+| Get materialize.public.orderline (u13)
 | ArrangeBy (#2, #1, #0)
 
 %9 =
@@ -1552,13 +1638,13 @@ GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1)
 ----
 %0 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
 | Map substr(chartostr(#11), 1, 1)
 | Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#0..=#2, #9, #16)
 
 %1 =
-| Get materialize.public.customer (u6)
+| Get materialize.public.customer (u4)
 | Filter (#16 > 0)
 | Map substr(chartostr(#11), 1, 1)
 | Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
@@ -1583,7 +1669,7 @@ ORDER BY substr(c_state, 1, 1)
 | ArrangeBy (#0, #1, #2)
 
 %5 =
-| Get materialize.public.order (u16)
+| Get materialize.public.order (u11)
 | Filter !(isnull(#3))
 | Project (#1..=#3)
 | Distinct group=(#2, #0, #1)

@@ -34,14 +34,15 @@ use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::{
-    sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector,
+    client::ComputeInstanceId, sinks::SinkConnectorBuilder, sinks::SinkEnvelope,
+    sources::SourceConnector,
 };
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement,
+    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
@@ -73,6 +74,7 @@ pub enum Plan {
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
+    CreateComputeInstance(CreateComputeInstancePlan),
     CreateSource(CreateSourcePlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -85,6 +87,7 @@ pub enum Plan {
     DropDatabase(DropDatabasePlan),
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
+    DropComputeInstances(DropComputeInstancesPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -112,6 +115,7 @@ pub enum Plan {
     Prepare(PreparePlan),
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
+    Raise(RaisePlan),
 }
 
 #[derive(Debug)]
@@ -135,6 +139,19 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct CreateComputeInstancePlan {
+    pub name: String,
+    pub if_not_exists: bool,
+    pub config: ComputeInstanceConfig,
+}
+
+#[derive(Debug)]
+pub enum ComputeInstanceConfig {
+    Virtual,
+    Real { size: String },
 }
 
 #[derive(Debug)]
@@ -208,6 +225,11 @@ pub struct DropRolesPlan {
 }
 
 #[derive(Debug)]
+pub struct DropComputeInstancesPlan {
+    pub names: Vec<String>,
+}
+
+#[derive(Debug)]
 pub struct DropItemsPlan {
     pub items: Vec<GlobalId>,
     pub ty: ObjectType,
@@ -228,7 +250,7 @@ pub struct SetVariablePlan {
 #[derive(Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
-    pub when: PeekWhen,
+    pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
 }
@@ -237,7 +259,7 @@ pub struct PeekPlan {
 pub struct TailPlan {
     pub from: TailFrom,
     pub with_snapshot: bool,
-    pub ts: Option<MirScalarExpr>,
+    pub when: QueryWhen,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
 }
@@ -360,6 +382,11 @@ pub struct DeallocatePlan {
     pub name: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct RaisePlan {
+    pub severity: NoticeSeverity,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
@@ -384,6 +411,7 @@ pub struct Sink {
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -401,6 +429,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -410,9 +439,9 @@ pub struct Type {
     pub depends_on: Vec<GlobalId>,
 }
 
-/// Specifies when a `Peek` should occur.
+/// Specifies when a `Peek` or `Tail` should occur.
 #[derive(Debug, PartialEq)]
-pub enum PeekWhen {
+pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,

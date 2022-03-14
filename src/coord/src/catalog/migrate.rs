@@ -12,14 +12,18 @@ use std::path::Path;
 use anyhow::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use mz_repr::strconv;
+use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use semver::Version;
 use tokio::fs::File;
 use tracing::warn;
 
+use mz_dataflow_types::client::DEFAULT_COMPUTE_INSTANCE_ID;
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_ore::collections::CollectionExt;
+use mz_postgres_util::publication_info;
+use mz_repr::strconv;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::{self, VisitMut};
 use mz_sql::ast::{
@@ -27,8 +31,8 @@ use mz_sql::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
-    ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedDataType,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+    ProtobufSchema, Raw, RawIdent, RawName, SqlOption, Statement, TableFunction,
+    UnresolvedDataType, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::names::resolve_names_stmt;
 use mz_sql_parser::ast::CreateTypeAs;
@@ -72,6 +76,7 @@ lazy_static! {
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
     static ref VER_0_9_13: Version = Version::new(0, 9, 13);
     static ref VER_0_20_0: Version = Version::new(0, 20, 0);
+    static ref VER_0_23_0: Version = Version::new(0, 23, 0);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -83,7 +88,6 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         // non-semver versions are less than that.
         Err(_) => Version::new(0, 0, 0),
     };
-
     let mut tx = storage.transaction()?;
     // First, do basic AST -> AST transformations.
     rewrite_items(&tx, |stmt| {
@@ -102,6 +106,10 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_20_0 {
             ast_rewrite_ccsr_with_options_to_compiled_0_20_0(stmt)?;
+        }
+        if catalog_version < *VER_0_23_0 {
+            ast_rewrite_pgcdc_with_details_0_23_0(stmt)?;
+            ast_rewrite_index_sink_cluster_default_0_23_0(stmt)?;
         }
         Ok(())
     })?;
@@ -140,6 +148,79 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// Connects to source postgres database, captures state of the publication and
+// serializes this into a string in the `details` field. This is the same logic
+// used during purification starting in 0.23.0
+fn ast_rewrite_pgcdc_with_details_0_23_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if let Statement::CreateSource(CreateSourceStatement { connector, .. }) = stmt {
+        match connector {
+            CreateSourceConnector::Postgres {
+                conn,
+                publication,
+                slot,
+                details,
+            } => {
+                // Assume existing details are correct
+                if details.is_some() {
+                    return Ok(());
+                }
+                let res = block_on(publication_info(conn, publication));
+                match res {
+                    Ok(tables) => {
+                        let details_proto = PostgresSourceDetails {
+                            tables: tables.into_iter().map(|t| t.into()).collect(),
+                            slot: slot.clone().expect("slot must exist"),
+                        };
+                        *details = Some(hex::encode(details_proto.encode_to_vec()));
+                    }
+                    Err(e) => bail!(e),
+                }
+            }
+            _ => (),
+        }
+    }
+    Ok(())
+}
+
+/// Adds the default cluster to all existing indexes and sinks.
+fn ast_rewrite_index_sink_cluster_default_0_23_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::CreateIndex(CreateIndexStatement {
+            name: _,
+            in_cluster,
+            on_name: _,
+            key_parts: _,
+            with_options: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
+        }
+
+        Statement::CreateSink(CreateSinkStatement {
+            name: _,
+            in_cluster,
+            from: _,
+            connector: _,
+            with_options: _,
+            format: _,
+            envelope: _,
+            with_snapshot: _,
+            as_of: _,
+            if_not_exists: _,
+        }) => {
+            *in_cluster = Some(RawIdent::Resolved(DEFAULT_COMPUTE_INSTANCE_ID.to_string()));
+        }
+
+        _ => (),
+    };
+
+    Ok(())
+}
 
 // Copies `ssl_` options to CSR connectors that defaulted to Kafka ssl values
 // from when that was the default
@@ -337,6 +418,7 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,
@@ -510,6 +592,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options: _,
@@ -524,6 +607,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
 
         Statement::CreateSink(CreateSinkStatement {
             name: _,
+            in_cluster: _,
             from: _,
             connector: _,
             with_options: _,
@@ -608,6 +692,7 @@ fn ast_rewrite_type_references_0_6_1(
 
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
+            in_cluster: _,
             on_name: _,
             key_parts,
             with_options,

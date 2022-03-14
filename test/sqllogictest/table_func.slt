@@ -182,7 +182,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 
 %1 =
 | CallTable generate_series(1, #^0, 1)
@@ -196,7 +196,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 %0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 
 %1 =
 | CallTable generate_series(i32toi64(100), i32toi64(#^0), 1)
@@ -209,8 +209,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
 ----
+Source materialize.public.x (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | ArrangeBy ()
 
 %1 =
@@ -225,8 +229,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
+Source materialize.public.x (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | FlatMap generate_series(1, #0, 1)
 
 EOF
@@ -234,8 +242,13 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
+Source materialize.public.x (u2):
+| Filter !(isnull(#1))
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | Filter !(isnull(#1))
 
 %1 =
@@ -254,8 +267,13 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
+Source materialize.public.x (u2):
+| Filter !(isnull(#1))
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | Filter !(isnull(#1))
 
 %1 =
@@ -276,8 +294,13 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
+Source materialize.public.x (u2):
+| Filter !(isnull(#1))
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | Filter !(isnull(#1))
 
 %1 =

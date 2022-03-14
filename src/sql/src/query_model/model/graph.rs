@@ -139,7 +139,6 @@ pub(crate) struct QueryBox {
     /// rows from its input boxes. See [DistinctOperation].
     pub distinct: DistinctOperation,
     /// Derived attributes
-    #[allow(dead_code)]
     pub attributes: Attributes,
 }
 
@@ -201,7 +200,7 @@ pub(crate) const ARBITRARY_QUANTIFIER: usize = 0b00000000
     | (QuantifierType::PreservedForeach as usize)
     | (QuantifierType::Scalar as usize);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum BoxType {
     /// A table from the catalog.
     Get(Get),
@@ -230,7 +229,7 @@ pub(crate) enum BoxType {
     Values(Values),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Get {
     pub id: mz_expr::GlobalId,
     pub unique_keys: Vec<Vec<usize>>,
@@ -243,7 +242,7 @@ impl From<Get> for BoxType {
 }
 
 /// The content of a Grouping box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Grouping {
     pub key: Vec<BoxScalarExpr>,
 }
@@ -255,7 +254,7 @@ impl From<Grouping> for BoxType {
 }
 
 /// The content of a OuterJoin box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
@@ -268,7 +267,7 @@ impl From<OuterJoin> for BoxType {
 }
 
 /// The content of a Select box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Select {
     /// The list of predicates applied by the box.
     pub predicates: Vec<BoxScalarExpr>,
@@ -297,7 +296,7 @@ impl Select {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
@@ -309,7 +308,7 @@ impl From<TableFunction> for BoxType {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
 }
@@ -413,7 +412,10 @@ impl Model {
     }
 
     /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
-    pub(crate) fn get_quantifier(&self, quantifier_id: QuantifierId) -> BoundRef<'_, Quantifier> {
+    pub(crate) fn get_quantifier<'a>(
+        &'a self,
+        quantifier_id: QuantifierId,
+    ) -> BoundRef<'a, Quantifier> {
         BoundRef {
             model: self,
             r#ref: self
@@ -892,6 +894,44 @@ impl<'a> BoundRefMut<'a, QueryBox> {
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
     pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
+    }
+}
+
+/// Immutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRef<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&'a self) -> BoundRef<'a, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+}
+
+/// Mutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRefMut<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.parent_box)
     }
 }
 

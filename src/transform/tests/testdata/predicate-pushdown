@@ -18,7 +18,7 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 (call_nullary mz_logical_timestamp)]])
+  [[#1 (call_unmaterializable mz_logical_timestamp)]])
 ----
 ----
 %0 =
@@ -38,7 +38,7 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 #3 (call_nullary mz_logical_timestamp)]])
+  [[#1 #3 (call_unmaterializable mz_logical_timestamp)]])
 ----
 ----
 %0 =
@@ -61,7 +61,7 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 1 (call_nullary mz_logical_timestamp)]])
+  [[#1 1 (call_unmaterializable mz_logical_timestamp)]])
 ----
 ----
 %0 =
@@ -85,7 +85,7 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary eq #1 (call_nullary mz_logical_timestamp))])
+  [(call_binary eq #1 (call_unmaterializable mz_logical_timestamp))])
 ----
 ----
 %0 =
@@ -107,7 +107,7 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary eq (call_nullary mz_logical_timestamp) #1)])
+  [(call_binary eq (call_unmaterializable mz_logical_timestamp) #1)])
 ----
 ----
 %0 =

@@ -3,13 +3,13 @@ name = "mz-mbta"
 description = "Converts MBTA streams to Kafka streams to use in Materialize"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.55"
 byteorder = "1.4.3"
-clap = { version = "3.1.2", features = ["derive"] }
+clap = { version = "3.1.6", features = ["derive"] }
 futures = "0.3.21"
 json = "0.12.4"
 mz-ore = { path = "../../src/ore" }

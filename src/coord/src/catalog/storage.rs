@@ -132,6 +132,14 @@ const MIGRATIONS: &[&str] = &[
     //
     // Introduced in v0.12.0.
     "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
+    // Adds table to track users' compute instances.
+    //
+    // Introduced in v0.22.0.
+    "CREATE TABLE compute_instances (
+        id   integer PRIMARY KEY,
+        name text NOT NULL UNIQUE
+    );
+    INSERT INTO compute_instances VALUES (1, 'default');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -359,6 +367,17 @@ impl Connection {
             .collect()
     }
 
+    pub fn load_compute_instances(&self) -> Result<Vec<(i64, String)>, Error> {
+        self.inner
+            .prepare("SELECT id, name FROM compute_instances")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                Ok((id, name))
+            })?
+            .collect()
+    }
+
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
@@ -543,6 +562,20 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn insert_compute_instance(&mut self, cluster_name: &str) -> Result<i64, Error> {
+        match self
+            .inner
+            .prepare_cached("INSERT INTO compute_instances (name) VALUES (?)")?
+            .execute(params![cluster_name])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
+            )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn insert_item(
         &self,
         id: GlobalId,
@@ -667,6 +700,19 @@ impl Transaction<'_> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownRole(name.to_owned()).into())
+        }
+    }
+
+    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
+            .execute(params![name])?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         }
     }
 

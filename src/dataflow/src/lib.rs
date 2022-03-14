@@ -25,4 +25,7 @@ mod sink;
 pub mod logging;
 pub mod source;
 
-pub use server::{serve, Config, Server};
+pub use server::{
+    boundary::ComputeReplay, boundary::DummyBoundary, boundary::EventLinkBoundary,
+    boundary::StorageCapture, serve, serve_boundary, tcp_boundary, Config, Server,
+};

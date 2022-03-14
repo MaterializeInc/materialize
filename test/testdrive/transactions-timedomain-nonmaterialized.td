@@ -30,11 +30,13 @@ $ file-append path=static.csv
 2
 4
 
-! SELECT * FROM unindexed
-contains:unable to automatically determine a query timestamp
+> SELECT c FROM unindexed
+1
+2
+4
 
-! SELECT * FROM v_unindexed
-contains:unable to automatically determine a query timestamp
+> SELECT * FROM v_unindexed
+3
 
 > BEGIN
 
@@ -45,10 +47,12 @@ contains:unable to automatically determine a query timestamp
 2
 4
 
-! SELECT c FROM unindexed ORDER BY c
-contains:Transactions can only reference objects in the same timedomain
+> SELECT c FROM unindexed
+1
+2
+4
 
-> ROLLBACK
+> COMMIT
 
 # The unindexed view should be the same.
 > BEGIN
@@ -58,10 +62,10 @@ contains:Transactions can only reference objects in the same timedomain
 2
 4
 
-! SELECT * FROM v_unindexed
-contains:Transactions can only reference objects in the same timedomain
+> SELECT * FROM v_unindexed
+3
 
-> ROLLBACK
+> COMMIT
 
 # Ensure that other optionally indexed things (views) are correctly
 # included in the timedomain.

@@ -4,12 +4,12 @@ version = "0.1.0"
 authors = ["Materialize, Inc."]
 license = "Apache-2.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.55"
-clap = { version = "3.1.2", features = ["derive"] }
+clap = { version = "3.1.6", features = ["derive"] }
 mz-ore = { path = "../../src/ore" }
 serde = "1.0.136"
 serde_json = "1.0.79"

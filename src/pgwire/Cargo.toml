@@ -3,7 +3,7 @@ name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
@@ -32,4 +32,4 @@ tokio = "1.17.0"
 tokio-openssl = "0.6.3"
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ["codec"] }
-tracing = "0.1.31"
+tracing = "0.1.32"

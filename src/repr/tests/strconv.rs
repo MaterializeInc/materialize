@@ -492,9 +492,10 @@ fn miri_test_format_list() {
     ];
     let mut out = String::new();
     strconv::format_list(&mut out, &list, |lw, el| match el {
-        None => lw.write_null(),
-        Some(el) => strconv::format_string(lw.nonnull_buffer(), el),
-    });
+        None => Ok::<_, ()>(lw.write_null()),
+        Some(el) => Ok(strconv::format_string(lw.nonnull_buffer(), el)),
+    })
+    .unwrap();
     assert_eq!(
         out,
         r#"{a,"a\"b","",NULL,"NULL",nUlL,"  spaces ","a,b","\\","a\\b\"c\\d\""}"#

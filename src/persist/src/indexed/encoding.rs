@@ -174,7 +174,10 @@ pub struct UnsealedBatchMeta {
 ///
 /// Invariants:
 /// - The Description's time interval is non-empty.
-/// - TODO: key invariants?
+/// - Keys for all trace batch parts are unique.
+/// - Keys for all trace batch parts are stored in index order.
+/// - The data in all of the trace batch parts is sorted and consolidated.
+/// - All of the trace batch parts have the same desc as the metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceBatchMeta {
     /// The keys to retrieve the batch's data from the blob store.
@@ -254,13 +257,9 @@ pub struct BlobUnsealedBatch {
 /// - The values in updates are "consolidated", i.e. (key, value, time) is
 ///   unique.
 /// - All entries have a non-zero diff.
-/// - (Intentionally no invariant around update non-emptiness because we might
-///   need empty batches to make the timestamps line up.)
 ///
-/// TODO: This probably wants to be a different level of abstraction, so we can
-/// put multiple small batches in a single blob but also break a very large
-/// batch over multiple blobs. We also may want to break the latter into chunks
-/// for checksum and encryption?
+/// TODO: disallow empty trace batch parts in the future so there is one unique way
+/// to represent an empty trace batch.
 #[derive(Clone, Debug)]
 pub struct BlobTraceBatchPart {
     /// Which updates are included in this batch.
@@ -545,6 +544,60 @@ impl TraceBatchMeta {
         // up making sense.
         if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
+        }
+
+        Ok(())
+    }
+
+    /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
+    pub fn validate_data<B: BlobRead>(&self, cache: &BlobCache<B>) -> Result<(), Error> {
+        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, u64)> = None;
+        let mut batches = vec![];
+        for (idx, key) in self.keys.iter().enumerate() {
+            let batch = cache
+                .get_trace_batch_async(key, CacheHint::NeverAdd)
+                .recv()?;
+            if batch.desc != self.desc {
+                return Err(format!(
+                    "invalid trace batch part desc expected {:?} got {:?}",
+                    &self.desc, &batch.desc
+                )
+                .into());
+            }
+
+            if batch.index != u64::cast_from(idx) {
+                return Err(format!(
+                    "invalid index for blob trace batch part at key {} expected {} got {}",
+                    key, idx, batch.index
+                )
+                .into());
+            }
+
+            batch.validate()?;
+            batches.push(batch);
+        }
+
+        for update in batches
+            .iter()
+            .flat_map(|batch| batch.updates.iter().flat_map(|u| u.iter()))
+        {
+            let ((key, val), ts, diff) = update;
+            let this = (PrettyBytes(&key), PrettyBytes(&val), ts);
+            if let Some(prev) = prev {
+                match prev.cmp(&this) {
+                    Ordering::Less => {} // Correct.
+                    Ordering::Equal => return Err(format!("unconsolidated: {:?}", this).into()),
+                    Ordering::Greater => {
+                        return Err(format!("unsorted: {:?} was before {:?}", prev, this).into())
+                    }
+                }
+            }
+            prev = Some(this);
+
+            // Check data invariants.
+            if diff == 0 {
+                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
+            }
         }
 
         Ok(())
@@ -935,8 +988,14 @@ pub fn decode_trace_inline_meta(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tokio::runtime::Runtime as AsyncRuntime;
+
     use crate::error::Error;
     use crate::indexed::columnar::ColumnarRecordsVec;
+    use crate::indexed::Metrics;
+    use crate::mem::MemRegistry;
     use crate::workload::DataGenerator;
 
     use super::*;
@@ -1203,6 +1262,148 @@ mod tests {
                 "invalid desc: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
             )),
         );
+    }
+
+    #[test]
+    fn trace_batch_meta_validate_data() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let blob = BlobCache::new(
+            mz_build_info::DUMMY_BUILD_INFO,
+            Arc::new(Metrics::default()),
+            async_runtime,
+            MemRegistry::new().blob_no_reentrance()?,
+            None,
+        );
+        let format = ProtoBatchFormat::ParquetKvtd;
+
+        let batch_desc = u64_desc_since(0, 3, 0);
+        let batch0 = BlobTraceBatchPart {
+            desc: batch_desc.clone(),
+            index: 0,
+            updates: vec![
+                (("k".as_bytes(), "v".as_bytes()), 2, 1),
+                (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
+            ]
+            .iter()
+            .collect::<ColumnarRecordsVec>()
+            .into_inner(),
+        };
+        let batch1 = BlobTraceBatchPart {
+            desc: batch_desc.clone(),
+            index: 1,
+            updates: vec![
+                (("k4".as_bytes(), "v4".as_bytes()), 2, 1),
+                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
+            ]
+            .iter()
+            .collect::<ColumnarRecordsVec>()
+            .into_inner(),
+        };
+
+        let batch0_size_bytes = blob.set_trace_batch("b0".into(), batch0, format)?;
+        let batch1_size_bytes = blob.set_trace_batch("b1".into(), batch1, format)?;
+        let size_bytes = batch0_size_bytes + batch1_size_bytes;
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b0".into(), "b1".into()],
+            format,
+            desc: batch_desc.clone(),
+            level: 0,
+            size_bytes,
+        };
+
+        // Normal case:
+        assert_eq!(batch_meta.validate_data(&blob), Ok(()));
+
+        // Incorrect desc
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b0".into(), "b1".into()],
+            format,
+            desc: u64_desc_since(1, 3, 0),
+            level: 0,
+            size_bytes,
+        };
+        assert_eq!(batch_meta.validate_data(&blob), Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
+        // Key with no corresponding batch part
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b0".into(), "b1".into(), "b2".into()],
+            format,
+            desc: batch_desc.clone(),
+            level: 0,
+            size_bytes,
+        };
+        assert_eq!(
+            batch_meta.validate_data(&blob),
+            Err(Error::from("no blob for trace batch at key: b2"))
+        );
+        // Batch parts not in index order
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b1".into(), "b0".into()],
+            format,
+            desc: batch_desc.clone(),
+            level: 0,
+            size_bytes,
+        };
+        assert_eq!(
+            batch_meta.validate_data(&blob),
+            Err(Error::from(
+                "invalid index for blob trace batch part at key b1 expected 0 got 1"
+            ))
+        );
+
+        // Unsorted updates across trace batch parts.
+        let batch1_unsorted = BlobTraceBatchPart {
+            desc: batch_desc.clone(),
+            index: 1,
+            updates: vec![
+                (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
+                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
+            ]
+            .iter()
+            .collect::<ColumnarRecordsVec>()
+            .into_inner(),
+        };
+        let batch1_unsorted_size_bytes =
+            blob.set_trace_batch("b1_unsorted".into(), batch1_unsorted, format)?;
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b0".into(), "b1_unsorted".into()],
+            format,
+            desc: batch_desc.clone(),
+            level: 0,
+            size_bytes: batch0_size_bytes + batch1_unsorted_size_bytes,
+        };
+        assert_eq!(
+            batch_meta.validate_data(&blob),
+            Err(Error::from(
+                "unsorted: (\"k3\", \"v3\", 2) was before (\"k2\", \"v2\", 2)"
+            ))
+        );
+        // Unconsolidated updates across trace batch parts.
+        let batch1_unconsolidated = BlobTraceBatchPart {
+            desc: batch_desc.clone(),
+            index: 1,
+            updates: vec![
+                (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
+                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
+            ]
+            .iter()
+            .collect::<ColumnarRecordsVec>()
+            .into_inner(),
+        };
+        let batch1_unconsolidated_size_bytes =
+            blob.set_trace_batch("b1_unconsolidated".into(), batch1_unconsolidated, format)?;
+        let batch_meta = TraceBatchMeta {
+            keys: vec!["b0".into(), "b1_unconsolidated".into()],
+            format,
+            desc: batch_desc,
+            level: 0,
+            size_bytes: batch0_size_bytes + batch1_unconsolidated_size_bytes,
+        };
+        assert_eq!(
+            batch_meta.validate_data(&blob),
+            Err(Error::from("unconsolidated: (\"k3\", \"v3\", 2)"))
+        );
+
+        Ok(())
     }
 
     #[test]

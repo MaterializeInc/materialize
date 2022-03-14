@@ -14,20 +14,22 @@
 // #![warn(missing_docs)]
 
 use async_trait::async_trait;
+use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tracing::trace;
 
 use crate::logging::LoggingConfig;
 use crate::{
-    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse,
-    SourceInstanceDesc, TailResponse, Update,
+    sources::{MzOffset, SourceDesc},
+    DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_repr::Row;
 
 pub mod controller;
@@ -43,9 +45,22 @@ pub enum Command<T = mz_repr::Timestamp> {
 }
 
 /// An abstraction allowing us to name difference compute instances.
-pub type ComputeInstanceId = usize;
+// TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
+// support natively storing `u64`. Revisit this before shipping Platform, as we
+// might not like to bake in this decision based on a SQLite limitation.
+// See #11123.
+pub type ComputeInstanceId = i64;
 /// A default value whose use we can track down and remove later.
-pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 0;
+pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
+
+/// Instance configuration
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum InstanceConfig {
+    /// In-process virtual instance, likely the default instance
+    Virtual,
+    /// Out-of-process named instance
+    Remote(Vec<String>),
+}
 
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
@@ -58,7 +73,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
     /// Optionally, request that the logging sources in the contained configuration are installed.
-    CreateInstance(Option<LoggingConfig>),
+    CreateInstance(InstanceConfig, Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -70,7 +85,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Subsequent commands may arbitrarily compact the arrangements;
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan, T>>),
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, T>>),
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -97,8 +112,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         key: Option<Row>,
         /// The identifier of this peek request.
         ///
-        /// Used in responses and cancelation requests.
-        conn_id: u32,
+        /// Used in responses and cancellation requests.
+        uuid: Uuid,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: T,
         /// Actions to apply to the result set before returning them.
@@ -106,10 +121,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// Linear operation to apply in-line on each result.
         map_filter_project: mz_expr::SafeMfpPlan,
     },
-    /// Cancel the peek associated with the given `conn_id`.
-    CancelPeek {
-        /// The identifier of the peek request to cancel.
-        conn_id: u32,
+    /// Cancel the peeks associated with the given `uuids`.
+    CancelPeeks {
+        /// The identifiers of the peek requests to cancel.
+        uuids: BTreeSet<Uuid>,
     },
 }
 
@@ -123,11 +138,24 @@ impl ComputeCommandKind {
             ComputeCommandKind::CreateInstance => "create_instance",
             ComputeCommandKind::DropInstance => "drop_instance",
             ComputeCommandKind::AllowCompaction => "allow_compute_compaction",
-            ComputeCommandKind::CancelPeek => "cancel_peek",
+            ComputeCommandKind::CancelPeeks => "cancel_peeks",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
             ComputeCommandKind::Peek => "peek",
         }
     }
+}
+
+/// A command creating a single source
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateSourceCommand<T> {
+    /// The source identifier
+    pub id: GlobalId,
+    /// The source description
+    pub desc: SourceDesc,
+    /// The initial `since` frontier
+    pub since: Antichain<T>,
+    /// Any previously stored timestamp bindings
+    pub ts_bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
 }
 
 /// Commands related to the ingress and egress of collections.
@@ -139,9 +167,7 @@ impl ComputeCommandKind {
 )]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    ///
-    /// For each identifier, there is a source description and a valid `since` frontier.
-    CreateSources(Vec<(GlobalId, (crate::types::sources::SourceDesc, Antichain<T>))>),
+    CreateSources(Vec<CreateSourceCommand<T>>),
     /// Render the enumerated sources.
     ///
     /// Each source has a name for debugging purposes, an optional "as of" frontier and collection
@@ -173,20 +199,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
     /// all the same data)
     DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
-    /// Add a new source to be aware of for timestamping.
-    AddSourceTimestamping {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The connector for the timestamped source.
-        connector: SourceConnector,
-        /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
-    },
-    /// Drop all timestamping info for a source
-    DropSourceTimestamping {
-        /// The ID id of the formerly timestamped source.
-        id: GlobalId,
-    },
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
         /// The timestamp to advance to.
@@ -200,9 +212,7 @@ impl StorageCommandKind {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
             StorageCommandKind::AllowCompaction => "allow_storage_compaction",
             StorageCommandKind::CreateSources => "create_sources",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
@@ -233,13 +243,13 @@ impl<T: timely::progress::Timestamp> Command<T> {
                         let mut builds_parts = vec![Vec::new(); parts];
                         // Partition each build description among `parts`.
                         for build_desc in dataflow.objects_to_build {
-                            let build_part = build_desc.view.partition_among(parts);
-                            for (view, objects_to_build) in
+                            let build_part = build_desc.plan.partition_among(parts);
+                            for (plan, objects_to_build) in
                                 build_part.into_iter().zip(builds_parts.iter_mut())
                             {
                                 objects_to_build.push(crate::BuildDesc {
                                     id: build_desc.id,
-                                    view,
+                                    plan,
                                 });
                             }
                         }
@@ -253,7 +263,6 @@ impl<T: timely::progress::Timestamp> Command<T> {
                                 objects_to_build,
                                 index_exports: dataflow.index_exports.clone(),
                                 sink_exports: dataflow.sink_exports.clone(),
-                                dependent_objects: dataflow.dependent_objects.clone(),
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
                                 id: dataflow.id,
@@ -267,8 +276,9 @@ impl<T: timely::progress::Timestamp> Command<T> {
                 }
                 Command::Storage(StorageCommand::Insert { id, updates }) => {
                     let mut updates_parts = vec![Vec::new(); parts];
-                    for (index, update) in updates.into_iter().enumerate() {
-                        updates_parts[index % parts].push(update);
+                    for update in updates {
+                        let part = usize::cast_from(update.row.hashed()) % parts;
+                        updates_parts[part].push(update);
                     }
                     updates_parts
                         .into_iter()
@@ -287,8 +297,8 @@ impl<T: timely::progress::Timestamp> Command<T> {
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
             Command::Storage(StorageCommand::CreateSources(sources)) => {
-                for (id, _) in sources.iter() {
-                    start.push(*id);
+                for source in sources.iter() {
+                    start.push(source.id);
                 }
             }
             Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
@@ -308,7 +318,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
+            Command::Compute(ComputeCommand::CreateInstance(_config, logging), _instance) => {
                 if let Some(logging_config) = logging {
                     start.extend(logging_config.log_identifiers());
                 }
@@ -353,7 +363,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(u32, PeekResponse),
+    PeekResponse(Uuid, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
 }
@@ -370,7 +380,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 #[async_trait(?Send)]
 pub trait Client<T = mz_repr::Timestamp> {
     /// Sends a command to the dataflow server.
-    async fn send(&mut self, cmd: Command<T>);
+    ///
+    /// The command can error for various reasons.
+    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error>;
 
     /// Receives the next response from the dataflow server.
     ///
@@ -381,7 +393,7 @@ pub trait Client<T = mz_repr::Timestamp> {
 
 #[async_trait(?Send)]
 impl Client for Box<dyn Client> {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
@@ -396,6 +408,8 @@ pub struct ClientAsStream<'a, C: Client + 'a> {
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use uuid::Uuid;
+
 impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
     type Item = Response;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -474,7 +488,7 @@ impl LocalClient {
 
 #[async_trait(?Send)]
 impl Client for LocalClient {
-    async fn send(&mut self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
@@ -529,12 +543,13 @@ pub mod partitioned {
 
     #[async_trait(?Send)]
     impl<C: Client> Client for Partitioned<C> {
-        async fn send(&mut self, cmd: Command) {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
-                shard.send(cmd_part).await;
+                shard.send(cmd_part).await?;
             }
+            Ok(())
         }
 
         async fn recv(&mut self) -> Option<Response> {
@@ -558,32 +573,30 @@ pub mod partitioned {
     }
 
     use timely::progress::frontier::MutableAntichain;
+    use uuid::Uuid;
 
     /// Buffer for partial results for a `TAIL`.
     /// This exists so we can consolidate rows and
     /// sort them by timestamp before passing them to the consumer
     /// (currently, coord.rs).
-    struct PendingTail {
+    struct PendingTail<T> {
         /// `frontiers[i]` is an antichain representing the times at which we may
         /// still receive results from worker `i`.
-        frontiers: HashMap<usize, Antichain<Timestamp>>,
+        frontiers: HashMap<usize, Antichain<T>>,
         /// Consolidated frontiers
-        change_batch: ChangeBatch<Timestamp>,
+        change_batch: ChangeBatch<T>,
         /// The results (possibly unsorted) which have not yet been delivered.
-        buffer: Vec<(Timestamp, Row, Diff)>,
+        buffer: Vec<(T, Row, Diff)>,
         /// The number of unique shard IDs expected.
         parts: usize,
         /// The last progress message that has been reported to the consumer.
-        reported_frontier: Antichain<Timestamp>,
+        reported_frontier: Antichain<T>,
     }
 
-    impl PendingTail {
+    impl<T: timely::progress::Timestamp + Copy> PendingTail<T> {
         /// Return all the updates with time less than `upper`,
         /// in sorted and consolidated representation.
-        pub fn consolidate_up_to(
-            &mut self,
-            upper: Antichain<Timestamp>,
-        ) -> Vec<(Timestamp, Row, Diff)> {
+        pub fn consolidate_up_to(&mut self, upper: Antichain<T>) -> Vec<(T, Row, Diff)> {
             differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
             let split_point = self
                 .buffer
@@ -591,15 +604,15 @@ pub mod partitioned {
             self.buffer.drain(0..split_point).collect()
         }
 
-        pub fn push_data<I: IntoIterator<Item = (Timestamp, Row, Diff)>>(&mut self, data: I) {
+        pub fn push_data<I: IntoIterator<Item = (T, Row, Diff)>>(&mut self, data: I) {
             self.buffer.extend(data);
         }
 
         pub fn record_progress(
             &mut self,
             shard_id: usize,
-            progress: Antichain<Timestamp>,
-        ) -> Option<Antichain<Timestamp>> {
+            progress: Antichain<T>,
+        ) -> Option<Antichain<T>> {
             // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
             // We would need to have the tail workers report both their old frontier and their new frontier, rather
             // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
@@ -654,13 +667,13 @@ pub mod partitioned {
     ///
     /// This helper type unifies the responses of multiple partitioned
     /// workers in order to present as a single worker.
-    pub struct PartitionedClientState {
+    pub struct PartitionedClientState<T = mz_repr::Timestamp> {
         /// Upper frontiers for indexes, sources, and sinks.
         ///
         /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<Timestamp>>,
+        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<T>>,
         /// Pending responses for a peek; returnable once all are available.
-        peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
+        peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
         /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
@@ -670,9 +683,9 @@ pub mod partitioned {
         /// further messages should be forwarded.
         ///
         /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail>>,
+        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail<T>>>,
         /// The next responses to return immediately, if any
-        stashed_responses: Fuse<Box<dyn Iterator<Item = Response> + Send>>,
+        stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
     }
 
     impl PartitionedClientState {
@@ -749,13 +762,17 @@ pub mod partitioned {
                         }
                     }
 
-                    Box::new(
-                        Some(Response::Compute(
-                            ComputeResponse::FrontierUppers(list),
-                            instance,
-                        ))
-                        .into_iter(),
-                    )
+                    if list.is_empty() {
+                        Box::new(None.into_iter())
+                    } else {
+                        Box::new(
+                            Some(Response::Compute(
+                                ComputeResponse::FrontierUppers(list),
+                                instance,
+                            ))
+                            .into_iter(),
+                        )
+                    }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
@@ -786,14 +803,11 @@ pub mod partitioned {
                         .into_iter(),
                     )
                 }
-                Response::Compute(
-                    ComputeResponse::PeekResponse(connection, response),
-                    instance,
-                ) => {
+                Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
-                        .entry(connection)
+                        .entry(uuid)
                         .or_insert_with(Default::default);
                     let novel = entry.insert(shard_id, response);
                     assert!(novel.is_none(), "Duplicate peek response");
@@ -812,10 +826,10 @@ pub mod partitioned {
                                 }
                             };
                         }
-                        self.peek_responses.remove(&connection);
+                        self.peek_responses.remove(&uuid);
                         Box::new(
                             Some(Response::Compute(
-                                ComputeResponse::PeekResponse(connection, response),
+                                ComputeResponse::PeekResponse(uuid, response),
                                 instance,
                             ))
                             .into_iter(),
@@ -924,11 +938,12 @@ pub mod process_local {
 
     #[async_trait(?Send)]
     impl Client for ProcessLocal {
-        async fn send(&mut self, cmd: Command) {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
             self.worker_tx
                 .send(cmd)
                 .expect("worker command receiver should not drop first");
             self.worker_thread.unpark();
+            Ok(())
         }
 
         async fn recv(&mut self) -> Option<Response> {

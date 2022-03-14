@@ -407,19 +407,26 @@ impl Arrangement {
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
-        let batch = BlobTraceBatchPart {
-            desc: req.desc.clone(),
-            index: 0,
-            updates,
+        let desc = req.desc.clone();
+        let format = ProtoBatchFormat::ParquetKvtd;
+
+        let (keys, size_bytes) = if !updates.is_empty() {
+            let batch = BlobTraceBatchPart {
+                desc: desc.clone(),
+                index: 0,
+                updates,
+            };
+
+            let key = Self::new_blob_key();
+            let size_bytes = blob.set_trace_batch(key.clone(), batch, format)?;
+            (vec![key], size_bytes)
+        } else {
+            (vec![], 0)
         };
 
-        let desc = batch.desc.clone();
-        let key = Self::new_blob_key();
-        let format = ProtoBatchFormat::ParquetKvtd;
-        let size_bytes = blob.set_trace_batch(key.clone(), batch, format)?;
         // Batches are inserted into the trace with compaction level set to 0.
         let drained = TraceBatchMeta {
-            keys: vec![key],
+            keys,
             format,
             desc,
             level: 0,

@@ -9,6 +9,25 @@
 
 $ set-sql-timeout duration=1s
 
+# Test \d <object> command
+> CREATE TABLE tbl (a int, b text)
+
+> CREATE INDEX tbl_ind ON tbl (b)
+
+> CREATE INDEX tbl_lower_ind ON tbl (lower(b), a)
+
+$ psql-execute command="\d tbl"
+\                Table "public.tbl"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | NULL
+ b      | text    |           |          | NULL
+Indexes:
+    "tbl_ind" arrangement (b)
+    "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
+
+> DROP TABLE tbl CASCADE
+
 # What schemas do we have by default?
 > SHOW SCHEMAS
 public
@@ -209,7 +228,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
+contains:Expected DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
 
 > SHOW FULL OBJECTS
 name            type
@@ -372,6 +391,7 @@ mz_worker_materialization_frontiers           system true          volatile    l
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
+mz_clusters
 mz_columns
 mz_databases
 mz_functions
@@ -400,6 +420,7 @@ name                  type
 mz_array_types        system
 mz_avro_ocf_sinks     system
 mz_base_types         system
+mz_clusters           system
 mz_columns            system
 mz_databases          system
 mz_functions          system
@@ -430,6 +451,7 @@ mz_views              system
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
+mz_clusters
 mz_columns
 mz_databases
 mz_functions
@@ -461,6 +483,7 @@ test_table
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
+mz_clusters
 mz_columns
 mz_databases
 mz_functions
@@ -486,11 +509,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-24
+25
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-43
+19
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing

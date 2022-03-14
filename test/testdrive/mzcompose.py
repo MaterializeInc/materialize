@@ -105,7 +105,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
             )
-        c.kill("materialized")
 
 
 def workflow_testdrive_redpanda_ci(c: Composition) -> None:

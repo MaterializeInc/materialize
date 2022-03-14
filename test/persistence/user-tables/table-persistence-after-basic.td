@@ -26,6 +26,9 @@
 > SELECT CAST(int4_list AS text), CAST(int4_list_list AS text), CAST(int4_map AS text), CAST(int4_map_map AS text) FROM exotic_types;
 "{1,2}" "{{1,2}}" "{a=>1}" "{a=>{a=>1}}"
 
+> SELECT * FROM char_type_quoted;
+97
+
 #
 # A table that has been dropped previously should not have become resurrected
 #

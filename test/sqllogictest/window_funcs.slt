@@ -199,7 +199,7 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 
 %5 = Let l3 =
 | Join %3 %4
@@ -272,6 +272,13 @@ query T multiline
 EXPLAIN SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
+Source materialize.public.t1 (u1):
+| Project (#0)
+
+Source materialize.public.t2 (u2):
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Project (#0)
@@ -282,7 +289,7 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 
 %3 =
 | Join %1 %2
@@ -352,7 +359,7 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER(
 | Constant ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 
 %2 = Let l1 =
 | Join %0 %1
@@ -401,7 +408,7 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER(
 | Constant ()
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 
 %2 = Let l1 =
 | Join %0 %1

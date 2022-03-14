@@ -25,6 +25,10 @@ ORDER BY d LIMIT 4
 )
 GROUP BY sumc, sumd
 ----
+Source materialize.public.test1 (u1):
+| Project (#0..=#3)
+
+Query:
 %0 =
 | Get materialize.public.test1 (u1)
 | Map (#0 + #1), (#4 + #2), (#4 + #3)
@@ -52,6 +56,10 @@ ORDER BY sumc
 query T multiline
 EXPLAIN PLAN FOR VIEW plan_test1
 ----
+Source materialize.public.test1 (u1):
+| Project (#0..=#3)
+
+Query:
 %0 =
 | Get materialize.public.test1 (u1)
 | Reduce group=(((#0 + #1) + #2), ((#0 + #1) + #3))
@@ -66,6 +74,10 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
 ----
+Source materialize.public.test1 (u1):
+| Project (#0..=#3)
+
+Query:
 %0 =
 | Get materialize.public.test1 (u1)
 
@@ -108,8 +120,12 @@ create materialized view v1 as select * from (select * from t1 order by f1 limit
 query T multiline
 explain view v1;
 ----
+Source materialize.public.t1 (u5):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t1 (u7)
+| Get materialize.public.t1 (u5)
 | TopK group=() order=(#0 asc) limit=3 offset=3
 
 EOF

@@ -135,6 +135,7 @@ impl<'a> ToJson for TypedDatum<'_> {
         } else {
             match &typ.scalar_type {
                 ScalarType::Bool => json!(datum.unwrap_bool()),
+                ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
                 ScalarType::Int32 => json!(datum.unwrap_int32()),
                 ScalarType::Int64 => json!(datum.unwrap_int64()),
@@ -251,6 +252,10 @@ fn build_row_schema_field<F: FnMut() -> String>(
 ) -> serde_json::value::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::Bool => json!("boolean"),
+        ScalarType::PgLegacyChar => json!({
+            "type": "fixed",
+            "size": 1,
+        }),
         ScalarType::Int16 | ScalarType::Int32 => {
             json!("int")
         }

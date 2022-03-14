@@ -313,7 +313,7 @@ impl FromStr for LockInfo {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (reentrance_id, details) = s
-            .split_once("\n")
+            .split_once('\n')
             .ok_or_else(|| Error::from(format!("invalid LOCK format: {}", s)))?;
         LockInfo::new(reentrance_id.to_owned(), details.to_owned())
     }

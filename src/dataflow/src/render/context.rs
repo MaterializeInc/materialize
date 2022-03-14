@@ -60,7 +60,7 @@ pub type ErrArrangementImport<S, T> = Arranged<
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, V: Data, T>
+pub struct Context<S: Scope, V: Data, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -73,15 +73,14 @@ where
     /// without affecting the results. We *should* apply it, to sources and
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
-    pub as_of_frontier: Antichain<mz_repr::Timestamp>,
+    pub as_of_frontier: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
 
-impl<S: Scope, V: Data, T> Context<S, V, T>
+impl<S: Scope, V: Data> Context<S, V>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
@@ -97,7 +96,13 @@ where
             bindings: BTreeMap::new(),
         }
     }
+}
 
+impl<S: Scope, V: Data, T> Context<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -140,7 +145,7 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, V: Data, T: Lattice>
+pub enum ArrangementFlavor<S: Scope, V: Data, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -252,7 +257,7 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, V: Data, T: Lattice>
+pub struct CollectionBundle<S: Scope, V: Data, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -468,9 +473,12 @@ where
     }
 }
 
-impl<S> CollectionBundle<S, mz_repr::Row, mz_repr::Timestamp>
+impl<S, T> CollectionBundle<S, mz_repr::Row, T>
 where
-    S: Scope<Timestamp = mz_repr::Timestamp>,
+    T: timely::progress::Timestamp + Lattice,
+    S: Scope,
+    S::Timestamp:
+        Refines<T> + Lattice + timely::progress::Timestamp + crate::render::RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -511,15 +519,34 @@ where
             let mut datum_vec = DatumVec::new();
 
             move |row_parts, time, diff| {
+                use crate::render::RenderTimestamp;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datum_vec.borrow_with_many(row_parts);
-                mfp_plan.evaluate(
-                    &mut datums_local,
-                    &temp_storage,
-                    time.clone(),
-                    diff.clone(),
-                    &mut row_builder,
-                )
+                let time = time.clone();
+                let event_time: mz_repr::Timestamp = *time.clone().event_time();
+                mfp_plan
+                    .evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        event_time,
+                        diff.clone(),
+                        &mut row_builder,
+                    )
+                    .map(move |x| match x {
+                        Ok((row, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: S::Timestamp = time.clone();
+                            *time.event_time() = event_time;
+                            Ok((row, time, diff))
+                        }
+                        Err((e, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: S::Timestamp = time.clone();
+                            *time.event_time() = event_time;
+                            Err((e, time, diff))
+                        }
+                    })
             }
         });
 

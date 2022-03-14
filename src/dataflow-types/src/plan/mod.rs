@@ -11,29 +11,29 @@
 
 #![warn(missing_debug_implementations, missing_docs)]
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize, Serializer};
+use tracing::error;
+
+use mz_expr::{
+    permutation_for_arrangement, CollectionPlan, EvalError, GlobalId, Id, JoinInputMapper, LocalId,
+    MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+};
+use mz_repr::{Datum, Diff, Row};
+
+use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use self::reduce::{KeyValPlan, ReducePlan};
+use self::threshold::ThresholdPlan;
+use self::top_k::TopKPlan;
+use crate::DataflowDescription;
+
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
-
-use join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
-use mz_expr::permutation_for_arrangement;
-use reduce::{KeyValPlan, ReducePlan};
-use threshold::ThresholdPlan;
-use top_k::TopKPlan;
-use tracing::error;
-
-use serde::{Deserialize, Serialize, Serializer};
-
-use crate::DataflowDescription;
-use mz_expr::{
-    EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, TableFunc,
-};
-
-use mz_repr::{Datum, Diff, Row};
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 // This function exists purely to convert the HashMap into a BTreeMap,
 // so that the value will be stable, for the benefit of tests
@@ -134,11 +134,11 @@ impl AvailableCollections {
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Plan {
+pub enum Plan<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, T, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -178,10 +178,10 @@ pub enum Plan {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan>,
+        value: Box<Plan<T>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<Plan<T>>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -190,7 +190,7 @@ pub enum Plan {
     /// and topk stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
@@ -211,7 +211,7 @@ pub enum Plan {
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Expressions that for each row prepare the arguments to `func`.
@@ -229,7 +229,7 @@ pub enum Plan {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan>,
+        inputs: Vec<Plan<T>>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -240,7 +240,7 @@ pub enum Plan {
     /// Aggregation by key.
     Reduce {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -256,7 +256,7 @@ pub enum Plan {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
@@ -267,7 +267,7 @@ pub enum Plan {
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -275,7 +275,7 @@ pub enum Plan {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -291,7 +291,7 @@ pub enum Plan {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan>,
+        inputs: Vec<Plan<T>>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -301,7 +301,7 @@ pub enum Plan {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<Plan<T>>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input.
         ///
@@ -314,7 +314,7 @@ pub enum Plan {
     },
 }
 
-impl Plan {
+impl<T: timely::progress::Timestamp> Plan<T> {
     /// Replace the plan with another one
     /// that has the collection in some additional forms.
     pub fn arrange_by(
@@ -418,11 +418,10 @@ impl Plan {
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {
-                use timely::progress::Timestamp;
                 let plan = Plan::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
-                            .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
+                            .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
                 };
@@ -934,12 +933,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build.into_iter() {
-            let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
+            let (plan, keys) = Self::from_mir(&build.plan, &mut arrangements)?;
             arrangements.insert(Id::Global(build.id), keys);
-            objects_to_build.push(crate::BuildDesc {
-                id: build.id,
-                view: plan,
-            });
+            objects_to_build.push(crate::BuildDesc { id: build.id, plan });
         }
 
         Ok(DataflowDescription {
@@ -948,7 +944,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build,
             index_exports: desc.index_exports,
             sink_exports: desc.sink_exports,
-            dependent_objects: desc.dependent_objects,
             as_of: desc.as_of,
             debug_name: desc.debug_name,
             id: desc.id,
@@ -1136,6 +1131,69 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_mfp: input_mfp.clone(),
                     })
                     .collect(),
+            }
+        }
+    }
+}
+
+impl<T> CollectionPlan for Plan<T> {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        match self {
+            Plan::Constant { rows: _ } => (),
+            Plan::Get {
+                id,
+                keys: _,
+                mfp: _,
+                key_val: _,
+            } => match id {
+                Id::Global(id) => {
+                    out.insert(*id);
+                }
+                Id::Local(_) | Id::LocalBareSource => (),
+            },
+            Plan::Let { id: _, value, body } => {
+                value.depends_on_into(out);
+                body.depends_on_into(out);
+            }
+            Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {
+                for input in inputs {
+                    input.depends_on_into(out);
+                }
+            }
+            Plan::Mfp {
+                input,
+                mfp: _,
+                input_key_val: _,
+            }
+            | Plan::FlatMap {
+                input,
+                func: _,
+                exprs: _,
+                mfp: _,
+                input_key: _,
+            }
+            | Plan::ArrangeBy {
+                input,
+                forms: _,
+                input_key: _,
+                input_mfp: _,
+            }
+            | Plan::Reduce {
+                input,
+                key_val_plan: _,
+                plan: _,
+                input_key: _,
+            }
+            | Plan::TopK {
+                input,
+                top_k_plan: _,
+            }
+            | Plan::Negate { input }
+            | Plan::Threshold {
+                input,
+                threshold_plan: _,
+            } => {
+                input.depends_on_into(out);
             }
         }
     }

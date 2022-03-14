@@ -72,6 +72,8 @@ wrappers = [
     "junit-report",
     "mysql_async",
     "mysql_common",
+    "opentelemetry",
+    "opentelemetry-otlp",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -139,6 +141,7 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
+    "Zlib",
 ]
 copyleft = "deny"
 private = { ignore = true }

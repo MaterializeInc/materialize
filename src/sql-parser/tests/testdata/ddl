@@ -457,7 +457,7 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]),
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
 ----
-error: Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found OR
+error: Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found OR
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^
 
@@ -669,7 +669,7 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=tea
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';
@@ -718,35 +718,35 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }, Value { name: Ident("retention_ms"), value: Number("10000") }, Value { name: Ident("retention_bytes"), value: Number("10000000000") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }, Value { name: Ident("retention_ms"), value: Number("10000") }, Value { name: Ident("retention_bytes"), value: Number("10000000000") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY TOPIC 'consistency' CONSISTENCY FORMAT BYTES FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
@@ -760,14 +760,14 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSIS
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [ObjectName { name: Ident("username"), object_name: UnresolvedObjectName([Ident("user")]) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [ObjectName { name: Ident("username"), object_name: UnresolvedObjectName([Ident("user")]) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
@@ -781,7 +781,7 @@ CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
 ----
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz' WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: UnresolvedObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
@@ -844,49 +844,70 @@ CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
+----
+CREATE INDEX foo ON myschema.bar (a, b)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
 ----
 CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [WithOption { key: Ident("baz"), value: Some(Value(String("raz"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [WithOption { key: Ident("baz"), value: Some(Value(String("raz"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), on_name: UnresolvedObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: UnresolvedObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
+----
+CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
+----
+CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
 ----
 CREATE DEFAULT INDEX ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 ----
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: true })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: true })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
@@ -907,7 +928,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
@@ -1239,3 +1260,80 @@ ALTER INDEX name SET ENABLED (property = true)
 error: Expected end of statement, found left parenthesis
 ALTER INDEX name SET ENABLED (property = true)
                              ^
+
+parse-statement
+ALTER INDEX i1 misplaced
+----
+error: Expected one of RESET or SET or RENAME, found identifier "misplaced"
+ALTER INDEX i1 misplaced
+               ^
+
+parse-statement
+ALTER INDEX i1
+----
+error: Expected one of RESET or SET or RENAME, found EOF
+ALTER INDEX i1
+              ^
+
+parse-statement
+CREATE CLUSTER cluster
+----
+CREATE CLUSTER cluster
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [] })
+
+parse-statement
+CREATE CLUSTER cluster VIRTUAL
+----
+CREATE CLUSTER cluster VIRTUAL
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE 'small'
+----
+CREATE CLUSTER cluster SIZE 'small'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE = 'small'
+----
+CREATE CLUSTER cluster SIZE 'small'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+
+parse-statement
+CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+----
+CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual, Virtual, Size("small"), Virtual, Size("medium")] })
+
+parse-statement
+DROP CLUSTER cluster
+----
+DROP CLUSTER cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: false, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster
+----
+DROP CLUSTER IF EXISTS cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster RESTRICT
+----
+DROP CLUSTER IF EXISTS cluster
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER IF EXISTS cluster CASCADE
+----
+DROP CLUSTER IF EXISTS cluster CASCADE
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: true })

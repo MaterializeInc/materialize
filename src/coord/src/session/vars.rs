@@ -10,7 +10,10 @@
 use std::borrow::Borrow;
 use std::fmt;
 
+use const_format::concatcp;
 use uncased::UncasedStr;
+
+use mz_ore::cast;
 
 use crate::error::CoordError;
 use crate::session::EndTransactionAction;
@@ -22,6 +25,20 @@ macro_rules! static_uncased_str {
         unsafe { ::core::mem::transmute::<&'static str, &'static UncasedStr>($string) }
     }};
 }
+
+// We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+// be. Too new and some clients will emit a "server too new" warning. Too old
+// and some clients will fall back to legacy code paths. v9.5.0 empirically
+// seems to be a good compromise.
+
+/// The major version of PostgreSQL that Materialize claims to be.
+pub const SERVER_MAJOR_VERSION: u8 = 9;
+
+/// The minor version of PostgreSQL that Materialize claims to be.
+pub const SERVER_MINOR_VERSION: u8 = 5;
+
+/// The patch version of PostgreSQL that Materialize claims to be.
+pub const SERVER_PATCH_VERSION: u8 = 0;
 
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
     name: static_uncased_str!("application_name"),
@@ -39,6 +56,12 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: static_uncased_str!("client_min_messages"),
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
+};
+
+const CLUSTER: ServerVar<str> = ServerVar {
+    name: static_uncased_str!("cluster"),
+    value: "default",
+    description: "Sets the current cluster (Materialize).",
 };
 
 const DATABASE: ServerVar<str> = ServerVar {
@@ -87,18 +110,21 @@ const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: static_uncased_str!("server_version"),
-    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
-    // be. Too new and some clients will emit a "server too new" warning. Too
-    // old and some clients will fall back to legacy code paths. v9.5.0
-    // empirically seems to be a good compromise.
-    value: "9.5.0",
+    value: concatcp!(
+        SERVER_MAJOR_VERSION,
+        ".",
+        SERVER_MINOR_VERSION,
+        ".",
+        SERVER_PATCH_VERSION
+    ),
     description: "Shows the server version (PostgreSQL).",
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: static_uncased_str!("server_version_num"),
-    // See the comment on `SERVER_VERSION`.
-    value: &90500,
+    value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
+        + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
+        + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the server version as an integer (PostgreSQL).",
 };
 
@@ -156,6 +182,7 @@ pub struct Vars {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
+    cluster: SessionVar<str>,
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
@@ -177,6 +204,7 @@ impl Default for Vars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
+            cluster: SessionVar::new(&CLUSTER),
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
@@ -202,6 +230,7 @@ impl Vars {
             &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
+            &self.cluster,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
@@ -251,6 +280,8 @@ impl Vars {
             Ok(&self.client_encoding)
         } else if name == CLIENT_MIN_MESSAGES.name {
             Ok(&self.client_min_messages)
+        } else if name == CLUSTER.name {
+            Ok(&self.cluster)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
@@ -315,6 +346,8 @@ impl Vars {
                     valid_values: Some(ClientSeverity::valid_values()),
                 });
             }
+        } else if name == CLUSTER.name {
+            self.cluster.set(value, local)
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {
@@ -403,6 +436,7 @@ impl Vars {
             application_name,
             client_encoding: _,
             client_min_messages,
+            cluster: _,
             database,
             date_style: _,
             extra_float_digits,
@@ -438,6 +472,11 @@ impl Vars {
     /// Returns the value of the `client_min_messages` configuration parameter.
     pub fn client_min_messages(&self) -> &ClientSeverity {
         self.client_min_messages.value()
+    }
+
+    /// Returns the value of the `cluster` configuration parameter.
+    pub fn cluster(&self) -> &str {
+        self.cluster.value()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.

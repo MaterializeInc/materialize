@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! ### NOTICE
+//!
+//! coordtest is currently ignored in our testing suite. If any other
+//! API change would force annoying refactoring of this file, it is ok to
+//! completely remove the coordtest directory.
+//!
 //! coordtest attempts to be a deterministic Coordinator tester using datadriven
 //! test files. Many parts of dataflow run in their own tokio task and we aren't
 //! able to observe their output until we bump a timestamp and see if new data
@@ -67,7 +73,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future::FutureExt;
-use mz_dataflow_types::client::{ComputeResponse, Response};
+use mz_dataflow_types::client::{ComputeResponse, InstanceConfig, Response};
 use mz_dataflow_types::sources::AwsExternalId;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -140,6 +146,7 @@ impl CoordTest {
             .await?;
         let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
             dataflow_client: Box::new(dataflow_client.clone()),
+            dataflow_instance: InstanceConfig::Virtual,
             storage,
             logging: None,
             logical_compaction_window: None,
@@ -574,7 +581,7 @@ impl<C> mz_dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
     C: mz_dataflow_types::client::Client,
 {
-    async fn send(&mut self, cmd: mz_dataflow_types::client::Command) {
+    async fn send(&mut self, cmd: mz_dataflow_types::client::Command) -> Result<(), anyhow::Error> {
         self.inner.lock().await.send(cmd).await
     }
 

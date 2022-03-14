@@ -17,7 +17,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
-use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
@@ -45,6 +44,8 @@ pub enum Value {
     Bool(bool),
     /// A byte array, i.e., a variable-length binary string.
     Bytea(Vec<u8>),
+    /// A single-byte character.
+    Char(u8),
     /// A date.
     Date(NaiveDate),
     /// A 4-byte floating point number.
@@ -80,7 +81,7 @@ pub enum Value {
     /// A variable-length string.
     Text(String),
     /// A fixed-length string.
-    Char(String),
+    BpChar(String),
     /// A variable-length string with an optional limit.
     VarChar(String),
     /// A universally unique identifier.
@@ -105,6 +106,7 @@ impl Value {
             (Datum::Int16(i), ScalarType::Int16) => Some(Value::Int2(i)),
             (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
+            (Datum::UInt8(c), ScalarType::PgLegacyChar) => Some(Value::Char(c)),
             (Datum::UInt32(oid), ScalarType::Oid) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), ScalarType::RegClass) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), ScalarType::RegProc) => Some(Value::Oid(oid)),
@@ -121,7 +123,7 @@ impl Value {
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (Datum::String(s), ScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
             (Datum::String(s), ScalarType::Char { length }) => {
-                Some(Value::Char(char::format_str_pad(s, *length)))
+                Some(Value::BpChar(char::format_str_pad(s, *length)))
             }
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
@@ -188,6 +190,7 @@ impl Value {
             Value::Bool(true) => Datum::True,
             Value::Bool(false) => Datum::False,
             Value::Bytea(b) => Datum::Bytes(buf.push_bytes(b)),
+            Value::Char(c) => Datum::UInt8(c),
             Value::Date(d) => Datum::Date(d),
             Value::Float4(f) => Datum::Float32(f.into()),
             Value::Float8(f) => Datum::Float64(f.into()),
@@ -235,7 +238,7 @@ impl Value {
             Value::TimestampTz(ts) => Datum::TimestampTz(ts),
             Value::Interval(iv) => Datum::Interval(iv.0),
             Value::Text(s) => Datum::String(buf.push_string(s)),
-            Value::Char(s) => Datum::String(buf.push_string(s.trim_end().into())),
+            Value::BpChar(s) => Datum::String(buf.push_string(s.trim_end().into())),
             Value::VarChar(s) => Datum::String(buf.push_string(s)),
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),
@@ -255,26 +258,31 @@ impl Value {
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text<F>(&self, buf: &mut F) -> Nestable
-    where
-        F: FormatBuffer,
-    {
+    pub fn encode_text(&self, buf: &mut BytesMut) -> Nestable {
         match self {
             Value::Array { dims, elements } => {
                 strconv::format_array(buf, dims, elements, |buf, elem| match elem {
-                    None => buf.write_null(),
-                    Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+                    None => Ok::<_, ()>(buf.write_null()),
+                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
                 })
+                .expect("provided closure never fails")
             }
             Value::Int2Vector { elements } => {
                 strconv::format_legacy_vector(buf, elements, |buf, elem| {
-                    elem.as_ref()
-                        .expect("Int2Vector does not support NULL values")
-                        .encode_text(buf.nonnull_buffer())
+                    Ok::<_, ()>(
+                        elem.as_ref()
+                            .expect("Int2Vector does not support NULL values")
+                            .encode_text(buf.nonnull_buffer()),
+                    )
                 })
+                .expect("provided closure never fails")
             }
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
+            Value::Char(c) => {
+                buf.put_u8(*c);
+                Nestable::MayNeedEscaping
+            }
             Value::Date(d) => strconv::format_date(buf, *d),
             Value::Int2(i) => strconv::format_int16(buf, *i),
             Value::Int4(i) => strconv::format_int32(buf, *i),
@@ -284,19 +292,22 @@ impl Value {
             Value::Float8(f) => strconv::format_float64(buf, *f),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => strconv::format_list(buf, elems, |buf, elem| match elem {
-                None => buf.write_null(),
-                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-            }),
+                None => Ok::<_, ()>(buf.write_null()),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+            })
+            .expect("provided closure never fails"),
             Value::Map(elems) => strconv::format_map(buf, elems, |buf, value| match value {
-                None => buf.write_null(),
-                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-            }),
+                None => Ok::<_, ()>(buf.write_null()),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+            })
+            .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_oid(buf, *oid),
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
-                None => buf.write_null(),
-                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-            }),
-            Value::Text(s) | Value::VarChar(s) | Value::Char(s) => strconv::format_string(buf, s),
+                None => Ok::<_, ()>(buf.write_null()),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+            })
+            .expect("provided closure never fails"),
+            Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) => strconv::format_string(buf, s),
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
@@ -334,6 +345,7 @@ impl Value {
             }
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
+            Value::Char(c) => i8::from_ne_bytes(c.to_ne_bytes()).to_sql(&PgType::CHAR, buf),
             Value::Date(d) => d.to_sql(&PgType::DATE, buf),
             Value::Float4(f) => f.to_sql(&PgType::FLOAT4, buf),
             Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
@@ -396,7 +408,7 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
-            Value::Char(s) => s.to_sql(&PgType::BPCHAR, buf),
+            Value::BpChar(s) => s.to_sql(&PgType::BPCHAR, buf),
             Value::VarChar(s) => s.to_sql(&PgType::VARCHAR, buf),
             Value::Time(t) => t.to_sql(&PgType::TIME, buf),
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
@@ -427,49 +439,50 @@ impl Value {
     /// Deserializes a value of type `ty` from `raw` using the [text encoding
     /// format](Format::Text).
     pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
-        let raw = str::from_utf8(raw)?;
+        let s = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Array(_) => return Err("input of array types is not implemented".into()),
             Type::Int2Vector { .. } => {
                 return Err("input of Int2Vector types is not implemented".into())
             }
-            Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
-            Type::Bytea => Value::Bytea(strconv::parse_bytes(raw)?),
-            Type::Date => Value::Date(strconv::parse_date(raw)?),
-            Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
-            Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
-            Type::Int2 => Value::Int2(strconv::parse_int16(raw)?),
-            Type::Int4 => Value::Int4(strconv::parse_int32(raw)?),
-            Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
-            Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
+            Type::Bool => Value::Bool(strconv::parse_bool(s)?),
+            Type::Bytea => Value::Bytea(strconv::parse_bytes(s)?),
+            Type::Char => Value::Char(raw.get(0).copied().unwrap_or(0)),
+            Type::Date => Value::Date(strconv::parse_date(s)?),
+            Type::Float4 => Value::Float4(strconv::parse_float32(s)?),
+            Type::Float8 => Value::Float8(strconv::parse_float64(s)?),
+            Type::Int2 => Value::Int2(strconv::parse_int16(s)?),
+            Type::Int4 => Value::Int4(strconv::parse_int32(s)?),
+            Type::Int8 => Value::Int8(strconv::parse_int64(s)?),
+            Type::Interval { .. } => Value::Interval(Interval(strconv::parse_interval(s)?)),
             Type::Json => return Err("input of json types is not implemented".into()),
-            Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
+            Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(s)?)),
             Type::List(elem_type) => Value::List(strconv::parse_list(
-                raw,
+                s,
                 matches!(**elem_type, Type::List(..)),
                 || None,
                 |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
             )?),
             Type::Map { value_type } => Value::Map(strconv::parse_map(
-                raw,
+                s,
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
-            Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
+            Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                Value::Oid(strconv::parse_oid(raw)?)
+                Value::Oid(strconv::parse_oid(s)?)
             }
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
-            Type::Text => Value::Text(raw.to_owned()),
-            Type::Char { .. } => Value::Char(raw.to_owned()),
-            Type::VarChar { .. } => Value::VarChar(raw.to_owned()),
-            Type::Time => Value::Time(strconv::parse_time(raw)?),
-            Type::TimeTz => return Err("input of timetz types is not implemented".into()),
-            Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
-            Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
-            Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
+            Type::Text => Value::Text(s.to_owned()),
+            Type::BpChar { .. } => Value::BpChar(s.to_owned()),
+            Type::VarChar { .. } => Value::VarChar(s.to_owned()),
+            Type::Time { .. } => Value::Time(strconv::parse_time(s)?),
+            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
+            Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
+            Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
         })
     }
 
@@ -481,13 +494,15 @@ impl Value {
             Type::Int2Vector => Err("input of int2vector types is not implemented".into()),
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
+            Type::Char => i8::from_sql(ty.inner(), raw)
+                .map(|c| Value::Char(u8::from_ne_bytes(c.to_ne_bytes()))),
             Type::Date => chrono::NaiveDate::from_sql(ty.inner(), raw).map(Value::Date),
             Type::Float4 => f32::from_sql(ty.inner(), raw).map(Value::Float4),
             Type::Float8 => f64::from_sql(ty.inner(), raw).map(Value::Float8),
             Type::Int2 => i16::from_sql(ty.inner(), raw).map(Value::Int2),
             Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
-            Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
+            Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
@@ -498,12 +513,16 @@ impl Value {
             }
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
-            Type::Char { .. } => String::from_sql(ty.inner(), raw).map(Value::Char),
+            Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
-            Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
-            Type::TimeTz => return Err("input of timetz types is not implemented".into()),
-            Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
-            Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
+            Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
+            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::Timestamp { .. } => {
+                NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp)
+            }
+            Type::TimestampTz { .. } => {
+                DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz)
+            }
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
         }
     }

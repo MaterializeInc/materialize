@@ -40,6 +40,13 @@ SHOW ROLES
 ShowObjects(ShowObjectsStatement { object_type: Role, from: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
+SHOW CLUSTERS
+----
+SHOW CLUSTERS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
 SHOW USERS
 ----
 SHOW ROLES
@@ -276,6 +283,13 @@ SHOW a
 SHOW a
 =>
 ShowVariable(ShowVariableStatement { variable: Ident("a") })
+
+parse-statement
+SHOW CLUSTERS
+----
+SHOW CLUSTERS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, extended: false, full: false, materialized: false, filter: None })
 
 # TODO(justin): "all" here should be its own token so that it doesn't get
 # downcased.

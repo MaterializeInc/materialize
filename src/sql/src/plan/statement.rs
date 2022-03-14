@@ -22,7 +22,8 @@ use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{
-    CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+    CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
+    SessionCatalog,
 };
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
@@ -32,6 +33,7 @@ use crate::plan::{Params, Plan, PlanContext};
 
 mod ddl;
 mod dml;
+mod raise;
 mod scl;
 mod show;
 mod tcl;
@@ -111,6 +113,8 @@ pub fn describe(
         Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
+        Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
+        Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
@@ -152,6 +156,9 @@ pub fn describe(
         Statement::SetTransaction(stmt) => tcl::describe_set_transaction(&scx, stmt)?,
         Statement::Rollback(stmt) => tcl::describe_rollback(&scx, stmt)?,
         Statement::Commit(stmt) => tcl::describe_commit(&scx, stmt)?,
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -161,8 +168,9 @@ pub fn describe(
 /// Produces a [`Plan`] from the purified statement `stmt`.
 ///
 /// Planning is a pure, synchronous function and so requires that the provided
-/// `stmt` does does not depend on any external state. To purify a statement,
-/// use [`crate::pure::purify`].
+/// `stmt` does does not depend on any external state. Only `CREATE SOURCE`
+/// statements can depend on external state; remove that state prior to calling
+/// this function via [`crate::pure::purify_create_source`].
 ///
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
@@ -198,6 +206,8 @@ pub fn plan(
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
+        Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
+        Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
@@ -239,6 +249,9 @@ pub fn plan(
         Statement::SetTransaction(stmt) => tcl::plan_set_transaction(scx, stmt),
         Statement::Rollback(stmt) => tcl::plan_rollback(scx, stmt),
         Statement::Commit(stmt) => tcl::plan_commit(scx, stmt),
+
+        // RAISE statements.
+        Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
     }
 }
 
@@ -312,7 +325,7 @@ impl<'a> StatementContext<'a> {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
-                None => DatabaseSpecifier::Name(self.catalog.default_database().into()),
+                None => DatabaseSpecifier::Name(self.catalog.active_database().into()),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
             item: name.item,
@@ -327,12 +340,12 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<&dyn CatalogDatabase, PlanError> {
-        let name = self.catalog.default_database();
+    pub fn resolve_active_database(&self) -> Result<&dyn CatalogDatabase, PlanError> {
+        let name = self.catalog.active_database();
         Ok(self.catalog.resolve_database(name)?)
     }
 
-    pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
+    pub fn resolve_active_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
         self.resolve_schema(UnresolvedObjectName::unqualified("public"))
     }
 
@@ -374,6 +387,14 @@ impl<'a> StatementContext<'a> {
     ) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: Option<&Ident>,
+    ) -> Result<&dyn CatalogComputeInstance, PlanError> {
+        let name = name.map(|name| name.as_str());
+        Ok(self.catalog.resolve_compute_instance(name)?)
     }
 
     pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {

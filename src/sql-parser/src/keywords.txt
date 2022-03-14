@@ -28,6 +28,7 @@ Alter
 And
 Any
 Arn
+Arrangement
 Array
 As
 Asc
@@ -53,6 +54,8 @@ Character
 Characteristics
 Check
 Close
+Cluster
+Clusters
 Coalesce
 Collate
 Columns
@@ -76,6 +79,7 @@ Day
 Days
 Deallocate
 Debezium
+Debug
 Dec
 Decimal
 Declare
@@ -84,6 +88,7 @@ Default
 Delete
 Delimited
 Desc
+Details
 Discard
 Discover
 Distinct
@@ -132,6 +137,7 @@ In
 Include
 Index
 Indexes
+Info
 Inner
 Insert
 Int
@@ -157,6 +163,7 @@ Like
 Limit
 List
 Local
+Log
 Login
 Map
 Matching
@@ -175,6 +182,7 @@ Nologin
 None
 Nosuperuser
 Not
+Notice
 Notifications
 Null
 Nullif
@@ -206,6 +214,7 @@ Protobuf
 Publication
 Pubnub
 Query
+Raise
 Range
 Raw
 Read
@@ -230,6 +239,8 @@ Schema
 Schemas
 Second
 Seconds
+Secret
+Secrets
 Seed
 Select
 Sequences
@@ -239,6 +250,7 @@ Set
 Show
 Sink
 Sinks
+Size
 Slot
 Smallint
 Snapshot
@@ -289,6 +301,8 @@ Varchar
 Varying
 View
 Views
+Virtual
+Warning
 When
 Where
 With

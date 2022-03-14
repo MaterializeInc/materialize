@@ -82,7 +82,6 @@ pub struct BuiltinLog {
     pub name: &'static str,
     pub schema: &'static str,
     pub id: GlobalId,
-    pub index_id: GlobalId,
 }
 
 pub struct BuiltinTable {
@@ -90,7 +89,6 @@ pub struct BuiltinTable {
     pub schema: &'static str,
     pub desc: RelationDesc,
     pub id: GlobalId,
-    pub index_id: GlobalId,
     pub persistent: bool,
 }
 
@@ -123,37 +121,43 @@ pub struct BuiltinRole {
     pub id: i64,
 }
 
-// Builtin definitions below. Keep these sorted by global ID, and ensure you
-// add new builtins to the `BUILTINS` map.
+// Builtin definitions below. Ensure you add new builtins to the `BUILTINS` map.
+//
+// You SHOULD NOT change the ID of any builtins, nor delete a builtin. If you
+// do, you will break any downstream user objects that depended on the builtin.
 //
 // Builtins are loaded in ID order, so sorting them by global ID makes the
-// source code definition order match the load order.
+// source code definition order match the load order. A builtin must appear
+// AFTER any items it depends upon.
 //
-// A builtin must appear AFTER any items it depends upon. This means you may
-// need to reorder IDs if you change the dependency set of an existing builtin.
-// Unlike user IDs, system IDs are not persisted in the catalog, so it's safe to
-// change a builtin's ID.
+// NOTE(benesch): loading builtins in ID order means we're hosed if an existing
+// view needs to take on a new dependency on a *new* builtin, i.e., a builtin
+// with a global ID that is greater than the existing builtin.
 //
 // Allocate IDs from the following ranges based on the item's type:
 //
-// | Item type | ID range  |
-// | ----------|-----------|
-// | Types     | 1000-1999 |
-// | Funcs     | 2000-2999 |
-// | Logs      | 3000-3999 |
-// | Tables    | 4000-4999 |
-// | Views     | 5000-5999 |
+// | Item type | ID range  | Notes
+// | ----------|-----------|-------------------------
+// | Types     | 1000-1999 |                        |
+// | Funcs     | 2000-2999 |                        |
+// | Logs      | 3000-3999 |                        |
+// | Tables    | 4000-4999 |                        |
+// | Views     | 5000-5999 |                        |
+// | Indexes   | 1000000+  | Dynamically allocated  |
 //
 // WARNING: if you change the definition of an existing builtin item, you must
 // be careful to maintain backwards compatibility! Adding new columns is safe.
 // Removing a column, changing the name of a column, or changing the type of a
 // column is not safe, as persisted user views may depend upon that column.
+
+pub const FIRST_SYSTEM_INDEX_ID: u64 = 1000000;
+
 // The following types are the list of builtin data types available
-// in Materialize. This list is derived from the Type variants supported
-// in pgrepr.
+// in Materialize. This list is derived from the `pg_type` table in PostgreSQL.
 //
 // Builtin types cannot be created, updated, or deleted. Their OIDs
 // are static, unlike other objects, to match the type OIDs defined by Postgres.
+
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
     name: "bool",
     schema: PG_CATALOG_SCHEMA,
@@ -612,7 +616,7 @@ pub const TYPE_CHAR: BuiltinType = BuiltinType {
     id: GlobalId::System(1038),
     oid: 18,
     details: CatalogTypeDetails {
-        typ: CatalogType::Char1,
+        typ: CatalogType::PgLegacyChar,
         array_id: Some(GlobalId::System(1043)),
     },
 };
@@ -825,7 +829,6 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
     id: GlobalId::System(3000),
-    index_id: GlobalId::System(3001),
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
@@ -833,7 +836,6 @@ pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     id: GlobalId::System(3002),
-    index_id: GlobalId::System(3003),
 };
 
 pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
@@ -841,7 +843,6 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
     id: GlobalId::System(3004),
-    index_id: GlobalId::System(3005),
 };
 
 pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
@@ -849,7 +850,6 @@ pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     id: GlobalId::System(3006),
-    index_id: GlobalId::System(3007),
 };
 
 pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
@@ -857,7 +857,6 @@ pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
     id: GlobalId::System(3008),
-    index_id: GlobalId::System(3009),
 };
 
 pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
@@ -865,7 +864,6 @@ pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
     id: GlobalId::System(3010),
-    index_id: GlobalId::System(3011),
 };
 
 pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
@@ -873,7 +871,6 @@ pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     id: GlobalId::System(3012),
-    index_id: GlobalId::System(3013),
 };
 
 pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
@@ -881,7 +878,6 @@ pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     id: GlobalId::System(3014),
-    index_id: GlobalId::System(3015),
 };
 
 pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
@@ -889,7 +885,6 @@ pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowCurrent),
     id: GlobalId::System(3016),
-    index_id: GlobalId::System(3017),
 };
 
 pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
@@ -897,7 +892,6 @@ pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowDependency),
     id: GlobalId::System(3018),
-    index_id: GlobalId::System(3019),
 };
 
 pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
@@ -905,7 +899,6 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::FrontierCurrent),
     id: GlobalId::System(3020),
-    index_id: GlobalId::System(3021),
 };
 
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
@@ -913,7 +906,6 @@ pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekCurrent),
     id: GlobalId::System(3022),
-    index_id: GlobalId::System(3023),
 };
 
 pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
@@ -921,7 +913,6 @@ pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
     id: GlobalId::System(3024),
-    index_id: GlobalId::System(3025),
 };
 
 pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
@@ -929,7 +920,6 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
     id: GlobalId::System(3026),
-    index_id: GlobalId::System(3027),
 };
 
 pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
@@ -937,7 +927,6 @@ pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     id: GlobalId::System(3028),
-    index_id: GlobalId::System(3029),
 };
 
 pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
@@ -945,7 +934,6 @@ pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     id: GlobalId::System(3036),
-    index_id: GlobalId::System(3037),
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
@@ -953,7 +941,6 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
     id: GlobalId::System(3034),
-    index_id: GlobalId::System(3035),
 };
 
 pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
@@ -961,7 +948,6 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     id: GlobalId::System(3038),
-    index_id: GlobalId::System(3039),
 };
 
 pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
@@ -969,7 +955,6 @@ pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
     id: GlobalId::System(3040),
-    index_id: GlobalId::System(3041),
 };
 
 // Next id BuiltinLog: 3042
@@ -983,7 +968,6 @@ lazy_static! {
             .with_column("column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4001),
-        index_id: GlobalId::System(4002),
         persistent: false,
     };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
@@ -997,7 +981,6 @@ lazy_static! {
             .with_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
         id: GlobalId::System(4003),
-        index_id: GlobalId::System(4004),
         persistent: false,
     };
     pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
@@ -1009,7 +992,6 @@ lazy_static! {
             .with_column("consistency_topic", ScalarType::String.nullable(true))
             .with_key(vec![0]),
         id: GlobalId::System(4005),
-        index_id: GlobalId::System(4006),
         persistent: false,
     };
     pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
@@ -1020,7 +1002,6 @@ lazy_static! {
             .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(4007),
-        index_id: GlobalId::System(4008),
         persistent: false,
     };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
@@ -1031,7 +1012,6 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4009),
-        index_id: GlobalId::System(4010),
         persistent: false,
     };
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
@@ -1043,7 +1023,6 @@ lazy_static! {
             .with_column("database_id", ScalarType::Int64.nullable(true))
             .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4011),
-        index_id: GlobalId::System(4012),
         persistent: false,
     };
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
@@ -1058,7 +1037,6 @@ lazy_static! {
             .with_column("default", ScalarType::String.nullable(true))
             .with_column("type_oid", ScalarType::Oid.nullable(false)),
         id: GlobalId::System(4013),
-        index_id: GlobalId::System(4014),
         persistent: false,
     };
     pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
@@ -1072,7 +1050,6 @@ lazy_static! {
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("enabled", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4015),
-        index_id: GlobalId::System(4016),
         persistent: false,
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
@@ -1085,7 +1062,6 @@ lazy_static! {
             .with_column("on_expression", ScalarType::String.nullable(true))
             .with_column("nullable", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4017),
-        index_id: GlobalId::System(4018),
         persistent: false,
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
@@ -1098,7 +1074,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4019),
-        index_id: GlobalId::System(4020),
         persistent: false,
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
@@ -1113,7 +1088,6 @@ lazy_static! {
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4021),
-        index_id: GlobalId::System(4022),
         persistent: false,
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
@@ -1127,7 +1101,6 @@ lazy_static! {
             .with_column("connector_type", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
-        index_id: GlobalId::System(4024),
         persistent: false,
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
@@ -1140,7 +1113,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
-        index_id: GlobalId::System(4026),
         persistent: false,
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
@@ -1152,7 +1124,6 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4027),
-        index_id: GlobalId::System(4028),
         persistent: false,
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
@@ -1162,7 +1133,6 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4029),
-            index_id: GlobalId::System(4030),
             persistent: false,
     };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
@@ -1171,7 +1141,6 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4031),
-            index_id: GlobalId::System(4032),
             persistent: false,
     };
     pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
@@ -1181,7 +1150,6 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4033),
-            index_id: GlobalId::System(4034),
             persistent: false,
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
@@ -1192,7 +1160,6 @@ lazy_static! {
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4035),
-            index_id: GlobalId::System(4036),
             persistent: false,
     };
     pub static ref MZ_ROLES: BuiltinTable = BuiltinTable {
@@ -1203,7 +1170,6 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4037),
-        index_id: GlobalId::System(4038),
         persistent: false,
     };
     pub static ref MZ_PSEUDO_TYPES: BuiltinTable = BuiltinTable {
@@ -1212,7 +1178,6 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(4039),
-        index_id: GlobalId::System(4040),
         persistent: false,
     };
     pub static ref MZ_FUNCTIONS: BuiltinTable = BuiltinTable {
@@ -1228,7 +1193,6 @@ lazy_static! {
             .with_column("ret_id", ScalarType::String.nullable(true))
             .with_column("ret_set", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4041),
-        index_id: GlobalId::System(4042),
         persistent: false,
     };
     pub static ref MZ_PROMETHEUS_READINGS: BuiltinTable = BuiltinTable {
@@ -1243,7 +1207,6 @@ lazy_static! {
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
         id: GlobalId::System(4043),
-        index_id: GlobalId::System(4044),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
         // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
@@ -1258,7 +1221,6 @@ lazy_static! {
                 .with_column("help", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
         id: GlobalId::System(4045),
-        index_id: GlobalId::System(4046),
         persistent: false,
     };
     pub static ref MZ_PROMETHEUS_HISTOGRAMS: BuiltinTable = BuiltinTable {
@@ -1274,11 +1236,19 @@ lazy_static! {
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
         id: GlobalId::System(4047),
-        index_id: GlobalId::System(4048),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
         // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
         persistent: true,
+    };
+    pub static ref MZ_CLUSTERS: BuiltinTable = BuiltinTable {
+        name: "mz_clusters",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(4049),
+        persistent: false,
     };
 }
 
@@ -1561,14 +1531,42 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.oid,
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
+    -- MZ doesn't support typed tables so reloftype is filled with 0
+    0::pg_catalog.oid AS reloftype,
     NULL::pg_catalog.oid AS relowner,
     0::pg_catalog.oid AS relam,
+    -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
+    0::pg_catalog.oid AS reltablespace,
+    -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
+    0::pg_catalog.oid AS reltoastrelid,
+    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = mz_objects.id) AS relhasindex,
+    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
+    -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
+    -- TODO(jkosh44): update this column when issue is resolved.
+    'p'::pg_catalog.\"char\" AS relpersistence,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
-    END relkind
+    END relkind,
+    -- MZ doesn't support CHECK constraints so relchecks is filled with 0
+    0::pg_catalog.int2 AS relchecks,
+    -- MZ doesn't support creating rules so relhasrules is filled with false
+    false AS relhasrules,
+    -- MZ doesn't support creating triggers so relhastriggers is filled with false
+    false AS relhastriggers,
+    -- MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
+    false AS relrowsecurity,
+    false AS relforcerowsecurity,
+    -- MZ doesn't support replication so relreplident is filled with 'd' for default
+    'd'::pg_catalog.\"char\" AS relreplident,
+    -- MZ doesn't support table partitioning so relispartition is filled with false
+    false AS relispartition,
+    -- PG removed relhasoids in v12 so it's filled with false
+    false AS relhasoids,
+    -- MZ doesn't support options for relations
+    NULL::pg_catalog.text[] as reloptions
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
     id: GlobalId::System(5015),
@@ -1598,7 +1596,25 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     mz_indexes.oid AS indexrelid,
     mz_objects.oid AS indrelid,
     false::pg_catalog.bool AS indisprimary,
-    pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
+    -- MZ doesn't support creating unique indexes so indisunique is filled with false
+    false::pg_catalog.bool AS indisunique,
+    -- MZ doesn't support CLUSTER so indisclustered is filled with false
+    false::pg_catalog.bool AS indisclustered,
+    -- MZ never creates invalid indexes so indisvalid is filled with true
+    true::pg_catalog.bool AS indisvalid,
+    -- MZ doesn't support replication so indisreplident is filled with false
+    false::pg_catalog.bool AS indisreplident,
+    -- Return zero if the index attribute is not a simple column reference, column position otherwise
+    pg_catalog.string_agg(coalesce(mz_index_columns.on_position, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position)::pg_catalog.int2vector AS indkey,
+    -- MZ doesn't have per-column flags, so returning a 0 for each column in the index
+    pg_catalog.string_agg('0', ' ')::pg_catalog.int2vector AS indoption,
+    -- Index expressions are returned in MZ format
+    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position)
+    WHEN NULL THEN NULL
+    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position) || '}'
+    END AS indexprs,
+    -- MZ doesn't support indexes with predicates
+    NULL::pg_catalog.text AS indpred
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
@@ -1630,7 +1646,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     NULL::pg_catalog.int2 AS typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
-    CASE mztype WHEN 'a' THEN 'b' ELSE mztype END AS typtype,
+    (CASE mztype WHEN 'a' THEN 'b' ELSE mztype END)::pg_catalog.char AS typtype,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
     coalesce(
@@ -1651,6 +1667,8 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype,
     -1::pg_catalog.int4 AS typtypmod,
+    -- MZ doesn't support COLLATE so typcollation is filled with 0
+    0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault
 FROM
     mz_catalog.mz_types
@@ -1682,7 +1700,11 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
-    FALSE as attisdropped
+    -- MZ doesn't support generated columns so attgenerated is filled with ''
+    ''::pg_catalog.\"char\" as attgenerated,
+    FALSE as attisdropped,
+    -- MZ doesn't support COLLATE so attcollation is filled with 0
+    0::pg_catalog.oid as attcollation
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
 JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid",
@@ -2030,7 +2052,63 @@ JOIN mz_catalog.mz_databases d on s.database_id = d.id",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5041
+// MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
+// codes a collation of 'C' for every database, so we could copy that here.
+pub const PG_COLLATION: BuiltinView = BuiltinView {
+    name: "pg_collation",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class
+AS SELECT
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS collname,
+    NULL::pg_catalog.oid AS collnamespace,
+    NULL::pg_catalog.oid AS collowner,
+    NULL::pg_catalog.\"char\" AS collprovider,
+    NULL::pg_catalog.bool AS collisdeterministic,
+    NULL::pg_catalog.int4 AS collencoding,
+    NULL::pg_catalog.text AS collcollate,
+    NULL::pg_catalog.text AS collctype,
+    NULL::pg_catalog.text AS collversion
+WHERE false",
+    id: GlobalId::System(5041),
+    needs_logs: false,
+};
+
+// MZ doesn't support row level security policies so the table is filled in with NULLs and made empty.
+pub const PG_POLICY: BuiltinView = BuiltinView {
+    name: "pg_policy",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class
+AS SELECT
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS polname,
+    NULL::pg_catalog.oid AS polrelid,
+    NULL::pg_catalog.\"char\" AS polcmd,
+    NULL::pg_catalog.bool AS polpermissive,
+    NULL::pg_catalog.oid[] AS polroles,
+    NULL::pg_catalog.text AS polqual,
+    NULL::pg_catalog.text AS polwithcheck
+WHERE false",
+    id: GlobalId::System(5042),
+    needs_logs: false,
+};
+
+// MZ doesn't support table inheritance so the table is filled in with NULLs and made empty.
+pub const PG_INHERITS: BuiltinView = BuiltinView {
+    name: "pg_inherits",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_inherits
+AS SELECT
+    NULL::pg_catalog.oid AS inhrelid,
+    NULL::pg_catalog.oid AS inhparent,
+    NULL::pg_catalog.int4 AS inhseqno,
+    NULL::pg_catalog.bool AS inhdetachpending
+WHERE false",
+    id: GlobalId::System(5043),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5044
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -2139,6 +2217,7 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
+            Builtin::Table(&MZ_CLUSTERS),
             Builtin::View(&MZ_CATALOG_NAMES),
             Builtin::View(&MZ_ARRANGEMENT_SHARING),
             Builtin::View(&MZ_ARRANGEMENT_SIZES),
@@ -2177,6 +2256,9 @@ lazy_static! {
             Builtin::View(&PG_ACCESS_METHODS),
             Builtin::View(&PG_ROLES),
             Builtin::View(&PG_VIEWS),
+            Builtin::View(&PG_COLLATION),
+            Builtin::View(&PG_POLICY),
+            Builtin::View(&PG_INHERITS),
             Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
             Builtin::View(&INFORMATION_SCHEMA_TABLES),
         ];
@@ -2215,6 +2297,11 @@ lazy_static! {
                     identifier,
                     id,
                 );
+                assert!(
+                    *id < GlobalId::System(FIRST_SYSTEM_INDEX_ID),
+                    "{field_name} for {kind_name} {identifier:?} is not less \
+                     than FIRST_SYSTEM_INDEX_ID ({FIRST_SYSTEM_INDEX_ID}): {id}"
+                )
             };
         use Builtin::*;
         for b in builtins.iter() {
@@ -2223,13 +2310,11 @@ lazy_static! {
                     let name = format!("with ID {:?}", id);
                     encounter("type", "id", &name, id);
                 }
-                Log(BuiltinLog { id, name, index_id, .. }) => {
+                Log(BuiltinLog { id, name, .. }) => {
                     encounter("type", "id", name, id);
-                    encounter("type", "index_id", name, index_id);
                 }
-                Table(BuiltinTable { id, index_id, name, .. }) => {
+                Table(BuiltinTable { id, name, .. }) => {
                     encounter("builtin table", "id", name, id);
-                    encounter("builtin table", "index_id", name, index_id);
                 }
                 View(BuiltinView { id, name, .. }) => {
                     encounter("view", "id", name, id);

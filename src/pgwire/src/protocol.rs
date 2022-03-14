@@ -15,19 +15,18 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
 use mz_expr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
 
 use mz_coord::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
-    TransactionStatus,
+    row_future_to_stream, EndTransactionAction, InProgressRows, Portal, PortalState,
+    RowBatchStream, Session, TransactionStatus,
 };
 use mz_coord::ExecuteResponse;
 use mz_dataflow_types::PeekResponseUnary;
@@ -38,7 +37,7 @@ use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Ident, NoticeSeverity, Raw, Statement};
 use mz_sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -159,28 +158,12 @@ where
         }
     }
 
-    if let Some(frontegg) = frontegg {
+    let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
-        match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => {
-                let res = frontegg
-                    .exchange_password_for_token(&password)
-                    .await
-                    .and_then(|res| frontegg.validate_access_token(&res.access_token));
-                match res {
-                    Ok(claims) if claims.email == user => {}
-                    _ => {
-                        return conn
-                            .send(ErrorResponse::fatal(
-                                SqlState::INVALID_PASSWORD,
-                                "invalid password",
-                            ))
-                            .await;
-                    }
-                }
-            }
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => password,
             _ => {
                 return conn
                     .send(ErrorResponse::fatal(
@@ -189,8 +172,26 @@ where
                     ))
                     .await
             }
+        };
+        match frontegg
+            .exchange_password_for_token(&password)
+            .await
+            .and_then(|token| frontegg.check_expiry(token, user.clone()))
+        {
+            Ok(check) => check.left_future(),
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
         }
-    }
+    } else {
+        // No frontegg check, so is_expired never resolves.
+        pending().right_future()
+    };
 
     // Construct session.
     let mut session = Session::new(conn.id(), user);
@@ -212,6 +213,7 @@ where
 
     // From this point forward we must not fail without calling `coord_client.terminate`!
 
+    let mut allow_no_session = false;
     let res = async {
         let session = coord_client.session();
         let mut buf = vec![BackendMessage::AuthenticationOk];
@@ -234,10 +236,24 @@ where
             conn,
             coord_client: &mut coord_client,
         };
-        machine.run().await
+
+        tokio::select! {
+            r = machine.run() => r,
+            _ = is_expired => {
+                // If the login has expired, we immediately stop running the state machine,
+                // meaning the session could still be owned by the coordinator, so we allow no
+                // session to be present.
+                allow_no_session = true;
+                Err(io::ErrorKind::ConnectionAborted.into())
+            }
+        }
     }
     .await;
-    coord_client.terminate().await;
+    if allow_no_session {
+        coord_client.terminate_allow_no_session().await;
+    } else {
+        coord_client.terminate().await;
+    }
     res
 }
 
@@ -502,7 +518,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => match ScalarType::try_from(&ty) {
+                Ok(ty) => match ScalarType::try_from(&ty) {
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
@@ -513,12 +529,12 @@ where
                             .await
                     }
                 },
-                None if oid == 0 => param_types.push(None),
-                None => {
+                Err(_) if oid == 0 => param_types.push(None),
+                Err(e) => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
-                            format!("unable to decode parameter whose type OID is {}", oid),
+                            e.to_string(),
                         ))
                         .await;
                 }
@@ -1050,6 +1066,9 @@ where
                 let existed = false;
                 created!(existed, SqlState::DUPLICATE_OBJECT, "role")
             }
+            ExecuteResponse::CreatedComputeInstance { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
@@ -1077,6 +1096,7 @@ where
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
             ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
+            ExecuteResponse::DroppedComputeInstance => command_complete!("DROP CLUSTER"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
@@ -1114,31 +1134,16 @@ where
             ExecuteResponse::SendingRows(rx) => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
-                match rx.await {
-                    PeekResponseUnary::Canceled => {
-                        self.error(ErrorResponse::error(
-                            SqlState::QUERY_CANCELED,
-                            "canceling statement due to user request",
-                        ))
-                        .await
-                    }
-                    PeekResponseUnary::Error(text) => {
-                        self.error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
-                            .await
-                    }
-                    PeekResponseUnary::Rows(rows) => {
-                        self.send_rows(
-                            row_desc,
-                            portal_name,
-                            InProgressRows::single_batch(rows),
-                            max_rows,
-                            get_response,
-                            fetch_portal_name,
-                            timeout,
-                        )
-                        .await
-                    }
-                }
+                self.send_rows(
+                    row_desc,
+                    portal_name,
+                    InProgressRows::new(row_future_to_stream(rx).await),
+                    max_rows,
+                    get_response,
+                    fetch_portal_name,
+                    timeout,
+                )
+                .await
             }
             ExecuteResponse::SetVariable { name } => {
                 // This code is somewhat awkwardly structured because we
@@ -1214,27 +1219,7 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
                     ExecuteResponse::Tailing { rx } => rx,
-                    ExecuteResponse::SendingRows(rx) => match rx.await {
-                        // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
-                        PeekResponseUnary::Canceled => {
-                            return self
-                                .error(ErrorResponse::error(
-                                    SqlState::QUERY_CANCELED,
-                                    "canceling statement due to user request",
-                                ))
-                                .await;
-                        }
-                        PeekResponseUnary::Error(text) => {
-                            return self
-                                .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
-                                .await;
-                        }
-                        PeekResponseUnary::Rows(rows) => {
-                            let (tx, rx) = unbounded_channel();
-                            tx.send(rows).expect("send must succeed");
-                            rx
-                        }
-                    },
+                    ExecuteResponse::SendingRows(rows_rx) => row_future_to_stream(rows_rx).await,
                     _ => {
                         return self
                             .error(ErrorResponse::error(
@@ -1261,6 +1246,27 @@ where
             ExecuteResponse::Prepare => command_complete!("PREPARE"),
             ExecuteResponse::Deallocate { all } => {
                 command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })
+            }
+            ExecuteResponse::Raise { severity } => {
+                let msg = match severity {
+                    NoticeSeverity::Debug => {
+                        ErrorResponse::debug(SqlState::WARNING, "raised a test debug")
+                    }
+                    NoticeSeverity::Info => {
+                        ErrorResponse::info(SqlState::WARNING, "raised a test info")
+                    }
+                    NoticeSeverity::Log => {
+                        ErrorResponse::log(SqlState::WARNING, "raised a test log")
+                    }
+                    NoticeSeverity::Notice => {
+                        ErrorResponse::notice(SqlState::WARNING, "raised a test notice")
+                    }
+                    NoticeSeverity::Warning => {
+                        ErrorResponse::warning(SqlState::WARNING, "raised a test warning")
+                    }
+                };
+                self.send(msg).await?;
+                command_complete!("RAISE")
             }
         }
     }
@@ -1324,11 +1330,18 @@ where
                 FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
+            } else if want_rows == 0 {
+                FetchResult::Rows(None)
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     _ = self.coord_client.canceled() => FetchResult::Canceled,
-                    batch = rows.remaining.recv() => FetchResult::Rows(batch),
+                    batch = rows.remaining.recv() => match batch {
+                        None=>FetchResult::Rows(None),
+                        Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
+                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
+                    },
                 }
             };
 
@@ -1394,6 +1407,11 @@ where
                         break;
                     }
                     self.conn.flush().await?;
+                }
+                FetchResult::Error(text) => {
+                    return self
+                        .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                        .await;
                 }
                 FetchResult::Canceled => {
                     return self
@@ -1513,7 +1531,19 @@ where
                 },
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(rows) => {
+                    Some(PeekResponseUnary::Error(text)) => {
+                        return self
+                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                            .await;
+                    }
+                    Some(PeekResponseUnary::Canceled) => {
+                        return self.error(ErrorResponse::error(
+                                SqlState::QUERY_CANCELED,
+                                "canceling statement due to user request",
+                            ))
+                            .await;
+                    }
+                    Some(PeekResponseUnary::Rows(rows)) => {
                         count += rows.len();
                         for row in rows {
                             encode_fn(row, typ, &mut out)?;
@@ -1788,4 +1818,5 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Vec<Row>>),
     Canceled,
+    Error(String),
 }
