@@ -137,7 +137,7 @@ Many tools in the modern data stack can connect to Materialize via PostgreSQL, b
 | --- | --- | --- | --- |
 | Metabase | 🟢 Beta | The Metabase PostgreSQL connector can be used to [connect Metabase to Materialize Core](/third-party/metabase/). | [More Info](/third-party/metabase/) [](#notify) |
 | Superset | 🟢 Alpha | Connect Superset to Materialize Core or Cloud using the Postgres connector.  | [](#notify) |
-| Looker | 🟡 Alpha | TBD @andrioni input. | [](#notify) |
+| Looker | 🟡 Alpha | Connect Looker to Materialize Core by adding a PostgreSQL 9.5+ database connection and specifying your Materialize credentials. Connections to Materialize Cloud are currently blocked by user/password auth. | [](#notify) |
 | Google Data Studio | 🟡 Alpha | Google Data Studio can connect to Materialize Core and Cloud using the PostgreSQL connector. Data is cached hourly but can be manually refreshed. | [](#notify) |
 | Tableau | 🔴 Researching | | [](#notify) |
 | Microsoft Power BI | 🔴 Researching | | [](#notify) |
