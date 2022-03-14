@@ -629,3 +629,709 @@ ORDER BY y, z DESC, x
 1  1  c  NaN
 1  2  c  NaN
 2  3  c    1
+
+## lag
+
+# Simple cases
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT lag(x) OVER (ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+NULL  a
+a     b
+b     c
+
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
+SELECT lag(x) OVER (ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+NULL  a
+a     b
+b     b
+b     c
+
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
+SELECT lag(x) OVER (ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+NULL  a
+a     b
+b     b
+b     c
+c     c
+
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
+ORDER BY x, lag
+----
+b     a
+c     b
+NULL  c
+
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
+SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
+ORDER BY x, lag
+----
+b     a
+b     b
+c     b
+NULL  c
+
+query TT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
+SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
+ORDER BY x, lag
+----
+b     a
+b     b
+c     b
+c     c
+NULL  c
+
+query TT
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
+SELECT lag(x) OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+NULL  a
+NULL  b
+a     c
+
+query TT
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
+SELECT lag(x) OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+a     a
+NULL  a
+NULL  a
+a     b
+a     c
+
+query TT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT lag(x) OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+ORDER BY x, lag
+----
+c     a
+NULL  b
+NULL  c
+
+query TT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT lag(x) OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY x, lag
+----
+NULL  a
+NULL  b
+NULL  c
+
+query TT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT lag(a1.x) OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2
+ORDER BY q DESC, a1.x DESC
+----
+NULL  a
+c     c
+c     c
+b     c
+b     b
+b     b
+a     b
+a     a
+a     a
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  1
+3  c  1  2
+4  b  1  NULL
+4  b  0  4
+1  a  1  NULL
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  1
+3  c  1  2
+4  b  1  NULL
+4  b  0  4
+1  a  1  NULL
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  1
+3  c  1  2
+4  b  1  NULL
+4  b  0  4
+1  a  1  NULL
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+
+# With default value
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  -1
+1  c  NaN  -1
+2  c  NaN  1
+3  c  1  2
+4  b  1  -1
+4  b  0  4
+1  a  1  -1
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+# Complex expressions
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + coalesce(nullif(f3, 'NaN'), -10)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  -9
+3  c  1  -8
+4  b  1  NULL
+4  b  0  5
+1  a  1  NULL
+2  a  1  2
+2  a  1  3
+3  a  1  3
+
+# Nulls in the first argument
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(NULL::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(nullif(f1, 4)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  1
+3  c  1  2
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+# Nulls in the first argument with a default value in the third argument
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(NULL::int, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+
+# Zero offset
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  7
+1  c  NaN  1
+2  c  NaN  2
+3  c  1  3
+4  b  1  4
+4  b  0  4
+1  a  1  1
+2  a  1  2
+2  a  1  2
+3  a  1  3
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  2
+1  c  NaN  NaN
+2  c  NaN  NaN
+3  c  1  4
+4  b  1  5
+4  b  0  4
+1  a  1  2
+2  a  1  3
+2  a  1  3
+3  a  1  4
+
+# Positive offsets
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  1
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  1
+2  a  1  NULL
+3  a  1  2
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NaN
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  2
+2  a  1  NULL
+3  a  1  3
+
+# Out of range positive offsets
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, 10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  0
+1  c  NaN  0
+2  c  NaN  0
+3  c  1  0
+4  b  1  0
+4  b  0  0
+1  a  1  0
+2  a  1  0
+2  a  1  0
+3  a  1  0
+
+# Negative offsets
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  2
+2  c  NaN  3
+3  c  1  NULL
+4  b  1  4
+4  b  0  NULL
+1  a  1  2
+2  a  1  2
+2  a  1  3
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NaN
+2  c  NaN  4
+3  c  1  NULL
+4  b  1  4
+4  b  0  NULL
+1  a  1  3
+2  a  1  3
+2  a  1  4
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, -2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  4
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  3
+2  a  1  4
+2  a  1  NULL
+3  a  1  NULL
+
+# Out of range negative offsets
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1 + f3, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, -10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  0
+1  c  NaN  0
+2  c  NaN  0
+3  c  1  0
+4  b  1  0
+4  b  0  0
+1  a  1  0
+2  a  1  0
+2  a  1  0
+3  a  1  0
+
+# Variable per row offsets
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  1
+2  a  1  NULL
+3  a  1  1
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, f1 - 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  1
+2  c  NaN  1
+3  c  1  1
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  1
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+
+# Null offsets
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, nullif(f1, 1)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  1
+2  a  1  NULL
+3  a  1  1
+
+# Null offset with default value
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, NULL, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  NULL
+1  c  NaN  NULL
+2  c  NaN  NULL
+3  c  1  NULL
+4  b  1  NULL
+4  b  0  NULL
+1  a  1  NULL
+2  a  1  NULL
+2  a  1  NULL
+3  a  1  NULL
+
+# Variable per row default value
+query ITTT
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
+SELECT f1, f2, f3, lag(f1, 1, f3) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+ORDER BY f2 DESC, f3 DESC, f1, lag
+----
+7  d  -5  -5
+1  c  NaN  NaN
+2  c  NaN  1
+3  c  1  2
+4  b  1  1
+4  b  0  4
+1  a  1  1
+2  a  1  1
+2  a  1  2
+3  a  1  2
+
+# reduce_elision code path
+# Default offset
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  NULL
+3  NULL
+
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  NULL
+3  NULL
+
+# Zero offset
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 0) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  1
+3  3
+
+# Negative offset
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, -1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  NULL
+3  NULL
+
+# Default value with offset 1
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 1, 10) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  10
+3  10
+
+# Default value with offset 0
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 0, 10) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  1
+3  3
+
+# Complex expression
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1 * f2, 0, 10) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  2
+3  12
+
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1 * f2, 1, f1 * f2 + 1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  3
+3  13
+
+# Complex offset
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1 * f2, f1 - f1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  2
+3  12
+
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+3  NULL
+1  2
+
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1 * f2, f2 - 2 * f1, f2) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  2
+3  4
+
+# Complex default value
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 0, f1 * f2) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  1
+3  3
+
+query II
+WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
+SELECT f1, lag(f1, 1, f1 * f2) OVER (PARTITION BY f1, f2)
+FROM (SELECT DISTINCT f1, f2 FROM t) q
+----
+1  2
+3  12
