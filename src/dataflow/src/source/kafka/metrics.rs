@@ -12,13 +12,13 @@ use std::collections::HashMap;
 use prometheus::core::AtomicI64;
 
 use mz_expr::SourceInstanceId;
-use mz_ore::iter::IteratorExt;
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, IntGaugeVec};
+
+use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 
 use crate::source::metrics::PartitionSpecificMetrics;
 
 pub(super) struct KafkaPartitionMetrics {
-    labels: Vec<String>,
+    // labels: Vec<String>,
     // gauge_vec: &'a IntGaugeVec,
     partition_offset_map: HashMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
 }
@@ -46,7 +46,7 @@ impl KafkaPartitionMetrics {
                         .get_delete_on_drop_gauge(labels.to_vec()),
                 )
             })),
-            labels: vec![topic.clone(), source_name.clone(), source_id.to_string()],
+            // labels: vec![topic.clone(), source_name.clone(), source_id.to_string()],
             // gauge_vec: &metrics.partition_offset_max,
         }
     }

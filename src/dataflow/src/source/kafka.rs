@@ -15,7 +15,7 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
-use serde::ser::StdError;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -414,8 +414,7 @@ impl KafkaSourceReader {
             }
 
             // This temp var is required to satisfy the type checker
-            let res: Result<Statistics, serde_json::Error> =
-                serde_json::from_reader(cursor);
+            let res: Result<Statistics, serde_json::Error> = serde_json::from_reader(cursor);
             match res {
                 Ok(statistics) => {
                     statistics.topics.get(&self.topic_name).and_then(|topic| {
