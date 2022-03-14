@@ -19,6 +19,8 @@ $ set writer-schema={
 $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 {"a": 1, "b": "dog"}
 
+$ set-regex match=u\d+ replacement=UID
+
 # Create library of objects and verify names
 > CREATE MATERIALIZED SOURCE mz_data
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
@@ -189,7 +191,7 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER [1] FROM [u244 AS \"materialize\".\"public\".\"renamed_mz_data\"] INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER [1] FROM [UID AS \"materialize\".\"public\".\"renamed_mz_data\"] INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
