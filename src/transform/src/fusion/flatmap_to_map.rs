@@ -31,7 +31,7 @@ impl FlatMapToMap {
     fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
             if let TableFunc::Wrap { width, .. } = func {
-                if *width == exprs.len() {
+                if *width >= exprs.len() {
                     if let MirRelationExpr::FlatMap { exprs, input, .. } = relation.take_dangerous()
                     {
                         *relation = input.map(exprs);
