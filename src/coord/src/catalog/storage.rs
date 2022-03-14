@@ -22,6 +22,7 @@ use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{DatabaseSpecifier, FullName};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};

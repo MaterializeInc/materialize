@@ -14,6 +14,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;

@@ -49,6 +49,15 @@ struct Args {
     #[clap(short = 'b', long)]
     bucket: String,
 
+    /// A pattern for the thing
+    ///
+    /// Examples:
+    ///
+    ///   - `AAAAAA,1` will repeat AAAA 1 --line-count times
+    ///   - `%o,AAAAA` will repeat Object number, AAAA --line-count times
+    #[clap(long)]
+    pattern: String,
+
     /// Which region to operate in
     #[clap(short = 'r', long, default_value = "us-east-2")]
     region: String,

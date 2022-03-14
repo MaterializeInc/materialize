@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
 use std::str::FromStr;
+use std::{fmt, sync::Arc};
 
 use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,7 @@ impl fmt::Display for SourceInstanceId {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
+    S3 { bucket: Arc<str>, key: Arc<str> },
     None,
 }
 
@@ -141,6 +142,7 @@ impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id),
+            PartitionId::S3 { bucket, key } => write!(f, "s3:{}/{}", bucket, key),
             PartitionId::None => write!(f, "none"),
         }
     }
@@ -161,6 +163,17 @@ impl FromStr for PartitionId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "none" => Ok(PartitionId::None),
+            s if s.starts_with("s3:") => {
+                let (bucket, key) = s
+                    .strip_prefix("s3:")
+                    .unwrap()
+                    .split_once("/")
+                    .expect("always contains a bucket and key");
+                Ok(PartitionId::S3 {
+                    bucket: Arc::from(bucket),
+                    key: Arc::from(key),
+                })
+            }
             s => {
                 let val: i32 = s.parse()?;
                 Ok(PartitionId::Kafka(val))

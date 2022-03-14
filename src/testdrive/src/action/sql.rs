@@ -11,7 +11,7 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -124,6 +124,7 @@ impl Action for SqlAction {
         };
 
         let state = &state;
+        let start = Instant::now();
         match should_retry {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
@@ -138,11 +139,12 @@ impl Action for SqlAction {
                         println!();
                     }
                     println!(
-                        "rows match; continuing at ts {}",
+                        "rows match; continuing at ts {} after {:?}",
                         SystemTime::now()
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap()
-                            .as_secs_f64()
+                            .as_secs_f64(),
+                        start.elapsed()
                     );
                     Ok(())
                 }

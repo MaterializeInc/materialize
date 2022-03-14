@@ -63,6 +63,7 @@ tokio-util = { version = "0.6.9", features = ["codec", "io"] }
 tracing = "0.1.32"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+async-channel = "1.6.1"
 
 [build-dependencies]
 prost-build = "0.9.1"

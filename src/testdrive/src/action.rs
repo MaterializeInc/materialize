@@ -528,6 +528,7 @@ pub(crate) async fn build(
                         Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
                     }
                     "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
+                    "s3-put-objects" => Box::new(s3::build_put_objects(builtin).map_err(wrap_err)?),
                     "s3-delete-objects" => {
                         Box::new(s3::build_delete_object(builtin).map_err(wrap_err)?)
                     }

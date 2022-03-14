@@ -19,8 +19,15 @@ message ProtoSourceTimestamp {
     oneof partition_id {
         int32 kafka = 1;
         google.protobuf.Empty none = 2;
+        // TODO: double-check is this right? putting a oneof at the end, position 4
+        S3PartitionId s3 = 4;
     }
     int64 mz_offset = 3;
+}
+
+message S3PartitionId {
+  string bucket = 1;
+  string key = 2;
 }
 
 message ProtoAssignedTimestamp {

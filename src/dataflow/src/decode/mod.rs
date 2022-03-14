@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
@@ -124,6 +125,15 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
+    fn fresh(&self) -> PreDelimitedFormat {
+        use PreDelimitedFormat::*;
+        match &self {
+            Bytes => Bytes,
+            Text => Text,
+            Regex(re, _) => Regex(re.clone(), Row::default()),
+            Protobuf(state) => Protobuf(state.fresh()),
+        }
+    }
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeError> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
@@ -171,6 +181,24 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
+    pub fn fresh(&self) -> DataDecoder {
+        let inner = match &self.inner {
+            DataDecoderInner::Avro(ad) => DataDecoderInner::Avro(ad.fresh()),
+            DataDecoderInner::DelimitedBytes { delimiter, format } => {
+                DataDecoderInner::DelimitedBytes {
+                    delimiter: *delimiter,
+                    format: format.fresh(),
+                }
+            }
+            DataDecoderInner::Csv(csv) => DataDecoderInner::Csv(csv.fresh()),
+            DataDecoderInner::PreDelimited(_) => todo!(),
+        };
+        DataDecoder {
+            inner,
+            metrics: self.metrics.clone(),
+        }
+    }
+
     pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
@@ -453,7 +481,8 @@ where
 {
     let op_name = format!("{}Decode", value_encoding.op_name());
 
-    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, false, metrics);
+    let value_decoder_type = get_decoder(value_encoding, debug_name, operators, false, metrics);
+    let mut partition_decoders = HashMap::new();
 
     let mut value_buf = vec![];
 
@@ -478,6 +507,9 @@ where
                     partition,
                 } in data.iter()
                 {
+                    let value_decoder = partition_decoders
+                        .entry(partition.clone())
+                        .or_insert_with(|| value_decoder_type.fresh());
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
@@ -490,6 +522,7 @@ where
                                 )));
                             }
                             value_buf.clear();
+                            partition_decoders.remove(&partition);
 
                             match result.transpose() {
                                 None => continue,
@@ -599,10 +632,10 @@ where
             });
             // Matching historical practice, we only log metrics on the value decoder.
             if n_errors > 0 {
-                value_decoder.log_errors(n_errors);
+                value_decoder_type.log_errors(n_errors);
             }
             if n_successes > 0 {
-                value_decoder.log_successes(n_errors);
+                value_decoder_type.log_successes(n_errors);
             }
         }
     });
@@ -647,6 +680,16 @@ fn to_metadata_row(
                 match item {
                     IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
                     _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
+                }
+            }
+        }
+        PartitionId::S3 { .. } => {
+            for item in metadata_items.iter() {
+                match item {
+                    IncludedColumnSource::DefaultPosition => {
+                        row.push(Datum::from(position.expect("position is always provided")))
+                    }
+                    _ => panic!("cannot include metadata items for s3: {:?}", metadata_items),
                 }
             }
         }

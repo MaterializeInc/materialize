@@ -24,6 +24,7 @@ pub struct CsvDecoderState {
     row_buf: Row,
     events_error: usize,
     events_success: usize,
+    delimiter: u8,
 }
 
 impl CsvDecoderState {
@@ -59,6 +60,27 @@ impl CsvDecoderState {
             row_buf: Row::default(),
             events_error: 0,
             events_success: 0,
+            delimiter,
+        }
+    }
+
+    pub fn fresh(&self) -> CsvDecoderState {
+        CsvDecoderState {
+            next_row_is_header: self.header_names.is_some(),
+            header_names: self.header_names.clone(),
+            n_cols: self.n_cols,
+            output: vec![0],
+            output_cursor: 0,
+            ends: vec![0],
+            ends_cursor: 1,
+            csv_reader: csv_core::ReaderBuilder::new()
+                .delimiter(self.delimiter)
+                .build(),
+            demanded: self.demanded.clone(),
+            row_packer: Default::default(),
+            events_error: 0,
+            events_success: 0,
+            delimiter: self.delimiter,
         }
     }
 

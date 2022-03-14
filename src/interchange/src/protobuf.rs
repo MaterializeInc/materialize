@@ -20,7 +20,7 @@ use mz_ore::str::StrExt;
 use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecodedDescriptors {
     message_descriptor: MessageDescriptor,
     columns: Vec<(ColumnName, ColumnType)>,
@@ -82,6 +82,14 @@ impl Decoder {
             row: Row::default(),
             confluent_wire_format,
         })
+    }
+
+    pub fn fresh(&self) -> Decoder {
+        Decoder {
+            descriptors: self.descriptors.clone(),
+            packer: Default::default(),
+            confluent_wire_format: self.confluent_wire_format,
+        }
     }
 
     /// Decodes the encoded Protobuf message into a [`Row`].

@@ -91,6 +91,15 @@ impl Decoder {
         })
     }
 
+    pub fn fresh(&self) -> Decoder {
+        Decoder {
+            csr_avro: self.csr_avro.fresh(),
+            debug_name: self.debug_name.clone(),
+            buf1: vec![],
+            packer: Default::default(),
+        }
+    }
+
     /// Decodes Avro-encoded `bytes` into a `Row`.
     pub async fn decode(&mut self, bytes: &mut &[u8]) -> anyhow::Result<Row> {
         // Clear out any bytes that might be left over from
