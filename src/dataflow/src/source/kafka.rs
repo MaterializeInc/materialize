@@ -405,8 +405,8 @@ impl KafkaSourceReader {
                 });
                 self.last_stats = Some(stats.clone());
             }
-            let mut writer = vec![];
-            let write_res = stats.as_ref().to_writer(&mut writer);
+            let mut cursor = std::io::Cursor::new(vec![]);
+            let write_res = stats.as_ref().to_writer(&mut cursor);
             // If the write failed log an error and continue to the next loop iteration
             if let Err(e) = write_res {
                 error!("error serializing rdkafka stats: {}", e);
@@ -415,7 +415,7 @@ impl KafkaSourceReader {
 
             // This temp var is required to satisfy the type checker
             let res: Result<Statistics, serde_json::Error> =
-                serde_json::from_reader(writer.as_slice());
+                serde_json::from_reader(cursor);
             match res {
                 Ok(statistics) => {
                     statistics.topics.get(&self.topic_name).and_then(|topic| {
