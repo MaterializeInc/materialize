@@ -123,7 +123,7 @@ if err != nil {
 }
 ```
 
-The [TAIL Output format](/sql/tail/#output) of `tailResult` contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.  When a row of a tailed view is **updated,** two objects will show up in our result set: 
+The [TAIL Output format](/sql/tail/#output) of `tailResult` contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.  When a row of a tailed view is **updated,** two objects will show up in our result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}
