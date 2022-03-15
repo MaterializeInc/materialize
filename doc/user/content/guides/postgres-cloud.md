@@ -143,18 +143,19 @@ The Materialize replica will need firewall access to connect to the upstream dat
 
 Connect to your PostgreSQL cluster as the `doadmin` user and create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
 
-  ```sql
-  CREATE PUBLICATION mz_source FOR TABLE table1, table2;
-  ```
+```sql
+CREATE PUBLICATION mz_source FOR TABLE table1, table2;
+```
+
 **Note:** Because the `doadmin` user, is not a superuser, you will not be able to create a publication for **all** tables.
 
 The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 If a table that you want to replicate has a primary key defined, you can use your default replica identity value. If a table you want to replicate has no primary key defined, you must set the replica identity value to FULL:
 
-    ```
-    ALTER TABLE table1 REPLICA IDENTITY FULL;
-    ```
+```sql
+ALTER TABLE table1 REPLICA IDENTITY FULL;
+```
 
 For more information, see the [Managed Postgres](https://docs.digitalocean.com/products/databases/postgresql/) documentation.
 
