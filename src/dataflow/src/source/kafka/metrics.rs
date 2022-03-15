@@ -15,6 +15,7 @@ use mz_expr::SourceInstanceId;
 
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::iter::IteratorExt;
+use tracing::error;
 use crate::source::metrics::SourceBaseMetrics;
 
 pub(super) struct KafkaPartitionMetrics {
@@ -53,6 +54,15 @@ impl KafkaPartitionMetrics {
     }
 
     pub fn set_offset_max(&mut self, id: i32, offset: i64) {
+        // Valid partition ids start at 0, librdkafka uses -1 as a sentinel for unassigned partitions
+        if id < 0 {
+            return;
+        }
+        // This offset value is another librdkafka sentinel indicating it got an invalid
+        if offset == -1001 {
+            error!("Got invalid high watermark for partition {}", id);
+            return;
+        }
         self.partition_offset_map
             .entry(id)
             .or_insert_with_key(|id| {

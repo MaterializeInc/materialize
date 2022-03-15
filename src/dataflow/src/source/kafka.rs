@@ -406,17 +406,18 @@ impl KafkaSourceReader {
                 self.last_stats = Some(stats.clone());
             }
 
-            // This temp var is required to satisfy the type checker
-            let res: Result<Statistics, serde_json::Error> = serde_json::from_str(&stats.to_string());
-            match res {
+            match serde_json::from_str::<Statistics>(&stats.to_string()) {
                 Ok(statistics) => {
-                    statistics.topics.get(&self.topic_name).and_then(|topic| {
-                        topic.partitions.iter().for_each(|(id, partition)| {
-                            self.partition_metrics
-                                .set_offset_max(*id, partition.hi_offset);
-                        });
-                        Some(())
-                    });
+                    let topic = statistics.topics.get(&self.topic_name);
+                    match topic {
+                        Some(topic) => {
+                            for (id, partition) in &topic.partitions {
+                                self.partition_metrics
+                                    .set_offset_max(*id, partition.hi_offset);
+                            }
+                        }
+                        None => error!("No stats found for topic: {}", &self.topic_name),
+                    }
                 }
                 Err(e) => {
                     error!("{}", e);
