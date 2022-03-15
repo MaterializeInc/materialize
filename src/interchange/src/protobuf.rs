@@ -87,7 +87,7 @@ impl Decoder {
     pub fn fresh(&self) -> Decoder {
         Decoder {
             descriptors: self.descriptors.clone(),
-            packer: Default::default(),
+            row: Row::default(),
             confluent_wire_format: self.confluent_wire_format,
         }
     }

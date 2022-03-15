@@ -77,10 +77,10 @@ impl CsvDecoderState {
                 .delimiter(self.delimiter)
                 .build(),
             demanded: self.demanded.clone(),
-            row_packer: Default::default(),
             events_error: 0,
             events_success: 0,
             delimiter: self.delimiter,
+            row_buf: Default::default(),
         }
     }
 

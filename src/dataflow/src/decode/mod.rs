@@ -686,9 +686,7 @@ fn to_metadata_row(
         PartitionId::S3 { .. } => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::DefaultPosition => {
-                        row.push(Datum::from(position.expect("position is always provided")))
-                    }
+                    IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
                     _ => panic!("cannot include metadata items for s3: {:?}", metadata_items),
                 }
             }

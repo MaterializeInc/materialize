@@ -96,7 +96,7 @@ impl Decoder {
             csr_avro: self.csr_avro.fresh(),
             debug_name: self.debug_name.clone(),
             buf1: vec![],
-            packer: Default::default(),
+            row_buf: Row::default(),
         }
     }
 
