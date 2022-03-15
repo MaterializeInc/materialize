@@ -641,23 +641,16 @@ Query:
 | | types = (integer?)
 | | keys = ((#0))
 
-%1 = Let l1 =
+%1 =
 | Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#1 = 1))
+| Map (#0 = 1)
 | | types = (integer?, boolean?)
 | | keys = ((#0))
 
 %2 =
-| Get %1 (l1)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
+| Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
 | Negate
@@ -672,12 +665,12 @@ Query:
 | | types = (integer?, boolean)
 | | keys = ()
 
-%4 = Let l2 =
+%4 = Let l1 =
 | Union %1 %3
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%5 = Let l3 =
+%5 = Let l2 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -685,358 +678,152 @@ Query:
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 
-%6 = Let l4 =
-| Get %5 (l3)
+%6 =
+| Get %5 (l2)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
-| FlatMap wrap1(#1)
-| | types = (integer?, integer, integer)
-| | keys = ()
-
-%7 = Let l5 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Filter (#2 = 1)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
+| Map (#0 = #1)
+| | types = (integer?, integer, boolean?)
 | | keys = ((#0, #1))
 
-%8 = Let l6 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#0 = #1))
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%9 =
-| Get %8 (l6)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
+%7 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
 | Negate
-| | types = (integer?)
+| | types = (integer?, integer)
 | | keys = ()
 
-%10 =
-| Union %9 %0
-| | types = (integer?)
+%8 =
+| Union %7 %5
+| | types = (integer?, integer)
 | | keys = ()
 | Map false
-| | types = (integer?, boolean)
+| | types = (integer?, integer, boolean)
 | | keys = ()
 
-%11 = Let l7 =
-| Union %8 %10
-| | types = (integer?, boolean?)
+%9 = Let l3 =
+| Union %6 %8
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%12 = Let l8 =
+%10 = Let l4 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
+| | types = (integer?, integer)
+| | keys = ((#0))
+
+%11 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| Project (#1)
-| | types = (integer)
+| ArrangeBy (#0)
+| | types = (integer?, integer)
 | | keys = ()
-| Distinct group=(#0)
-| | types = (integer)
-| | keys = ((#0))
 
-%13 = Let l9 =
-| Get %12 (l8)
-| | types = (integer)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer, integer?)
+%12 =
+| Get %4 (l1)
+| | types = (integer?, boolean?)
 | | keys = ()
-| Reduce group=(#0)
-| | agg any((#0 = #1))
-| | types = (integer, boolean?)
-| | keys = ((#0))
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%13 =
+| Union %12 %0
+| | types = (integer?)
+| | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
 
 %14 =
-| Get %13 (l9)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer)
-| | keys = ((#0))
-| Negate
-| | types = (integer)
+| Union %4 %13
+| | types = (integer?, boolean?)
 | | keys = ()
 
 %15 =
-| Union %14 %12
-| | types = (integer)
+| Get %10 (l4)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Map 1, true
+| | types = (integer?, integer, integer, boolean)
+| | keys = ((#0))
+| Project (#0, #2, #3)
+| | types = (integer?, integer, boolean)
+| | keys = ((#0))
+
+%16 =
+| Get %10 (l4)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+| Map 1
+| | types = (integer?, integer)
+| | keys = ()
+
+%17 =
+| Union %16 %5
+| | types = (integer?, integer)
 | | keys = ()
 | Map false
-| | types = (integer, boolean)
+| | types = (integer?, integer, boolean)
 | | keys = ()
-
-%16 = Let l10 =
-| Union %13 %15
-| | types = (integer, boolean?)
-| | keys = ()
-
-%17 = Let l11 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Reduce group=(#0, #1)
-| | agg any((#0 = #2))
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
 
 %18 =
-| Get %17 (l11)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
+| Union %15 %17
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
 | | keys = ()
 
 %19 =
-| Union %18 %5
+| Get %9 (l3)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
 | | types = (integer?, integer)
 | | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
+| Negate
+| | types = (integer?, integer)
 | | keys = ()
 
-%20 = Let l12 =
-| Union %17 %19
+%20 =
+| Union %19 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%21 = Let l13 =
-| Get %5 (l3)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer, integer?)
-| | keys = ()
-| Reduce group=(#0, #1)
-| | agg any((#1 = #2))
+%21 =
+| Union %9 %20
 | | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
 
 %22 =
-| Get %21 (l13)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
+| Join %11 %14 %18 %21 (= #0 #2 #4 #7) (= #1 #5 #8)
+| | implementation = Differential %14 %11.(#0) %18.(#0, #1) %21.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)
 | | keys = ()
-
-%23 =
-| Union %22 %5
-| | types = (integer?, integer)
+| Map null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, boolean?, boolean?)
 | | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%24 = Let l14 =
-| Union %21 %23
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%25 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%26 =
-| Get %4 (l2)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%27 =
-| Union %26 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%28 =
-| Union %4 %27
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%29 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-
-%30 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%31 =
-| Union %30 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%32 =
-| Union %29 %31
-| | types = (integer?, integer, boolean)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%33 =
-| Get %11 (l7)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%34 =
-| Union %33 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%35 =
-| Union %11 %34
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%36 =
-| Get %16 (l10)
-| | types = (integer, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer)
-| | keys = ()
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%37 =
-| Union %36 %12
-| | types = (integer)
-| | keys = ()
-| Map null
-| | types = (integer, boolean?)
-| | keys = ()
-
-%38 =
-| Union %16 %37
-| | types = (integer, boolean?)
-| | keys = ()
-
-%39 =
-| Get %20 (l12)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%40 =
-| Union %39 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%41 =
-| Union %20 %40
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%42 =
-| Get %24 (l14)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%43 =
-| Union %42 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%44 =
-| Union %24 %43
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%45 =
-| Join %25 %28 %32 %35 %38 %41 %44 (= #0 #2 #4 #7 #11 #14) (= #1 #5 #9 #12 #15)
-| | implementation = Differential %38 %25.(#1) %32.(#0, #1) %41.(#0, #1) %44.(#0, #1) %28.(#0) %35.(#0)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, boolean?, integer, boolean?, integer?, integer, boolean?, integer?, integer, boolean?)
-| | keys = ()
-| Project (#3, #6, #8, #10, #13, #16)
+| Project (#3, #6, #10, #11, #9, #9)
 | | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
 | | keys = ()
 
@@ -1061,23 +848,16 @@ Query:
 | | types = (integer?)
 | | keys = ((#0))
 
-%1 = Let l1 =
+%1 =
 | Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((1 > #1))
+| Map (1 > #0)
 | | types = (integer?, boolean?)
 | | keys = ((#0))
 
 %2 =
-| Get %1 (l1)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
+| Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
 | Negate
@@ -1092,12 +872,12 @@ Query:
 | | types = (integer?, boolean)
 | | keys = ()
 
-%4 = Let l2 =
+%4 = Let l1 =
 | Union %1 %3
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%5 = Let l3 =
+%5 = Let l2 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -1105,125 +885,98 @@ Query:
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 
-%6 = Let l4 =
-| Get %5 (l3)
+%6 =
+| Get %5 (l2)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
-| FlatMap wrap1(#1)
-| | types = (integer?, integer, integer)
-| | keys = ()
-
-%7 = Let l5 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Filter (1 > #2)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%8 = Let l6 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#0 > #1))
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%9 =
-| Get %8 (l6)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
 | Negate
-| | types = (integer?)
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 = Let l3 =
+| Union %6 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%8 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#0 > #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%9 = Let l4 =
+| Union %8 %7
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
 %10 =
-| Union %9 %0
-| | types = (integer?)
-| | keys = ()
-| Map false
-| | types = (integer?, boolean)
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#1 > #0)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%11 = Let l5 =
+| Union %10 %7
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%11 = Let l7 =
-| Union %8 %10
-| | types = (integer?, boolean?)
-| | keys = ()
+%12 = Let l6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 > #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
 
-%12 = Let l8 =
+%13 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| Project (#1)
-| | types = (integer)
+| ArrangeBy (#0)
+| | types = (integer?, integer)
 | | keys = ()
-| Distinct group=(#0)
-| | types = (integer)
-| | keys = ((#0))
-
-%13 = Let l9 =
-| Get %12 (l8)
-| | types = (integer)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#0 > #1))
-| | types = (integer, boolean?)
-| | keys = ((#0))
 
 %14 =
-| Get %13 (l9)
-| | types = (integer, boolean?)
-| | keys = ((#0))
+| Get %4 (l1)
+| | types = (integer?, boolean?)
+| | keys = ()
 | Project (#0)
-| | types = (integer)
-| | keys = ((#0))
+| | types = (integer?)
+| | keys = ()
 | Negate
-| | types = (integer)
+| | types = (integer?)
 | | keys = ()
 
 %15 =
-| Union %14 %12
-| | types = (integer)
+| Union %14 %0
+| | types = (integer?)
 | | keys = ()
-| Map false
-| | types = (integer, boolean)
-| | keys = ()
-
-%16 = Let l10 =
-| Union %13 %15
-| | types = (integer, boolean?)
+| Map null
+| | types = (integer?, boolean?)
 | | keys = ()
 
-%17 = Let l11 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
+%16 =
+| Union %4 %15
+| | types = (integer?, boolean?)
 | | keys = ()
-| Reduce group=(#0, #1)
-| | agg any((#0 > #2))
-| | types = (integer?, integer, boolean?)
+
+%17 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map true
+| | types = (integer?, integer, boolean)
 | | keys = ((#0, #1))
 
 %18 =
-| Get %17 (l11)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| Project (#0, #1)
+| Get %12 (l6)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Negate
@@ -1238,225 +991,77 @@ Query:
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%20 = Let l12 =
+%20 =
 | Union %17 %19
-| | types = (integer?, integer, boolean?)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
 | | keys = ()
 
-%21 = Let l13 =
-| Get %5 (l3)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer, integer?)
+%21 =
+| Get %9 (l4)
+| | types = (integer?, integer, boolean?)
 | | keys = ()
-| Reduce group=(#0, #1)
-| | agg any((#1 > #2))
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%22 =
-| Get %21 (l13)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
 | Project (#0, #1)
 | | types = (integer?, integer)
-| | keys = ((#0, #1))
+| | keys = ()
 | Negate
 | | types = (integer?, integer)
+| | keys = ()
+
+%22 =
+| Union %21 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
 %23 =
-| Union %22 %5
-| | types = (integer?, integer)
+| Union %9 %22
+| | types = (integer?, integer, boolean?)
 | | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%24 = Let l14 =
-| Union %21 %23
+%24 =
+| Get %11 (l5)
 | | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
 | | keys = ()
 
 %25 =
-| Get materialize.public.int_table (u1)
+| Union %24 %5
 | | types = (integer?, integer)
 | | keys = ()
-| ArrangeBy (#1)
-| | types = (integer?, integer)
+| Map null
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
 %26 =
-| Get %4 (l2)
-| | types = (integer?, boolean?)
+| Union %11 %25
+| | types = (integer?, integer, boolean?)
 | | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
 %27 =
-| Union %26 %0
-| | types = (integer?)
+| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
-| Map null
-| | types = (integer?, boolean?)
+| Map null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean?, boolean?)
 | | keys = ()
-
-%28 =
-| Union %4 %27
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%29 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-
-%30 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%31 =
-| Union %30 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%32 =
-| Union %29 %31
-| | types = (integer?, integer, boolean)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%33 =
-| Get %11 (l7)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%34 =
-| Union %33 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%35 =
-| Union %11 %34
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%36 =
-| Get %16 (l10)
-| | types = (integer, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer)
-| | keys = ()
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%37 =
-| Union %36 %12
-| | types = (integer)
-| | keys = ()
-| Map null
-| | types = (integer, boolean?)
-| | keys = ()
-
-%38 =
-| Union %16 %37
-| | types = (integer, boolean?)
-| | keys = ()
-
-%39 =
-| Get %20 (l12)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%40 =
-| Union %39 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%41 =
-| Union %20 %40
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%42 =
-| Get %24 (l14)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%43 =
-| Union %42 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%44 =
-| Union %24 %43
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%45 =
-| Join %25 %28 %32 %35 %38 %41 %44 (= #0 #2 #4 #7 #11 #14) (= #1 #5 #9 #12 #15)
-| | implementation = Differential %38 %25.(#1) %32.(#0, #1) %41.(#0, #1) %44.(#0, #1) %28.(#0) %35.(#0)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, boolean?, integer, boolean?, integer?, integer, boolean?, integer?, integer, boolean?)
-| | keys = ()
-| Project (#3, #6, #8, #10, #13, #16)
+| Project (#3, #6, #13, #14, #9, #12)
 | | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
 | | keys = ()
 
@@ -1480,23 +1085,16 @@ Query:
 | | types = (integer?)
 | | keys = ((#0))
 
-%1 = Let l1 =
+%1 =
 | Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg all((1 < #1))
+| Map (1 < #0)
 | | types = (integer?, boolean?)
 | | keys = ((#0))
 
 %2 =
-| Get %1 (l1)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
+| Get %0 (l0)
 | | types = (integer?)
 | | keys = ((#0))
 | Negate
@@ -1511,12 +1109,12 @@ Query:
 | | types = (integer?, boolean)
 | | keys = ()
 
-%4 = Let l2 =
+%4 = Let l1 =
 | Union %1 %3
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%5 = Let l3 =
+%5 = Let l2 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -1524,125 +1122,98 @@ Query:
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 
-%6 = Let l4 =
-| Get %5 (l3)
+%6 =
+| Get %5 (l2)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
-| FlatMap wrap1(#1)
-| | types = (integer?, integer, integer)
-| | keys = ()
-
-%7 = Let l5 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Filter (1 >= #2)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%8 = Let l6 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer?, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg all((#0 < #1))
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%9 =
-| Get %8 (l6)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
 | Negate
-| | types = (integer?)
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 = Let l3 =
+| Union %6 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map true
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%8 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#0 < #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%9 = Let l4 =
+| Union %8 %7
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
 %10 =
-| Union %9 %0
-| | types = (integer?)
-| | keys = ()
-| Map true
-| | types = (integer?, boolean)
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#1 < #0)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%11 = Let l5 =
+| Union %10 %7
+| | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%11 = Let l7 =
-| Union %8 %10
-| | types = (integer?, boolean?)
-| | keys = ()
+%12 = Let l6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 >= #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
 
-%12 = Let l8 =
+%13 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| Project (#1)
-| | types = (integer)
+| ArrangeBy (#0)
+| | types = (integer?, integer)
 | | keys = ()
-| Distinct group=(#0)
-| | types = (integer)
-| | keys = ((#0))
-
-%13 = Let l9 =
-| Get %12 (l8)
-| | types = (integer)
-| | keys = ((#0))
-| FlatMap wrap1(null)
-| | types = (integer, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg all((#0 < #1))
-| | types = (integer, boolean?)
-| | keys = ((#0))
 
 %14 =
-| Get %13 (l9)
-| | types = (integer, boolean?)
-| | keys = ((#0))
+| Get %4 (l1)
+| | types = (integer?, boolean?)
+| | keys = ()
 | Project (#0)
-| | types = (integer)
-| | keys = ((#0))
+| | types = (integer?)
+| | keys = ()
 | Negate
-| | types = (integer)
+| | types = (integer?)
 | | keys = ()
 
 %15 =
-| Union %14 %12
-| | types = (integer)
+| Union %14 %0
+| | types = (integer?)
 | | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%16 =
+| Union %4 %15
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%17 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
 | Map true
-| | types = (integer, boolean)
-| | keys = ()
-
-%16 = Let l10 =
-| Union %13 %15
-| | types = (integer, boolean?)
-| | keys = ()
-
-%17 = Let l11 =
-| Get %6 (l4)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Reduce group=(#0, #1)
-| | agg all((#0 < #2))
-| | types = (integer?, integer, boolean?)
+| | types = (integer?, integer, boolean)
 | | keys = ((#0, #1))
 
 %18 =
-| Get %17 (l11)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| Project (#0, #1)
+| Get %12 (l6)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Negate
@@ -1653,171 +1224,20 @@ Query:
 | Union %18 %5
 | | types = (integer?, integer)
 | | keys = ()
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%20 = Let l12 =
-| Union %17 %19
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%21 = Let l13 =
-| Get %5 (l3)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| FlatMap wrap1(#0)
-| | types = (integer?, integer, integer?)
-| | keys = ()
-| Reduce group=(#0, #1)
-| | agg all((#1 < #2))
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%22 =
-| Get %21 (l13)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%23 =
-| Union %22 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%24 = Let l14 =
-| Union %21 %23
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%25 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%26 =
-| Get %4 (l2)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%27 =
-| Union %26 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%28 =
-| Union %4 %27
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%29 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-
-%30 =
-| Get %7 (l5)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%31 =
-| Union %30 %5
-| | types = (integer?, integer)
-| | keys = ()
 | Map false
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%32 =
-| Union %29 %31
+%20 =
+| Union %17 %19
 | | types = (integer?, integer, boolean)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%33 =
-| Get %11 (l7)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%34 =
-| Union %33 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%35 =
-| Union %11 %34
-| | types = (integer?, boolean?)
-| | keys = ()
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%36 =
-| Get %16 (l10)
-| | types = (integer, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer)
-| | keys = ()
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%37 =
-| Union %36 %12
-| | types = (integer)
-| | keys = ()
-| Map null
-| | types = (integer, boolean?)
-| | keys = ()
-
-%38 =
-| Union %16 %37
-| | types = (integer, boolean?)
-| | keys = ()
-
-%39 =
-| Get %20 (l12)
+%21 =
+| Get %9 (l4)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | Project (#0, #1)
@@ -1827,24 +1247,24 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%40 =
-| Union %39 %5
+%22 =
+| Union %21 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%41 =
-| Union %20 %40
+%23 =
+| Union %9 %22
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%42 =
-| Get %24 (l14)
+%24 =
+| Get %11 (l5)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | Project (#0, #1)
@@ -1854,31 +1274,31 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%43 =
-| Union %42 %5
+%25 =
+| Union %24 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%44 =
-| Union %24 %43
+%26 =
+| Union %11 %25
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%45 =
-| Join %25 %28 %32 %35 %38 %41 %44 (= #0 #2 #4 #7 #11 #14) (= #1 #5 #9 #12 #15)
-| | implementation = Differential %38 %25.(#1) %32.(#0, #1) %41.(#0, #1) %44.(#0, #1) %28.(#0) %35.(#0)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, boolean?, integer, boolean?, integer?, integer, boolean?, integer?, integer, boolean?)
+%27 =
+| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
-| Map !(#6)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, boolean?, integer, boolean?, integer?, integer, boolean?, integer?, integer, boolean?, boolean)
+| Map !(#6), null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean, boolean?, boolean?)
 | | keys = ()
-| Project (#3, #17, #8, #10, #13, #16)
+| Project (#3, #13..=#15, #9, #12)
 | | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
 | | keys = ()
 

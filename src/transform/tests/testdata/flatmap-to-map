@@ -1,0 +1,74 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test the FlatMapToMap transform
+
+cat
+(defsource x [int64])
+----
+ok
+
+# Rewrite possible
+build apply=FlatMapToMap
+(FlatMap
+    (get x)
+    (Wrap [(String false)] 1) [("a_string" String)])
+----
+%0 =
+| Get x (u0)
+| Map "a_string"
+
+# Rewrite possible
+build apply=FlatMapToMap
+(FlatMap
+    (get x)
+    (Wrap [(String false)] 3) [("a_string" String) ("another" String) ("test" String)])
+----
+%0 =
+| Get x (u0)
+| Map "a_string", "another", "test"
+
+# Rewrite possible, two columns
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false) (String false)] 2) [(0 Int32) ("test" String)])
+----
+%0 =
+| Get x (u0)
+| Map 0, "test"
+
+# Rewrite possible, bigger wrap width than input
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false) (String false) (String false)] 3) [(0 Int32) ("test" String)])
+----
+%0 =
+| Get x (u0)
+| Map 0, "test"
+
+
+# Produces more than one row, must not rewrite these
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false)] 1) [(0 Int32) (1 Int32) (2 Int32)])
+----
+%0 =
+| Get x (u0)
+| FlatMap wrap1(0, 1, 2)
+
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false) (Int32 false)] 2) [(0 Int32) (1 Int32) (2 Int32) (3 Int32)])
+----
+%0 =
+| Get x (u0)
+| FlatMap wrap2(0, 1, 2, 3)
+
+build apply=FlatMapToMap
+(FlatMap (get x) (Wrap [(Int32 false) (Int32 true) (Int32 true)] 3) [(0 Int32) (1 Int32) (2 Int32) (3 Int32)])
+----
+%0 =
+| Get x (u0)
+| FlatMap wrap3(0, 1, 2, 3)
