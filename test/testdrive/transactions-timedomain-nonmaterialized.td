@@ -30,13 +30,16 @@ $ file-append path=static.csv
 2
 4
 
-> SELECT c FROM unindexed
-1
-2
-4
+! SELECT * FROM unindexed
+contains:unable to automatically determine a query timestamp
 
-> SELECT * FROM v_unindexed
-3
+! SELECT * FROM v_unindexed
+contains:unable to automatically determine a query timestamp
+
+# Since sources aren't linearizable (see #11048), we need to wait out a
+# timestamp frequency interval to ensure the read timestamp for the timestamp
+# is not picked to a timestamp when the source is empty.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1s
 
 > BEGIN
 
@@ -47,10 +50,8 @@ $ file-append path=static.csv
 2
 4
 
-> SELECT c FROM unindexed
-1
-2
-4
+! SELECT c FROM unindexed
+contains:unable to automatically determine a query timestamp
 
 > COMMIT
 
@@ -62,8 +63,8 @@ $ file-append path=static.csv
 2
 4
 
-> SELECT * FROM v_unindexed
-3
+! SELECT * FROM v_unindexed
+contains:unable to automatically determine a query timestamp
 
 > COMMIT
 
@@ -122,6 +123,10 @@ $ file-append path=static.csv
 # it returns a 0 timestamp error.
 > SELECT * FROM v_materialized
 3
+# Since sources aren't linearizable (see #11048), we need to wait out a
+# timestamp frequency interval to ensure the read timestamp for the timestamp
+# is not picked to a timestamp when the source is empty.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1s
 > BEGIN
 > SELECT * FROM v_materialized
 3
