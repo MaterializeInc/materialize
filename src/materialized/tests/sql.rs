@@ -811,7 +811,14 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     let mut client_interactive = server.connect(postgres::NoTls)?;
     let mut client_tail = server.connect(postgres::NoTls)?;
 
-    let verify_rw_pair = move |rows: &[Row], expected_data: &str| -> bool {
+    let verify_rw_pair = move |mut rows: &[Row], expected_data: &str| -> bool {
+        // Clear progress rows that may appear after row 2.
+        for i in (2..rows.len()).rev() {
+            if rows[i].get::<_, bool>("mz_progressed") {
+                rows = &rows[..i];
+            }
+        }
+
         for (i, row) in rows.iter().enumerate() {
             match row.get::<_, Option<String>>("data") {
                 // Only verify if all rows have expected data
