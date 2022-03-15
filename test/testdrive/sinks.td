@@ -98,13 +98,13 @@ snk4
 snk5
 
 > SHOW FULL SINKS
-name   type  volatility
+cluster name   type  volatility
 -----------------------
-snk1   user  unknown
-snk2   user  unknown
-snk3   user  unknown
-snk4   user  unknown
-snk5   user  unknown
+default snk1   user  unknown
+default snk2   user  unknown
+default snk3   user  unknown
+default snk4   user  unknown
+default snk5   user  unknown
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
@@ -191,18 +191,18 @@ $ kafka-verify format=avro sink=materialize.public.sink10 sort-messages=true
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW FULL SINKS
-name        type  volatility
-----------------------------
-snk1        user  unknown
-snk2        user  unknown
-snk3        user  unknown
-snk4        user  unknown
-snk5        user  unknown
-snk6        user  unknown
-snk7        user  unknown
-snk8        user  unknown
-sink9       user  nonvolatile
-sink10      user  nonvolatile
+cluster    name        type  volatility
+-----------------------------------------
+default    snk1        user  unknown
+default    snk2        user  unknown
+default    snk3        user  unknown
+default    snk4        user  unknown
+default    snk5        user  unknown
+default    snk6        user  unknown
+default    snk7        user  unknown
+default    snk8        user  unknown
+default    sink9       user  nonvolatile
+default    sink10      user  nonvolatile
 
 # test explicit partition count
 > CREATE SINK sink11 FROM foo
@@ -232,3 +232,13 @@ sink10      user  nonvolatile
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink15'
   WITH (partition_count=-1, replication_factor=-1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE CLUSTER clstr
+
+> CREATE SINK clstr_sink
+  IN CLUSTER clstr FROM src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clstr_sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> SHOW SINKS IN CLUSTER clstr
+clstr_sink

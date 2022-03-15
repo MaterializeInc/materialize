@@ -28,7 +28,9 @@ use crate::ast::{
     ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier};
+use crate::names::{
+    resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier, ResolvedClusterName,
+};
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan, SendRowsPlan};
@@ -206,6 +208,7 @@ pub fn show_objects<'a>(
         materialized,
         object_type,
         from,
+        in_cluster,
         filter,
     }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
@@ -214,7 +217,7 @@ pub fn show_objects<'a>(
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
-        ObjectType::Sink => show_sinks(scx, full, from, filter),
+        ObjectType::Sink => show_sinks(scx, full, from, in_cluster, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
@@ -409,25 +412,48 @@ fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     from: Option<UnresolvedObjectName>,
+    in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
+    let mut query_filters = vec![];
+
+    if let Some(from) = from {
+        query_filters.push(format!("schema_id = {}", scx.resolve_schema(from)?.id()));
+    } else if in_cluster.is_none() {
+        query_filters.push(format!("schema_id = {}", scx.resolve_active_schema()?.id()));
     };
+
+    if let Some(cluster) = in_cluster {
+        scx.require_experimental_mode("SHOW SINKS...IN CLUSTER")?;
+        query_filters.push(format!("clusters.id = {}", cluster.0));
+    }
+
+    let query_filters = itertools::join(query_filters.iter(), " AND ");
 
     let query = if full {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
-            FROM mz_catalog.mz_sinks
-            WHERE schema_id = {}",
-            schema.id(),
+            "SELECT
+            clusters.name AS cluster,
+            sinks.name,
+            mz_internal.mz_classify_object_id(sinks.id) AS type,
+            sinks.volatility
+        FROM
+            mz_catalog.mz_sinks AS sinks
+            JOIN mz_catalog.mz_clusters AS clusters ON
+                    clusters.id = sinks.cluster_id
+        WHERE {}",
+            query_filters
         )
     } else {
         format!(
-            "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {}",
-            schema.id(),
+            "SELECT
+            sinks.name
+        FROM
+            mz_catalog.mz_sinks AS sinks
+            JOIN mz_catalog.mz_clusters AS clusters ON
+                    clusters.id = sinks.cluster_id
+        WHERE {}",
+            query_filters
         )
     };
     ShowSelect::new(scx, query, filter, None, None)
@@ -497,6 +523,7 @@ pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
         extended,
+        in_cluster,
         table_name,
         filter,
     }: ShowIndexesStatement<Aug>,
@@ -504,20 +531,37 @@ pub fn show_indexes<'a>(
     if extended {
         bail_unsupported!("SHOW EXTENDED INDEXES")
     }
-    let from = scx.get_item_by_name(&table_name)?;
-    if from.item_type() != CatalogItemType::View
-        && from.item_type() != CatalogItemType::Source
-        && from.item_type() != CatalogItemType::Table
-    {
-        bail!(
-            "cannot show indexes on {} because it is a {}",
-            from.name(),
-            from.item_type(),
-        );
+
+    let mut query_filter = vec![];
+
+    if let Some(table_name) = table_name {
+        let from = scx.get_item_by_name(&table_name)?;
+        if from.item_type() != CatalogItemType::View
+            && from.item_type() != CatalogItemType::Source
+            && from.item_type() != CatalogItemType::Table
+        {
+            bail!(
+                "cannot show indexes on {} because it is a {}",
+                from.name(),
+                from.item_type(),
+            );
+        }
+        query_filter.push(format!("objs.id = '{}'", from.id()));
     }
+
+    if let Some(cluster) = in_cluster {
+        scx.require_experimental_mode("SHOW INDEXES...IN CLUSTER")?;
+        query_filter.push(format!("clusters.id = {}", cluster.0))
+    };
+
+    assert!(
+        !query_filter.is_empty(),
+        "parsing failed to enforce either table_name or in_cluster's presence"
+    );
 
     let query = format!(
         "SELECT
+            clusters.name AS cluster,
             objs.name AS on_name,
             idxs.name AS key_name,
             idx_cols.index_position AS seq_in_index,
@@ -529,12 +573,14 @@ pub fn show_indexes<'a>(
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
             JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
+            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
             LEFT JOIN mz_catalog.mz_columns AS obj_cols
                 ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
-            objs.id = '{}'",
-        from.id(),
+            {}",
+        itertools::join(query_filter.iter(), " AND ")
     );
+
     ShowSelect::new(scx, query, filter, None, None)
 }
 

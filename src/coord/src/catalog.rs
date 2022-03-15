@@ -2248,7 +2248,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
-                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+                compute_instance: index.compute_instance,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2261,7 +2261,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
-                compute_instance: DEFAULT_COMPUTE_INSTANCE_ID,
+                compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

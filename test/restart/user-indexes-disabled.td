@@ -30,9 +30,9 @@
 1
 
 > SHOW INDEXES FROM logging_derived_mat;
-on_name             key_name                        seq_in_index  column_name expression  nullable enabled
-----------------------------------------------------------------------------------------------------------
-logging_derived_mat logging_derived_mat_primary_idx 1             count       <null>      false    false
+cluster on_name             key_name                        seq_in_index  column_name expression  nullable enabled
+------------------------------------------------------------------------------------------------------------------
+default logging_derived_mat logging_derived_mat_primary_idx 1             count       <null>      false    false
 
 # Views that embed a constant are selectable
 > SELECT * FROM constant
@@ -50,17 +50,17 @@ logging_derived_mat logging_derived_mat_primary_idx 1             count       <n
 1
 
 > SHOW INDEXES FROM mat_view;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_view  mat_view_primary_idx  1             sum          <null>      true     false
-mat_view  mv_drop_idx           1             sum          <null>      true     false
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_view  mat_view_primary_idx  1             sum          <null>      true     false
+default mat_view  mv_drop_idx           1             sum          <null>      true     false
 
 > DROP INDEX mv_drop_idx;
 
 > SHOW INDEXES FROM mat_view;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_view  mat_view_primary_idx  1             sum          <null>      true     false
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_view  mat_view_primary_idx  1             sum          <null>      true     false
 
 # Cannot alter disabled index
 ! ALTER INDEX mat_view_primary_idx RESET (logical_compaction_window)
@@ -76,17 +76,17 @@ contains:invalid ALTER on disabled index "materialize.public.mat_view_primary_id
 1
 
 > SHOW INDEXES FROM mat_data;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_data  mat_data_primary_idx  1             a            <null>      false    false
-mat_data  ms_drop_idx           1             a            <null>      false    false
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_data  mat_data_primary_idx  1             a            <null>      false    false
+default mat_data  ms_drop_idx           1             a            <null>      false    false
 
 > DROP INDEX ms_drop_idx;
 
 > SHOW INDEXES FROM mat_data;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_data  mat_data_primary_idx  1             a            <null>      false    false
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_data  mat_data_primary_idx  1             a            <null>      false    false
 
 # 🔬🔬🔬🔬 Non-materialized views
 
@@ -108,9 +108,9 @@ mat_data  mat_data_primary_idx  1             a            <null>      false    
 1
 
 > SHOW INDEXES FROM t;
-on_name   key_name      seq_in_index  column_name  expression  nullable enabled
------------------------------------------------------------------------------
-t         t_drop_idx    1             a            <null>      true     false
+cluster on_name   key_name      seq_in_index  column_name  expression  nullable enabled
+-------------------------------------------------------------------------------------
+default t         t_drop_idx    1             a            <null>      true     false
 
 # 🔬🔬 Indexes
 
@@ -118,17 +118,17 @@ t         t_drop_idx    1             a            <null>      true     false
 > CREATE INDEX t_secondary_idx ON t(a+a);
 
 > SHOW INDEXES FROM t;
-on_name   key_name        seq_in_index  column_name  expression  nullable enabled
------------------------------------------------------------------------------
-t         t_drop_idx      1             a            <null>      true     false
-t         t_secondary_idx 1             <null>       "a + a"     true     false
+cluster on_name   key_name        seq_in_index  column_name  expression  nullable enabled
+-------------------------------------------------------------------------------------
+default t         t_drop_idx      1             a            <null>      true     false
+default t         t_secondary_idx 1             <null>       "a + a"     true     false
 
 > DROP INDEX t_drop_idx;
 
 > SHOW INDEXES FROM t;
-on_name   key_name        seq_in_index  column_name  expression  nullable enabled
------------------------------------------------------------------------------
-t         t_secondary_idx 1             <null>       "a + a"     true     false
+cluster on_name   key_name        seq_in_index  column_name  expression  nullable enabled
+-------------------------------------------------------------------------------------
+default t         t_secondary_idx 1             <null>       "a + a"     true     false
 
 # 🔬 Enabling indexes
 
@@ -140,9 +140,9 @@ t         t_secondary_idx 1             <null>       "a + a"     true     false
 1
 
 > SHOW INDEXES FROM logging_derived_mat;
-on_name             key_name                        seq_in_index  column_name expression  nullable enabled
-----------------------------------------------------------------------------------------------------------
-logging_derived_mat logging_derived_mat_primary_idx 1             count       <null>      false    true
+cluster on_name             key_name                        seq_in_index  column_name expression  nullable enabled
+------------------------------------------------------------------------------------------------------------------
+default logging_derived_mat logging_derived_mat_primary_idx 1             count       <null>      false    true
 
 # Alter index is functionally idempotent
 > ALTER INDEX logging_derived_mat_primary_idx SET ENABLED;
@@ -155,9 +155,9 @@ logging_derived_mat logging_derived_mat_primary_idx 1             count       <n
 > ALTER INDEX mat_view_primary_idx  SET ENABLED;
 
 > SHOW INDEXES FROM mat_view;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_view  mat_view_primary_idx  1             sum          <null>      true     true
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_view  mat_view_primary_idx  1             sum          <null>      true     true
 
 > SHOW MATERIALIZED VIEWS
 logging_derived_mat
@@ -171,9 +171,9 @@ mat_view
 > ALTER INDEX mat_data_primary_idx  SET ENABLED;
 
 > SHOW INDEXES FROM mat_data;
-on_name   key_name              seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-mat_data  mat_data_primary_idx  1             a            <null>      false    true
+cluster on_name   key_name              seq_in_index  column_name  expression  nullable enabled
+-----------------------------------------------------------------------------------------------
+default mat_data  mat_data_primary_idx  1             a            <null>      false    true
 
 > SHOW MATERIALIZED SOURCES
 mat_data
@@ -203,9 +203,9 @@ $ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-mes
 
 # Tables still work with non-primary indexes enabled because all indexes are covering
 > SHOW INDEXES FROM t;
-on_name   key_name        seq_in_index  column_name  expression  nullable enabled
------------------------------------------------------------------------------
-t         t_secondary_idx 1             <null>       "a + a"     true     false
+cluster on_name   key_name        seq_in_index  column_name  expression  nullable enabled
+-------------------------------------------------------------------------------------
+default t         t_secondary_idx 1             <null>       "a + a"     true     false
 
 > INSERT INTO t VALUES (2)
 

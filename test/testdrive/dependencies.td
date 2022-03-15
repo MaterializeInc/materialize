@@ -151,17 +151,17 @@ contains:catalog item 'materialize.public.i1' is an index and so cannot be depen
 
 > CREATE INDEX i2 ON v2a(x*2);
 
-> SHOW INDEX in v2a;
-on_name   key_name         seq_in_index column_name expression  nullable  enabled
----------------------------------------------------------------------------------
-v2a       i2               1            <null>      "x * 2"     false     true
-v2a       v2a_primary_idx  1            x           <null>      false     true
+> SHOW INDEXES FROM v2a;
+cluster on_name   key_name         seq_in_index column_name expression  nullable  enabled
+-----------------------------------------------------------------------------------------
+default v2a       i2               1            <null>      "x * 2"     false     true
+default v2a       v2a_primary_idx  1            x           <null>      false     true
 
-> SHOW INDEX in v2;
-on_name  key_name        seq_in_index column_name expression nullable enabled
------------------------------------------------------------------------------
-v2       i1              1            x           <null>     false    true
-v2       v2_primary_idx  1            x           <null>     false    true
+> SHOW INDEXES FROM v2;
+cluster on_name  key_name        seq_in_index column_name expression nullable enabled
+-------------------------------------------------------------------------------------
+default v2       i1              1            x           <null>     false    true
+default v2       v2_primary_idx  1            x           <null>     false    true
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -170,11 +170,11 @@ v2       v2_primary_idx  1            x           <null>     false    true
 ! DROP VIEW v2a;
 contains:unknown catalog item 'v2a'
 
-> SHOW INDEX in v2;
-on_name  key_name        seq_in_index   column_name expression nullable enabled
--------------------------------------------------------------------------------
-v2       i1              1              x           <null>     false    true
-v2       v2_primary_idx  1              x           <null>     false    true
+> SHOW INDEXES FROM v2;
+cluster on_name  key_name        seq_in_index   column_name expression nullable enabled
+---------------------------------------------------------------------------------------
+default v2       i1              1              x           <null>     false    true
+default v2       v2_primary_idx  1              x           <null>     false    true
 
 ! DROP INDEX i2;
 contains:unknown catalog item 'i2'
@@ -185,20 +185,20 @@ contains:unknown catalog item 'i2'
 
 > CREATE INDEX i3 ON v4a(y);
 
-> SHOW INDEX in v4a;
-on_name  key_name         seq_in_index   column_name expression nullable  enabled
----------------------------------------------------------------------------------
-v4a      i3               1              y           <null>     false     true
-v4a      v4a_primary_idx  1              y           <null>     false     true
+> SHOW INDEXES FROM v4a;
+cluster on_name  key_name         seq_in_index   column_name expression nullable  enabled
+-----------------------------------------------------------------------------------------
+default v4a      i3               1              y           <null>     false     true
+default v4a      v4a_primary_idx  1              y           <null>     false     true
 
 > CREATE INDEX i4 ON v4(x);
 
-> SHOW INDEX in v4;
-on_name  key_name        seq_in_index  column_name expression nullable  enabled
--------------------------------------------------------------------------------
-v4       i4              1             x           <null>     false     true
-v4       v4_primary_idx  1             x           <null>     false     true
-v4       v4_primary_idx  2             y           <null>     false     true
+> SHOW INDEXES FROM v4;
+cluster on_name  key_name        seq_in_index  column_name expression nullable  enabled
+---------------------------------------------------------------------------------------
+default v4       i4              1             x           <null>     false     true
+default v4       v4_primary_idx  1             x           <null>     false     true
+default v4       v4_primary_idx  2             y           <null>     false     true
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -209,36 +209,36 @@ contains:unknown catalog item 'v4a'
 ! DROP INDEX i3;
 contains:unknown catalog item 'i3'
 
-> SHOW INDEX in v4;
-on_name  key_name        seq_in_index  column_name expression nullable  enabled
--------------------------------------------------------------------------------
-v4       i4              1             x           <null>     false     true
-v4       v4_primary_idx  1             x           <null>     false     true
-v4       v4_primary_idx  2             y           <null>     false     true
+> SHOW INDEXES FROM v4;
+cluster on_name  key_name        seq_in_index  column_name expression nullable  enabled
+---------------------------------------------------------------------------------------
+default v4       i4              1             x           <null>     false     true
+default v4       v4_primary_idx  1             x           <null>     false     true
+default v4       v4_primary_idx  2             y           <null>     false     true
 
 > CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
-> SHOW INDEX in v5;
-on_name   key_name        seq_in_index  column_name expression nullable enabled
--------------------------------------------------------------------------------
-v5        i5              1             substr      <null>     true     true
-v5        v5_primary_idx  1             substr      <null>     true     true
+> SHOW INDEXES FROM v5;
+cluster on_name   key_name        seq_in_index  column_name expression nullable enabled
+---------------------------------------------------------------------------------------
+default v5        i5              1             substr      <null>     true     true
+default v5        v5_primary_idx  1             substr      <null>     true     true
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
-> SHOW INDEX IN multicol
-on_name   key_name  seq_in_index column_name  expression   nullable enabled
----------------------------------------------------------------------------
-multicol  i6        1            b            <null>       false     true
-multicol  i6        2            a            <null>       false     true
-multicol  i6        3            d            <null>       false     true
+> SHOW INDEXES FROM multicol
+cluster on_name   key_name  seq_in_index column_name  expression   nullable enabled
+-----------------------------------------------------------------------------------
+default multicol  i6        1            b            <null>       false     true
+default multicol  i6        2            a            <null>       false     true
+default multicol  i6        3            d            <null>       false     true
 
-> SHOW INDEX IN multicol WHERE column_name = 'a'
-on_name   key_name  seq_in_index column_name  expression   nullable enabled
----------------------------------------------------------------------------
-multicol  i6        2            a            <null>       false    true
+> SHOW INDEXES FROM multicol WHERE column_name = 'a'
+cluster on_name   key_name  seq_in_index column_name  expression   nullable enabled
+-----------------------------------------------------------------------------------
+default multicol  i6        2            a            <null>       false    true
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -271,12 +271,12 @@ contains:unknown catalog item 'i4'
 # Test that dependent indexes do not prevent source deletion when restrict is specified
 > CREATE INDEX j1 on s3(ascii(y))
 
-> SHOW INDEX in s3;
-on_name  key_name        seq_in_index  column_name expression             nullable  enabled
--------------------------------------------------------------------------------------------
-s3       j1              1             <null>      "pg_catalog.ascii(y)"  false     true
-s3       s3_primary_idx  1             x           <null>                 false     true
-s3       s3_primary_idx  2             y           <null>                 false     true
+> SHOW INDEXES FROM s3;
+cluster on_name  key_name        seq_in_index  column_name expression             nullable  enabled
+---------------------------------------------------------------------------------------------------
+default s3       j1              1             <null>      "pg_catalog.ascii(y)"  false     true
+default s3       s3_primary_idx  1             x           <null>                 false     true
+default s3       s3_primary_idx  2             y           <null>                 false     true
 
 > DROP SOURCE s3;
 
@@ -299,17 +299,17 @@ contains:unknown catalog item 'j1'
 
 > CREATE INDEX j3 on w(z);
 
-> SHOW INDEX in s4;
-on_name  key_name        seq_in_index   column_name expression  nullable  enabled
----------------------------------------------------------------------------------
-s4       j2              1               <null>      "x + 2"    false     true
-s4       s4_primary_idx  1               x           <null>     false     true
-s4       s4_primary_idx  2               y           <null>     false     true
+> SHOW INDEXES FROM s4;
+cluster on_name  key_name        seq_in_index   column_name expression  nullable  enabled
+-----------------------------------------------------------------------------------------
+default s4       j2              1               <null>      "x + 2"    false     true
+default s4       s4_primary_idx  1               x           <null>     false     true
+default s4       s4_primary_idx  2               y           <null>     false     true
 
-> SHOW INDEX in w;
-on_name  key_name   seq_in_index  column_name expression nullable enabled
--------------------------------------------------------------------------
-w        j3         1             z           <null>     false    true
+> SHOW INDEXES FROM w;
+cluster on_name  key_name   seq_in_index  column_name expression nullable enabled
+---------------------------------------------------------------------------------
+default w        j3         1             z           <null>     false    true
 
 > DROP SOURCE s4 CASCADE;
 

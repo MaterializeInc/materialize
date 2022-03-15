@@ -286,6 +286,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connector.name()),
                     Datum::String(self.is_volatile(id).as_str()),
+                    Datum::Int64(sink.compute_instance),
                 ]),
                 diff,
             });
@@ -320,6 +321,7 @@ impl CatalogState {
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
                 Datum::from(index.enabled),
+                Datum::Int64(index.compute_instance),
             ]),
             diff,
         });
