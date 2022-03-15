@@ -191,7 +191,7 @@ impl SourceReader for KafkaSourceReader {
             partition_info,
             _metadata_thread_handle: metadata_thread_handle,
             partition_metrics: KafkaPartitionMetrics::new(
-                &base_metrics.partition_specific,
+                base_metrics,
                 partition_ids,
                 topic,
                 source_name,
@@ -405,16 +405,9 @@ impl KafkaSourceReader {
                 });
                 self.last_stats = Some(stats.clone());
             }
-            let mut cursor = std::io::Cursor::new(vec![]);
-            let write_res = stats.as_ref().to_writer(&mut cursor);
-            // If the write failed log an error and continue to the next loop iteration
-            if let Err(e) = write_res {
-                error!("error serializing rdkafka stats: {}", e);
-                continue;
-            }
 
             // This temp var is required to satisfy the type checker
-            let res: Result<Statistics, serde_json::Error> = serde_json::from_reader(cursor);
+            let res: Result<Statistics, serde_json::Error> = serde_json::from_str(&stats.to_string());
             match res {
                 Ok(statistics) => {
                     statistics.topics.get(&self.topic_name).and_then(|topic| {
