@@ -123,7 +123,9 @@ use mz_sql::ast::{
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
 };
-use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::names::{
+    FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
+};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
@@ -135,11 +137,11 @@ use mz_sql::plan::{
     RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
     TailFrom, TailPlan, View,
 };
-use mz_sql_parser::ast::RawName;
+use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
-use crate::catalog::builtin::{self, BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
 };
@@ -954,7 +956,7 @@ impl Coordinator {
                 // connector, which means there is external state (like
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
-                if self.catalog.try_get_by_id(id).is_some() {
+                if self.catalog.try_get_entry(&id).is_some() {
                     // TODO(benesch): this `expect` here is possibly scary, but
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
@@ -973,7 +975,7 @@ impl Coordinator {
             }
             Err(e) => {
                 // Drop the placeholder sink if still present.
-                if self.catalog.try_get_by_id(id).is_some() {
+                if self.catalog.try_get_entry(&id).is_some() {
                     self.catalog_transact(vec![catalog::Op::DropItem(id)], |_| Ok(()))
                         .await
                         .expect("deleting placeholder sink cannot fail");
@@ -1066,9 +1068,9 @@ impl Coordinator {
 
                 let mut messages = vec![];
                 let catalog = self.catalog.for_session(&session);
-                if catalog.resolve_database(catalog.active_database()).is_err() {
+                if catalog.active_database().is_none() {
                     messages.push(StartupMessage::UnknownSessionDatabase(
-                        catalog.active_database().into(),
+                        session.vars().database().into(),
                     ));
                 }
 
@@ -1442,6 +1444,7 @@ impl Coordinator {
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
                     | Statement::ShowDatabases(_)
+                    | Statement::ShowSchemas(_)
                     | Statement::ShowIndexes(_)
                     | Statement::ShowObjects(_)
                     | Statement::ShowVariable(_)
@@ -1483,7 +1486,10 @@ impl Coordinator {
                     | Statement::CreateViews(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
+                    | Statement::DropSchema(_)
                     | Statement::DropObjects(_)
+                    | Statement::DropRoles(_)
+                    | Statement::DropClusters(_)
                     | Statement::Insert(_)
                     | Statement::Update(_) => {
                         return tx.send(
@@ -1622,7 +1628,7 @@ impl Coordinator {
         compute_instance: ComputeInstanceId,
     ) -> Result<(), CoordError> {
         // Update catalog entry with sink connector.
-        let entry = self.catalog.get_by_id(&id);
+        let entry = self.catalog.get_entry(&id);
         let name = entry.name().clone();
         let mut sink = match entry.item() {
             CatalogItem::Sink(sink) => sink.clone(),
@@ -1658,7 +1664,7 @@ impl Coordinator {
                     from: sink.from,
                     from_desc: builder
                         .catalog
-                        .get_by_id(&sink.from)
+                        .get_entry(&sink.from)
                         .desc()
                         .unwrap()
                         .clone(),
@@ -1712,7 +1718,7 @@ impl Coordinator {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan).await, session);
+                tx.send(self.sequence_create_index(&session, plan).await, session);
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan).await, session);
@@ -1804,10 +1810,17 @@ impl Coordinator {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
             Plan::AlterIndexSetOptions(plan) => {
-                tx.send(self.sequence_alter_index_set_options(plan).await, session);
+                tx.send(
+                    self.sequence_alter_index_set_options(&session, plan).await,
+                    session,
+                );
             }
             Plan::AlterIndexResetOptions(plan) => {
-                tx.send(self.sequence_alter_index_reset_options(plan).await, session);
+                tx.send(
+                    self.sequence_alter_index_reset_options(&session, plan)
+                        .await,
+                    session,
+                );
             }
             Plan::AlterIndexEnable(plan) => {
                 tx.send(self.sequence_alter_index_enable(plan).await, session);
@@ -1935,17 +1948,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let db_oid = self.catalog.allocate_oid()?;
         let schema_oid = self.catalog.allocate_oid()?;
-        let ops = vec![
-            catalog::Op::CreateDatabase {
-                name: plan.name.clone(),
-                oid: db_oid,
-            },
-            catalog::Op::CreateSchema {
-                database_name: DatabaseSpecifier::Name(plan.name),
-                schema_name: "public".into(),
-                oid: schema_oid,
-            },
-        ];
+        let ops = vec![catalog::Op::CreateDatabase {
+            name: plan.name.clone(),
+            oid: db_oid,
+            public_schema_oid: schema_oid,
+        }];
         match self.catalog_transact(ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
@@ -1962,7 +1969,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
-            database_name: plan.database_name,
+            database_id: plan.database_spec,
             schema_name: plan.schema_name,
             oid,
         };
@@ -2171,10 +2178,13 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_user_id()?;
+            let full_name = self
+                .catalog
+                .resolve_full_name(&plan.name, session.conn_id());
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
-                plan.name,
+                full_name,
                 source_id,
                 &source.desc,
                 None,
@@ -2320,7 +2330,7 @@ impl Coordinator {
                         id,
                         mz_dataflow_types::sinks::SinkDesc {
                             from: sink.from,
-                            from_desc: txn.catalog.get_by_id(&sink.from).desc().unwrap().clone(),
+                            from_desc: txn.catalog.get_entry(&sink.from).desc().unwrap().clone(),
                             connector: SinkConnector::Tail(TailSinkConnector {}),
                             envelope: Some(sink.envelope),
                             as_of: SinkAsOf {
@@ -2371,7 +2381,7 @@ impl Coordinator {
     fn generate_view_ops(
         &mut self,
         session: &Session,
-        name: FullName,
+        name: QualifiedObjectName,
         view: View,
         replace: Option<GlobalId>,
         materialize: bool,
@@ -2416,10 +2426,11 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_user_id()?;
+            let full_name = self.catalog.resolve_full_name(&name, session.conn_id());
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
-                name,
+                full_name,
                 view_id,
                 &view.desc,
                 view.conn_id,
@@ -2524,6 +2535,7 @@ impl Coordinator {
 
     async fn sequence_create_index(
         &mut self,
+        session: &Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2564,7 +2576,7 @@ impl Coordinator {
             Ok(df) => {
                 if let Some(df) = df {
                     self.ship_dataflow(df, compute_instance).await;
-                    self.set_index_options(id, options)
+                    self.set_index_options(id, options, session)
                         .await
                         .expect("index enabled");
                 }
@@ -2608,7 +2620,7 @@ impl Coordinator {
         &mut self,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_database_ops(plan.name);
+        let ops = self.catalog.drop_database_ops(plan.id);
         self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
@@ -2617,7 +2629,7 @@ impl Coordinator {
         &mut self,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_schema_ops(plan.name);
+        let ops = self.catalog.drop_schema_ops(plan.id);
         self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
@@ -2663,7 +2675,6 @@ impl Coordinator {
         let ops = self.catalog.drop_items_ops(&plan.items);
         self.catalog_transact(ops, |_| Ok(())).await?;
         Ok(match plan.ty {
-            ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
@@ -2808,7 +2819,7 @@ impl Coordinator {
                         let mut volatile_updates = Vec::new();
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
-                            let _ = self.catalog.try_get_by_id(id).ok_or_else(|| {
+                            let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
                                 CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                             })?;
                             // This can be empty if, say, a DELETE's WHERE clause had 0 results.
@@ -2910,17 +2921,26 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = HashSet::new();
         for id in uses_ids {
-            let entry = self.catalog.get_by_id(id);
+            let entry = self.catalog.get_entry(id);
             let name = entry.name();
-            schemas.insert((&name.database, &*name.schema));
+            schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
         // If any of the system schemas is specified, add the rest of the
         // system schemas.
-        let system_schemas = &[
-            (&DatabaseSpecifier::Ambient, builtin::MZ_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, builtin::PG_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, builtin::INFORMATION_SCHEMA),
+        let system_schemas = [
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog.get_mz_catalog_schema_id().clone()),
+            ),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone()),
+            ),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog.get_information_schema_id().clone()),
+            ),
         ];
         if system_schemas.iter().any(|s| schemas.contains(s)) {
             schemas.extend(system_schemas);
@@ -2929,10 +2949,7 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: HashSet<GlobalId> = HashSet::new();
         for (db, schema) in schemas {
-            let schema = self
-                .catalog
-                .get_schema(db, schema, conn_id)
-                .expect("known to exist");
+            let schema = self.catalog.get_schema(&db, &schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
@@ -2987,23 +3004,38 @@ impl Coordinator {
         fn check_no_unmaterialized_sources(
             catalog: &Catalog,
             id_bundle: &CollectionIdBundle,
+            session: &Session,
         ) -> Result<(), CoordError> {
             let mut unmaterialized = vec![];
             let mut disabled_indexes = vec![];
             for id in &id_bundle.storage_ids {
-                let entry = catalog.get_by_id(id);
+                let entry = catalog.get_entry(id);
                 if entry.is_table() {
                     continue;
                 }
                 let mut indexes = catalog.state().get_indexes_on(*id).peekable();
                 if indexes.peek().is_none() {
-                    unmaterialized.push(entry.name().to_string());
+                    unmaterialized.push(
+                        catalog
+                            .resolve_full_name(entry.name(), session.conn_id())
+                            .to_string(),
+                    );
                 } else {
                     let disabled_index_names = indexes
                         .filter(|(_id, idx)| !idx.enabled)
-                        .map(|(id, _idx)| catalog.get_by_id(&id).name().to_string())
+                        .map(|(id, _idx)| catalog.get_entry(&id).name())
+                        .map(|name| {
+                            catalog
+                                .resolve_full_name(name, session.conn_id())
+                                .to_string()
+                        })
                         .collect();
-                    disabled_indexes.push((entry.name().to_string(), disabled_index_names));
+                    disabled_indexes.push((
+                        catalog
+                            .resolve_full_name(entry.name(), session.conn_id())
+                            .to_string(),
+                        disabled_index_names,
+                    ));
                 }
             }
             if unmaterialized.is_empty() && disabled_indexes.is_empty() {
@@ -3090,7 +3122,7 @@ impl Coordinator {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
+            check_no_unmaterialized_sources(&self.catalog, &id_bundle, session)?;
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -3101,13 +3133,23 @@ impl Coordinator {
                 let mut names: Vec<_> = allowed_id_bundle
                     .iter()
                     // This could filter out a view that has been replaced in another transaction.
-                    .filter_map(|id| self.catalog.try_get_by_id(id))
-                    .map(|item| item.name().to_string())
+                    .filter_map(|id| self.catalog.try_get_entry(&id))
+                    .map(|item| item.name())
+                    .map(|name| {
+                        self.catalog
+                            .resolve_full_name(name, session.conn_id())
+                            .to_string()
+                    })
                     .collect();
                 let mut outside: Vec<_> = outside
                     .iter()
-                    .filter_map(|id| self.catalog.try_get_by_id(id))
-                    .map(|item| item.name().to_string())
+                    .filter_map(|id| self.catalog.try_get_entry(&id))
+                    .map(|item| item.name())
+                    .map(|name| {
+                        self.catalog
+                            .resolve_full_name(name, session.conn_id())
+                            .to_string()
+                    })
                     .collect();
                 // Sort so error messages are deterministic.
                 names.sort();
@@ -3124,7 +3166,7 @@ impl Coordinator {
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
             if when == QueryWhen::Immediately {
-                check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
+                check_no_unmaterialized_sources(&self.catalog, &id_bundle, session)?;
             }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
@@ -3256,7 +3298,7 @@ impl Coordinator {
 
         let dataflow = match from {
             TailFrom::Id(from_id) => {
-                let from = self.catalog.get_by_id(&from_id);
+                let from = self.catalog.get_entry(&from_id);
                 let from_desc = from.desc().unwrap().clone();
                 let sink_id = self.catalog.allocate_user_id()?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
@@ -3703,8 +3745,13 @@ impl Coordinator {
                         let state = storage.collection(*id).unwrap();
                         let name = self
                             .catalog
-                            .try_get_by_id(*id)
-                            .map(|item| item.name().to_string())
+                            .try_get_entry(id)
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, session.conn_id())
+                                    .to_string()
+                            })
                             .unwrap_or_else(|| id.to_string());
                         sources.push(mz_dataflow_types::TimestampSource {
                             name: format!("{name} ({id}, storage)"),
@@ -3724,8 +3771,13 @@ impl Coordinator {
                         let state = compute.collection(*id).unwrap();
                         let name = self
                             .catalog
-                            .try_get_by_id(*id)
-                            .map(|item| item.name().to_string())
+                            .try_get_entry(id)
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, session.conn_id())
+                                    .to_string()
+                            })
                             .unwrap_or_else(|| id.to_string());
                         sources.push(mz_dataflow_types::TimestampSource {
                             name: format!("{name} ({id}, compute)"),
@@ -3855,7 +3907,7 @@ impl Coordinator {
             ),
             // All non-constant values must be planned as read-then-writes.
             mut selection => {
-                let desc_arity = match self.catalog.try_get_by_id(plan.id) {
+                let desc_arity = match self.catalog.try_get_entry(&plan.id) {
                     Some(table) => table.desc().expect("desc called on table").arity(),
                     None => {
                         tx.send(
@@ -3906,7 +3958,7 @@ impl Coordinator {
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, CoordError> {
         // Insert can be queued, so we need to re-verify the id exists.
-        let desc = match self.catalog.try_get_by_id(id) {
+        let desc = match self.catalog.try_get_entry(&id) {
             Some(table) => table.desc()?,
             None => {
                 return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
@@ -3972,7 +4024,7 @@ impl Coordinator {
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
-        let desc = match self.catalog.try_get_by_id(id) {
+        let desc = match self.catalog.try_get_entry(&id) {
             Some(table) => table.desc().expect("desc called on table").clone(),
             None => {
                 tx.send(
@@ -3988,7 +4040,7 @@ impl Coordinator {
         // Ensure selection targets are valid, i.e. user-defined tables, or
         // objects local to the dataflow.
         for id in selection.depends_on() {
-            let valid = match self.catalog.try_get_by_id(id) {
+            let valid = match self.catalog.try_get_entry(&id) {
                 // TODO: Widen this check when supporting temporary tables.
                 Some(entry) if id.is_user() => entry.is_table(),
                 _ => false,
@@ -4097,6 +4149,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let op = catalog::Op::RenameItem {
             id: plan.id,
+            current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
         match self.catalog_transact(vec![op], |_| Ok(())).await {
@@ -4107,14 +4160,17 @@ impl Coordinator {
 
     async fn sequence_alter_index_set_options(
         &mut self,
+        session: &Session,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options).await?;
+        self.set_index_options(plan.id, plan.options, session)
+            .await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     async fn sequence_alter_index_reset_options(
         &mut self,
+        session: &Session,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let options = plan
@@ -4126,7 +4182,7 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options).await?;
+        self.set_index_options(plan.id, options, session).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -4136,7 +4192,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let index = self
             .catalog
-            .get_by_id(&plan.id)
+            .get_entry(&plan.id)
             .index()
             .expect("cannot enable non-indexes");
         if !index.enabled {
@@ -4183,7 +4239,7 @@ impl Coordinator {
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
-                match self.catalog.get_by_id(id).item() {
+                match self.catalog.get_entry(id).item() {
                     CatalogItem::Table(_) => {
                         tables_to_drop.push(*id);
                     }
@@ -4391,13 +4447,19 @@ impl Coordinator {
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
+        session: &Session,
     ) -> Result<(), CoordError> {
         let needs = match self.read_capability.get_mut(&id) {
             Some(needs) => needs,
             None => {
                 if !self.catalog.is_index_enabled(&id) {
                     return Err(CoordError::InvalidAlterOnDisabledIndex(
-                        self.catalog.get_by_id(&id).name().to_string(),
+                        self.catalog
+                            .resolve_full_name(
+                                self.catalog.get_entry(&id).name(),
+                                session.conn_id(),
+                            )
+                            .to_string(),
                     ));
                 } else {
                     panic!("coord indexes out of sync")
@@ -4411,7 +4473,7 @@ impl Coordinator {
                     // The index is on a specific compute instance.
                     let compute_instance = self
                         .catalog
-                        .get_by_id(&id)
+                        .get_entry(&id)
                         .index()
                         .expect("setting options on index")
                         .compute_instance;
@@ -4555,7 +4617,7 @@ impl Coordinator {
             if timelines.contains_key(&id) {
                 continue;
             }
-            let entry = self.catalog.get_by_id(&id);
+            let entry = self.catalog.get_entry(&id);
             match entry.item() {
                 CatalogItem::Source(source) => {
                     timelines.insert(id, source.connector.timeline());
@@ -4752,7 +4814,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 fn auto_generate_primary_idx(
     index_name: String,
     compute_instance: ComputeInstanceId,
-    on_name: FullName,
+    on_name: FullObjectName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
@@ -4785,17 +4847,15 @@ fn auto_generate_primary_idx(
 pub fn index_sql(
     index_name: String,
     compute_instance: ComputeInstanceId,
-    view_name: FullName,
+    view_name: FullObjectName,
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
     use mz_sql::ast::{Expr, Value};
 
-    // TODO(jkosh44): we should be able to use CreateIndexStatement<Aug> since we always no the ID
-    // for view_name
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: RawName::Name(mz_sql::normalize::unresolve(view_name)),
+        on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawIdent::Resolved(compute_instance.to_string())),
         key_parts: Some(
             keys.iter()

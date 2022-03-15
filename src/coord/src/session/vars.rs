@@ -13,7 +13,9 @@ use std::fmt;
 use const_format::concatcp;
 use uncased::UncasedStr;
 
+use crate::catalog::builtin::{MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_ore::cast;
+use mz_sql::DEFAULT_SCHEMA;
 
 use crate::error::CoordError;
 use crate::session::EndTransactionAction;
@@ -39,6 +41,9 @@ pub const SERVER_MINOR_VERSION: u8 = 5;
 
 /// The patch version of PostgreSQL that Materialize claims to be.
 pub const SERVER_PATCH_VERSION: u8 = 0;
+
+/// The name of the default database that Materialize uses.
+pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
     name: static_uncased_str!("application_name"),
@@ -66,7 +71,7 @@ const CLUSTER: ServerVar<str> = ServerVar {
 
 const DATABASE: ServerVar<str> = ServerVar {
     name: static_uncased_str!("database"),
-    value: "materialize",
+    value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
 };
 
@@ -103,7 +108,12 @@ const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
 
 const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
     name: static_uncased_str!("search_path"),
-    value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
+    value: &[
+        MZ_CATALOG_SCHEMA,
+        PG_CATALOG_SCHEMA,
+        DEFAULT_SCHEMA,
+        MZ_TEMP_SCHEMA,
+    ],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 };

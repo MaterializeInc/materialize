@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{DatabaseId, GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing, SchemaId};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
 
@@ -45,7 +45,7 @@ use crate::ast::{
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
-use crate::names::{Aug, DatabaseSpecifier, FullName, SchemaName};
+use crate::names::{Aug, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -131,7 +131,7 @@ pub struct CreateDatabasePlan {
 
 #[derive(Debug)]
 pub struct CreateSchemaPlan {
-    pub database_name: DatabaseSpecifier,
+    pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_name: String,
     pub if_not_exists: bool,
 }
@@ -168,7 +168,7 @@ pub struct ComputeInstanceIntrospectionConfig {
 
 #[derive(Debug)]
 pub struct CreateSourcePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
@@ -176,14 +176,14 @@ pub struct CreateSourcePlan {
 
 #[derive(Debug)]
 pub struct CreateSecretPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub secret: Secret,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateSinkPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
@@ -191,14 +191,14 @@ pub struct CreateSinkPlan {
 
 #[derive(Debug)]
 pub struct CreateTablePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub table: Table,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateViewPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
@@ -209,14 +209,14 @@ pub struct CreateViewPlan {
 
 #[derive(Debug)]
 pub struct CreateViewsPlan {
-    pub views: Vec<(FullName, View)>,
+    pub views: Vec<(QualifiedObjectName, View)>,
     pub materialize: bool,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateIndexPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
@@ -224,18 +224,18 @@ pub struct CreateIndexPlan {
 
 #[derive(Debug)]
 pub struct CreateTypePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub typ: Type,
 }
 
 #[derive(Debug)]
 pub struct DropDatabasePlan {
-    pub name: String,
+    pub id: Option<DatabaseId>,
 }
 
 #[derive(Debug)]
 pub struct DropSchemaPlan {
-    pub name: SchemaName,
+    pub id: Option<(DatabaseId, SchemaId)>,
 }
 
 #[derive(Debug)]
@@ -361,6 +361,7 @@ pub struct AlterIndexEnablePlan {
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
+    pub current_full_name: FullObjectName,
     pub to_name: String,
     pub object_type: ObjectType,
 }

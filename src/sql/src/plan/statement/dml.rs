@@ -207,7 +207,7 @@ pub fn plan_explain(
     let is_view = matches!(explainee, Explainee::View(_));
     let query = match explainee {
         Explainee::View(name) => {
-            let view = scx.get_item_by_name(&name)?;
+            let view = scx.get_item_by_resolved_name(&name)?;
             if view.item_type() != CatalogItemType::View {
                 bail!("Expected {} to be a view, not a {}", name, view.item_type());
             }
@@ -283,7 +283,7 @@ pub fn describe_tail(
     stmt: TailStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let relation_desc = match stmt.relation {
-        TailRelation::Name(name) => scx.get_item_by_name(&name)?.desc()?.clone(),
+        TailRelation::Name(name) => scx.get_item_by_resolved_name(&name)?.desc()?.clone(),
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
@@ -324,7 +324,7 @@ pub fn plan_tail(
 ) -> Result<Plan, anyhow::Error> {
     let from = match relation {
         TailRelation::Name(name) => {
-            let entry = scx.get_item_by_name(&name)?;
+            let entry = scx.get_item_by_resolved_name(&name)?;
             match entry.item_type() {
                 CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
                     TailFrom::Id(entry.id())
@@ -335,7 +335,7 @@ pub fn plan_tail(
                 | CatalogItemType::Type
                 | CatalogItemType::Secret => bail!(
                     "'{}' cannot be tailed because it is a {}",
-                    entry.name(),
+                    name.full_name_str(),
                     entry.item_type(),
                 ),
             }

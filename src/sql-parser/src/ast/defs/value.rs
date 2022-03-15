@@ -22,7 +22,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::RawName;
+use crate::ast::RawObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -236,7 +236,7 @@ pub enum UnresolvedDataType {
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: RawName,
+        name: RawObjectName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<i64>,
     },

@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use mz_ore::str::StrExt;
-use mz_sql_parser::ast::RawName;
+use mz_sql_parser::ast::RawObjectName;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -21,7 +21,7 @@ use crate::ast::{
     CreateTableStatement, CreateViewStatement, Expr, Ident, Query, Raw, Statement,
     UnresolvedObjectName, ViewDefinition,
 };
-use crate::names::FullName;
+use crate::names::FullObjectName;
 
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
@@ -63,7 +63,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
 ///   check, but will be more meaningful once the first restriction is lifted.
 pub fn create_stmt_rename_refs(
     create_stmt: &mut Statement<Raw>,
-    from_name: FullName,
+    from_name: FullObjectName,
     to_item_name: String,
 ) -> Result<(), String> {
     let from_object = UnresolvedObjectName::from(from_name.clone());
@@ -99,7 +99,7 @@ pub fn create_stmt_rename_refs(
 }
 
 /// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
-fn rewrite_query(from: FullName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
+fn rewrite_query(from: FullObjectName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
     let from_ident = Ident::new(from.item.clone());
     let to_ident = Ident::new(to);
     let qual_depth =
@@ -265,7 +265,9 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
 
     fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ObjectName) {
         match object_name {
-            RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name(n),
+            RawObjectName::Name(n) | RawObjectName::Id(_, n) => {
+                self.visit_unresolved_object_name(n)
+            }
         }
     }
 }
@@ -277,7 +279,7 @@ struct CreateSqlRewriter {
 
 impl CreateSqlRewriter {
     fn rewrite_query_with_qual_depth(
-        from_name: FullName,
+        from_name: FullObjectName,
         to_name: Ident,
         qual_depth: usize,
         query: &mut Query<Raw>,
@@ -329,7 +331,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
         object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
     ) {
         match object_name {
-            RawName::Name(n) | RawName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawObjectName::Name(n) | RawObjectName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }

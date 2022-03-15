@@ -136,7 +136,7 @@ contains:catalog item 's1' already exists
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:catalog item 's1' is a sink and so cannot be depended upon
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
@@ -147,7 +147,7 @@ contains:catalog item 'materialize.public.s1' is a sink and so cannot be depende
 # Test that indexes cannot be depended upon
 
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
-contains:catalog item 'materialize.public.i1' is an index and so cannot be depended upon
+contains:catalog item 'i1' is an index and so cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 

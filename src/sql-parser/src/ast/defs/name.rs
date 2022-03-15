@@ -139,3 +139,25 @@ impl AstDisplay for &UnresolvedObjectName {
         display::separated(&self.0, ".").fmt(f);
     }
 }
+
+/// A name of a schema
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UnresolvedSchemaName(pub Vec<Ident>);
+
+impl AstDisplay for UnresolvedSchemaName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        display::separated(&self.0, ".").fmt(f);
+    }
+}
+impl_display!(UnresolvedSchemaName);
+
+/// A name of a database
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UnresolvedDatabaseName(pub Ident);
+
+impl AstDisplay for UnresolvedDatabaseName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.0);
+    }
+}
+impl_display!(UnresolvedDatabaseName);

@@ -18,6 +18,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
+use mz_coord::session::DEFAULT_DATABASE_NAME;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -155,7 +156,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     // The default database should be `materialize`.
     assert_eq!(
         client.query_one("SHOW database", &[])?.get::<_, String>(0),
-        "materialize",
+        DEFAULT_DATABASE_NAME,
     );
 
     // Connecting to a nonexistent database should work, and creating that

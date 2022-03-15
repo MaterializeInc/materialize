@@ -172,18 +172,18 @@ DROP ROLE IF EXISTS usr
 ----
 DROP ROLE IF EXISTS usr
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Role, if_exists: true, names: [UnresolvedObjectName([Ident("usr")])], cascade: false })
+DropRoles(DropRolesStatement { if_exists: true, names: [UnresolvedObjectName([Ident("usr")])] })
 
 parse-statement
 DROP ROLE a, b, c
 ----
 DROP ROLE a, b, c
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Role, if_exists: false, names: [UnresolvedObjectName([Ident("a")]), UnresolvedObjectName([Ident("b")]), UnresolvedObjectName([Ident("c")])], cascade: false })
+DropRoles(DropRolesStatement { if_exists: false, names: [UnresolvedObjectName([Ident("a")]), UnresolvedObjectName([Ident("b")]), UnresolvedObjectName([Ident("c")])] })
 
 parse-statement
 DROP USER usr
 ----
 DROP ROLE usr
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Role, if_exists: false, names: [UnresolvedObjectName([Ident("usr")])], cascade: false })
+DropRoles(DropRolesStatement { if_exists: false, names: [UnresolvedObjectName([Ident("usr")])] })

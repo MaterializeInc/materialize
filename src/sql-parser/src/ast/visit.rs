@@ -105,7 +105,7 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawName};
+//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawObjectName};
 //! use mz_sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
@@ -119,7 +119,7 @@
 //!     }
 //!     fn visit_object_name(&mut self, name: &'ast <Raw as AstInfo>::ObjectName) {
 //!         match name {
-//!             RawName::Name(n) | RawName::Id(_, n) => {
+//!             RawObjectName::Name(n) | RawObjectName::Id(_, n) => {
 //!                 for node in &n.0 {
 //!                     self.idents.push(node);
 //!                     visit::visit_ident(self, node);

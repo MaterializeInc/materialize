@@ -1605,7 +1605,7 @@ impl<'a> Parser<'a> {
     fn parse_create_database(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(DATABASE)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_identifier()?;
+        let name = self.parse_database_name()?;
         Ok(Statement::CreateDatabase(CreateDatabaseStatement {
             name,
             if_not_exists,
@@ -1615,7 +1615,7 @@ impl<'a> Parser<'a> {
     fn parse_create_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SCHEMA)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_schema_name()?;
         Ok(Statement::CreateSchema(CreateSchemaStatement {
             name,
             if_not_exists,
@@ -2358,19 +2358,23 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_raw_ident(&mut self) -> Result<RawIdent, ParserError> {
+        if self.consume_token(&Token::LBracket) {
+            let id = match self.next_token() {
+                Some(Token::Ident(id)) => id,
+                Some(Token::Number(n)) => n,
+                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+            };
+            self.expect_token(&Token::RBracket)?;
+            Ok(RawIdent::Resolved(id))
+        } else {
+            Ok(RawIdent::Unresolved(self.parse_identifier()?))
+        }
+    }
+
     fn parse_optional_in_cluster(&mut self) -> Result<Option<RawIdent>, ParserError> {
         if self.parse_keywords(&[IN, CLUSTER]) {
-            if self.consume_token(&Token::LBracket) {
-                let id = match self.next_token() {
-                    Some(Token::Ident(id)) => id,
-                    Some(Token::Number(n)) => n,
-                    _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
-                };
-                self.expect_token(&Token::RBracket)?;
-                Ok(Some(RawIdent::Resolved(id)))
-            } else {
-                Ok(Some(RawIdent::Unresolved(self.parse_identifier()?)))
-            }
+            Ok(Some(self.parse_raw_ident()?))
         } else {
             Ok(None)
         }
@@ -2564,7 +2568,7 @@ impl<'a> Parser<'a> {
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_identifier()?;
+                let name = self.parse_database_name()?;
                 let restrict = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(RESTRICT),
@@ -2575,10 +2579,41 @@ impl<'a> Parser<'a> {
                     restrict,
                 }));
             }
+            Some(SCHEMA) => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_schema_name()?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                return Ok(Statement::DropSchema(DropSchemaStatement {
+                    name,
+                    if_exists,
+                    cascade,
+                }));
+            }
+            Some(ROLE) | Some(USER) => {
+                let if_exists = self.parse_if_exists()?;
+                let names = self.parse_comma_separated(Parser::parse_object_name)?;
+                return Ok(Statement::DropRoles(DropRolesStatement {
+                    if_exists,
+                    names,
+                }));
+            }
+            Some(CLUSTER) => {
+                let if_exists = self.parse_if_exists()?;
+                let names = self.parse_comma_separated(Parser::parse_object_name)?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                return Ok(Statement::DropClusters(DropClustersStatement {
+                    if_exists,
+                    names,
+                    cascade,
+                }));
+            }
             Some(INDEX) => ObjectType::Index,
-            Some(ROLE) | Some(USER) => ObjectType::Role,
-            Some(CLUSTER) => ObjectType::Cluster,
-            Some(SCHEMA) => ObjectType::Schema,
             Some(SINK) => ObjectType::Sink,
             Some(SOURCE) => ObjectType::Source,
             Some(TABLE) => ObjectType::Table,
@@ -2596,7 +2631,7 @@ impl<'a> Parser<'a> {
         };
 
         let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_object_name)?;
+        let names = self.parse_comma_separated(Parser::parse_raw_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
@@ -3190,7 +3225,7 @@ impl<'a> Parser<'a> {
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
         let other = |name: &str| UnresolvedDataType::Other {
-            name: RawName::Name(UnresolvedObjectName::unqualified(name)),
+            name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
 
@@ -3204,16 +3239,16 @@ impl<'a> Parser<'a> {
                         "bpchar"
                     };
                     UnresolvedDataType::Other {
-                        name: RawName::Name(UnresolvedObjectName::unqualified(name)),
+                        name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
                 BPCHAR => UnresolvedDataType::Other {
-                    name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
+                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("bpchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 VARCHAR => UnresolvedDataType::Other {
-                    name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
+                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 STRING => other("text"),
@@ -3222,7 +3257,7 @@ impl<'a> Parser<'a> {
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
                 DEC | DECIMAL => UnresolvedDataType::Other {
-                    name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
+                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -3278,7 +3313,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     UnresolvedDataType::Other {
-                        name: RawName::Name(self.parse_object_name()?),
+                        name: RawObjectName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -3380,7 +3415,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_raw_name(&mut self) -> Result<RawName, ParserError> {
+    fn parse_raw_name(&mut self) -> Result<RawObjectName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
@@ -3397,15 +3432,32 @@ impl<'a> Parser<'a> {
                 );
             }
             self.expect_token(&Token::RBracket)?;
-            Ok(RawName::Id(id, name))
+            Ok(RawObjectName::Id(id, name))
         } else {
-            Ok(RawName::Name(self.parse_object_name()?))
+            Ok(RawObjectName::Name(self.parse_object_name()?))
         }
     }
 
-    /// Parse a possibly qualified, possibly quoted identifier, e.g.
+    /// Parse a possibly quoted database identifier, e.g.
+    /// `foo` or `"mydatabase"`
+    fn parse_database_name(&mut self) -> Result<UnresolvedDatabaseName, ParserError> {
+        Ok(UnresolvedDatabaseName(self.parse_identifier()?))
+    }
+
+    /// Parse a possibly qualified, possibly quoted schema identifier, e.g.
+    /// `foo` or `mydatabase."schema"`
+    fn parse_schema_name(&mut self) -> Result<UnresolvedSchemaName, ParserError> {
+        Ok(UnresolvedSchemaName(self.parse_identifiers()?))
+    }
+
+    /// Parse a possibly qualified, possibly quoted object identifier, e.g.
     /// `foo` or `myschema."table"`
     fn parse_object_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
+        Ok(UnresolvedObjectName(self.parse_identifiers()?))
+    }
+
+    ///Parse one or more simple one-word identifiers separated by a '.'
+    fn parse_identifiers(&mut self) -> Result<Vec<Ident>, ParserError> {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
@@ -3413,7 +3465,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(UnresolvedObjectName(idents))
+        Ok(idents)
     }
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
@@ -3517,7 +3569,7 @@ impl<'a> Parser<'a> {
 
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
-        let table_name = RawName::Name(self.parse_object_name()?);
+        let table_name = RawObjectName::Name(self.parse_object_name()?);
         let alias = self.parse_optional_table_alias()?;
         let using = if self.parse_keyword(USING) {
             self.parse_comma_separated(Parser::parse_table_and_joins)?
@@ -3940,14 +3992,25 @@ impl<'a> Parser<'a> {
 
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
+        } else if self.parse_keyword(SCHEMAS) {
+            let from = if self.parse_keyword(FROM) {
+                Some(self.parse_database_name()?)
+            } else {
+                None
+            };
+            Ok(Statement::ShowSchemas(ShowSchemasStatement {
+                from,
+                extended,
+                full,
+                filter: self.parse_show_statement_filter()?,
+            }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
+            OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTERS => ObjectType::Cluster,
-                SCHEMAS => ObjectType::Schema,
                 SINKS => ObjectType::Sink,
                 SOURCES => ObjectType::Source,
                 TABLES => ObjectType::Table,
@@ -3972,7 +4035,7 @@ impl<'a> Parser<'a> {
                             );
                         }
                     } else {
-                        let from = self.parse_object_name()?;
+                        let from = self.parse_schema_name()?;
                         let in_cluster = self.parse_optional_in_cluster()?;
                         (Some(from), in_cluster)
                     }
@@ -4232,7 +4295,7 @@ impl<'a> Parser<'a> {
         } else {
             let name = self.parse_raw_name()?;
             match name {
-                RawName::Name(name) if self.consume_token(&Token::LParen) => {
+                RawObjectName::Name(name) if self.consume_token(&Token::LParen) => {
                     let args = self.parse_optional_args(false)?;
                     let alias = self.parse_optional_table_alias()?;
                     let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -4325,7 +4388,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let table_name = RawName::Name(self.parse_object_name()?);
+        let table_name = RawObjectName::Name(self.parse_object_name()?);
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;

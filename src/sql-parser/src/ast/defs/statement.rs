@@ -24,7 +24,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedObjectName, Value,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -52,10 +52,14 @@ pub enum Statement<T: AstInfo> {
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     Discard(DiscardStatement),
-    DropDatabase(DropDatabaseStatement),
-    DropObjects(DropObjectsStatement),
+    DropDatabase(DropDatabaseStatement<T>),
+    DropSchema(DropSchemaStatement<T>),
+    DropObjects(DropObjectsStatement<T>),
+    DropRoles(DropRolesStatement),
+    DropClusters(DropClustersStatement),
     SetVariable(SetVariableStatement),
     ShowDatabases(ShowDatabasesStatement<T>),
+    ShowSchemas(ShowSchemasStatement<T>),
     ShowObjects(ShowObjectsStatement<T>),
     ShowIndexes(ShowIndexesStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
@@ -105,9 +109,13 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSecret(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
+            Statement::DropSchema(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
+            Statement::DropRoles(stmt) => f.write_node(stmt),
+            Statement::DropClusters(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ShowDatabases(stmt) => f.write_node(stmt),
+            Statement::ShowSchemas(stmt) => f.write_node(stmt),
             Statement::ShowObjects(stmt) => f.write_node(stmt),
             Statement::ShowIndexes(stmt) => f.write_node(stmt),
             Statement::ShowColumns(stmt) => f.write_node(stmt),
@@ -333,7 +341,7 @@ impl_display_t!(DeleteStatement);
 /// `CREATE DATABASE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateDatabaseStatement {
-    pub name: Ident,
+    pub name: UnresolvedDatabaseName,
     pub if_not_exists: bool,
 }
 
@@ -351,7 +359,7 @@ impl_display!(CreateDatabaseStatement);
 /// `CREATE SCHEMA`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSchemaStatement {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedSchemaName,
     pub if_not_exists: bool,
 }
 
@@ -1045,13 +1053,13 @@ impl AstDisplay for DiscardTarget {
 impl_display!(DiscardTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropDatabaseStatement {
-    pub name: Ident,
+pub struct DropDatabaseStatement<T: AstInfo> {
+    pub name: T::DatabaseName,
     pub if_exists: bool,
     pub restrict: bool,
 }
 
-impl AstDisplay for DropDatabaseStatement {
+impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP DATABASE ");
         if self.if_exists {
@@ -1063,11 +1071,32 @@ impl AstDisplay for DropDatabaseStatement {
         }
     }
 }
-impl_display!(DropDatabaseStatement);
+impl_display_t!(DropDatabaseStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropSchemaStatement<T: AstInfo> {
+    pub name: T::SchemaName,
+    pub if_exists: bool,
+    pub cascade: bool,
+}
+
+impl<T: AstInfo> AstDisplay for DropSchemaStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP SCHEMA ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        if self.cascade {
+            f.write_str(" CASCADE");
+        }
+    }
+}
+impl_display_t!(DropSchemaStatement);
 
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropObjectsStatement {
+pub struct DropObjectsStatement<T: AstInfo> {
     /// If this was constructed as `DROP MATERIALIZED <type>`
     pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
@@ -1075,13 +1104,13 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
+    pub names: Vec<T::ObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
 }
 
-impl AstDisplay for DropObjectsStatement {
+impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP ");
         f.write_node(&self.object_type);
@@ -1095,7 +1124,51 @@ impl AstDisplay for DropObjectsStatement {
         }
     }
 }
-impl_display!(DropObjectsStatement);
+impl_display_t!(DropObjectsStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropRolesStatement {
+    /// An optional `IF EXISTS` clause. (Non-standard.)
+    pub if_exists: bool,
+    /// One or more objects to drop. (ANSI SQL requires exactly one.)
+    pub names: Vec<UnresolvedObjectName>,
+}
+
+impl AstDisplay for DropRolesStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP ROLE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&display::comma_separated(&self.names));
+    }
+}
+impl_display!(DropRolesStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropClustersStatement {
+    /// An optional `IF EXISTS` clause. (Non-standard.)
+    pub if_exists: bool,
+    /// One or more objects to drop. (ANSI SQL requires exactly one.)
+    pub names: Vec<UnresolvedObjectName>,
+    /// Whether `CASCADE` was specified. This will be `false` when
+    /// `RESTRICT` or no drop behavior at all was specified.
+    pub cascade: bool,
+}
+
+impl AstDisplay for DropClustersStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP CLUSTER ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&display::comma_separated(&self.names));
+        if self.cascade {
+            f.write_str(" CASCADE");
+        }
+    }
+}
+impl_display!(DropClustersStatement);
 
 /// `SET <variable>`
 ///
@@ -1153,6 +1226,37 @@ impl<T: AstInfo> AstDisplay for ShowDatabasesStatement<T> {
 }
 impl_display_t!(ShowDatabasesStatement);
 
+/// `SHOW SCHEMAS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowSchemasStatement<T: AstInfo> {
+    pub from: Option<T::DatabaseName>,
+    pub extended: bool,
+    pub full: bool,
+    pub filter: Option<ShowStatementFilter<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ShowSchemasStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW");
+        if self.extended {
+            f.write_str(" EXTENDED");
+        }
+        if self.full {
+            f.write_str(" FULL");
+        }
+        f.write_str(" SCHEMAS");
+        if let Some(from) = &self.from {
+            f.write_str(" FROM ");
+            f.write_node(from);
+        }
+        if let Some(filter) = &self.filter {
+            f.write_str(" ");
+            f.write_node(filter);
+        }
+    }
+}
+impl_display_t!(ShowSchemasStatement);
+
 /// `SHOW <object>S`
 ///
 /// ```sql
@@ -1164,7 +1268,7 @@ impl_display_t!(ShowDatabasesStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
-    pub from: Option<UnresolvedObjectName>,
+    pub from: Option<T::SchemaName>,
     pub in_cluster: Option<T::ClusterName>,
     pub extended: bool,
     pub full: bool,
@@ -1186,7 +1290,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         }
         f.write_str(" ");
         f.write_str(match &self.object_type {
-            ObjectType::Schema => "SCHEMAS",
             ObjectType::Table => "TABLES",
             ObjectType::View => "VIEWS",
             ObjectType::Source => "SOURCES",
@@ -1200,7 +1303,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         });
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
-            f.write_node(&from);
+            f.write_node(from);
         }
         if let Some(filter) = &self.filter {
             f.write_str(" ");
@@ -1497,7 +1600,6 @@ impl_display_t!(InsertSource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {
-    Schema,
     Table,
     View,
     Source,
@@ -1513,7 +1615,6 @@ pub enum ObjectType {
 impl AstDisplay for ObjectType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            ObjectType::Schema => "SCHEMA",
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::Source => "SOURCE",

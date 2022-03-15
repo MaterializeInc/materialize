@@ -10,13 +10,13 @@
 use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
-use mz_expr::{GlobalId, MirScalarExpr};
+use mz_expr::{DatabaseId, GlobalId, MirScalarExpr, SchemaId};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::CatalogType;
-use mz_sql::names::DatabaseSpecifier;
+use mz_sql::catalog::{CatalogDatabase, CatalogType};
+use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
@@ -42,14 +42,14 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_database_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
-        let database = &self.by_name[name];
+    pub(super) fn pack_database_update(&self, id: &DatabaseId, diff: Diff) -> BuiltinTableUpdate {
+        let database = &self.database_by_id[id];
         BuiltinTableUpdate {
             id: MZ_DATABASES.id,
             row: Row::pack_slice(&[
-                Datum::Int64(database.id),
+                Datum::Int64(id.0),
                 Datum::UInt32(database.oid),
-                Datum::String(&name),
+                Datum::String(database.name()),
             ]),
             diff,
         }
@@ -57,24 +57,24 @@ impl CatalogState {
 
     pub(super) fn pack_schema_update(
         &self,
-        database_spec: &DatabaseSpecifier,
-        schema_name: &str,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_id: &SchemaId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
         let (database_id, schema) = match database_spec {
-            DatabaseSpecifier::Ambient => (None, &self.ambient_schemas[schema_name]),
-            DatabaseSpecifier::Name(name) => {
-                let db = &self.by_name[name];
-                (Some(db.id), &db.schemas[schema_name])
-            }
+            ResolvedDatabaseSpecifier::Ambient => (None, &self.ambient_schemas_by_id[schema_id]),
+            ResolvedDatabaseSpecifier::Id(id) => (
+                Some(id.0),
+                &self.database_by_id[id].schemas_by_id[schema_id],
+            ),
         };
         BuiltinTableUpdate {
             id: MZ_SCHEMAS.id,
             row: Row::pack_slice(&[
-                Datum::Int64(schema.id),
+                Datum::Int64(schema_id.0),
                 Datum::UInt32(schema.oid),
                 Datum::from(database_id),
-                Datum::String(schema_name),
+                Datum::String(&schema.name.schema),
             ]),
             diff,
         }
@@ -107,13 +107,16 @@ impl CatalogState {
     }
 
     pub(super) fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
-        let entry = self.get_by_id(&id);
+        let entry = self.get_entry(&id);
         let id = entry.id();
         let oid = entry.oid();
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-        let schema_id = self
-            .get_schema(&entry.name().database, &entry.name().schema, conn_id)
-            .unwrap()
+        let schema_id = &self
+            .get_schema(
+                &entry.name().qualifiers.database_spec,
+                &entry.name().qualifiers.schema_spec,
+                conn_id,
+            )
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
@@ -166,7 +169,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         oid: u32,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         table: &Table,
         diff: Diff,
@@ -176,7 +179,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id),
+                Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::from(table.persist_name.as_deref()),
             ]),
@@ -188,7 +191,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         oid: u32,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         source: &Source,
         diff: Diff,
@@ -202,7 +205,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id),
+                Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
@@ -216,7 +219,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         oid: u32,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -225,7 +228,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id),
+                Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(self.is_volatile(id).as_str()),
             ]),
@@ -237,7 +240,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         oid: u32,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         sink: &Sink,
         diff: Diff,
@@ -284,7 +287,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
-                    Datum::Int64(schema_id),
+                    Datum::Int64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connector.name()),
                     Datum::String(self.is_volatile(id).as_str()),
@@ -330,7 +333,7 @@ impl CatalogState {
 
         for (i, key) in index.keys.iter().enumerate() {
             let nullable = key
-                .typ(self.get_by_id(&index.on).desc().unwrap().typ())
+                .typ(self.get_entry(&index.on).desc().unwrap().typ())
                 .nullable;
             let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
             let key_sql = key_sqls
@@ -364,7 +367,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         oid: u32,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         typ: &Type,
         diff: Diff,
@@ -374,7 +377,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id),
+                Datum::Int64(schema_id.into()),
                 Datum::String(name),
             ]),
             diff,
@@ -408,7 +411,7 @@ impl CatalogState {
     fn pack_func_update(
         &self,
         id: GlobalId,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         func: &Func,
         diff: Diff,
@@ -418,7 +421,7 @@ impl CatalogState {
             let arg_ids = func_impl_details
                 .arg_oids
                 .iter()
-                .map(|oid| self.get_by_oid(oid).id().to_string())
+                .map(|oid| self.get_entry_by_oid(oid).id().to_string())
                 .collect::<Vec<_>>();
             let mut row = Row::default();
             row.packer()
@@ -434,18 +437,18 @@ impl CatalogState {
 
             let variadic_id = func_impl_details
                 .variadic_oid
-                .map(|oid| self.get_by_oid(&oid).id().to_string());
+                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
 
             let ret_id = func_impl_details
                 .return_oid
-                .map(|oid| self.get_by_oid(&oid).id().to_string());
+                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
 
             updates.push(BuiltinTableUpdate {
                 id: MZ_FUNCTIONS.id,
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
-                    Datum::Int64(schema_id),
+                    Datum::Int64(schema_id.into()),
                     Datum::String(name),
                     arg_ids,
                     Datum::from(variadic_id.as_deref()),
@@ -461,7 +464,7 @@ impl CatalogState {
     fn pack_secret_update(
         &self,
         id: GlobalId,
-        schema_id: i64,
+        schema_id: &SchemaSpecifier,
         name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -469,7 +472,7 @@ impl CatalogState {
             id: MZ_SECRETS.id,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int64(schema_id),
+                Datum::Int64(schema_id.into()),
                 Datum::String(name),
             ]),
             diff,

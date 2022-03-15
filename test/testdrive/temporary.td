@@ -240,5 +240,5 @@ contains:unknown catalog item 'double_temp_v'
 ! SELECT * FROM temp_v;
 contains:unknown catalog item 'temp_v'
 
-! CREATE TEMP VIEW mz_foo.a AS SELECT 1
+! CREATE TEMP VIEW mz_catalog.a AS SELECT 1
 contains:cannot create temporary item in non-temporary schema

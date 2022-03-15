@@ -123,14 +123,14 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     };
                     let desc = self
                         .catalog
-                        .get_by_id(id)
+                        .get_entry(id)
                         .desc()
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone());
                 }
             } else {
                 drop(valid_indexes);
-                let entry = self.catalog.get_by_id(id);
+                let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
@@ -152,7 +152,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                             if !intersection.is_empty() {
                                 let existing_indexes = intersection
                                     .iter()
-                                    .map(|id| self.catalog.get_by_id(id).name().item.clone())
+                                    .map(|id| self.catalog.get_entry(id).name().item.clone())
                                     .collect();
                                 return Err(CoordError::InvalidRematerialization {
                                     base_source: entry.name().item.clone(),
@@ -214,7 +214,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         id: GlobalId,
     ) -> Result<Option<DataflowDesc>, CoordError> {
-        let index_entry = self.catalog.get_by_id(&id);
+        let index_entry = self.catalog.get_entry(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
@@ -222,7 +222,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         if !index.enabled {
             return Ok(None);
         }
-        let on_entry = self.catalog.get_by_id(&index.on);
+        let on_entry = self.catalog.get_entry(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let name = index_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name);
