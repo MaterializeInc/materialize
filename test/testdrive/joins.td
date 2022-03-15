@@ -234,8 +234,22 @@ names_num names_name mods_num mods_mod
 > CREATE VIEW test15 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
 
-! SELECT * FROM test15;
-contains:unable to automatically determine a query timestamp
-
-! SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
-contains:unable to automatically determine a query timestamp
+# TODO(guswynn|benesch): re-enable this test when we resolve
+# consistency unknowns
+#> SELECT * FROM test15;
+#names_num names_name mods_num mods_mod
+#--------------------------------------
+#1 one <null> <null>
+#2 two <null> <null>
+#3 three <null> <null>
+#<null> <null> 0 even
+#<null> <null> 1 odd
+#<null> <null> 2 even
+#
+#> SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
+#1 one <null> <null>
+#2 two <null> <null>
+#3 three <null> <null>
+#<null> <null> 0 even
+#<null> <null> 1 odd
+#<null> <null> 2 even
