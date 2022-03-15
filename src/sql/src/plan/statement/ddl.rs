@@ -54,9 +54,10 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
-    AstInfo, CreateClusterStatement, CreateSecretStatement, CreateViewsSourceTarget,
-    CsrSeedCompiledOrLegacy, Op, Query, RawName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins, UnresolvedObjectName,
+    AlterSecretStatement, AstInfo, CreateClusterStatement, CreateSecretStatement,
+    CreateViewsSourceTarget, CsrSeedCompiledOrLegacy, Op, Query, RawName, Select, SelectItem,
+    SetExpr, SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins,
+    UnresolvedObjectName,
 };
 
 use crate::ast::display::AstDisplay;
@@ -2935,6 +2936,24 @@ pub fn plan_alter_object_rename(
         to_name: normalize::ident(to_item_name),
         object_type,
     }))
+}
+
+pub fn describe_alter_secret_options(
+    _: &StatementContext,
+    _: AlterSecretStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_secret(
+    _: &StatementContext,
+    AlterSecretStatement {
+        secret_name: _,
+        if_exists: _,
+        value: _,
+    }: AlterSecretStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    bail_unsupported!("ALTER SECRET")
 }
 
 struct DependsOnCollector {

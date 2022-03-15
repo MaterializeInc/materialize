@@ -140,6 +140,7 @@ pub fn describe(
             ddl::describe_alter_object_rename(&scx, stmt)?
         }
         (Statement::AlterIndex(stmt), None) => ddl::describe_alter_index_options(&scx, stmt)?,
+        (Statement::AlterSecret(stmt), None) => ddl::describe_alter_secret_options(&scx, stmt)?,
 
         // `SHOW` statements.
         (Statement::ShowCreateTable(stmt), None) => show::describe_show_create_table(&scx, stmt)?,
@@ -246,6 +247,7 @@ pub fn plan(
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
+        Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
 
         // DML statements.
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),

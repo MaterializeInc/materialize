@@ -1337,3 +1337,52 @@ DROP CLUSTER IF EXISTS cluster CASCADE
 DROP CLUSTER IF EXISTS cluster CASCADE
 =>
 DropObjects(DropObjectsStatement { materialized: false, object_type: Cluster, if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: true })
+
+parse-statement
+CREATE SECRET secret AS decode('base64-encoded secret', 'base64')
+----
+CREATE SECRET secret AS decode('base64-encoded secret', 'base64')
+=>
+CreateSecret(CreateSecretStatement { name: Ident("secret"), if_not_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+
+parse-statement
+CREATE SECRET IF NOT EXISTS secret AS decode('base64-encoded secret', 'base64')
+----
+CREATE SECRET IF NOT EXISTS secret AS decode('base64-encoded secret', 'base64')
+=>
+CreateSecret(CreateSecretStatement { name: Ident("secret"), if_not_exists: true, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+
+parse-statement
+DROP SECRET secret
+----
+DROP SECRET secret
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+
+parse-statement
+DROP SECRET IF EXISTS secret
+----
+DROP SECRET IF EXISTS secret
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+
+parse-statement
+SHOW SECRETS
+----
+SHOW SECRETS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
+ALTER SECRET secret RENAME TO secret2
+----
+ALTER SECRET secret RENAME TO secret2
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Name(UnresolvedObjectName([Ident("secret")])), to_item_name: Ident("secret2") })
+
+parse-statement
+ALTER SECRET secret AS decode('new base64-encoded secret', 'base64')
+----
+ALTER SECRET secret AS decode('new base64-encoded secret', 'base64')
+=>
+AlterSecret(AlterSecretStatement { secret_name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })

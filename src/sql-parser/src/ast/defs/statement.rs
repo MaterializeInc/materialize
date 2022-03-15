@@ -50,6 +50,7 @@ pub enum Statement<T: AstInfo> {
     CreateSecret(CreateSecretStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
+    AlterSecret(AlterSecretStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropObjects(DropObjectsStatement),
@@ -101,6 +102,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
+            Statement::AlterSecret(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
@@ -795,7 +797,7 @@ impl<T: AstInfo> AstDisplay for CreateSecretStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str("AS ");
+        f.write_str(" AS ");
         f.write_node(&self.value);
     }
 }
@@ -968,6 +970,28 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 }
 
 impl_display_t!(AlterIndexStatement);
+
+/// `ALTER SECRET ... AS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSecretStatement<T: AstInfo> {
+    pub secret_name: T::ObjectName,
+    pub if_exists: bool,
+    pub value: Expr<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SECRET ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.secret_name);
+        f.write_str(" AS ");
+        f.write_node(&self.value);
+    }
+}
+
+impl_display_t!(AlterSecretStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
