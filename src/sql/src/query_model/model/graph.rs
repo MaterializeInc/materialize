@@ -826,7 +826,7 @@ impl QueryBox {
     fn input_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -837,7 +837,7 @@ impl QueryBox {
     fn ranging_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.ranging_quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -847,12 +847,12 @@ impl QueryBox {
 /// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
 impl<'a> BoundRef<'a, QueryBox> {
     /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
-    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn input_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().input_quantifiers(self.model)
     }
 
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
-    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn ranging_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
 
