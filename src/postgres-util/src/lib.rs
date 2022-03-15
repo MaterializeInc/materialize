@@ -12,6 +12,7 @@
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
+use std::time::Duration;
 use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::{Client, Config};
 
@@ -232,6 +233,8 @@ pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
     let tls = make_tls(&config)?;
     let (client, connection) = config
         .replication_mode(ReplicationMode::Logical)
+        .connect_timeout(Duration::from_secs(30))
+        .keepalives_idle(Duration::from_secs(10 * 60))
         .connect(tls)
         .await?;
     task::spawn(
