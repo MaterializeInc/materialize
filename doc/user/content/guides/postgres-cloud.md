@@ -121,6 +121,22 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
 
 For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation.
 
+## Azure Database for PostgreSQL
+
+Before you start, note that a database restart will be required after making changes to the database.
+
+1. The Materialize replica will need access to connect to the upstream database. In your Azure portal, go to the Azure Database for PostgreSQL instance and under the "Connections security" section add your [Materialize instance's IP address](/docs/cloud/security/#static-ip-addresses) to the allowed IP addresses list and click on the "Save" button.
+
+1. Enable Logical Replication by going to the Azure Database for PostgreSQL instance, then under the "Replication" section click the "Enable Logical Replication" toggle button and click on "Save".
+
+1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
+
+    ```sql
+    CREATE PUBLICATION mz_source FOR TABLE table1, table2;
+    ```
+
+     The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
+
 ## DigitalOcean Managed Postgres
 
 Connect to the DigitalOcean Managed Postgres with the `doadmin` user and make the following:
@@ -136,6 +152,12 @@ Connect to the DigitalOcean Managed Postgres with the `doadmin` user and make th
      As the `doadmin` user, is not a superuser, you will not be able to create a publication for all tables.
 
      The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
+
+1. If a table that you want to replicate has a primary key defined, you can use your default replica identity value. If a table you want to replicate has no primary key defined, you must set the replica identity value to FULL:
+
+    ```
+    ALTER TABLE table1 REPLICA IDENTITY FULL;
+    ```
 
 For more information, see the [Managed Postgres](https://docs.digitalocean.com/products/databases/postgresql/) documentation.
 
