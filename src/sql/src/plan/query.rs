@@ -4625,7 +4625,6 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: HashMap::new(),
-            ids: HashSet::new(),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
