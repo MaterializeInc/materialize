@@ -2845,18 +2845,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[INDEX, SINK, SOURCE, VIEW, TABLE])? {
-            INDEX => ObjectType::Index,
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            VIEW => ObjectType::View,
-            TABLE => ObjectType::Table,
-            _ => unreachable!(),
-        };
+        let object_type =
+            match self.expect_one_of_keywords(&[INDEX, SINK, SOURCE, VIEW, TABLE, SECRET])? {
+                INDEX => ObjectType::Index,
+                SINK => ObjectType::Sink,
+                SOURCE => ObjectType::Source,
+                VIEW => ObjectType::View,
+                TABLE => ObjectType::Table,
+                SECRET => ObjectType::Secret,
+                _ => unreachable!(),
+            };
 
         // We support `ALTER INDEX ... {RESET, SET} and `ALTER <object type> RENAME
         if object_type == ObjectType::Index {
             return self.parse_alter_index();
+        }
+
+        // We support `ALTER SECRET ... AS and `ALTER <object type> RENAME
+        if object_type == ObjectType::Secret {
+            return self.parse_alter_secret();
         }
 
         let if_exists = self.parse_if_exists()?;
@@ -2911,6 +2918,34 @@ impl<'a> Parser<'a> {
 
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Index,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_raw_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
+            AS => {
+                let value = self.parse_expr()?;
+                Statement::AlterSecret(AlterSecretStatement {
+                    secret_name: name,
+                    if_exists,
+                    value,
+                })
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Secret,
                     if_exists,
                     name,
                     to_item_name,

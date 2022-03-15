@@ -1434,6 +1434,7 @@ impl Coordinator {
 
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
+                    | Statement::AlterSecret(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
