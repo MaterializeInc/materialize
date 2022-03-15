@@ -99,7 +99,7 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
 
 1. In the Google Cloud Console, set the `cloudsql.logical_decoding` to `on`. This enables logical replication.
 
-1. The Materialize replica will need access to connect to the upstream database. In the Google Cloud Console, enable access on the upstream database for the [Materialize instace static IP address](/docs/cloud/security/#static-ip-addresses).
+1. The Materialize replica will need access to connect to the upstream database. In the Google Cloud Console, enable access on the upstream database for the [Materialize instance's static IP address](/docs/cloud/security/#static-ip-addresses).
 
 1. Restart the database to apply your changes.
 
