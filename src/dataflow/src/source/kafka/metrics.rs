@@ -13,10 +13,10 @@ use prometheus::core::AtomicI64;
 
 use mz_expr::SourceInstanceId;
 
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::iter::IteratorExt;
-use tracing::error;
 use crate::source::metrics::SourceBaseMetrics;
+use mz_ore::iter::IteratorExt;
+use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
+use tracing::error;
 
 pub(super) struct KafkaPartitionMetrics {
     labels: Vec<String>,
@@ -66,8 +66,16 @@ impl KafkaPartitionMetrics {
         self.partition_offset_map
             .entry(id)
             .or_insert_with_key(|id| {
-                let labels = self.labels.iter().cloned().chain_one(format!("{}", id)).collect();
-                self.base_metrics.partition_specific.partition_offset_max.get_delete_on_drop_gauge(labels)
+                self.base_metrics
+                    .partition_specific
+                    .partition_offset_max
+                    .get_delete_on_drop_gauge(
+                        self.labels
+                            .iter()
+                            .cloned()
+                            .chain_one(format!("{}", id))
+                            .collect(),
+                    )
             })
             .set(offset);
     }
