@@ -139,21 +139,18 @@ Before you start, note that a database restart will be required after making cha
 
 ## DigitalOcean Managed Postgres
 
-Connect to the DigitalOcean Managed Postgres with the `doadmin` user and make the following:
+The Materialize replica will need firewall access to connect to the upstream database. In the DigitalOcean console, add your [Materialize instance IP address](/docs/cloud/security/#static-ip-addresses) to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls) for your Managed PostgreSQL Cluster.
 
-1. The Materialize replica will need access to connect to the upstream database. In your DigitalOcean Managed Postgres console, add your [Materialize instance IP address](/docs/cloud/security/#static-ip-addresses) to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls).
+Connect to your PostgreSQL cluster as the `doadmin` user and create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
 
-1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
+  ```sql
+  CREATE PUBLICATION mz_source FOR TABLE table1, table2;
+  ```
+**Note:** Because the `doadmin` user, is not a superuser, you will not be able to create a publication for **all** tables.
 
-    ```sql
-    CREATE PUBLICATION mz_source FOR TABLE table1, table2;
-    ```
+The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
-     As the `doadmin` user, is not a superuser, you will not be able to create a publication for all tables.
-
-     The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
-
-1. If a table that you want to replicate has a primary key defined, you can use your default replica identity value. If a table you want to replicate has no primary key defined, you must set the replica identity value to FULL:
+If a table that you want to replicate has a primary key defined, you can use your default replica identity value. If a table you want to replicate has no primary key defined, you must set the replica identity value to FULL:
 
     ```
     ALTER TABLE table1 REPLICA IDENTITY FULL;
