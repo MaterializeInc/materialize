@@ -238,7 +238,7 @@ mod tests {
     ///
     ///             --------------
     fn test_model() -> Model {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         // vertices
         let b0 = model.make_box(Select::default().into());

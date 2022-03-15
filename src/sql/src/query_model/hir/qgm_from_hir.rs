@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Generates a Query Graph Model from a [HirRelationExpr].
+//! Generates a Query Graph Model from a [`HirRelationExpr`].
 //!
 //! The public interface consists of the [`From<HirRelationExpr>`]
 //! implementation for [`Result<Model, QGMError>`].
@@ -26,10 +26,11 @@ use crate::query_model::model::{
 impl TryFrom<HirRelationExpr> for Model {
     type Error = QGMError;
     fn try_from(expr: HirRelationExpr) -> Result<Self, Self::Error> {
-        FromHir::generate(expr)
+        FromHir::default().generate(expr)
     }
 }
 
+#[derive(Default)]
 struct FromHir {
     model: Model,
     /// The stack of context boxes for resolving offset-based column references.
@@ -41,15 +42,9 @@ struct FromHir {
 
 impl FromHir {
     /// Generates a Query Graph Model for representing the given query.
-    fn generate(expr: HirRelationExpr) -> Result<Model, QGMError> {
-        let mut generator = FromHir {
-            model: Model::new(),
-            context_stack: Vec::new(),
-            gets_seen: HashMap::new(),
-        };
-
-        generator.model.top_box = generator.generate_select(expr)?;
-        Ok(generator.model)
+    fn generate(mut self, expr: HirRelationExpr) -> Result<Model, QGMError> {
+        self.model.top_box = self.generate_select(expr)?;
+        Ok(self.model)
     }
 
     /// Generates a sub-graph representing the given expression, ensuring
@@ -144,7 +139,7 @@ impl FromHir {
                 loop {
                     let old_arity = self.model.get_box(box_id).columns.len();
 
-                    // 1) Find a batch of scalars such that no scalar in the
+                    // 1) Find a prefix of scalars such that no scalar in the
                     // current batch depends on columns from the same batch.
                     let end_idx = scalars
                         .iter_mut()
@@ -159,7 +154,7 @@ impl FromHir {
                         })
                         .unwrap_or(scalars.len());
 
-                    // 2) Add the scalars in the batch to the box.
+                    // 2) Add the scalars in the prefix to the box.
                     for scalar in scalars.drain(0..end_idx) {
                         let expr = self.generate_expr(scalar, box_id)?;
                         let mut b = self.model.get_mut_box(box_id);
@@ -167,7 +162,7 @@ impl FromHir {
                     }
 
                     // 3) If there are scalars remaining, wrap the box so the
-                    // remaining scalars can point to the scalars in this batch.
+                    // remaining scalars can point to the scalars in this prefix.
                     if scalars.is_empty() {
                         break;
                     }

@@ -69,7 +69,7 @@ pub(crate) type QuantifierSet = BTreeSet<QuantifierId>;
 /// Each non-leaf box has a set of quantifiers, which are the inputs of the
 /// operation it represents. The quantifier adds information about how the
 /// relation represented by its input box is consumed by the parent box.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Model {
     /// The ID of the box representing the entry-point of the query.
     pub(crate) top_box: BoxId,
@@ -320,16 +320,6 @@ impl From<Values> for BoxType {
 }
 
 impl Model {
-    pub(crate) fn new() -> Self {
-        Self {
-            top_box: BoxId(0),
-            boxes: HashMap::new(),
-            box_id_gen: Default::default(),
-            quantifiers: HashMap::new(),
-            quantifier_id_gen: Default::default(),
-        }
-    }
-
     pub(crate) fn make_box(&mut self, box_type: BoxType) -> BoxId {
         let id = self.box_id_gen.allocate_id();
         let b = Box::new(RefCell::new(QueryBox {
