@@ -12,11 +12,11 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use mz_expr::MirRelationExpr;
+use mz_expr::{GlobalId, MirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
@@ -231,7 +231,6 @@ pub fn plan_explain(
         mut expr,
         desc,
         finishing,
-        ..
     } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
@@ -263,14 +262,12 @@ pub fn plan_query(
         mut expr,
         desc,
         finishing,
-        depends_on,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
         desc,
         finishing,
-        depends_on,
     })
 }
 
@@ -323,6 +320,7 @@ pub fn plan_tail(
         as_of,
     }: TailStatement<Aug>,
     copy_to: Option<CopyFormat>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let from = match relation {
         TailRelation::Name(name) => {
@@ -354,10 +352,11 @@ pub fn plan_tail(
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
+            let depends_on = depends_on.into_iter().collect();
             TailFrom::Query {
                 expr: query.expr,
                 desc: query.desc,
-                depends_on: query.depends_on,
+                depends_on,
             }
         }
     };
@@ -427,6 +426,7 @@ pub fn plan_copy(
         target,
         options,
     }: CopyStatement<Aug>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let options = CopyOptions::try_from(options)?;
     let mut copy_params = CopyParams {
@@ -462,7 +462,9 @@ pub fn plan_copy(
                 &Params::empty(),
                 Some(copy_params.format),
             )?),
-            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(copy_params.format))?),
+            CopyRelation::Tail(stmt) => {
+                Ok(plan_tail(scx, stmt, Some(copy_params.format), depends_on)?)
+            }
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

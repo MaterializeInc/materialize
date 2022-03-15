@@ -573,7 +573,7 @@ mod tests {
         )?
         .into_element();
 
-        let stmt = resolve_names_stmt(scx, parsed)?;
+        let (stmt, _) = resolve_names_stmt(scx, parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(

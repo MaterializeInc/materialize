@@ -101,7 +101,6 @@ pub fn describe(
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
-        ids: HashSet::new(),
     };
 
     // The following statement types require augmented statements to describe
@@ -116,35 +115,38 @@ pub fn describe(
         | Statement::Select(_)
         | Statement::Explain(_)
         | Statement::Tail(_)
-        | Statement::Copy(_) => Some(resolve_names_stmt(&mut scx, stmt.clone())?),
+        | Statement::Copy(_)
+        | Statement::Execute(_) => Some(resolve_names_stmt(&mut scx, stmt.clone())?.0),
         _ => None,
     };
 
     let desc = match (stmt, stmt_resolved) {
         // DDL statements.
-        (Statement::CreateDatabase(stmt), _) => ddl::describe_create_database(&scx, stmt)?,
-        (Statement::CreateSchema(stmt), _) => ddl::describe_create_schema(&scx, stmt)?,
-        (Statement::CreateTable(stmt), _) => ddl::describe_create_table(&scx, stmt)?,
-        (Statement::CreateSource(stmt), _) => ddl::describe_create_source(&scx, stmt)?,
-        (Statement::CreateView(stmt), _) => ddl::describe_create_view(&scx, stmt)?,
-        (Statement::CreateViews(stmt), _) => ddl::describe_create_views(&scx, stmt)?,
-        (Statement::CreateSink(stmt), _) => ddl::describe_create_sink(&scx, stmt)?,
-        (Statement::CreateIndex(stmt), _) => ddl::describe_create_index(&scx, stmt)?,
-        (Statement::CreateType(stmt), _) => ddl::describe_create_type(&scx, stmt)?,
-        (Statement::CreateRole(stmt), _) => ddl::describe_create_role(&scx, stmt)?,
-        (Statement::CreateCluster(stmt), _) => ddl::describe_create_cluster(&scx, stmt)?,
-        (Statement::CreateSecret(stmt), _) => ddl::describe_create_secret(&scx, stmt)?,
-        (Statement::DropDatabase(stmt), _) => ddl::describe_drop_database(&scx, stmt)?,
-        (Statement::DropObjects(stmt), _) => ddl::describe_drop_objects(&scx, stmt)?,
-        (Statement::AlterObjectRename(stmt), _) => ddl::describe_alter_object_rename(&scx, stmt)?,
-        (Statement::AlterIndex(stmt), _) => ddl::describe_alter_index_options(&scx, stmt)?,
+        (Statement::CreateDatabase(stmt), None) => ddl::describe_create_database(&scx, stmt)?,
+        (Statement::CreateSchema(stmt), None) => ddl::describe_create_schema(&scx, stmt)?,
+        (Statement::CreateTable(stmt), None) => ddl::describe_create_table(&scx, stmt)?,
+        (Statement::CreateSource(stmt), None) => ddl::describe_create_source(&scx, stmt)?,
+        (Statement::CreateView(stmt), None) => ddl::describe_create_view(&scx, stmt)?,
+        (Statement::CreateViews(stmt), None) => ddl::describe_create_views(&scx, stmt)?,
+        (Statement::CreateSink(stmt), None) => ddl::describe_create_sink(&scx, stmt)?,
+        (Statement::CreateIndex(stmt), None) => ddl::describe_create_index(&scx, stmt)?,
+        (Statement::CreateType(stmt), None) => ddl::describe_create_type(&scx, stmt)?,
+        (Statement::CreateRole(stmt), None) => ddl::describe_create_role(&scx, stmt)?,
+        (Statement::CreateCluster(stmt), None) => ddl::describe_create_cluster(&scx, stmt)?,
+        (Statement::CreateSecret(stmt), None) => ddl::describe_create_secret(&scx, stmt)?,
+        (Statement::DropDatabase(stmt), None) => ddl::describe_drop_database(&scx, stmt)?,
+        (Statement::DropObjects(stmt), None) => ddl::describe_drop_objects(&scx, stmt)?,
+        (Statement::AlterObjectRename(stmt), None) => {
+            ddl::describe_alter_object_rename(&scx, stmt)?
+        }
+        (Statement::AlterIndex(stmt), None) => ddl::describe_alter_index_options(&scx, stmt)?,
 
         // `SHOW` statements.
-        (Statement::ShowCreateTable(stmt), _) => show::describe_show_create_table(&scx, stmt)?,
-        (Statement::ShowCreateSource(stmt), _) => show::describe_show_create_source(&scx, stmt)?,
-        (Statement::ShowCreateView(stmt), _) => show::describe_show_create_view(&scx, stmt)?,
-        (Statement::ShowCreateSink(stmt), _) => show::describe_show_create_sink(&scx, stmt)?,
-        (Statement::ShowCreateIndex(stmt), _) => show::describe_show_create_index(&scx, stmt)?,
+        (Statement::ShowCreateTable(stmt), None) => show::describe_show_create_table(&scx, stmt)?,
+        (Statement::ShowCreateSource(stmt), None) => show::describe_show_create_source(&scx, stmt)?,
+        (Statement::ShowCreateView(stmt), None) => show::describe_show_create_view(&scx, stmt)?,
+        (Statement::ShowCreateSink(stmt), None) => show::describe_show_create_sink(&scx, stmt)?,
+        (Statement::ShowCreateIndex(stmt), None) => show::describe_show_create_index(&scx, stmt)?,
         (_, Some(Statement::ShowColumns(stmt))) => show::show_columns(&scx, stmt)?.describe()?,
         (_, Some(Statement::ShowDatabases(stmt))) => {
             show::show_databases(&scx, stmt)?.describe()?
@@ -153,15 +155,15 @@ pub fn describe(
         (_, Some(Statement::ShowIndexes(stmt))) => show::show_indexes(&scx, stmt)?.describe()?,
 
         // SCL statements.
-        (Statement::SetVariable(stmt), _) => scl::describe_set_variable(&scx, stmt)?,
-        (Statement::ShowVariable(stmt), _) => scl::describe_show_variable(&scx, stmt)?,
-        (Statement::Discard(stmt), _) => scl::describe_discard(&scx, stmt)?,
-        (Statement::Declare(stmt), _) => scl::describe_declare(&scx, stmt)?,
-        (Statement::Fetch(stmt), _) => scl::describe_fetch(&scx, stmt)?,
-        (Statement::Close(stmt), _) => scl::describe_close(&scx, stmt)?,
-        (Statement::Prepare(stmt), _) => scl::describe_prepare(&scx, stmt)?,
-        (Statement::Execute(stmt), _) => scl::describe_execute(&scx, stmt)?,
-        (Statement::Deallocate(stmt), _) => scl::describe_deallocate(&scx, stmt)?,
+        (Statement::SetVariable(stmt), None) => scl::describe_set_variable(&scx, stmt)?,
+        (Statement::ShowVariable(stmt), None) => scl::describe_show_variable(&scx, stmt)?,
+        (Statement::Discard(stmt), None) => scl::describe_discard(&scx, stmt)?,
+        (Statement::Declare(stmt), None) => scl::describe_declare(&scx, stmt)?,
+        (Statement::Fetch(stmt), None) => scl::describe_fetch(&scx, stmt)?,
+        (Statement::Close(stmt), None) => scl::describe_close(&scx, stmt)?,
+        (Statement::Prepare(stmt), None) => scl::describe_prepare(&scx, stmt)?,
+        (_, Some(Statement::Execute(stmt))) => scl::describe_execute(&scx, stmt)?,
+        (Statement::Deallocate(stmt), None) => scl::describe_deallocate(&scx, stmt)?,
 
         // DML statements.
         (_, Some(Statement::Insert(stmt))) => dml::describe_insert(&scx, stmt)?,
@@ -173,13 +175,13 @@ pub fn describe(
         (_, Some(Statement::Copy(stmt))) => dml::describe_copy(&scx, stmt)?,
 
         // TCL statements.
-        (Statement::StartTransaction(stmt), _) => tcl::describe_start_transaction(&scx, stmt)?,
-        (Statement::SetTransaction(stmt), _) => tcl::describe_set_transaction(&scx, stmt)?,
-        (Statement::Rollback(stmt), _) => tcl::describe_rollback(&scx, stmt)?,
-        (Statement::Commit(stmt), _) => tcl::describe_commit(&scx, stmt)?,
+        (Statement::StartTransaction(stmt), None) => tcl::describe_start_transaction(&scx, stmt)?,
+        (Statement::SetTransaction(stmt), None) => tcl::describe_set_transaction(&scx, stmt)?,
+        (Statement::Rollback(stmt), None) => tcl::describe_rollback(&scx, stmt)?,
+        (Statement::Commit(stmt), None) => tcl::describe_commit(&scx, stmt)?,
 
         // RAISE statements.
-        (Statement::Raise(stmt), _) => raise::describe_raise(&scx, stmt)?,
+        (Statement::Raise(stmt), None) => raise::describe_raise(&scx, stmt)?,
 
         (_, _) => unreachable!(),
     };
@@ -201,7 +203,7 @@ pub fn describe(
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
-    stmt_raw: Statement<Raw>,
+    stmt: Statement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let param_types = params
@@ -215,22 +217,27 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
-        ids: HashSet::new(),
     };
 
-    //TODO(jkosh44) remove clone when all planners take augmented statements
-    let stmt = resolve_names_stmt(scx, stmt_raw.clone())?;
+    // Delay name resolution of DECLARE and PREPARE until they're executed
+    if let Statement::Declare(stmt) = stmt {
+        return scl::plan_declare(scx, stmt);
+    } else if let Statement::Prepare(stmt) = stmt {
+        return scl::plan_prepare(scx, stmt);
+    }
+
+    let (stmt, depends_on) = resolve_names_stmt(scx, stmt)?;
 
     match stmt {
         // DDL statements.
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
-        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
+        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt, depends_on),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
-        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
+        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params, depends_on),
         Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
-        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
-        Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
+        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt, depends_on),
+        Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt, depends_on),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
@@ -246,8 +253,8 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
         Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
-        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None),
-        Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
+        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None, depends_on),
+        Statement::Copy(stmt) => dml::plan_copy(scx, stmt, depends_on),
 
         // `SHOW` statements.
         Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
@@ -261,27 +268,15 @@ pub fn plan(
         Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
 
         // SCL statements.
-        // TODO(jkosh44) SCL planners should use augmented statements
-        Statement::SetVariable(_)
-        | Statement::ShowVariable(_)
-        | Statement::Discard(_)
-        | Statement::Declare(_)
-        | Statement::Fetch(_)
-        | Statement::Close(_)
-        | Statement::Prepare(_)
-        | Statement::Execute(_)
-        | Statement::Deallocate(_) => match stmt_raw {
-            Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
-            Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
-            Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
-            Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
-            Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
-            Statement::Close(stmt) => scl::plan_close(scx, stmt),
-            Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
-            Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
-            Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
-            _ => unreachable!(),
-        },
+        Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
+        Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
+        Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
+        Statement::Declare(_) => unreachable!("planned with raw statement"),
+        Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
+        Statement::Close(stmt) => scl::plan_close(scx, stmt),
+        Statement::Prepare(_) => unreachable!("planned with raw statement"),
+        Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+        Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
 
         // TCL statements.
         Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),
@@ -342,8 +337,6 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
-    /// The GlobalIds of the items the `Statement` is dependent upon.
-    pub ids: HashSet<GlobalId>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -355,7 +348,6 @@ impl<'a> StatementContext<'a> {
             pcx,
             catalog,
             param_types: Default::default(),
-            ids: HashSet::new(),
         }
     }
 

@@ -45,14 +45,13 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction,
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
-    Query, Raw, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value,
-    Values,
+    Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
+    TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{resolve_names_expr, Aug, PartialName, ResolvedDataType, ResolvedObjectName};
+use crate::names::{Aug, PartialName, ResolvedDataType, ResolvedObjectName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -71,7 +70,6 @@ pub struct PlannedQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
     pub finishing: RowSetFinishing,
-    pub depends_on: Vec<GlobalId>,
 }
 
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
@@ -107,13 +105,11 @@ pub fn plan_root_query(
             .collect(),
     );
     let desc = RelationDesc::new(typ, scope.column_names());
-    let depends_on = qcx.ids().into_iter().collect();
 
     Ok(PlannedQuery {
         expr,
         desc,
         finishing,
-        depends_on,
     })
 }
 
@@ -284,7 +280,7 @@ pub fn plan_insert_query(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let (hir, _) = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -411,7 +407,7 @@ pub fn plan_copy_from_rows(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let (hir, _) = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -752,7 +748,7 @@ pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
     target_ty: &ScalarType,
-) -> Result<(HirScalarExpr, Vec<GlobalId>), PlanError> {
+) -> Result<HirScalarExpr, PlanError> {
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -764,12 +760,12 @@ pub fn plan_default_expr(
         allow_windows: false,
     };
     let hir = plan_expr(ecx, &expr)?.cast_to(ecx, CastContext::Assignment, target_ty)?;
-    Ok((hir, qcx.ids().into_iter().collect()))
+    Ok(hir)
 }
 
 pub fn plan_params<'a>(
     scx: &'a StatementContext,
-    params: Vec<Expr<Raw>>,
+    params: Vec<Expr<Aug>>,
     desc: &StatementDesc,
 ) -> Result<Params, PlanError> {
     if params.len() != desc.param_types.len() {
@@ -780,7 +776,7 @@ pub fn plan_params<'a>(
         );
     }
 
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
@@ -788,8 +784,7 @@ pub fn plan_params<'a>(
     let mut packer = datums.packer();
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
-    for (param, ty) in params.into_iter().zip(&desc.param_types) {
-        let mut expr = resolve_names_expr(&mut qcx, param)?;
+    for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
         transform_ast::transform_expr(scx, &mut expr)?;
 
         let ecx = &ExprContext {
@@ -822,7 +817,7 @@ pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
     exprs: Vec<Expr<Aug>>,
-) -> Result<(Vec<mz_expr::MirScalarExpr>, Vec<GlobalId>), PlanError> {
+) -> Result<Vec<mz_expr::MirScalarExpr>, PlanError> {
     let scope = Scope::from_source(None, on_desc.iter_names());
     let qcx = QueryContext::root(scx, QueryLifetime::Static);
 
@@ -841,7 +836,7 @@ pub fn plan_index_exprs<'a>(
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }
-    Ok((out, qcx.ids().into_iter().collect()))
+    Ok(out)
 }
 
 fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr<Aug>) -> Result<HirScalarExpr, PlanError> {
@@ -4613,8 +4608,6 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: HashMap<LocalId, CteDesc>,
-    /// The GlobalIds of the items the `Query` is dependent upon.
-    ids: HashSet<GlobalId>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -4656,7 +4649,6 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
-            ids: HashSet::new(),
             recursion_guard: self.recursion_guard.clone(),
         }
     }
@@ -4708,16 +4700,6 @@ impl<'a> QueryContext<'a> {
 
     pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
         self.scx.humanize_scalar_type(typ)
-    }
-
-    pub fn ids(&self) -> HashSet<GlobalId> {
-        let mut ids = self.ids.clone();
-        ids.extend(self.scx.ids.iter());
-        ids
-    }
-
-    pub fn extend_ids(&mut self, ids: &HashSet<GlobalId>) {
-        self.ids.extend(ids.iter());
     }
 }
 
