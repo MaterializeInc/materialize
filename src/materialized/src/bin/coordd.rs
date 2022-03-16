@@ -37,7 +37,7 @@ struct Args {
         long,
         env = "COORDD_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "0.0.0.0:6875"
+        default_value = "127.0.0.1:6875"
     )]
     listen_addr: String,
     /// The address of the dataflowd servers to connect to.

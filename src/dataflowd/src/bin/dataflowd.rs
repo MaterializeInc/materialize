@@ -42,7 +42,7 @@ struct Args {
         long,
         env = "DATAFLOWD_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "0.0.0.0:6876"
+        default_value = "127.0.0.1:6876"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.

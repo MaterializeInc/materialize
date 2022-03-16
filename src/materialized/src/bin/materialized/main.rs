@@ -252,7 +252,7 @@ pub struct Args {
         long,
         env = "MZ_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "0.0.0.0:6875"
+        default_value = "127.0.0.1:6875"
     )]
     listen_addr: SocketAddr,
     /// How stringently to demand TLS authentication and encryption.

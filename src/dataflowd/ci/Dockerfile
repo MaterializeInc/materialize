@@ -13,4 +13,4 @@ RUN apt-get update && apt-get -qy install ca-certificates curl tini
 
 COPY kdestroy kinit dataflowd /usr/local/bin/
 
-ENTRYPOINT ["tini", "--", "dataflowd"]
+ENTRYPOINT ["tini", "--", "dataflowd", "--listen-addr=0.0.0.0:6876"]
