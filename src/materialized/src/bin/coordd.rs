@@ -95,7 +95,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             (Box::new(client), config)
         };
 
-    let experimental_mode = false;
+    let experimental_mode = true;
     let mut metrics_registry = MetricsRegistry::new();
     let coord_storage = mz_coord::catalog::storage::Connection::open(
         &args.data_directory.join("catalog"),
