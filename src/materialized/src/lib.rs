@@ -273,7 +273,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         workers,
         timely_config: timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
-            worker: timely::WorkerConfig::default(),
+            worker: config.timely_worker,
         },
         experimental_mode: config.experimental_mode,
         now: config.now.clone(),
