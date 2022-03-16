@@ -1252,45 +1252,105 @@ impl TableFunc {
     }
 
     pub fn output_type(&self) -> RelationType {
-        RelationType::new(match self {
-            TableFunc::JsonbEach { stringify: true } => vec![
-                ScalarType::String.nullable(false),
-                ScalarType::String.nullable(true),
-            ],
-            TableFunc::JsonbEach { stringify: false } => vec![
-                ScalarType::String.nullable(false),
-                ScalarType::Jsonb.nullable(false),
-            ],
-            TableFunc::JsonbObjectKeys => vec![ScalarType::String.nullable(false)],
+        let (column_types, keys) = match self {
+            TableFunc::JsonbEach { stringify: true } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(true),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::JsonbEach { stringify: false } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::Jsonb.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::JsonbObjectKeys => {
+                let column_types = vec![ScalarType::String.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::JsonbArrayElements { stringify: true } => {
-                vec![ScalarType::String.nullable(true)]
+                let column_types = vec![ScalarType::String.nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
             }
             TableFunc::JsonbArrayElements { stringify: false } => {
-                vec![ScalarType::Jsonb.nullable(false)]
+                let column_types = vec![ScalarType::Jsonb.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
             }
-            TableFunc::RegexpExtract(a) => a
-                .capture_groups_iter()
-                .map(|cg| ScalarType::String.nullable(cg.nullable))
-                .collect(),
-            TableFunc::CsvExtract(n_cols) => iter::repeat(ScalarType::String.nullable(false))
-                .take(*n_cols)
-                .collect(),
+            TableFunc::RegexpExtract(a) => {
+                let column_types = a
+                    .capture_groups_iter()
+                    .map(|cg| ScalarType::String.nullable(cg.nullable))
+                    .collect();
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::CsvExtract(n_cols) => {
+                let column_types = iter::repeat(ScalarType::String.nullable(false))
+                    .take(*n_cols)
+                    .collect();
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::GenerateSeriesInt32 => {
-                vec![ScalarType::Int32.nullable(false)]
+                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
             }
             TableFunc::GenerateSeriesInt64 => {
-                vec![ScalarType::Int64.nullable(false)]
+                let column_types = vec![ScalarType::Int64.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
             }
-            TableFunc::GenerateSeriesTimestamp => vec![ScalarType::Timestamp.nullable(false)],
-            TableFunc::GenerateSeriesTimestampTz => vec![ScalarType::TimestampTz.nullable(false)],
+            TableFunc::GenerateSeriesTimestamp => {
+                let column_types = vec![ScalarType::Timestamp.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::GenerateSeriesTimestampTz => {
+                let column_types = vec![ScalarType::TimestampTz.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::GenerateSubscriptsArray => {
-                vec![ScalarType::Int32.nullable(false)]
+                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
             }
-            TableFunc::Repeat => vec![],
-            TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
-            TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
-            TableFunc::Wrap { types, .. } => types.clone(),
-        })
+            TableFunc::Repeat => {
+                let column_types = vec![];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::UnnestArray { el_typ } => {
+                let column_types = vec![el_typ.clone().nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::UnnestList { el_typ } => {
+                let column_types = vec![el_typ.clone().nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::Wrap { types, .. } => {
+                let column_types = types.clone();
+                let keys = vec![];
+                (column_types, keys)
+            }
+        };
+
+        if !keys.is_empty() {
+            RelationType::new(column_types).with_keys(keys)
+        } else {
+            RelationType::new(column_types)
+        }
     }
 
     pub fn output_arity(&self) -> usize {
