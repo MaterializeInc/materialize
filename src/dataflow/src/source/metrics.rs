@@ -110,6 +110,7 @@ pub(super) struct PartitionSpecificMetrics {
     pub(super) offset_received: IntGaugeVec,
     pub(super) closed_ts: UIntGaugeVec,
     pub(super) messages_ingested: IntCounterVec,
+    pub(super) partition_offset_max: IntGaugeVec,
 }
 
 impl PartitionSpecificMetrics {
@@ -134,6 +135,11 @@ impl PartitionSpecificMetrics {
             messages_ingested: registry.register(metric!(
                 name: "mz_messages_ingested",
                 help: "The number of messages ingested per partition.",
+                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+            )),
+            partition_offset_max: registry.register(metric!(
+                name: "mz_kafka_partition_offset_max",
+                help: "High watermark offset on broker for partition",
                 var_labels: ["topic", "source_id", "source_instance", "partition_id"],
             )),
         }
