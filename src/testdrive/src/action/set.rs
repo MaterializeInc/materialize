@@ -49,6 +49,7 @@ impl Action for RegexAction {
 
 pub struct SqlTimeoutAction {
     duration: Option<Duration>,
+    force: bool,
 }
 
 pub fn build_sql_timeout(mut cmd: BuiltinCommand) -> Result<SqlTimeoutAction, anyhow::Error> {
@@ -58,8 +59,9 @@ pub fn build_sql_timeout(mut cmd: BuiltinCommand) -> Result<SqlTimeoutAction, an
     } else {
         Some(mz_repr::util::parse_duration(&duration).context("parsing duration")?)
     };
+    let force = cmd.args.opt_bool("force")?.unwrap_or(false);
     cmd.args.done()?;
-    Ok(SqlTimeoutAction { duration })
+    Ok(SqlTimeoutAction { duration, force })
 }
 
 #[async_trait]
@@ -69,10 +71,12 @@ impl Action for SqlTimeoutAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        state.timeout = cmp::max(
-            self.duration.unwrap_or(state.default_timeout),
-            state.default_timeout,
-        );
+        state.timeout = self.duration.unwrap_or(state.default_timeout);
+        if !self.force {
+            // Bump the timeout to be at least the default timeout unless the
+            // timeout has been forced.
+            state.timeout = cmp::max(state.timeout, state.default_timeout);
+        }
         Ok(ControlFlow::Continue)
     }
 }

@@ -612,19 +612,30 @@ Instructs Mz to sleep for the specified number of seconds. `mz_sleep()` returns 
 
 ## Controlling timeouts and retries
 
-#### `$ set-sql-timeout duration=N(ms|s|m)`
+#### `$ set-sql-timeout duration=N(ms|s|m) [force=true]`
 
 Adjusts the SQL timeout for tests that contain queries that may take a long time to run. Alternatively, the `--default-timeout` setting can be passed to `testdrive`.
 
+The command will be ignored if it sets a timeout that is smaller than the
+default timeout, unless you specify `force=true`. Use this override with
+caution! It may cause the test to fail in test environments that introduce
+overhead and need a larger `--default-timeout` to succeed.
+
 ## Actions on Avro OCF files
 
-#### `$ avro-ocf-write path=... schema=... codec=(snapy|null)`
+#### `$ avro-ocf-write path=... schema=... codec=(snapy|null) [repeat=N]`
 
 Writes the data following the action into the specified file using the specified schema. The schema is traditionally provided using a variable that is defined elsewhere in the test.
 
-#### `$ avro-ocf-append path=...`
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
+
+#### `$ avro-ocf-append path=... [repeat=N]`
 
 Appends the data provided to an already-existing file
+
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
 
 #### `$ avro-ocf-verify sink=...`
 
@@ -640,9 +651,12 @@ $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
 
 ## Actions on local files
 
-#### `$ file-append path=file.name [compression=gzip]`
+#### `$ file-append path=file.name [compression=gzip] [repeat=N]`
 
 Writes the data provided to a file on disk. The file will be created inside the temporary directory of the test.
+
+If the `repeat` parameter is provided, the data provided will be appended to the
+file the specified number of times, rather than just once.
 
 #### `$ file-delete path=file.name`
 
