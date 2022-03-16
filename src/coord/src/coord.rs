@@ -2917,6 +2917,40 @@ impl Coordinator {
         session: &mut Session,
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        // TODO: remove this function when sources are linearizable.
+        // See: #11048.
+        fn check_no_unmaterialized_sources(
+            catalog: &Catalog,
+            id_bundle: &CollectionIdBundle,
+        ) -> Result<(), CoordError> {
+            let mut unmaterialized = vec![];
+            let mut disabled_indexes = vec![];
+            for id in &id_bundle.storage_ids {
+                let entry = catalog.get_by_id(id);
+                if entry.is_table() {
+                    continue;
+                }
+                let mut indexes = catalog.state().get_indexes_on(*id).peekable();
+                if indexes.peek().is_none() {
+                    unmaterialized.push(entry.name().to_string());
+                } else {
+                    let disabled_index_names = indexes
+                        .filter(|(_id, idx)| !idx.enabled)
+                        .map(|(id, _idx)| catalog.get_by_id(&id).name().to_string())
+                        .collect();
+                    disabled_indexes.push((entry.name().to_string(), disabled_index_names));
+                }
+            }
+            if unmaterialized.is_empty() && disabled_indexes.is_empty() {
+                Ok(())
+            } else {
+                Err(CoordError::AutomaticTimestampFailure {
+                    unmaterialized,
+                    disabled_indexes,
+                })
+            }
+        }
+
         let PeekPlan {
             mut source,
             when,
@@ -2991,6 +3025,7 @@ impl Coordinator {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
+            check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -3023,6 +3058,9 @@ impl Coordinator {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
+            if when == QueryWhen::Immediately {
+                check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
+            }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
