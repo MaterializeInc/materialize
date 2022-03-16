@@ -1301,27 +1301,27 @@ impl TableFunc {
             }
             TableFunc::GenerateSeriesInt32 => {
                 let column_types = vec![ScalarType::Int32.nullable(false)];
-                let keys = vec![];
+                let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesInt64 => {
                 let column_types = vec![ScalarType::Int64.nullable(false)];
-                let keys = vec![];
+                let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestamp => {
                 let column_types = vec![ScalarType::Timestamp.nullable(false)];
-                let keys = vec![];
+                let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestampTz => {
                 let column_types = vec![ScalarType::TimestampTz.nullable(false)];
-                let keys = vec![];
+                let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSubscriptsArray => {
                 let column_types = vec![ScalarType::Int32.nullable(false)];
-                let keys = vec![];
+                let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::Repeat => {
