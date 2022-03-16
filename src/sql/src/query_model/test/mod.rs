@@ -65,7 +65,7 @@ fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, S
             let stmt = stmts.pop().unwrap();
             let scx = &mut StatementContext::new(None, catalog);
             let stmt = match resolve_names_stmt(scx, stmt) {
-                Ok(stmt) => stmt,
+                Ok((stmt, _)) => stmt,
                 Err(e) => return Err(format!("unable to resolve statement {}", e)),
             };
             if let mz_sql_parser::ast::Statement::Select(query) = stmt {
