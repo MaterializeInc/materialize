@@ -222,7 +222,6 @@ pub(crate) enum BoxType {
     /// The invocation of table function from the catalog.
     TableFunction(TableFunction),
     /// SQL's union operator
-    #[allow(dead_code)]
     Union,
     /// Operator that produces a set of rows, with potentially
     /// correlated values.
