@@ -59,7 +59,7 @@ impl KafkaPartitionMetrics {
         }
         // This offset value is another librdkafka sentinel indicating it got an invalid high watermark from the broker
         if offset == -1001 {
-            // TODO(nharring-adjacent): This is potentially spammy so its at debug but it would be better as info with sampling 
+            // TODO(nharring-adjacent): This is potentially spammy so its at debug but it would be better as info with sampling
             debug!("Got invalid high watermark for partition {}", id);
             return;
         }

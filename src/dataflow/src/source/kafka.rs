@@ -24,8 +24,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
-    MzOffset,
+    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset,
+    KafkaSourceConnector, MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
@@ -35,8 +35,8 @@ use mz_repr::adt::jsonb::Jsonb;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
-use super::metrics::SourceBaseMetrics;
 use self::metrics::KafkaPartitionMetrics;
+use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 
