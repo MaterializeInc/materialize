@@ -273,6 +273,7 @@ sudo systemctl start confluent-schema-registry
 
     # TODO - Do these in parallel
     launched = []
+    region = boto3.Session().region_name
     for (i, rev) in clusters:
         launched += scratch.launch_cluster(
             descs=descs,
@@ -291,6 +292,7 @@ sudo systemctl start confluent-schema-registry
             },
             delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
             git_rev=rev,
+            region=region,
         )
 
     print("Launched instances:")

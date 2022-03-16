@@ -16,6 +16,7 @@ import os
 import shlex
 import subprocess
 import sys
+from collections import defaultdict
 from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional, cast
 
@@ -128,6 +129,7 @@ def launch(
     instance_profile: Optional[str],
     nonce: str,
     delete_after: datetime.datetime,
+    region: str,
 ) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
@@ -146,7 +148,7 @@ def launch(
     if subnet_id:
         network_interface["SubnetId"] = subnet_id
 
-    say(f"launching instance {display_name or '(unnamed)'}")
+    say(f"launching instance {display_name or '(unnamed)'} in {region}")
     with open(ROOT / "misc" / "scratch" / "provision.bash") as f:
         provisioning_script = f.read()
     kwargs: RunInstancesRequestRequestTypeDef = {
@@ -272,6 +274,7 @@ class MachineDesc(BaseModel):
 def launch_cluster(
     descs: List[MachineDesc],
     *,
+    region: str,
     nonce: Optional[str] = None,
     subnet_id: str = DEFAULT_SUBNET_ID,
     key_name: Optional[str] = None,
@@ -301,6 +304,7 @@ def launch_cluster(
             instance_profile=instance_profile,
             nonce=nonce,
             delete_after=delete_after,
+            region=region,
         )
         for d in descs
     ]

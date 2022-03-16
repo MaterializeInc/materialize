@@ -70,7 +70,9 @@ def run(args: argparse.Namespace) -> None:
         )
     )
 
-    print("Destroying instances:")
+    region = boto3.Session().region_name
+
+    print(f"Destroying instances in {region}:")
     print_instances(instances, args.output_format)
 
     if not args.yes and not ui.confirm("Would you like to continue?"):

@@ -13,6 +13,8 @@ import json
 import sys
 from typing import Any, Dict, List
 
+import boto3
+
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
@@ -144,6 +146,8 @@ def run(args: argparse.Namespace) -> None:
         raise RuntimeError(f"max_age_days must be positive, got {args.max_age_days}")
     max_age = datetime.timedelta(days=args.max_age_days)
 
+    region = boto3.Session().region_name
+
     instances = launch_cluster(
         descs,
         subnet_id=args.subnet_id,
@@ -154,9 +158,10 @@ def run(args: argparse.Namespace) -> None:
         delete_after=datetime.datetime.utcnow() + max_age,
         git_rev=args.git_rev,
         extra_env={},
+        region=region,
     )
 
-    print("Launched instances:")
+    print(f"Launched instances in {region}:")
     print_instances(instances, args.output_format)
 
     if args.ssh:

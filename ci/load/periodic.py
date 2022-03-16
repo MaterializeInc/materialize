@@ -9,6 +9,8 @@
 
 import datetime
 
+import boto3
+
 from materialize import scratch
 
 
@@ -29,11 +31,13 @@ def main() -> None:
         size_gb=64,
     )
     now = datetime.datetime.utcnow()
+    region = boto3.Session().region_name
     scratch.launch_cluster(
         [desc],
         nonce=now.replace(tzinfo=datetime.timezone.utc).isoformat(),
         # Keep alive for at least a day.
         delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+        region=region,
     )
 
 

@@ -32,6 +32,8 @@ def run(args: argparse.Namespace) -> None:
     filters: List[FilterTypeDef] = []
     if not args.all:
         filters.append({"Name": "tag:LaunchedBy", "Values": args.who or [whoami()]})
+    region = boto3.Session().region_name
+    print(f"Instances in {region}:")
     print_instances(
         list(boto3.resource("ec2").instances.filter(Filters=filters)),
         args.output_format,
