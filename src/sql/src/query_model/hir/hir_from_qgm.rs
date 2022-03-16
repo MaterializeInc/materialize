@@ -128,9 +128,26 @@ impl FromModel {
                     typ,
                 }
             }
-            BoxType::Values(_) => {
-                HirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::new(vec![]))
-            }
+            BoxType::Values(values) => HirRelationExpr::constant(
+                // Map `Vec<Vec<BoxScalarExpr>` to `Vec<Vec<Datum>>`
+                values
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|expr| {
+                                if let BoxScalarExpr::Literal(datum, _) = expr {
+                                    datum.unpack_first()
+                                } else {
+                                    // TODO: the validator should make this branch unreachable.
+                                    panic!("expected all scalars in Values BoxType to be literals");
+                                }
+                            })
+                            .collect_vec()
+                    })
+                    .collect_vec(),
+                mz_repr::RelationType::new(r#box.attributes.get::<BoxRelationType>().to_owned()),
+            ),
             BoxType::Select(select) => {
                 let (rels, scalars) = self.convert_quantifiers(&r#box);
                 let (join_q_ids, mut join_inputs): (Vec<_>, Vec<_>) = rels.into_iter().unzip();
