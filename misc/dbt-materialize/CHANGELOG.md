@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## 1.0.4 - 2022-03-16
+## 1.0.3.post1 - 2022-03-16
 
 * Produce a proper error message when attempting to use an incremental materialization.
 
