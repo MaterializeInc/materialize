@@ -68,6 +68,9 @@ name = "anyhow"
 version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
+dependencies = [
+ "backtrace",
+]
 
 [[package]]
 name = "arbitrary"
@@ -3561,6 +3564,22 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mz-persist-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bytes",
+ "crossbeam-channel",
+ "differential-dataflow",
+ "futures-util",
+ "mz-persist-types",
+ "serde",
+ "timely",
  "uuid",
 ]
 
