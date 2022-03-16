@@ -188,7 +188,10 @@ impl FromModel {
                         result = result.filter(filter);
                     }
                 }
-                let result = self.convert_projection(&r#box, &column_map, result);
+                let mut result = self.convert_projection(&r#box, &column_map, result);
+                if r#box.distinct == DistinctOperation::Enforce {
+                    result = result.distinct();
+                }
                 if select.limit.is_some() || select.offset.is_some() || select.order_key.is_some() {
                     // TODO: put a TopK around the result
                     unimplemented!()

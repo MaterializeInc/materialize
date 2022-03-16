@@ -189,3 +189,11 @@ select * from x, x as y;
 | InnerJoin %0 %1 on true
 ----
 ----
+
+round_trip
+select distinct a from x
+----
+%0 =
+| Get ? (u0)
+| Project (#0)
+| Distinct
