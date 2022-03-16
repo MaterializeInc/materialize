@@ -115,7 +115,7 @@ pub struct CoordTest {
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
-        let experimental_mode = false;
+        let experimental_mode = true;
         let timestamp = Arc::new(Mutex::new(0));
         let now = {
             let timestamp = Arc::clone(&timestamp);
