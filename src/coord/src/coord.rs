@@ -85,7 +85,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -822,23 +822,24 @@ impl Coordinator {
             DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), _instance) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
-                let PendingPeek {
+                if let Some(PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                } = self
-                    .pending_peeks
-                    .remove(&uuid)
-                    .expect("no more PeekResponses after closing peek channel");
-                rows_tx
-                    .send(response)
-                    .expect("Peek endpoint terminated prematurely");
-                let uuids = self
-                    .client_pending_peeks
-                    .get_mut(&conn_id)
-                    .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
-                uuids.remove(&uuid);
-                if uuids.is_empty() {
-                    self.client_pending_peeks.remove(&conn_id);
+                }) = self.pending_peeks.remove(&uuid)
+                {
+                    rows_tx
+                        .send(response)
+                        .expect("Peek endpoint terminated prematurely");
+                    let uuids = self
+                        .client_pending_peeks
+                        .get_mut(&conn_id)
+                        .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
+                    uuids.remove(&uuid);
+                    if uuids.is_empty() {
+                        self.client_pending_peeks.remove(&conn_id);
+                    }
+                } else {
+                    warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
             DataflowResponse::Compute(
