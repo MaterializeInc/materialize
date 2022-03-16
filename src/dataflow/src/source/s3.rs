@@ -58,7 +58,7 @@ use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::MessagePayload;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace, warn, Instrument};
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -128,9 +128,11 @@ struct KeyInfo {
     key: String,
 }
 
-impl Display for KeyInfo {
+struct KeyDisplay<'a, 'b>(&'a str, &'b str);
+
+impl<'a, 'b> Display for KeyDisplay<'a, 'b> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.bucket, self.key)
+        write!(f, "{}/{}", self.0, self.1)
     }
 }
 
@@ -192,7 +194,6 @@ impl SeenObjects {
 }
 
 async fn download_objects_task(
-    task_id: u32,
     source_id: String,
     rx: async_channel::Receiver<S3Result<KeyInfo>>,
     tx: Sender<S3Result<InternalMessage>>,
@@ -218,7 +219,7 @@ async fn download_objects_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        debug!("download_objects received dataflow shutdown message");
                         break;
                     }
                 }
@@ -252,8 +253,6 @@ async fn download_objects_task(
                     Ok(update) => {
                         debug!(
                             timing=?start.elapsed(),
-                            %source_id,
-                            %task_id,
                             "successfully downloaded {}/{}",
                             msg.bucket, msg.key
                         );
@@ -288,10 +287,7 @@ async fn download_objects_task(
             }
         }
     }
-    debug!(
-        "source_id={} task_id={} exiting download objects task",
-        source_id, task_id
-    );
+    debug!("exiting download objects task");
 }
 
 async fn scan_bucket_task(
@@ -318,8 +314,8 @@ async fn scan_bucket_task(
     if is_literal_object {
         let key = glob.unwrap().glob().glob();
         debug!(
-            "source_id={} downloading single object from s3 bucket={} key={}",
-            source_id, bucket, key
+            "downloading single object from s3 bucket={} key={}",
+            bucket, key
         );
         if let Err(e) = tx
             .send(Ok(KeyInfo {
@@ -328,17 +324,14 @@ async fn scan_bucket_task(
             }))
             .await
         {
-            debug!(
-                "source_id={} Unable to send single key to downloader: {}",
-                source_id, e
-            );
+            debug!("Unable to send single key to downloader: {}", e);
         };
 
         return;
     } else {
         debug!(
-            "source_id={} scanning bucket to find objects to download bucket={}",
-            source_id, bucket
+            "scanning bucket to find objects to download bucket={}",
+            bucket
         );
     }
 
@@ -400,10 +393,7 @@ async fn scan_bucket_task(
             }
         }
     }
-    debug!(
-        "source_id={} exiting bucket scan task bucket={}",
-        source_id, bucket
-    );
+    debug!("exiting bucket scan task bucket={}", bucket);
 }
 
 async fn read_sqs_task(
@@ -417,8 +407,8 @@ async fn read_sqs_task(
     base_metrics: SourceBaseMetrics,
 ) {
     debug!(
-        "source_id={} starting read sqs task queue={}",
-        source_id, queue,
+        %source_id, %queue,
+        "starting read sqs task",
     );
 
     let config = aws_config.load(aws_external_id).await;
@@ -782,8 +772,9 @@ async fn download_object(
     };
 
     debug!(
-        "source_id={} {}/{} download_result={:?}",
-        source_id, bucket, key, download_result,
+        object=%KeyDisplay(bucket, key),
+        ?download_result,
+        "completed object download"
     );
 
     if download_result.is_ok() {
@@ -886,12 +877,13 @@ impl SourceReader for S3SourceReader {
                 .unwrap_or_else(|_| "5".to_string())
                 .parse()
                 .unwrap();
+            debug!(%task_count, "spawning concurrent download tasks");
 
             for task_id in 0..task_count {
+                let span = tracing::debug_span!("s3_download", %source_id, %task_id);
                 task::spawn(
-                    || format!("s3_download:{}", source_id),
+                    || format!("s3_download:{source_id}:{task_id}"),
                     download_objects_task(
-                        task_id,
                         source_id.to_string(),
                         keys_rx.clone(),
                         dataflow_tx.clone(),
@@ -901,7 +893,8 @@ impl SourceReader for S3SourceReader {
                         Arc::clone(&activator),
                         s3_conn.compression,
                         seen_objects.clone(),
-                    ),
+                    )
+                    .instrument(span),
                 );
             }
             for key_source in s3_conn.key_sources {
@@ -989,9 +982,9 @@ impl SourceReader for S3SourceReader {
 
 impl Drop for S3SourceReader {
     fn drop(&mut self) {
-        debug!("source_id={} Dropping S3SourceReader", self.id);
+        debug!(source_id=%self.id, "Dropping S3SourceReader");
         if self.dataflow_status.send(DataflowStatus::Stopped).is_err() {
-            debug!("source_id={} already shutdown", self.id);
+            debug!(source_id=%self.id, "already shutdown" );
         };
     }
 }
