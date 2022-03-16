@@ -14,7 +14,7 @@ aliases:
 
 Materialize Cloud hosts and maintains [Materialize](/overview/what-is-materialize) deployments for you, **automating administration tasks** like hardware provisioning, database setup, upgrades, and backups. You can sign up for an account in less than 30 seconds and try out Materialize with your own streaming and historical data sources.
 
-{{< cta href="https://cloud.materialize.com/account/sign-up" >}}
+{{< cta href="https://materialize.com/materialize-cloud-access/" >}}
 Sign up for Materialize Cloud →
 {{</ cta >}}
 
