@@ -571,7 +571,7 @@ digraph G {
     }
     subgraph cluster0 {
         label = "Box0:Get"
-        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY [0] [1, 2] }" ]
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY: C0| UNIQUE KEY: C1, C2 }" ]
         {
             rank = same
         }
@@ -609,7 +609,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Get"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY [0] [1, 2] }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY: C0| UNIQUE KEY: C1, C2 }" ]
         {
             rank = same
         }
