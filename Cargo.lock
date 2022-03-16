@@ -3731,10 +3731,14 @@ dependencies = [
  "bytes",
  "crossbeam-channel",
  "differential-dataflow",
+ "futures-executor",
  "futures-util",
+ "mz-ore",
  "mz-persist-types",
  "serde",
  "timely",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

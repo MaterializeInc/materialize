@@ -10,7 +10,6 @@
 //! Write capabilities and handles
 
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
@@ -18,9 +17,11 @@ use differential_dataflow::lattice::Lattice;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::{InvalidUsage, LocationError};
+use crate::r#impl::shard::Shard;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 ///
@@ -37,13 +38,23 @@ impl std::fmt::Display for WriterId {
     }
 }
 
+impl WriterId {
+    pub(crate) fn new() -> Self {
+        WriterId(*Uuid::new_v4().as_bytes())
+    }
+}
+
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
+#[derive(Debug)]
 pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) writer_id: WriterId,
+    pub(crate) shard: Shard<K, V, T, D>,
+
+    pub(crate) upper: Antichain<T>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -57,7 +68,7 @@ where
     ///
     /// This will always be greater or equal to the shard-global `upper`.
     pub fn upper(&self) -> &Antichain<T> {
-        todo!()
+        &self.upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -95,12 +106,37 @@ where
         updates: I,
         new_upper: Antichain<T>,
     ) -> Result<Result<(), InvalidUsage>, LocationError> {
-        todo!(
-            "{:?}{:?}{:?}",
+        trace!(
+            "WriteHandle::write_batch timeout={:?} new_upper={:?}",
             timeout,
-            updates.into_iter().size_hint(),
             new_upper
         );
+        let res = self
+            .shard
+            .write_batch(&self.writer_id, updates, new_upper)
+            .await;
+        match res {
+            Ok(x) => self.upper = x,
+            Err(err) => return Ok(Err(err)),
+        };
+        Ok(Ok(()))
+    }
+
+    /// Test helper for writing a slice of owned updates.
+    #[cfg(test)]
+    pub async fn write_batch_slice(
+        &mut self,
+        updates: &[((K, V), T, D)],
+        new_upper: T,
+    ) -> Result<Result<(), InvalidUsage>, LocationError> {
+        use crate::NO_TIMEOUT;
+
+        self.write_batch(
+            NO_TIMEOUT,
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(new_upper),
+        )
+        .await
     }
 }
 
@@ -109,6 +145,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        todo!()
+        // TODO: Use tokio instead of futures_executor.
+        futures_executor::block_on(self.shard.deregister_writer(&self.writer_id));
     }
 }
