@@ -15,6 +15,11 @@ The intent is that in each dimension we remove limits to scaling:
 Here "unbounded" does not mean "infinite", only "can be increased by spending
 more resources".
 
+It is important to stress that while we want to provide access to more resources,
+and more availability, this is not meant to come at the expense of correctness
+or consistency. We still require Materialize to speak clearly and correctly about
+the contents of the collections it manages.
+
 The above are goals, and the path to Materialize Platform starts with none being
 the case yet.
 
