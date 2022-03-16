@@ -10,14 +10,13 @@
 use std::collections::HashMap;
 
 use prometheus::core::AtomicI64;
+use tracing::debug;
 
 use mz_expr::SourceInstanceId;
-
-use crate::source::metrics::SourceBaseMetrics;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
-use tracing::error;
 
+use crate::source::metrics::SourceBaseMetrics;
 pub(super) struct KafkaPartitionMetrics {
     labels: Vec<String>,
     base_metrics: SourceBaseMetrics,
@@ -58,9 +57,10 @@ impl KafkaPartitionMetrics {
         if id < 0 {
             return;
         }
-        // This offset value is another librdkafka sentinel indicating it got an invalid
+        // This offset value is another librdkafka sentinel indicating it got an invalid high watermark from the broker
         if offset == -1001 {
-            error!("Got invalid high watermark for partition {}", id);
+            // TODO(nharring-adjacent): This is potentially spammy so its at debug but it would be better as info with sampling 
+            debug!("Got invalid high watermark for partition {}", id);
             return;
         }
         self.partition_offset_map

@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_dataflow_types::sources::AwsExternalId;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -15,17 +19,12 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
-
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 use timely::scheduling::activate::SyncActivator;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
+    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
     MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
@@ -36,8 +35,8 @@ use mz_repr::adt::jsonb::Jsonb;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
-use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
+use self::metrics::KafkaPartitionMetrics;
 
 mod metrics;
 
@@ -174,7 +173,7 @@ impl SourceReader for KafkaSourceReader {
                 .unwrap()
                 .unpark_on_drop()
         };
-        let partition_ids = start_offsets.keys().map(|i| *i).collect();
+        let partition_ids = start_offsets.keys().copied().collect();
         Ok(KafkaSourceReader {
             topic_name: topic.clone(),
             source_name: source_name.clone(),
@@ -420,7 +419,7 @@ impl KafkaSourceReader {
                     }
                 }
                 Err(e) => {
-                    error!("{}", e);
+                    error!("failed decoding librdkafka statistics JSON: {}", e);
                 }
             }
         }
