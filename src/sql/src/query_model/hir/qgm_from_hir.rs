@@ -18,10 +18,7 @@ use std::collections::HashMap;
 use crate::plan::expr::HirRelationExpr;
 use crate::plan::expr::{HirScalarExpr, JoinKind};
 use crate::query_model::error::{QGMError, UnsupportedHirRelationExpr, UnsupportedHirScalarExpr};
-use crate::query_model::model::{
-    BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, DistinctOperation, Get,
-    Grouping, Model, OuterJoin, QuantifierType, Select, Values,
-};
+use crate::query_model::model::*;
 
 impl TryFrom<HirRelationExpr> for Model {
     type Error = QGMError;
@@ -185,7 +182,32 @@ impl FromHir {
                 }
                 Ok(box_id)
             }
-            // HirRelationExpr::CallTable { func, exprs } => todo!(),
+            HirRelationExpr::CallTable { func, exprs } => {
+                // mark the output type of the called function for later
+                let output_type = func.output_type();
+
+                // create box with empty function call argument expressions
+                let call_table = CallTable::new(func, vec![]);
+                let box_id = self.model.make_box(call_table.into());
+
+                // fix function the call arguments (it is a bit awkward that
+                // this needs to be adapted only after creating the box)
+                let exprs = self.generate_exprs(exprs, box_id)?;
+                let mut r#box = self.model.get_mut_box(box_id);
+                if let BoxType::CallTable(call_table) = &mut r#box.box_type {
+                    call_table.exprs = exprs;
+                }
+
+                // add the output of the table as projected columns
+                for (position, column_type) in output_type.column_types.into_iter().enumerate() {
+                    r#box.add_column(BoxScalarExpr::BaseColumn(BaseColumn {
+                        position,
+                        column_type,
+                    }));
+                }
+
+                Ok(box_id)
+            }
             HirRelationExpr::Filter { input, predicates } => {
                 let input_box = self.generate_internal(*input)?;
                 // We could install the predicates in `input_box` if it happened
@@ -464,6 +486,20 @@ impl FromHir {
                 Err(QGMError::from(UnsupportedHirScalarExpr { scalar }))
             }
         }
+    }
+
+    /// Lowers the given expressions within the context of the given box.
+    ///
+    /// Delegates to [`FromHir::generate_expr`] for each element.
+    fn generate_exprs(
+        &mut self,
+        exprs: Vec<HirScalarExpr>,
+        context_box: BoxId,
+    ) -> Result<Vec<BoxScalarExpr>, QGMError> {
+        exprs
+            .into_iter()
+            .map(|expr| self.generate_expr(expr, context_box))
+            .collect()
     }
 
     /// Find the N-th column among the columns projected by the input quantifiers
