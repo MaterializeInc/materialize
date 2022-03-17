@@ -56,10 +56,10 @@ class Docker(Executor):
         self._composition = composition
         self._seed = seed
 
-    def RestartMz(self) -> Any:
+    def RestartMz(self) -> None:
         self._composition.kill("materialized")
         self._composition.up("materialized")
-        return 0.0
+        return None
 
     def Td(self, input: str) -> Any:
         with NamedTemporaryFile(
