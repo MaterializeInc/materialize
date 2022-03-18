@@ -117,8 +117,11 @@ impl Codec for DataflowError {
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let decoded = serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?;
-        Ok(decoded)
+        DecodeError::decode(buf)
+            .map(DataflowError::from)
+            .or_else(|_| {
+                serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?
+            })
     }
 }
 
