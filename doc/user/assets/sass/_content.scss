@@ -711,3 +711,25 @@ td > .default_button {
         color: $danger;
     }
 }
+
+.copy_button {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-family: "Inter", sans-serif;
+    line-height: 1.75;
+    &.success {
+        background: $lime;
+    }
+}
+
+pre {
+    position: relative;
+
+    &:hover {
+        .copy_button {
+            display: inline-block;
+        }
+    }
+}
