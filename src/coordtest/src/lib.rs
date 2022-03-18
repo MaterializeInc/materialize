@@ -560,6 +560,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 /// `recv`, however, only presents the responses that have been explicitly
 /// forwarded via `forward_response`. To access the actual responses from
 /// the underlying dataflow client, call `try_intercepting_recv`.
+#[derive(Debug)]
 struct InterceptingDataflowClient<C> {
     inner: Arc<TokioMutex<C>>,
     feedback_tx: mpsc::UnboundedSender<mz_dataflow_types::client::Response>,
