@@ -65,6 +65,25 @@ by the Apache License, Version 2.0.  */}}
           e.preventDefault();
           document.getElementById("search-input").focus();
         });
+
+        /* Add "Click to Copy" button to code blocks */
+        $(document).ready(function() {
+          $('pre.chroma').append('<span class="default_button copy_button" title="Copy code to clipboard">Copy</span>');
+
+          $('pre.chroma span.copy_button').click(function(e) {
+            var _this = $(this),
+                copyHex = document.createElement('textarea');
+            copyHex.value = _this.parent().find('code').text().trim();
+            document.body.appendChild(copyHex);
+            copyHex.select();
+            document.execCommand('copy');
+            document.body.removeChild(copyHex);
+            _this.parent().addClass("copy_success");
+            setTimeout(function() {
+              _this.parent().removeClass("copy_success");
+            }, 1);
+          });
+        });
     </script>
 </body>
 
