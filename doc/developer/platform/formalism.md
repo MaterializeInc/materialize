@@ -78,9 +78,10 @@ CIDR differential dataflow paper, a piece of data is called a "record".
 
 ## Times
 
-A *Timeline* is a set of *Materialize times* `T`, together with a *meet*
-(greatest lower bound) and *join* (least upper bound), each of which take two
-elements of `T` and yield a third:
+A *Timeline* is a unique ID (for disambiguating e.g. two sets of integers), a
+set of *Materialize times* `T`, together with a *meet* (greatest lower bound)
+and *join* (least upper bound), each of which take two elements of `T` and
+yield a third:
 
 ```
 meet(t1, t2) => t3
