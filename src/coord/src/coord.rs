@@ -2581,14 +2581,19 @@ impl Coordinator {
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
+        let mut instance_ids = Vec::new();
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
+            instance_ids.push(instance.id);
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
+        for id in instance_ids {
+            self.dataflow_client.drop_instance(id).await.unwrap();
+        }
         Ok(ExecuteResponse::DroppedComputeInstance)
     }
 
