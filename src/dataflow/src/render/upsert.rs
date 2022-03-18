@@ -164,7 +164,8 @@ where
                 operator::empty(&stream.scope()),
                 Pipeline,
                 |_, _| {},
-            );
+            )
+            .map(|((_k, v), t, d)| (v, t, d));
 
             let upsert_errs = operator::empty(&stream.scope());
 
@@ -306,7 +307,7 @@ fn evaluate(
 
 use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::{ParallelizationContract, ParallelizationContractCore};
-use timely::dataflow::operators::generic::{FrontieredInputHandle, FrontieredInputHandleCore};
+use timely::dataflow::operators::generic::FrontieredInputHandle;
 
 type RD<E> = Result<Row, E>;
 type DD<E, T> = ((RD<E>, RD<E>), T, i64);
@@ -322,7 +323,7 @@ fn upsert_core<G, P, PF>(
     es: Stream<G, DD<DecodeError, G::Timestamp>>,
     extra_p: P,
     mut persistence: PF,
-) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
+) -> Stream<G, ((Result<Row, DecodeError>, Result<Row, DataflowError>), u64, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
     P: ParallelizationContract<Timestamp, DD<DecodeError, Timestamp>>,
@@ -337,7 +338,7 @@ where
                         Vec<DD<DecodeError, Timestamp>>,
                     >>::Puller,
                 >,
-                &mut HashMap<RD<DecodeError>, RD<DecodeError>>,
+                &mut HashMap<RD<DecodeError>, RD<DataflowError>>,
             ) + 'static,
 {
     let result_stream = stream.binary_frontier(
@@ -356,14 +357,13 @@ where
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along
             let mut current_values: HashMap<Result<_, DecodeError>, _> = HashMap::new();
-            let mut persist_values = HashMap::new();
 
             let mut vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
 
             move |input, state_input, output| {
                 // perform persistence magic :)
-                persistence(state_input, &mut persist_values);
+                persistence(state_input, &mut current_values);
 
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
@@ -519,7 +519,7 @@ where
                                             })
                                             .map_err(|e| e.clone());
                                         current_values
-                                            .insert(Ok(decoded_key.clone()), thinned_value)
+                                            .insert(decoded_key.clone(), thinned_value)
                                             .map(|res| {
                                                 res.map(|v| {
                                                     rehydrate(
@@ -533,7 +533,7 @@ where
                                                 })
                                             })
                                     } else {
-                                        current_values.remove(&Ok(decoded_key.clone())).map(|res| {
+                                        current_values.remove(&decoded_key.clone()).map(|res| {
                                             res.map(|v| {
                                                 rehydrate(
                                                     &upsert_envelope.key_indices,
@@ -557,12 +557,20 @@ where
                                         // retract unrelated errors with the same message.
                                         if !decoded_key.is_err() {
                                             // retract old value
-                                            session.give((old_value, cap.time().clone(), -1));
+                                            session.give((
+                                                (decoded_key.clone(), old_value),
+                                                cap.time().clone(),
+                                                -1,
+                                            ));
                                         }
                                     }
                                     if let Some(new_value) = new_value {
                                         // give new value
-                                        session.give((new_value, cap.time().clone(), 1));
+                                        session.give((
+                                            (decoded_key, new_value),
+                                            cap.time().clone(),
+                                            1,
+                                        ));
                                     }
                                 }
                                 None => {}
@@ -653,7 +661,10 @@ mod persist {
         upsert_envelope: UpsertEnvelope,
         persist_config: PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
         name: &str,
-    ) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
+    ) -> (
+        Stream<G, (Result<Row, DataflowError>, u64, Diff)>,
+        Stream<G, (String, u64, i64)>,
+    )
     where
         G: Scope<Timestamp = Timestamp>,
         P: ParallelizationContract<G::Timestamp, DD<DecodeError, G::Timestamp>>,
@@ -681,7 +692,7 @@ mod persist {
         let mut state_input_buffer = Vec::new();
         let operator_name = format!("persistent_upsert({})", name);
 
-        upsert_core(
+        let new_upsert_oks = upsert_core(
             stream,
             predicates,
             position_or,
@@ -716,7 +727,11 @@ mod persist {
                         .take()
                         .expect("already finished ingesting")
                         .finish();
-                    current_values.extend(initial_state.into_iter());
+                    current_values.extend(
+                        initial_state
+                            .into_iter()
+                            .map(|(k, v)| (k, v.map_err(|e| e.into()))),
+                    );
 
                     trace!(
                         "In {}, initial (restored) upsert state: {:?}",
@@ -725,6 +740,30 @@ mod persist {
                     );
                 }
             },
+        );
+
+        let (new_upsert_oks, new_upsert_persist_errs) =
+            new_upsert_oks.persist(name, persist_config.write_handle);
+
+        // Also pull the timestamp of restored data up to the as_of_frontier. We are doing this in
+        // two steps: first, we are modifying the timestamp in the data itself, then we're delaying
+        // the timely timestamp. The latter will stash updates while they are not beyond the
+        // frontier.
+        let retime_as_of_frontier = as_of_frontier.clone();
+        let restored_upsert_oks = restored_upsert_oks
+            .map(move |(data, mut time, diff)| {
+                time.advance_by(retime_as_of_frontier.borrow());
+                (data, time, diff)
+            })
+            .delay_batch(move |time| {
+                let mut time = *time;
+                time.advance_by(as_of_frontier.borrow());
+                time
+            });
+
+        (
+            new_upsert_oks.concat(&restored_upsert_oks),
+            new_upsert_persist_errs.concat(&state_errs),
         )
     }
 
