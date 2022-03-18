@@ -33,7 +33,7 @@ class Action:
         assert False
 
 
-class Lambda(Action):
+class LambdaAction(Action):
     def __init__(self, _lambda: Callable) -> None:
         self._lambda = _lambda
 
