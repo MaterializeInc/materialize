@@ -24,9 +24,10 @@
   </tr>
   {{ range .functions }}
   <tr>
-    {{/*  Print an ID and class that can be used to index in docsearch
-            and deeplink.  */}}
-    <td class="docsearch_l4" id="{{ .signature | urlize }}">
+    {{/*  Extract the function's name from its signature and use it as the ID
+          to facilitate deeplinking. The `docsearch_l4` class is a special
+          class that is scraped by our Algolia DocSearch configuration.  */}}
+    <td class="docsearch_l4" id="{{ index (split .signature "(") 0 | urlize }}">
       {{/*  We use clojure highlighting simply because it looks best with the
       components we want to highlight. In the future, this should be customized
       in some way.  */}}
