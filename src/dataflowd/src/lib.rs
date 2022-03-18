@@ -25,9 +25,10 @@ use mz_dataflow_types::client::{
     partitioned::Partitioned, Client, Command, ComputeCommand, ComputeInstanceId, InstanceConfig,
     Response,
 };
-use tracing::trace;
+use tracing::{error, trace};
 
 /// A convenience type for compatibility.
+#[derive(Debug)]
 pub struct RemoteClient {
     client: Partitioned<tcp::TcpClient>,
 }
@@ -65,6 +66,7 @@ impl Client for RemoteClient {
 }
 
 /// Types of compute clients we manage.
+#[derive(Debug)]
 pub enum ComputeClientFlavor {
     /// A virtual compute client, hosted on the storage server.
     Virtual,
@@ -73,6 +75,7 @@ pub enum ComputeClientFlavor {
 }
 
 /// A [Client] backed by separate clients for storage and compute.
+#[derive(Debug)]
 pub struct SplitClient<S> {
     /// Client on which storage commands are executed, and where virtual compute instances are created.
     storage_client: S,
@@ -96,7 +99,12 @@ impl<S: Client> Client for SplitClient<S> {
         trace!("SplitClient: Sending dataflow command: {:?}", cmd);
         // Ensure that a client exists, if we are asked to create one.
         if let Command::Compute(ComputeCommand::CreateInstance(config, _logging), instance) = &cmd {
-            assert!(self.compute_clients.get(instance).is_none());
+            if let Some(existing) = self.compute_clients.remove(instance) {
+                error!("Duplicate compute client for instance {instance:?}: current: {existing:?} new: {config:?}");
+                return Err(anyhow!(
+                    "Duplicate compute client for instance {instance:?}"
+                ));
+            }
             let client = match config {
                 InstanceConfig::Virtual => ComputeClientFlavor::Virtual,
                 InstanceConfig::Remote(addr) => {
@@ -166,6 +174,7 @@ pub mod tcp {
     use mz_dataflow_types::client::{Client, Command, Response};
 
     /// A client to a remote dataflow server.
+    #[derive(Debug)]
     pub struct TcpClient {
         connection: FramedClient<TcpStream>,
     }

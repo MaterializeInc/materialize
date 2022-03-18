@@ -378,7 +378,7 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
 /// A client to a running dataflow server.
 #[async_trait(?Send)]
-pub trait Client<T = mz_repr::Timestamp> {
+pub trait Client<T = mz_repr::Timestamp>: std::fmt::Debug {
     /// Sends a command to the dataflow server.
     ///
     /// The command can error for various reasons.
@@ -463,6 +463,7 @@ impl<'a, C: Client + 'a> futures::stream::Stream for SelectStream<'a, C> {
 }
 
 /// A convenience type for compatibility.
+#[derive(Debug)]
 pub struct LocalClient {
     client: partitioned::Partitioned<process_local::ProcessLocal>,
 }
@@ -524,6 +525,7 @@ pub mod partitioned {
     ///
     /// Such a client needs to broadcast (partitioned) commands to all of its clients,
     /// and await responses from each of the client shards before it can respond.
+    #[derive(Debug)]
     pub struct Partitioned<C: Client> {
         shards: Vec<C>,
         cursor: usize,
@@ -579,6 +581,7 @@ pub mod partitioned {
     /// This exists so we can consolidate rows and
     /// sort them by timestamp before passing them to the consumer
     /// (currently, coord.rs).
+    #[derive(Debug)]
     struct PendingTail<T> {
         /// `frontiers[i]` is an antichain representing the times at which we may
         /// still receive results from worker `i`.
@@ -686,6 +689,18 @@ pub mod partitioned {
         pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail<T>>>,
         /// The next responses to return immediately, if any
         stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
+    }
+
+    // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
+    impl<T: std::fmt::Debug> std::fmt::Debug for PartitionedClientState<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PartitionedClientState<T>")
+                .field("uppers", &self.uppers)
+                .field("peek_responses", &self.peek_responses)
+                .field("parts", &self.parts)
+                .field("pending_tails", &self.pending_tails)
+                .finish_non_exhaustive()
+        }
     }
 
     impl PartitionedClientState {
@@ -930,6 +945,7 @@ pub mod process_local {
     use super::{Client, Command, Response};
 
     /// A client to a dataflow server running in the current process.
+    #[derive(Debug)]
     pub struct ProcessLocal {
         feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
         worker_tx: crossbeam_channel::Sender<Command>,
