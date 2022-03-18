@@ -719,20 +719,17 @@ td > .default_button {
     right: 10px;
     font-family: "Inter", sans-serif;
     line-height: 1.75;
+    &.success {
+        background: $lime;
+    }
 }
 
 pre {
     position: relative;
-    transition: background-color 500ms ease-out;
 
     &:hover {
         .copy_button {
             display: inline-block;
         }
-    }
-
-    &.copy_success {
-        background-color: rgba($lime, 0.3);
-        transition: background-color 0s;
     }
 }

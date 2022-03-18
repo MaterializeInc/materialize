@@ -78,10 +78,10 @@ by the Apache License, Version 2.0.  */}}
             copyHex.select();
             document.execCommand('copy');
             document.body.removeChild(copyHex);
-            _this.parent().addClass("copy_success");
+            _this.addClass("success").text('Copied');
             setTimeout(function() {
-              _this.parent().removeClass("copy_success");
-            }, 1);
+              _this.removeClass("success").text('Copy');
+            }, 1000);
           });
         });
     </script>
