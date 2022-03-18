@@ -1192,7 +1192,7 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.handle_verify_prepared_statement(&mut session, &name);
+                let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
             }
         }
@@ -1268,7 +1268,14 @@ impl Coordinator {
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
+        session.set_portal(
+            name,
+            desc,
+            Some(stmt),
+            params,
+            result_formats,
+            self.catalog.transient_revision(),
+        )?;
         Ok(())
     }
 
@@ -1301,7 +1308,7 @@ impl Coordinator {
     }
 
     /// Verify a prepared statement is still valid.
-    fn handle_verify_prepared_statement(
+    fn verify_prepared_statement(
         &self,
         session: &mut Session,
         name: &str,
@@ -1310,29 +1317,59 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(CoordError::UnknownPreparedStatement(name.to_string())),
         };
-        if ps.catalog_revision != self.catalog.transient_revision() {
-            let desc = self.describe(
+        if let Some(revision) =
+            self.verify_statement_revision(session, ps.sql(), ps.desc(), ps.catalog_revision)?
+        {
+            let ps = session
+                .get_prepared_statement_mut_unverified(name)
+                .expect("known to exist");
+            ps.catalog_revision = revision;
+        }
+
+        Ok(())
+    }
+
+    /// Verify a portal is still valid.
+    fn verify_portal(&self, session: &mut Session, name: &str) -> Result<(), CoordError> {
+        let portal = match session.get_portal_unverified(&name) {
+            Some(portal) => portal,
+            None => return Err(CoordError::UnknownCursor(name.to_string())),
+        };
+        if let Some(revision) = self.verify_statement_revision(
+            &session,
+            portal.stmt.as_ref(),
+            &portal.desc,
+            portal.catalog_revision,
+        )? {
+            let portal = session
+                .get_portal_unverified_mut(&name)
+                .expect("known to exist");
+            portal.catalog_revision = revision;
+        }
+        Ok(())
+    }
+
+    fn verify_statement_revision(
+        &self,
+        session: &Session,
+        stmt: Option<&Statement<Raw>>,
+        desc: &StatementDesc,
+        catalog_revision: u64,
+    ) -> Result<Option<u64>, CoordError> {
+        let current_revision = self.catalog.transient_revision();
+        if catalog_revision != current_revision {
+            let current_desc = self.describe(
                 session,
-                ps.sql().cloned(),
-                ps.desc()
-                    .param_types
-                    .iter()
-                    .map(|ty| Some(ty.clone()))
-                    .collect(),
+                stmt.cloned(),
+                desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
             )?;
-            if &desc != ps.desc() {
+            if &current_desc != desc {
                 Err(CoordError::ChangedPlan)
             } else {
-                // If the descs are the same, we can bump our version to declare that ps is
-                // correct as of now.
-                let ps = session
-                    .get_prepared_statement_mut_unverified(name)
-                    .expect("known to exist");
-                ps.catalog_revision = self.catalog.transient_revision();
-                Ok(())
+                Ok(Some(current_revision))
             }
         } else {
-            Ok(())
+            Ok(None)
         }
     }
 
@@ -1343,10 +1380,13 @@ impl Coordinator {
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
-        let portal = match session.get_portal(&portal_name) {
-            Some(portal) => portal,
-            None => return tx.send(Err(CoordError::UnknownCursor(portal_name)), session),
-        };
+        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+            return tx.send(Err(err), session);
+        }
+
+        let portal = session
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist");
 
         let stmt = match &portal.stmt {
             Some(stmt) => stmt,
@@ -1884,16 +1924,14 @@ impl Coordinator {
         plan: ExecutePlan,
     ) -> Result<String, CoordError> {
         // Verify the stmt is still valid.
-        self.handle_verify_prepared_statement(session, &plan.name)?;
-        let ps = session.get_prepared_statement_unverified(&plan.name);
-        match ps {
-            Some(ps) => {
-                let sql = ps.sql().cloned();
-                let desc = ps.desc().clone();
-                session.create_new_portal(sql, desc, plan.params, Vec::new())
-            }
-            None => Err(CoordError::UnknownPreparedStatement(plan.name)),
-        }
+        self.verify_prepared_statement(session, &plan.name)?;
+        let ps = session
+            .get_prepared_statement_unverified(&plan.name)
+            .expect("known to exist");
+        let sql = ps.sql().cloned();
+        let desc = ps.desc().clone();
+        let revision = ps.catalog_revision;
+        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
     async fn sequence_create_database(
@@ -4780,7 +4818,12 @@ pub fn describe(
         // FETCH's description depends on the current session, which describe_statement
         // doesn't (and shouldn't?) have access to, so intercept it here.
         Statement::Fetch(FetchStatement { ref name, .. }) => {
-            match session.get_portal(name.as_str()).map(|p| p.desc.clone()) {
+            // Unverified portal is ok here because Coordinator::execute will verify the
+            // named portal during execution.
+            match session
+                .get_portal_unverified(name.as_str())
+                .map(|p| p.desc.clone())
+            {
                 Some(desc) => Ok(desc),
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }

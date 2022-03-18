@@ -457,7 +457,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(5);
 
-        mz_pgtest::run_test(tf, &addr, user, timeout);
+        mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });
 
     Ok(())

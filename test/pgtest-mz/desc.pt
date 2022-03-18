@@ -1,0 +1,76 @@
+# Test changing a table mid query by another connection.
+
+# This is incompatible with Postgres beacuse they, reasonably, block on DROP
+# TABLE while a portal is bound to it.
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE t (a INT)"}
+Parse {"name": "q", "query": "SELECT * FROM t"}
+Bind {"statement": "q", "portal": "p"}
+Describe {"variant": "P", "name": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}
+
+# Bind then change the table in another connection. Don't send Sync because
+# that closes the portal.
+send
+Bind {"statement": "q", "portal": "p"}
+----
+
+# Unfortunately we cannot wait for BindComplete because it doesn't show up
+# until Sync, so this is probably a bit racey. But since this will initiate a
+# new connection, seems likely that the Bind always gets processed before this
+# connection is ready.
+send conn=writer
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (c INT, b INT)"}
+Query {"query": "INSERT INTO t VALUES (1, 2)"}
+----
+
+until conn=writer
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+
+# Executing (which in mz starts the portal) will now complain that the plan
+# changed before execution can start.
+# See: #11214, #11258
+send
+Execute {"portal": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+----
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}

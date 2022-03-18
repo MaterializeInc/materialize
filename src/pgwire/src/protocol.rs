@@ -397,7 +397,7 @@ where
         let stmt_desc = self
             .coord_client
             .session()
-            .get_portal(EMPTY_PORTAL)
+            .get_portal_unverified(EMPTY_PORTAL)
             .map(|portal| portal.desc.clone())
             .expect("unnamed portal should be present");
         if !stmt_desc.param_types.is_empty() {
@@ -707,12 +707,16 @@ where
         }
 
         let desc = stmt.desc().clone();
+        let revision = stmt.catalog_revision;
         let stmt = stmt.sql().cloned();
-        if let Err(err) =
-            self.coord_client
-                .session()
-                .set_portal(portal_name, desc, stmt, params, result_formats)
-        {
+        if let Err(err) = self.coord_client.session().set_portal(
+            portal_name,
+            desc,
+            stmt,
+            params,
+            result_formats,
+            revision,
+        ) {
             return self
                 .error(ErrorResponse::from_coord(Severity::Error, err))
                 .await;
@@ -734,8 +738,11 @@ where
             let aborted_txn = self.is_aborted_txn();
 
             // Check if the portal has been started and can be continued.
-            let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
-                //  let portal = match session.get_portal_mut(&portal_name) {
+            let portal = match self
+                .coord_client
+                .session()
+                .get_portal_unverified_mut(&portal_name)
+            {
                 Some(portal) => portal,
                 None => {
                     return self
@@ -856,7 +863,7 @@ where
 
         let session = self.coord_client.session();
         let row_desc = session
-            .get_portal(name)
+            .get_portal_unverified(name)
             .map(|portal| describe_rows(&portal.desc, &portal.result_formats));
         match row_desc {
             Some(row_desc) => {
@@ -889,7 +896,7 @@ where
         let portal = self
             .coord_client
             .session()
-            .get_portal_mut(name)
+            .get_portal_unverified_mut(name)
             .expect("portal should exist");
         portal.state = PortalState::Completed(None);
     }
@@ -1292,7 +1299,7 @@ where
         let result_formats = self
             .coord_client
             .session()
-            .get_portal(result_format_portal_name)
+            .get_portal_unverified(result_format_portal_name)
             .expect("valid fetch portal name for send rows")
             .result_formats
             .clone();
@@ -1431,7 +1438,7 @@ where
         let portal = self
             .coord_client
             .session()
-            .get_portal_mut(&portal_name)
+            .get_portal_unverified_mut(&portal_name)
             .expect("valid portal name for send rows");
 
         // Always return rows back, even if it's empty. This prevents an unclosed
@@ -1441,7 +1448,7 @@ where
         let fetch_portal = fetch_portal_name.map(|name| {
             self.coord_client
                 .session()
-                .get_portal_mut(&name)
+                .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
