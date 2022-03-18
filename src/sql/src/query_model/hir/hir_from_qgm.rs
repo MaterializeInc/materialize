@@ -56,7 +56,6 @@ struct ColumnMap {
 }
 
 impl FromModel {
-    #[allow(dead_code)]
     fn generate(mut self, mut model: Model) -> HirRelationExpr {
         // Derive the RelationType of each box.
         use crate::query_model::attribute::core::{Attribute, RequiredAttributes};
@@ -78,6 +77,7 @@ impl FromModel {
             },
         );
 
+        debug_assert!(self.converted.len() == 1);
         // Retrieve the HIR and put `let`s around it.
         let mut result = self.converted.pop().unwrap();
         while let Some((id, value, _)) = self.lets.pop() {
@@ -107,20 +107,7 @@ impl FromModel {
         let hir = match &r#box.box_type {
             BoxType::Get(Get { id, unique_keys }) => {
                 let typ = mz_repr::RelationType::new(
-                    r#box
-                        .columns
-                        .iter()
-                        .map(|c| {
-                            if let BoxScalarExpr::BaseColumn(BaseColumn { column_type, .. }) =
-                                &c.expr
-                            {
-                                column_type.clone()
-                            } else {
-                                // TODO: the validator should make this branch unreachable.
-                                panic!("expected all columns in Get BoxType to be BaseColumn");
-                            }
-                        })
-                        .collect::<Vec<_>>(),
+                    r#box.attributes.get::<BoxRelationType>().to_owned(),
                 )
                 .with_keys(unique_keys.clone());
                 HirRelationExpr::Get {

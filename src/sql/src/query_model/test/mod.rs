@@ -35,7 +35,7 @@ enum Directive {
     Opt,
     /// Optimize and decorrelate the model. Then convert it to a `MirRelationExpr`.
     EndToEnd,
-    /// Build the model and convert it back to a `HirRelationExpr`.
+    /// Ensure that the HIR ⇒ QGM ⇒ HIR round trip reaches a fixpoint after one iteration.
     RoundTrip,
 }
 
