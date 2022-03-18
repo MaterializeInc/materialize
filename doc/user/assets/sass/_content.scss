@@ -687,3 +687,27 @@ td > .default_button {
         display: block;
     }
 }
+
+.level-of-support {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    position: relative;
+    top: 5px;
+
+    &.level-production {
+        color: $success;
+    }
+
+     &.level-alpha, &.level-beta {
+        color: $progress;
+    }
+
+    &.level-in-development {
+        color: $warning;
+    }
+
+    &.level-researching, &.level-not-supported {
+        color: $danger;
+    }
+}
