@@ -56,7 +56,7 @@ struct UpsertSourceData {
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
 pub(crate) fn upsert<G>(
-    source_name: &str,
+    _source_name: &str,
     source_id: SourceInstanceId,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
@@ -175,7 +175,7 @@ where
             stream,
             predicates,
             position_or,
-            as_of_frontier.clone(),
+            as_of_frontier,
             source_arity,
             upsert_envelope,
             upsert_persist_config,
@@ -248,7 +248,6 @@ use timely::dataflow::channels::pact::{ParallelizationContract, ParallelizationC
 use timely::dataflow::operators::generic::FrontieredInputHandle;
 
 type RD<E> = Result<Row, E>;
-type DD<E, T> = ((RD<E>, RD<E>), T, i64);
 type DD2<E, E2, T> = ((RD<E>, RD<E2>), T, i64);
 
 /// Internal core upsert logic.
@@ -669,11 +668,7 @@ mod persist {
                         .take()
                         .expect("already finished ingesting")
                         .finish();
-                    current_values.extend(
-                        initial_state
-                            .into_iter()
-                            .map(|(k, v)| (k, v.map_err(|e| e.into()))),
-                    );
+                    current_values.extend(initial_state.into_iter());
 
                     trace!(
                         "In {}, initial (restored) upsert state: {:?}",

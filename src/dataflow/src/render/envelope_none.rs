@@ -12,7 +12,7 @@ use timely::dataflow::operators::{Concat, Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::{DataflowError, SourceError, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
 use mz_persist::operators::replay::Replay;
 use mz_persist::operators::stream::{Persist, RetractUnsealed};
