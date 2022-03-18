@@ -27,6 +27,11 @@ by the Apache License, Version 2.0.  */}}
 </head>
 
 <body>
+    <!-- If a page uses supportlevel svg icons, embed them inline
+         so they can be referenced via <use> tags. -->
+    {{ if in .Page.RawContent "supportLevel" }}
+      {{ partial "inline-svgs.html"}}
+    {{ end }}
     {{ partial "header.html" . }}
     {{ block "body" .}}
         <div class="content-wrapper">
