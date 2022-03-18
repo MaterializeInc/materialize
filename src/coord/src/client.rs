@@ -446,7 +446,8 @@ impl SessionClient {
             self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await?;
             let desc = self
                 .session()
-                .get_portal(EMPTY_PORTAL)
+                // We do not need to verify here because `self.execute` verifies below.
+                .get_portal_unverified(EMPTY_PORTAL)
                 .map(|portal| portal.desc.clone())
                 .expect("unnamed portal should be present");
             if !desc.param_types.is_empty() {

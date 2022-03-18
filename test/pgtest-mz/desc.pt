@@ -60,8 +60,8 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"INSERT 0 1"}
 ReadyForQuery {"status":"I"}
 
-# Executing (which in mz starts the portal) will now complain that the column
-# count changed.
+# Executing (which in mz starts the portal) will now complain that the plan
+# changed before execution can start.
 # See: #11214, #11258
 send
 Execute {"portal": "p"}
@@ -72,5 +72,5 @@ until
 ReadyForQuery
 ----
 BindComplete
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"internal error: row descriptor has 1 columns but row has 2 columns"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
