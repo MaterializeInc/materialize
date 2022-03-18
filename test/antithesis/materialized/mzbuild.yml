@@ -14,7 +14,7 @@ pre-image:
     bin: materialized
     strip: false
     rustflags: [
-      "-Cpasses=sancov",
+      "-Cpasses=sancov-module",
       "-Cllvm-args=-sanitizer-coverage-level=3",
       "-Cllvm-args=-sanitizer-coverage-trace-pc-guard",
       "-Ccodegen-units=1",
