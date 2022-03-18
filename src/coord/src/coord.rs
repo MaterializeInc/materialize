@@ -66,11 +66,11 @@
 //! ```
 //!
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
@@ -100,8 +100,7 @@ use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
-    Update,
+    BuildDesc, DataflowDesc, IndexDesc, PeekResponse, PeekResponseUnary, Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
@@ -113,12 +112,11 @@ use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
-use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
+    ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
 };
 use mz_sql::catalog::{
@@ -130,12 +128,12 @@ use mz_sql::plan::{
     AlterItemRenamePlan, ComputeInstanceConfig, CreateComputeInstancePlan, CreateDatabasePlan,
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, TailFrom, TailPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, FetchPlan,
+    IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, Plan, QueryWhen,
+    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan,
 };
-use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
+use mz_sql::plan::{StatementDesc, View};
 use mz_sql_parser::ast::RawName;
 use mz_transform::Optimizer;
 
@@ -163,6 +161,7 @@ use crate::util::ClientTransmitter;
 pub mod id_bundle;
 
 mod dataflow_builder;
+mod explain;
 mod indexes;
 mod prometheus;
 
@@ -3511,253 +3510,6 @@ impl Coordinator {
         }
     }
 
-    fn sequence_explain(
-        &mut self,
-        session: &Session,
-        plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
-
-        let ExplainPlan {
-            raw_plan,
-            row_set_finishing,
-            stage,
-            options,
-        } = plan;
-
-        struct Timings {
-            decorrelation: Option<Duration>,
-            optimization: Option<Duration>,
-        }
-
-        let mut timings = Timings {
-            decorrelation: None,
-            optimization: None,
-        };
-
-        let decorrelate = |timings: &mut Timings,
-                           raw_plan: HirRelationExpr|
-         -> Result<MirRelationExpr, CoordError> {
-            let start = Instant::now();
-            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
-                qgm_optimizations: session.vars().qgm_optimizations(),
-            })?;
-            timings.decorrelation = Some(start.elapsed());
-            Ok(decorrelated_plan)
-        };
-
-        let optimize =
-            |timings: &mut Timings,
-             coord: &mut Self,
-             decorrelated_plan: MirRelationExpr|
-             -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
-                let start = Instant::now();
-                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
-                coord
-                    .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
-                mz_transform::optimize_dataflow(
-                    &mut dataflow,
-                    &coord.index_oracle(compute_instance),
-                )?;
-                timings.optimization = Some(start.elapsed());
-                Ok(dataflow)
-            };
-
-        let mut explanation_string = match stage {
-            ExplainStage::RawPlan => {
-                let catalog = self.catalog.for_session(session);
-                let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                if options.typed {
-                    explanation.explain_types(&BTreeMap::new());
-                }
-                explanation.to_string()
-            }
-            ExplainStage::QueryGraph => {
-                let catalog = self.catalog.for_session(session);
-                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
-                model.as_dot("", &catalog, options.typed)?
-            }
-            ExplainStage::OptimizedQueryGraph => {
-                let catalog = self.catalog.for_session(session);
-                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
-                model.optimize();
-                model.as_dot("", &catalog, options.typed)?
-            }
-            ExplainStage::DecorrelatedPlan => {
-                let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
-                    &mut timings,
-                    raw_plan,
-                )?);
-                let catalog = self.catalog.for_session(session);
-                let formatter =
-                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation =
-                    mz_dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                explanation.to_string()
-            }
-            ExplainStage::OptimizedPlan => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let catalog = self.catalog.for_session(session);
-                let formatter =
-                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
-                    &dataflow, &catalog, &formatter,
-                );
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                explanation.to_string()
-            }
-            ExplainStage::PhysicalPlan => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan =
-                    mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
-                        .expect("Dataflow planning failed; unrecoverable error");
-                let catalog = self.catalog.for_session(session);
-                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
-                    &dataflow_plan,
-                    &catalog,
-                    &mz_dataflow_types::JsonViewFormatter {},
-                );
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                explanation.to_string()
-            }
-            ExplainStage::Timestamp => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                self.validate_timeline(optimized_plan.depends_on())?;
-                let source_ids = optimized_plan.depends_on();
-                let id_bundle = self
-                    .index_oracle(compute_instance)
-                    .sufficient_collections(&source_ids);
-                // TODO: determine_timestamp takes a mut self to track table linearizability,
-                // so explaining a plan involving tables has side effects. Removing those side
-                // effects would be good.
-                let timestamp = self.determine_timestamp(
-                    &session,
-                    &id_bundle,
-                    QueryWhen::Immediately,
-                    compute_instance,
-                )?;
-                let since = self
-                    .least_valid_read(&id_bundle, compute_instance)
-                    .elements()
-                    .to_vec();
-                let upper = self
-                    .least_valid_write(&id_bundle, compute_instance)
-                    .elements()
-                    .to_vec();
-                let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-                let table_read_ts = if has_table {
-                    Some(self.get_local_read_ts())
-                } else {
-                    None
-                };
-                let mut sources = Vec::new();
-                {
-                    let storage = self.dataflow_client.storage();
-                    for id in id_bundle.storage_ids.iter() {
-                        let state = storage.collection(*id).unwrap();
-                        let name = self
-                            .catalog
-                            .try_get_by_id(*id)
-                            .map(|item| item.name().to_string())
-                            .unwrap_or_else(|| id.to_string());
-                        sources.push(mz_dataflow_types::TimestampSource {
-                            name: format!("{name} ({id}, storage)"),
-                            read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
-                        });
-                    }
-                }
-                {
-                    let compute = self.dataflow_client.compute(compute_instance).unwrap();
-                    for id in id_bundle.compute_ids.iter() {
-                        let state = compute.collection(*id).unwrap();
-                        let name = self
-                            .catalog
-                            .try_get_by_id(*id)
-                            .map(|item| item.name().to_string())
-                            .unwrap_or_else(|| id.to_string());
-                        sources.push(mz_dataflow_types::TimestampSource {
-                            name: format!("{name} ({id}, compute)"),
-                            read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
-                        });
-                    }
-                }
-                let explanation = mz_dataflow_types::TimestampExplanation {
-                    timestamp,
-                    since,
-                    upper,
-                    has_table,
-                    table_read_ts,
-                    sources,
-                };
-                explanation.to_string()
-            }
-        };
-        if options.timing {
-            if let Some(decorrelation) = &timings.decorrelation {
-                explanation_string.push_str(&format!(
-                    "\nDecorrelation time: {}",
-                    Interval {
-                        months: 0,
-                        days: 0,
-                        micros: decorrelation.as_micros().try_into().unwrap(),
-                    }
-                ));
-            }
-            if let Some(optimization) = &timings.optimization {
-                explanation_string.push_str(&format!(
-                    "\nOptimization time: {}",
-                    Interval {
-                        months: 0,
-                        days: 0,
-                        micros: optimization.as_micros().try_into().unwrap(),
-                    }
-                ));
-            }
-            if timings.decorrelation.is_some() || timings.optimization.is_some() {
-                explanation_string.push_str("\n");
-            }
-        }
-        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
-        Ok(send_immediate_rows(rows))
-    }
-
     fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
@@ -5357,7 +5109,7 @@ impl Coordinator {
         // `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
-
+        use mz_dataflow_types::DataflowDescription;
         let df = DataflowDesc::new("".into(), GlobalId::Explain);
         let _: () = self
             .ship_dataflow(df.clone(), DEFAULT_COMPUTE_INSTANCE_ID)
