@@ -1,5 +1,16 @@
 # Supporting linearizable reads
 
+
+Note on terminology: `materialized` strives to always offer _serializability_. We usually refer to this as **consistency**.
+When we use _linearizability_ or _linearizable_ in this document, we are referring to those terms in service of
+what is called _strict serializability_, which is is effectively _serializability_ + _linearizability_.
+Because we consider _serializability_ important by default, we refer to the new concept we are introducing to `materialized`:
+_linearizability_.
+
+See [this jepsen map on consistency](https://jepsen.io/consistency) for more details about how these terms are used.
+
+Also, a previous version of this document included a design that has since been [broken out](https://github.com/MaterializeInc/materialize/pull/11302).
+
 ## Summary
 
 Materialize has "real time" sources whose updates are timestamped with a `materialized` local timestamp, used for queries and interaction with other data.
@@ -11,7 +22,7 @@ These bindings are produced and durably retained for sources, though the behavio
 
 - "unmaterialized", in that the source is known but not actively consumed. No current process will create new bindings.
 
-The timestamp bindings are the basis of *consistency* in Materialize. By reading from sources, and views over the sources, at a single timestamp, we can ensure that all readers observe consistent results, for potenially varying definitions of "consistent".
+The timestamp bindings are the basis of **consistency** in Materialize. By reading from sources, and views over the sources, at a single timestamp, we can ensure that all readers observe consistent results, for potenially varying definitions of "consistent".
 
 How we choose this timestamp influences the type of consistency guarantee we get. In particular, if we want to achieve _linearizable_ reads, those that reflect all data available in upstream sources as of at least the moment `SELECT` was typed, we will need to select a timestamp that whose bindings reflect all available source data. Consequently, STORAGE will need a command to provide such a timestamp for a collection of sources, when prompted.
 
@@ -37,13 +48,14 @@ and the _timestamp bindings_.
 
 ### Linearizable reads
 
-In the case of a linearizable read, peeks will be augemented to work as follows
+In the case of a linearizable read, peeks will be augmented to work as follows
 
 1. Before issuing the peek, we will first ask STORAGE "for all sources on which this query transitively depends, what timestamp reflects all of their current contents?"
 2. We will wait until STORAGE responds with such a timestamp, `t`.
-3. We then issue the peek at timestamp `t`.
+3. We then issue the peek at _at least_ timestamp `t`, while also taking into consideration the `since` and `uppers` of the involved indexes.
 
-The behavior of other reads does not need to be changed. They still consult `since` for their inputs, and may elect to choose any timestamp that is greater than this, but perhaps one that is not as "current" as for linearizable reads, to be able to return immediately.
+The behavior of non-linearizable reads does not need to be changed.
+They still consult `since` for their inputs, and may elect to choose any timestamp that is greater than this, but perhaps one that is not as "current" as for linearizable reads, to be able to return immediately.
 
 This behavior applies equally well to matarialized and unmaterialized sources.
 
