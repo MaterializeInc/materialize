@@ -33,6 +33,7 @@ steps:
           - { value: feature-benchmark }
           - { value: feature-benchmark-persistence }
           - { value: aws-config }
+          - { value: zippy }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -198,3 +199,10 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: aws-config
+
+  - id: zippy
+    label: "Zippy"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
