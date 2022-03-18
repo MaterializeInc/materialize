@@ -56,11 +56,11 @@ impl<V: Codec> PersistentEnvelopeNoneConfig<V> {
 pub(crate) fn persist_and_replay<G>(
     source_name: &str,
     source_id: SourceInstanceId,
-    stream: &Stream<G, (Result<Row, DecodeError>, Timestamp, Diff)>,
+    stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     as_of_frontier: &Antichain<Timestamp>,
-    persist_config: PersistentEnvelopeNoneConfig<Result<Row, DecodeError>>,
+    persist_config: PersistentEnvelopeNoneConfig<Result<Row, DataflowError>>,
 ) -> (
-    Stream<G, (Result<Row, DecodeError>, Timestamp, Diff)>,
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
 )
 where

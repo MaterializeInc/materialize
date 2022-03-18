@@ -20,6 +20,7 @@ pub enum DecodeError {
     Text(String),
 }
 
+// lalala
 // We only want to support persisting DecodeError for now, and not the full DataflowError, which is
 // a bit more complex.
 impl Codec for DecodeError {
@@ -98,6 +99,27 @@ pub enum DataflowError {
     DecodeError(DecodeError),
     EvalError(EvalError),
     SourceError(SourceError),
+}
+
+impl Codec for DataflowError {
+    fn codec_name() -> String {
+        "DataflowError".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        match serde_json::to_writer(buf.writer(), self) {
+            Ok(ok) => ok,
+            Err(e) => panic!("Encoding error, trying to encode {}: {}", self, e),
+        };
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let decoded = serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?;
+        Ok(decoded)
+    }
 }
 
 impl Display for DataflowError {

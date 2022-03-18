@@ -531,7 +531,8 @@ where
                                 let results = append_metadata_to_value(results);
 
                                 let flattened_stream =
-                                    flatten_results_prepend_keys(key_envelope, results);
+                                    flatten_results_prepend_keys(key_envelope, results)
+                                        .map(|r| r.map_err(DataflowError::from));
 
                                 let flattened_stream = flattened_stream.pass_through("decode");
 
@@ -582,13 +583,15 @@ where
                                 // TODO: Maybe we should finally move this to some central
                                 // place and re-use. There seem to be enough instances of this
                                 // by now.
+                                //
+                                // lalala
                                 fn split_ok_err(
-                                    x: (Result<Row, DecodeError>, u64, Diff),
+                                    x: (Result<Row, DataflowError>, u64, Diff),
                                 ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)>
                                 {
                                     match x {
                                         (Ok(row), ts, diff) => Ok((row, ts, diff)),
-                                        (Err(err), ts, diff) => Err((err.into(), ts, diff)),
+                                        (Err(err), ts, diff) => Err((err, ts, diff)),
                                     }
                                 }
 
@@ -760,7 +763,7 @@ fn get_persist_config(
     persist_client: &mut mz_persist::client::RuntimeClient,
 ) -> PersistentSourceConfig<
     Result<Row, DecodeError>,
-    Result<Row, DecodeError>,
+    Result<Row, DataflowError>,
     SourceTimestamp,
     AssignedTimestamp,
 > {
@@ -775,7 +778,7 @@ fn get_persist_config(
     match persist_desc.envelope_desc {
         EnvelopePersistDesc::Upsert => {
             let (data_write, data_read) = persist_client
-                .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
+                .create_or_load::<Result<Row, DecodeError>, Result<Row, DataflowError>>(
                     &persist_desc.primary_stream,
                 );
 
@@ -801,7 +804,7 @@ fn get_persist_config(
         }
         EnvelopePersistDesc::None => {
             let (data_write, data_read) = persist_client
-                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream);
+                .create_or_load::<Result<Row, DataflowError>, ()>(&persist_desc.primary_stream);
 
             let seal_ts = persist_desc.upper_seal_ts;
 

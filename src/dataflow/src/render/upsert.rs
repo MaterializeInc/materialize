@@ -64,7 +64,7 @@ pub(crate) fn upsert<G>(
     // Full arity, including the key columns
     source_arity: usize,
     persist_config: Option<
-        PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
+        PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DataflowError>>,
     >,
     upsert_envelope: UpsertEnvelope,
 ) -> (
@@ -161,7 +161,7 @@ where
                 as_of_frontier,
                 source_arity,
                 upsert_envelope,
-                operator::empty(&stream.scope()),
+                &operator::empty(&stream.scope()),
                 Pipeline,
                 |_, _| {},
             )
@@ -171,82 +171,16 @@ where
 
             (upsert_output, upsert_errs)
         }
-        Some(upsert_persist_config) => {
-            // This is slightly awkward: We don't want to persist full DataflowErrors,so we unpack
-            // only DecodeError, which we are more willing to persist. We have to translate to
-            // DataflowError again afterwards, such that the returned Streams have the same error
-            // type.
-            //
-            // This also means that we cannot push MFPs into the upsert operatot, as that would
-            // mean persisting EvalErrors, which, also icky.
-            let mut row_buf = Row::default();
-            let stream = stream.flat_map(move |decode_result| {
-                if decode_result.key.is_none() {
-                    // This is the same behaviour as regular upsert. It's not pretty, though.
-                    error!("Encountered empty key in: {:?}", decode_result);
-                    return None;
-                }
-                let offset = decode_result.position;
-
-                // Fold metadata into the value if there is in fact a valid value.
-                let value = if let Some(Ok(value)) = decode_result.value {
-                    let mut row_packer = row_buf.packer();
-                    row_packer.extend(value.iter());
-                    row_packer.extend(decode_result.metadata.iter());
-                    Some(Ok(row_buf.clone()))
-                } else {
-                    decode_result.value
-                };
-                Some((decode_result.key.unwrap(), value, offset))
-            });
-
-            let mut row_buf = Row::default();
-
-            let (upsert_output, upsert_persist_errs) = persist::persistent_upsert(
-                &stream,
-                source_name,
-                as_of_frontier,
-                upsert_persist_config,
-            );
-
-            // Apply Map-Filter-Project and also map back from DecodeError to DataflowError because
-            // that's what downstream code expects.
-            let mapped_upsert_ok = upsert_output.flat_map(move |((key, value), ts, diff)| {
-                match key {
-                    Ok(key) => {
-                        let result = value
-                            .map_err(DataflowError::from)
-                            .and_then(|value| {
-                                let mut datums = Vec::with_capacity(source_arity);
-                                datums.extend(key.iter());
-                                datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_buf)
-                                    .map_err(DataflowError::from)
-                            })
-                            .transpose();
-                        result.map(|result| (result, ts, diff))
-                    }
-                    Err(err) => {
-                        // This can never be retracted! But at least it's better to put the source in a
-                        // permanently errored state than to keep on trucking with wrong results.
-                        Some((Err(DataflowError::DecodeError(err)), ts, diff))
-                    }
-                }
-            });
-
-            // TODO: It is not ideal that persistence errors end up in the same differential error
-            // collection as other errors because they are transient/indefinite errors that we
-            // should be treating differently. We do not, however, at the current time have to
-            // infrastructure for treating these errors differently, so we're adding them to the
-            // same error collections.
-            let upsert_persist_errs = upsert_persist_errs.map(move |(err, ts, diff)| {
-                let source_error =
-                    SourceError::new(source_id, SourceErrorDetails::Persistence(err));
-                (source_error.into(), ts, diff)
-            });
-
-            (mapped_upsert_ok, upsert_persist_errs)
-        }
+        Some(upsert_persist_config) => persist::upsert_core_persist(
+            stream,
+            predicates,
+            position_or,
+            as_of_frontier.clone(),
+            source_arity,
+            upsert_envelope,
+            upsert_persist_config,
+            "gus",
+        ),
     };
 
     let (mut oks, mut errs) = upsert_output.ok_err(|(data, time, diff)| match data {
@@ -269,6 +203,11 @@ where
         oks = oks2;
         errs = errs.concat(&errs2);
     }
+
+    let upsert_persist_errs = upsert_persist_errs.map(move |(err, ts, diff)| {
+        let source_error = SourceError::new(source_id, SourceErrorDetails::Persistence(err));
+        (source_error.into(), ts, diff)
+    });
 
     let errs = errs.concat(&upsert_persist_errs);
 
@@ -305,12 +244,12 @@ fn evaluate(
     Ok(Some(row_buf.clone()))
 }
 
-use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::{ParallelizationContract, ParallelizationContractCore};
 use timely::dataflow::operators::generic::FrontieredInputHandle;
 
 type RD<E> = Result<Row, E>;
 type DD<E, T> = ((RD<E>, RD<E>), T, i64);
+type DD2<E, E2, T> = ((RD<E>, RD<E2>), T, i64);
 
 /// Internal core upsert logic.
 fn upsert_core<G, P, PF>(
@@ -320,29 +259,35 @@ fn upsert_core<G, P, PF>(
     as_of_frontier: Antichain<Timestamp>,
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
-    es: Stream<G, DD<DecodeError, G::Timestamp>>,
+    es: &Stream<G, DD2<DecodeError, DataflowError, Timestamp>>,
     extra_p: P,
     mut persistence: PF,
-) -> Stream<G, ((Result<Row, DecodeError>, Result<Row, DataflowError>), u64, Diff)>
+) -> Stream<
+    G,
+    (
+        (Result<Row, DecodeError>, Result<Row, DataflowError>),
+        u64,
+        Diff,
+    ),
+>
 where
     G: Scope<Timestamp = Timestamp>,
-    P: ParallelizationContract<Timestamp, DD<DecodeError, Timestamp>>,
-    PF:
-        FnMut(
-                &mut FrontieredInputHandle<
-                    '_,
+    P: ParallelizationContract<Timestamp, DD2<DecodeError, DataflowError, Timestamp>>,
+    PF: FnMut(
+            &mut FrontieredInputHandle<
+                '_,
+                Timestamp,
+                DD2<DecodeError, DataflowError, Timestamp>,
+                <P as ParallelizationContractCore<
                     Timestamp,
-                    DD<DecodeError, Timestamp>,
-                    <P as ParallelizationContractCore<
-                        Timestamp,
-                        Vec<DD<DecodeError, Timestamp>>,
-                    >>::Puller,
-                >,
-                &mut HashMap<RD<DecodeError>, RD<DataflowError>>,
-            ) + 'static,
+                    Vec<DD2<DecodeError, DataflowError, Timestamp>>,
+                >>::Puller,
+            >,
+            &mut HashMap<RD<DecodeError>, RD<DataflowError>>,
+        ) + 'static,
 {
     let result_stream = stream.binary_frontier(
-        &es,
+        es,
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
         extra_p,
         "Upsert",
@@ -640,26 +585,28 @@ mod persist {
     use mz_persist::operators::replay::Replay;
     use mz_persist::operators::split_ok_err;
     use mz_persist::operators::stream::{Persist, RetractUnsealed};
-    use std::collections::hash_map::Entry;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
     use std::fmt::Debug;
     use std::hash::Hash;
     use timely::dataflow::channels::pact::Exchange;
+    use timely::dataflow::operators::Delay;
     use timely::dataflow::operators::{Concat, Map, OkErr};
-    use timely::dataflow::operators::{Delay, Operator};
     use timely::dataflow::{Scope, Stream};
     use timely::progress::Antichain;
     use tracing::trace;
 
     /// Internal core upsert logic.
-    fn upsert_core_persist<G, P, PF>(
+    pub fn upsert_core_persist<G>(
         stream: &Stream<G, DecodeResult>,
         predicates: Vec<MirScalarExpr>,
         position_or: Vec<Option<usize>>,
         as_of_frontier: Antichain<Timestamp>,
         source_arity: usize,
         upsert_envelope: UpsertEnvelope,
-        persist_config: PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
+        persist_config: PersistentUpsertConfig<
+            Result<Row, DecodeError>,
+            Result<Row, DataflowError>,
+        >,
         name: &str,
     ) -> (
         Stream<G, (Result<Row, DataflowError>, u64, Diff)>,
@@ -667,11 +614,6 @@ mod persist {
     )
     where
         G: Scope<Timestamp = Timestamp>,
-        P: ParallelizationContract<G::Timestamp, DD<DecodeError, G::Timestamp>>,
-        PF: FnMut(
-                RefOrMut<Vec<DD<DecodeError, G::Timestamp>>>,
-                &mut HashMap<Row, RD<DataflowError>>,
-            ) + 'static,
     {
         let (restored_upsert_oks, state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
@@ -696,10 +638,10 @@ mod persist {
             stream,
             predicates,
             position_or,
-            as_of_frontier,
+            as_of_frontier.clone(),
             source_arity,
             upsert_envelope,
-            restored_upsert_oks,
+            &restored_upsert_oks,
             Exchange::new(
                 move |((key, _data), _ts, _diff): &((Result<Row, DecodeError>, _), _, _)| {
                     key.hashed()
@@ -762,220 +704,9 @@ mod persist {
             });
 
         (
-            new_upsert_oks.concat(&restored_upsert_oks),
-            new_upsert_persist_errs.concat(&state_errs),
-        )
-    }
-
-    /// lalala
-    pub fn persistent_upsert<G>(
-        stream: &Stream<
-            G,
-            (
-                Result<Row, DecodeError>,
-                Option<Result<Row, DecodeError>>,
-                i64,
-            ),
-        >,
-        name: &str,
-        as_of_frontier: Antichain<u64>,
-        persist_config: PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
-    ) -> (
-        Stream<
-            G,
-            (
-                (Result<Row, DecodeError>, Result<Row, DecodeError>),
-                u64,
-                i64,
-            ),
-        >,
-        Stream<G, (String, u64, i64)>,
-    )
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        let operator_name = format!("persistent_upsert({})", name);
-
-        let (restored_upsert_oks, state_errs) = {
-            let snapshot = persist_config.read_handle.snapshot();
-            let (restored_oks, restored_errs) = stream
-                .scope()
-                .replay(snapshot, &as_of_frontier)
-                .ok_err(split_ok_err);
-            let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
-                name,
-                persist_config.write_handle.clone(),
-                persist_config.upper_seal_ts,
-            );
-            let combined_errs = restored_errs.concat(&retract_errs);
-            (restored_upsert_oks, combined_errs)
-        };
-
-        let mut differential_state_ingester = Some(DifferentialStateIngester::new());
-
-        let upsert_as_of_frontier = as_of_frontier.clone();
-
-        let new_upsert_oks = stream.binary_frontier(
-            &restored_upsert_oks,
-            Exchange::new(
-                move |(key, _value, _ts): &(
-                    Result<Row, DecodeError>,
-                    Option<Result<Row, DecodeError>>,
-                    i64,
-                )| key.hashed(),
-            ),
-            Exchange::new(
-                move |((key, _data), _ts, _diff): &((Result<Row, DecodeError>, _), _, _)| {
-                    key.hashed()
-                },
-            ),
-            &operator_name.clone(),
-            move |_cap, _info| {
-                // This is a map of (time) -> (capability, ((key) -> (value with max offset))). This
-                // is a BTreeMap because we want to ensure that if we receive (key1, value1, time
-                // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
-                // value2, time 7).
-                //
-                // This is a staging area, where we group incoming updates by timestamp (the timely
-                // timestamp) and disambiguate by the offset (also called "timestamp" above) if
-                // necessary.
-                let mut to_send =
-                    BTreeMap::<_, (_, HashMap<_, (Option<Result<Row, DecodeError>>, i64)>)>::new();
-
-                // This is a map from key -> value. We store the latest value for a given key that
-                // way we know what to retract if a new value with the same key comes along.
-                let mut current_values = HashMap::new();
-
-                let mut input_buffer = Vec::new();
-                let mut state_input_buffer = Vec::new();
-
-                move |input, state_input, output| {
-                    state_input.for_each(|_time, data| {
-                        data.swap(&mut state_input_buffer);
-                        for state_update in state_input_buffer.drain(..) {
-                            trace!("In {}, restored upsert: {:?}", operator_name, state_update);
-
-                            differential_state_ingester
-                                .as_mut()
-                                .expect("already finished ingesting")
-                                .add_update(state_update);
-                        }
-                    });
-
-                    // An empty frontier signals that we will never receive data from that input
-                    // again because no-one upstream holds any capability anymore.
-                    if differential_state_ingester.is_some()
-                        && state_input.frontier.frontier().is_empty()
-                    {
-                        let initial_state = differential_state_ingester
-                            .take()
-                            .expect("already finished ingesting")
-                            .finish();
-                        current_values.extend(initial_state.into_iter());
-
-                        trace!(
-                            "In {}, initial (restored) upsert state: {:?}",
-                            operator_name,
-                            current_values.iter().take(10).collect::<Vec<_>>()
-                        );
-                    }
-
-                    // Digest each input, reduce by presented timestamp.
-                    input.for_each(|cap, data| {
-                        data.swap(&mut input_buffer);
-                        for (key, value, offset) in input_buffer.drain(..) {
-                            let mut time = cap.time().clone();
-                            time.advance_by(upsert_as_of_frontier.borrow());
-
-                            let time_entries = &mut to_send
-                                .entry(time)
-                                .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
-                                .1;
-
-                            let new_entry = (value, offset);
-
-                            match time_entries.entry(key) {
-                                Entry::Occupied(mut occupied) => {
-                                    let existing_entry = occupied.get_mut();
-                                    // If the time is equal, toss out the row with the lower
-                                    // offset.
-                                    if new_entry.1 > existing_entry.1 {
-                                        *existing_entry = new_entry;
-                                    }
-                                }
-                                Entry::Vacant(vacant) => {
-                                    // We didn't yet see an entry with the same timestamp. We can
-                                    // just insert and don't need to disambiguate by offset.
-                                    vacant.insert(new_entry);
-                                }
-                            }
-                        }
-                    });
-
-                    let mut removed_times = Vec::new();
-                    for (time, (cap, map)) in to_send.iter_mut() {
-                        if !input.frontier.less_equal(time)
-                            && !state_input.frontier.less_equal(time)
-                        {
-                            let mut session = output.session(cap);
-                            removed_times.push(time.clone());
-                            for (key, (value, _offset)) in map.drain() {
-                                let old_value = if let Some(new_value) = &value {
-                                    current_values.insert(key.clone(), new_value.clone())
-                                } else {
-                                    current_values.remove(&key)
-                                };
-                                if let Some(old_value) = old_value {
-                                    // Retract old value.
-                                    session.give((
-                                        (key.clone(), old_value),
-                                        cap.time().clone(),
-                                        -1,
-                                    ));
-                                }
-                                if let Some(new_value) = value {
-                                    // Give new value.
-                                    session.give(((key, new_value), cap.time().clone(), 1));
-                                }
-                            }
-                        } else {
-                            // Because this is a BTreeMap, the rest of the times in the map will be
-                            // greater than this time. So if the input_frontier is less than or
-                            // equal to this time, it will be less than the times in the rest of
-                            // the map.
-                            break;
-                        }
-                    }
-
-                    // Discard entries, which hold capabilities, for complete times.
-                    for time in removed_times {
-                        to_send.remove(&time);
-                    }
-                }
-            },
-        );
-
-        let (new_upsert_oks, new_upsert_persist_errs) =
-            new_upsert_oks.persist(name, persist_config.write_handle);
-
-        // Also pull the timestamp of restored data up to the as_of_frontier. We are doing this in
-        // two steps: first, we are modifying the timestamp in the data itself, then we're delaying
-        // the timely timestamp. The latter will stash updates while they are not beyond the
-        // frontier.
-        let retime_as_of_frontier = as_of_frontier.clone();
-        let restored_upsert_oks = restored_upsert_oks
-            .map(move |(data, mut time, diff)| {
-                time.advance_by(retime_as_of_frontier.borrow());
-                (data, time, diff)
-            })
-            .delay_batch(move |time| {
-                let mut time = *time;
-                time.advance_by(as_of_frontier.borrow());
-                time
-            });
-
-        (
-            new_upsert_oks.concat(&restored_upsert_oks),
+            new_upsert_oks
+                .concat(&restored_upsert_oks)
+                .map(|((_k, v), t, d)| (v, t, d)),
             new_upsert_persist_errs.concat(&state_errs),
         )
     }
