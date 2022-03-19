@@ -10,22 +10,22 @@
 <meta name=msapplication-TileColor content="#7F4EFF">
 <meta name=theme-color content="#ffffff">
 <meta property="og:locale" content=en_US>
-<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}">
 <meta property="og:type" content=article>
 <meta property="og:title" content="{{ $title }}">
-<meta property="og:image" content="https://user-images.githubusercontent.com/11527560/159132954-b0a92ff4-4b37-4e27-9834-b37581d305da.gif">
+<meta property="og:image" content="https://user-images.githubusercontent.com/11527560/159138047-38831547-6c9e-46d5-8614-b525e9feff06.gif">
 <meta property="og:description" content="{{ $description }}">
 <meta property="og:site_name" content=Materialize>
 <meta name="twitter:card" content=summary_large_image>
 <meta name="twitter:site" content="@MaterializeInc">
 <meta name="twitter:creator" content="@MaterializeInc">
 <meta name="twitter:title" content="{{ $title }}">
-<meta name="twitter:image" content="https://user-images.githubusercontent.com/11527560/159132954-b0a92ff4-4b37-4e27-9834-b37581d305da.gif">
+<meta name="twitter:image" content="https://user-images.githubusercontent.com/11527560/159138047-38831547-6c9e-46d5-8614-b525e9feff06.gif">
 <meta name="twitter:description" content="{{ $description }}">
-<link rel="shortcut icon" type="image/x-icon" href="/images/materialize_favicon_32.png">
-<link rel=apple-touch-icon sizes=180x180 href="/images/materialize_logo_180.png">
-<link rel=icon type="image/png" sizes=32x32 href="/images/materialize_favicon_32.png">
-<link rel=mask-icon href="/images/materialize_logo.svg" color="#4d7cfe">
+<link rel="shortcut icon" type="image/x-icon" href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
+<link rel=apple-touch-icon sizes=180x180 href="{{ .Site.BaseURL }}/images/materialize_logo_180.png">
+<link rel=icon type="image/png" sizes=32x32 href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
+<link rel=mask-icon href="{{ .Site.BaseURL }}/images/materialize_logo.svg" color="#4d7cfe">
 <link rel=canonical href="{{ .Permalink }}">
 
 {{/*  Include all JavaScript files here  */}}
