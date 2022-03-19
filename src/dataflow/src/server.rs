@@ -111,7 +111,7 @@ pub fn serve_boundary_requests<
     B: Fn(usize) -> (SC, CR) + Send + Sync + 'static,
 >(
     config: Config,
-    requests: tokio::sync::mpsc::UnboundedReceiver<(uuid::Uuid, GlobalId)>,
+    requests: tokio::sync::mpsc::UnboundedReceiver<crate::server::boundary::SourceRequest>,
     create_boundary: B,
 ) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
     let workers = config.workers as u64;

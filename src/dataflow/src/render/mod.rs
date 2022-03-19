@@ -244,6 +244,7 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                     region,
                     &format!("{name}-{source_id}"),
                     dataflow.id,
+                    dataflow.as_of.clone().unwrap(),
                 );
 
                 // We do not trust `replay` to correctly advance times.

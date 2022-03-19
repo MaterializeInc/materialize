@@ -44,6 +44,8 @@ pub mod server {
     use tokio_serde::formats::Bincode;
     use tracing::{debug, info, warn};
 
+    use crate::server::boundary::SourceRequest;
+
     /// A framed connection from the server's perspective.
     type FramedServer<C> = Framed<C, Command, Response>;
 
@@ -98,7 +100,7 @@ pub mod server {
         addr: A,
     ) -> std::io::Result<(
         TcpEventLinkHandle,
-        tokio::sync::mpsc::UnboundedReceiver<super::SourceId>,
+        tokio::sync::mpsc::UnboundedReceiver<SourceRequest>,
         JoinHandle<std::io::Result<()>>,
     )> {
         let (worker_tx, worker_rx) = unbounded_channel();
@@ -122,7 +124,7 @@ pub mod server {
     async fn accept(
         listener: TcpListener,
         mut worker_rx: UnboundedReceiver<WorkerResponse>,
-        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
+        render_requests: tokio::sync::mpsc::UnboundedSender<SourceRequest>,
     ) -> std::io::Result<()> {
         debug!("server listening {listener:?}");
 
@@ -181,7 +183,7 @@ pub mod server {
         client_id: ClientId,
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
-        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
+        render_requests: tokio::sync::mpsc::UnboundedSender<SourceRequest>,
     ) -> std::io::Result<()> {
         let mut source_ids = HashSet::new();
         let result = handle_compute_inner(
@@ -206,7 +208,7 @@ pub mod server {
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
         active_source_ids: &mut HashSet<SubscriptionId>,
-        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
+        render_requests: tokio::sync::mpsc::UnboundedSender<SourceRequest>,
     ) -> std::io::Result<()> {
         let mut connection = framed_server(socket);
 
@@ -216,9 +218,9 @@ pub mod server {
         loop {
             select! {
                 cmd = connection.try_next() => match cmd? {
-                    Some(Command::Subscribe(subscription_id, )) => {
+                    Some(Command::Subscribe(subscription_id, request)) => {
                         debug!("Subscribe client {client_id} to {subscription_id:?}");
-                        let _ = render_requests.send(subscription_id.0);
+                        let _ = render_requests.send(request);
                         let new = active_source_ids.insert(subscription_id);
                         assert!(new, "Duplicate key: {subscription_id:?}");
                         let stashed = {
@@ -460,6 +462,7 @@ pub mod client {
                 Announce::Register {
                     source_id,
                     worker,
+                    request,
                     storage_workers,
                     ok_tx,
                     ok_activator,
@@ -478,7 +481,12 @@ pub mod client {
                     debug!("Subscribing to {source_id:?}");
                     client
                         .send_all(&mut futures::stream::iter(storage_workers.into_iter().map(
-                            |storage_worker| Ok(Command::Subscribe((source_id, storage_worker))),
+                            |storage_worker| {
+                                Ok(Command::Subscribe(
+                                    (source_id, storage_worker),
+                                    request.clone(),
+                                ))
+                            },
                         )))
                         .await?;
                 }
@@ -592,6 +600,7 @@ pub mod client {
         Register {
             source_id: SourceId,
             worker: WorkerIdentifier,
+            request: crate::server::boundary::SourceRequest,
             storage_workers: Vec<WorkerIdentifier>,
             ok_activator: ArcActivator,
             err_activator: ArcActivator,
@@ -609,6 +618,7 @@ pub mod client {
             scope: &mut G,
             name: &str,
             dataflow_id: uuid::Uuid,
+            as_of: timely::progress::Antichain<mz_repr::Timestamp>,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,
@@ -627,10 +637,21 @@ pub mod client {
                 .filter(|x| *x < self.storage_workers)
                 .collect::<Vec<_>>();
 
+            let request = crate::server::boundary::SourceRequest {
+                source_id: id.identifier,
+                dataflow_id,
+                arguments: crate::server::boundary::SourceArgs {
+                    operators: id.operators,
+                    persist: id.persist,
+                },
+                as_of,
+            };
+
             // Register with the storage client
             let register = Announce::Register {
                 source_id,
                 worker: scope.index(),
+                request,
                 storage_workers: storage_workers.clone(),
                 ok_tx,
                 err_tx,
@@ -724,7 +745,7 @@ pub mod client {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Command {
     /// Subscribe the client to `source_id`.
-    Subscribe(SubscriptionId),
+    Subscribe(SubscriptionId, crate::server::boundary::SourceRequest),
     /// Unsubscribe the client from `source_id`.
     Unsubscribe(SubscriptionId),
 }

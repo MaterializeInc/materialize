@@ -51,12 +51,14 @@ impl<CR: ComputeReplay> ComputeReplay for Rc<RefCell<CR>> {
         scope: &mut G,
         name: &str,
         dataflow_id: uuid::Uuid,
+        as_of: Antichain<mz_repr::Timestamp>,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
         Rc<dyn Any>,
     ) {
-        self.borrow_mut().replay(id, scope, name, dataflow_id)
+        self.borrow_mut()
+            .replay(id, scope, name, dataflow_id, as_of)
     }
 }
 
@@ -73,6 +75,7 @@ pub trait ComputeReplay {
         scope: &mut G,
         name: &str,
         dataflow_id: uuid::Uuid,
+        as_of: Antichain<mz_repr::Timestamp>,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -90,6 +93,7 @@ impl ComputeReplay for DummyBoundary {
         _scope: &mut G,
         _name: &str,
         _dataflow_id: uuid::Uuid,
+        _as_of: Antichain<mz_repr::Timestamp>,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -113,20 +117,43 @@ impl StorageCapture for DummyBoundary {
     }
 }
 
+use timely::progress::Antichain;
+
+/// Type alias for source subscriptions, (dataflow_id, source_id).
+pub type SourceId = (uuid::Uuid, mz_expr::GlobalId);
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SourceArgs {
+    /// Optional linear operators that can be applied record-by-record.
+    pub operators: Option<mz_dataflow_types::LinearOperator>,
+    /// A description of how to persist the source.
+    pub persist:
+        Option<mz_dataflow_types::sources::persistence::SourcePersistDesc<mz_repr::Timestamp>>,
+}
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SourceRequest {
+    pub source_id: mz_expr::GlobalId,
+    pub dataflow_id: uuid::Uuid,
+    pub arguments: SourceArgs,
+    pub as_of: Antichain<mz_repr::Timestamp>,
+}
+
+impl SourceRequest {
+    pub fn unique_id(&self) -> SourceId {
+        (self.dataflow_id, self.source_id)
+    }
+}
+
 pub use boundary_hook::BoundaryHook;
 mod boundary_hook {
 
     use std::collections::BTreeMap;
-
-    use uuid::Uuid;
 
     use mz_dataflow_types::client::{Client, Command, Response, StorageCommand};
     use mz_dataflow_types::sources::SourceDesc;
     use mz_dataflow_types::SourceInstanceDesc;
     use mz_expr::GlobalId;
 
-    /// Type alias for source subscriptions, (dataflow_id, source_id).
-    pub type SourceId = (uuid::Uuid, GlobalId);
+    use super::{SourceId, SourceRequest};
 
     /// A client wrapper that observes source instantiation requests and enqueues them as commands.
     #[derive(Debug)]
@@ -134,21 +161,21 @@ mod boundary_hook {
         /// The wrapped client,
         client: S,
         /// Source creation requests to suppress.
-        suppress: BTreeMap<(Uuid, GlobalId), u64>,
+        suppress: BTreeMap<SourceId, u64>,
         /// Enqueue source rendering requests.
-        requests: tokio::sync::mpsc::UnboundedReceiver<SourceId>,
+        requests: tokio::sync::mpsc::UnboundedReceiver<SourceRequest>,
         /// The number of storage workers, of whom requests will be made.
         workers: u64,
         /// Created sources so that we can form render requests.
-        sources: BTreeMap<GlobalId, (SourceDesc, timely::progress::Antichain<mz_repr::Timestamp>)>,
+        sources: BTreeMap<GlobalId, SourceDesc>,
         /// Pending render requests, awaiting source creation.
-        pending: BTreeMap<GlobalId, Vec<SourceId>>,
+        pending: BTreeMap<GlobalId, Vec<SourceRequest>>,
     }
 
     impl<S> BoundaryHook<S> {
         pub fn new(
             client: S,
-            requests: tokio::sync::mpsc::UnboundedReceiver<SourceId>,
+            requests: tokio::sync::mpsc::UnboundedReceiver<SourceRequest>,
             workers: u64,
         ) -> Self {
             Self {
@@ -169,17 +196,17 @@ mod boundary_hook {
             if let Command::Storage(StorageCommand::CreateSources(sources)) = &cmd {
                 for source in sources.iter() {
                     if let Some(requests) = self.pending.remove(&source.id) {
-                        render_requests.extend(requests.into_iter().map(|(uuid, id)| {
+                        render_requests.extend(requests.into_iter().map(|request| {
                             (
                                 format!("TODO"),
-                                uuid,
-                                Some(source.since.clone()),
+                                request.dataflow_id,
+                                Some(request.as_of.clone()),
                                 Some((
-                                    id,
+                                    request.source_id,
                                     SourceInstanceDesc {
                                         description: source.desc.clone(),
-                                        operators: None,
-                                        persist: None,
+                                        operators: request.arguments.operators,
+                                        persist: request.arguments.persist,
                                     },
                                 ))
                                 .into_iter()
@@ -187,16 +214,7 @@ mod boundary_hook {
                             )
                         }));
                     }
-                    self.sources
-                        .insert(source.id, (source.desc.clone(), source.since.clone()));
-                }
-            }
-
-            if let Command::Storage(StorageCommand::AllowCompaction(frontiers)) = &cmd {
-                for (id, frontier) in frontiers.iter() {
-                    if let Some((_, f)) = self.sources.get_mut(id) {
-                        *f = frontier.clone();
-                    }
+                    self.sources.insert(source.id, source.desc.clone());
                 }
             }
 
@@ -217,28 +235,29 @@ mod boundary_hook {
                 tokio::select! {
                     cmd = self.requests.recv() => match cmd {
                         None => break,
-                        Some((uuid, id)) => {
-                            if !self.suppress.contains_key(&(uuid, id)) {
-                                if let Some((source, frontier)) = self.sources.get(&id) {
+                        Some(request) => {
+                            let unique_id = request.unique_id();
+                            if !self.suppress.contains_key(&unique_id) {
+                                if let Some(source) = self.sources.get(&request.source_id) {
                                     let command = StorageCommand::RenderSources(vec![(
                                         format!("TODO"),
-                                        uuid,
-                                        Some(frontier.clone()),
-                                        Some((id, SourceInstanceDesc {
+                                        request.dataflow_id,
+                                        Some(request.as_of.clone()),
+                                        Some((request.source_id, SourceInstanceDesc {
                                             description: source.clone(),
-                                            operators: None,
-                                            persist: None,
+                                            operators: request.arguments.operators,
+                                            persist: request.arguments.persist,
                                         })).into_iter().collect(),
                                     )]);
                                     self.client.send(Command::Storage(command)).await.unwrap()
                                 } else {
-                                    self.pending.entry(id).or_insert(Vec::new()).push((uuid, id));
+                                    self.pending.entry(request.source_id).or_insert(Vec::new()).push(request);
                                 }
                             }
                             // Introduce, decrement, and potentially remove the suppression count.
-                            *self.suppress.entry((uuid, id)).or_insert(self.workers) -= 1;
-                            if self.suppress[&(uuid, id)] == 0 {
-                                self.suppress.remove(&(uuid, id));
+                            *self.suppress.entry(unique_id).or_insert(self.workers) -= 1;
+                            if self.suppress[&unique_id] == 0 {
+                                self.suppress.remove(&unique_id);
                             }
                         },
                     },
@@ -283,14 +302,12 @@ mod event_link {
         /// Source boundaries shared between storage and compute.
         shared: BTreeMap<(uuid::Uuid, mz_expr::GlobalId), SourceBoundary>,
         /// Enqueue source rendering requests.
-        requests: tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, mz_expr::GlobalId)>,
+        requests: tokio::sync::mpsc::UnboundedSender<super::SourceRequest>,
     }
 
     impl EventLinkBoundary {
         /// Create a new boundary, initializing the state to be empty.
-        pub fn new(
-            requests: tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, mz_expr::GlobalId)>,
-        ) -> Self {
+        pub fn new(requests: tokio::sync::mpsc::UnboundedSender<super::SourceRequest>) -> Self {
             Self {
                 shared: BTreeMap::new(),
                 requests,
@@ -332,6 +349,7 @@ mod event_link {
             scope: &mut G,
             name: &str,
             dataflow_id: uuid::Uuid,
+            as_of: timely::progress::Antichain<mz_repr::Timestamp>,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,
@@ -342,7 +360,17 @@ mod event_link {
             let boundary = if let Some(boundary) = self.shared.remove(&key) {
                 boundary
             } else {
-                let _ = self.requests.send(key);
+                let request = super::SourceRequest {
+                    source_id: id.identifier,
+                    dataflow_id,
+                    arguments: super::SourceArgs {
+                        operators: id.operators,
+                        persist: id.persist,
+                    },
+                    as_of,
+                };
+
+                let _ = self.requests.send(request);
                 let boundary = SourceBoundary::new(name);
                 self.shared.insert(key, boundary.clone());
                 boundary
