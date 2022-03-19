@@ -411,6 +411,16 @@ pub trait Client<T = mz_repr::Timestamp>: std::fmt::Debug {
 }
 
 #[async_trait(?Send)]
+impl Client for Box<dyn Client + Send> {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        (**self).recv().await
+    }
+}
+
+#[async_trait(?Send)]
 impl Client for Box<dyn Client> {
     async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await

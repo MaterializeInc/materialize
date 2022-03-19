@@ -113,6 +113,145 @@ impl StorageCapture for DummyBoundary {
     }
 }
 
+pub use boundary_hook::BoundaryHook;
+mod boundary_hook {
+
+    use std::collections::BTreeMap;
+
+    use uuid::Uuid;
+
+    use mz_dataflow_types::client::{Client, Command, Response, StorageCommand};
+    use mz_dataflow_types::sources::SourceDesc;
+    use mz_dataflow_types::SourceInstanceDesc;
+    use mz_expr::GlobalId;
+
+    /// Type alias for source subscriptions, (dataflow_id, source_id).
+    pub type SourceId = (uuid::Uuid, GlobalId);
+
+    /// A client wrapper that observes source instantiation requests and enqueues them as commands.
+    #[derive(Debug)]
+    pub struct BoundaryHook<S> {
+        /// The wrapped client,
+        client: S,
+        /// Source creation requests to suppress.
+        suppress: BTreeMap<(Uuid, GlobalId), u64>,
+        /// Enqueue source rendering requests.
+        requests: tokio::sync::mpsc::UnboundedReceiver<SourceId>,
+        /// The number of storage workers, of whom requests will be made.
+        workers: u64,
+        /// Created sources so that we can form render requests.
+        sources: BTreeMap<GlobalId, (SourceDesc, timely::progress::Antichain<mz_repr::Timestamp>)>,
+        /// Pending render requests, awaiting source creation.
+        pending: BTreeMap<GlobalId, Vec<SourceId>>,
+    }
+
+    impl<S> BoundaryHook<S> {
+        pub fn new(
+            client: S,
+            requests: tokio::sync::mpsc::UnboundedReceiver<SourceId>,
+            workers: u64,
+        ) -> Self {
+            Self {
+                client,
+                requests,
+                workers,
+                suppress: Default::default(),
+                sources: Default::default(),
+                pending: Default::default(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl<S: Client> Client for BoundaryHook<S> {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+            let mut render_requests = Vec::new();
+            if let Command::Storage(StorageCommand::CreateSources(sources)) = &cmd {
+                for source in sources.iter() {
+                    if let Some(requests) = self.pending.remove(&source.id) {
+                        render_requests.extend(requests.into_iter().map(|(uuid, id)| {
+                            (
+                                format!("TODO"),
+                                uuid,
+                                Some(source.since.clone()),
+                                Some((
+                                    id,
+                                    SourceInstanceDesc {
+                                        description: source.desc.clone(),
+                                        operators: None,
+                                        persist: None,
+                                    },
+                                ))
+                                .into_iter()
+                                .collect(),
+                            )
+                        }));
+                    }
+                    self.sources
+                        .insert(source.id, (source.desc.clone(), source.since.clone()));
+                }
+            }
+
+            if let Command::Storage(StorageCommand::AllowCompaction(frontiers)) = &cmd {
+                for (id, frontier) in frontiers.iter() {
+                    if let Some((_, f)) = self.sources.get_mut(id) {
+                        *f = frontier.clone();
+                    }
+                }
+            }
+
+            self.client.send(cmd).await?;
+            if !render_requests.is_empty() {
+                self.client
+                    .send(Command::Storage(StorageCommand::RenderSources(
+                        render_requests,
+                    )))
+                    .await?;
+            }
+            Ok(())
+        }
+        async fn recv(&mut self) -> Option<Response> {
+            // The receive logic draws from either the responses of the client, or requests for source instantiation.
+            let mut response = None;
+            while response.is_none() {
+                tokio::select! {
+                    cmd = self.requests.recv() => match cmd {
+                        None => break,
+                        Some((uuid, id)) => {
+                            if !self.suppress.contains_key(&(uuid, id)) {
+                                if let Some((source, frontier)) = self.sources.get(&id) {
+                                    let command = StorageCommand::RenderSources(vec![(
+                                        format!("TODO"),
+                                        uuid,
+                                        Some(frontier.clone()),
+                                        Some((id, SourceInstanceDesc {
+                                            description: source.clone(),
+                                            operators: None,
+                                            persist: None,
+                                        })).into_iter().collect(),
+                                    )]);
+                                    self.client.send(Command::Storage(command)).await.unwrap()
+                                } else {
+                                    self.pending.entry(id).or_insert(Vec::new()).push((uuid, id));
+                                }
+                            }
+                            // Introduce, decrement, and potentially remove the suppression count.
+                            *self.suppress.entry((uuid, id)).or_insert(self.workers) -= 1;
+                            if self.suppress[&(uuid, id)] == 0 {
+                                self.suppress.remove(&(uuid, id));
+                            }
+                        },
+                    },
+                    resp = self.client.recv() => {
+                        response = resp;
+                    }
+                }
+            }
+            response
+        }
+    }
+}
+
 pub use event_link::EventLinkBoundary;
 
 /// A simple boundary that uses activated event linked lists.
@@ -142,14 +281,19 @@ mod event_link {
     /// A simple boundary that uses activated event linked lists.
     pub struct EventLinkBoundary {
         /// Source boundaries shared between storage and compute.
-        shared: BTreeMap<SourceInstanceKey, SourceBoundary>,
+        shared: BTreeMap<(uuid::Uuid, mz_expr::GlobalId), SourceBoundary>,
+        /// Enqueue source rendering requests.
+        requests: tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, mz_expr::GlobalId)>,
     }
 
     impl EventLinkBoundary {
         /// Create a new boundary, initializing the state to be empty.
-        pub fn new() -> Self {
+        pub fn new(
+            requests: tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, mz_expr::GlobalId)>,
+        ) -> Self {
             Self {
                 shared: BTreeMap::new(),
+                requests,
             }
         }
     }
@@ -162,15 +306,16 @@ mod event_link {
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             name: &str,
-            _dataflow_id: uuid::Uuid,
+            dataflow_id: uuid::Uuid,
         ) {
-            // If the replayer got here before we did ...
-            let boundary = if let Some(boundary) = self.shared.remove(&id) {
+            let key = (dataflow_id, id.identifier);
+            // If the compute replayer got here before we did ...
+            let boundary = if let Some(boundary) = self.shared.remove(&key) {
                 *boundary.token.borrow_mut() = Some(token);
                 boundary
             } else {
                 let boundary = SourceBoundary::with_token(name, token);
-                self.shared.insert(id, boundary.clone());
+                self.shared.insert(key, boundary.clone());
                 boundary
             };
 
@@ -192,11 +337,14 @@ mod event_link {
             Collection<G, DataflowError, Diff>,
             Rc<dyn Any>,
         ) {
-            let boundary = if let Some(boundary) = self.shared.remove(&id) {
+            let key = (dataflow_id, id.identifier);
+            // If the storage capturer got here before we did ...
+            let boundary = if let Some(boundary) = self.shared.remove(&key) {
                 boundary
             } else {
+                let _ = self.requests.send(key);
                 let boundary = SourceBoundary::new(name);
-                self.shared.insert(id, boundary.clone());
+                self.shared.insert(key, boundary.clone());
                 boundary
             };
 

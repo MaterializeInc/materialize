@@ -239,12 +239,26 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
                 let source_key = source.with_id(*source_id);
-                let (ok, err, token) = boundary.replay(
+                let (mut ok, mut err, token) = boundary.replay(
                     source_key,
                     region,
                     &format!("{name}-{source_id}"),
                     dataflow.id,
                 );
+
+                // We do not trust `replay` to correctly advance times.
+                use timely::dataflow::operators::Map;
+                let as_of_frontier1 = dataflow.as_of.clone().unwrap();
+                ok = ok
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
+                    .as_collection();
+
+                let as_of_frontier2 = dataflow.as_of.clone().unwrap();
+                err = err
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
+                    .as_collection();
 
                 // Associate collection bundle with the source identifier.
                 context.insert_id(

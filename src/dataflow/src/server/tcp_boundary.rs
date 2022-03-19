@@ -96,8 +96,14 @@ pub mod server {
     /// Returns a handle implementing [StorageCapture] and a join handle to await termination.
     pub async fn serve<A: ToSocketAddrs + std::fmt::Display>(
         addr: A,
-    ) -> std::io::Result<(TcpEventLinkHandle, JoinHandle<std::io::Result<()>>)> {
+    ) -> std::io::Result<(
+        TcpEventLinkHandle,
+        tokio::sync::mpsc::UnboundedReceiver<super::SourceId>,
+        JoinHandle<std::io::Result<()>>,
+    )> {
         let (worker_tx, worker_rx) = unbounded_channel();
+
+        let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel();
 
         info!("About to bind to {addr}");
         let listener = TcpListener::bind(addr).await?;
@@ -106,15 +112,17 @@ pub mod server {
             listener.local_addr()
         );
 
-        let thread = mz_ore::task::spawn(|| "storage server", accept(listener, worker_rx));
+        let thread =
+            mz_ore::task::spawn(|| "storage server", accept(listener, worker_rx, request_tx));
 
-        Ok((TcpEventLinkHandle { worker_tx }, thread))
+        Ok((TcpEventLinkHandle { worker_tx }, request_rx, thread))
     }
 
     /// Accept connections on `listener` and listening for data on `worker_rx`.
     async fn accept(
         listener: TcpListener,
         mut worker_rx: UnboundedReceiver<WorkerResponse>,
+        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
     ) -> std::io::Result<()> {
         debug!("server listening {listener:?}");
 
@@ -129,10 +137,11 @@ pub mod server {
                         client_id += 1;
                         match listener.accept().await {
                             Ok((socket, addr)) => {
+                                let render_requests = render_requests.clone();
                                 debug!("Accepting client {client_id} on {addr}...");
                                 let state = Arc::clone(&state);
                                 mz_ore::task::spawn(|| "client loop", async move {
-                                    handle_compute(client_id, Arc::clone(&state), socket).await
+                                    handle_compute(client_id, Arc::clone(&state), socket, render_requests.clone()).await
                                 });
                             }
                             Err(e) => {
@@ -172,10 +181,17 @@ pub mod server {
         client_id: ClientId,
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
+        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
     ) -> std::io::Result<()> {
         let mut source_ids = HashSet::new();
-        let result =
-            handle_compute_inner(client_id, Arc::clone(&state), socket, &mut source_ids).await;
+        let result = handle_compute_inner(
+            client_id,
+            Arc::clone(&state),
+            socket,
+            &mut source_ids,
+            render_requests,
+        )
+        .await;
         let mut state = state.lock().await;
         for source_id in source_ids {
             state.subscriptions.remove(&source_id);
@@ -190,6 +206,7 @@ pub mod server {
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
         active_source_ids: &mut HashSet<SubscriptionId>,
+        render_requests: tokio::sync::mpsc::UnboundedSender<super::SourceId>,
     ) -> std::io::Result<()> {
         let mut connection = framed_server(socket);
 
@@ -201,6 +218,7 @@ pub mod server {
                 cmd = connection.try_next() => match cmd? {
                     Some(Command::Subscribe(subscription_id, )) => {
                         debug!("Subscribe client {client_id} to {subscription_id:?}");
+                        let _ = render_requests.send(subscription_id.0);
                         let new = active_source_ids.insert(subscription_id);
                         assert!(new, "Duplicate key: {subscription_id:?}");
                         let stashed = {

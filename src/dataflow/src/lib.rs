@@ -27,5 +27,6 @@ pub mod source;
 
 pub use server::{
     boundary::ComputeReplay, boundary::DummyBoundary, boundary::EventLinkBoundary,
-    boundary::StorageCapture, serve, serve_boundary, tcp_boundary, Config, Server,
+    boundary::StorageCapture, serve, serve_boundary, serve_boundary_requests, tcp_boundary, Config,
+    Server,
 };

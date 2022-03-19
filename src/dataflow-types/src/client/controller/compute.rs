@@ -29,7 +29,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
+use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::GlobalId;
@@ -245,22 +245,6 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             }
         }
 
-        let sources = dataflows
-            .iter()
-            .map(|dataflow| {
-                (
-                    dataflow.debug_name.clone(),
-                    dataflow.id,
-                    dataflow.as_of.clone(),
-                    dataflow.source_imports.clone(),
-                )
-            })
-            .collect();
-
-        self.client
-            .send(Command::Storage(StorageCommand::RenderSources(sources)))
-            .await
-            .expect("Storage command failed; unrecoverable");
         self.client
             .send(Command::Compute(
                 ComputeCommand::CreateDataflows(dataflows),

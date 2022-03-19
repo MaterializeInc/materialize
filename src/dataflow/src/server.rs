@@ -48,6 +48,8 @@ use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
+use crate::server::boundary::BoundaryHook;
+
 pub mod boundary;
 mod compute_state;
 mod metrics;
@@ -89,13 +91,36 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// It uses the default [EventLinkBoundary] to host both compute and storage dataflows.
-pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
-    serve_boundary(config, |_| {
-        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new()));
+pub fn serve(config: Config) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (requests_tx, requests_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (server, client) = serve_boundary(config, move |_| {
+        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new(requests_tx.clone())));
         (Rc::clone(&boundary), boundary)
-    })
+    })?;
+
+    Ok((server, BoundaryHook::new(client, requests_rx, workers)))
 }
 
+/// Initiates a timely dataflow computation, processing materialized commands.
+///
+/// * `create_boundary`: A function to obtain the worker-local boundary components.
+pub fn serve_boundary_requests<
+    SC: StorageCapture,
+    CR: ComputeReplay,
+    B: Fn(usize) -> (SC, CR) + Send + Sync + 'static,
+>(
+    config: Config,
+    requests: tokio::sync::mpsc::UnboundedReceiver<(uuid::Uuid, GlobalId)>,
+    create_boundary: B,
+) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (server, client) = serve_boundary(config, create_boundary)?;
+    Ok((
+        server,
+        crate::server::boundary::BoundaryHook::new(client, requests, workers),
+    ))
+}
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// * `create_boundary`: A function to obtain the worker-local boundary components.
