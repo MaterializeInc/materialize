@@ -63,7 +63,7 @@ impl Coordinator {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute(instance).unwrap();
+        let compute = self.dataflow_controller.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
             persister: &self.persister,
@@ -78,7 +78,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute(instance).unwrap();
+        let compute = self.dataflow_controller.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
             persister: &self.persister,
