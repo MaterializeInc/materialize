@@ -717,10 +717,12 @@ td > .default_button {
     position: absolute;
     top: 10px;
     right: 10px;
-    font-family: "Inter", sans-serif;
-    line-height: 1.75;
+    font-family: 'Encode Sans Expanded';
+    font-size: 0.8rem;
+    line-height: 2;
     &.success {
-        background: $lime;
+        opacity:0.8;
+        background: #70F2A3;
     }
 }
 
