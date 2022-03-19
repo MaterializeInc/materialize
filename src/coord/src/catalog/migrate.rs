@@ -27,7 +27,7 @@ use mz_repr::strconv;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::{self, VisitMut};
 use mz_sql::ast::{
-    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
+    AsOf, AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
@@ -602,7 +602,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
             as_of,
             if_not_exists: _,
         }) => {
-            if let Some(expr) = as_of {
+            if let Some(AsOf::At(expr) | AsOf::AtLeast(expr)) = as_of {
                 FuncNormalizer.visit_expr_mut(expr);
             }
         }

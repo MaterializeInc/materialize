@@ -454,13 +454,19 @@ pub struct Type {
 #[derive(Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
-    /// peek to complete immediately.
+    /// peek to complete immediately. Observes and advances linearizability.
     Immediately,
     /// The peek should occur at the timestamp described by the specified
-    /// expression.
     ///
     /// The expression may have any type.
     AtTimestamp(MirScalarExpr),
+    /// Same as AtTimestamp, and may advance to an available timestamp.
+    AtLeastTimestamp(MirScalarExpr),
+    // Identical to Immediately, but ignores linearizability of past queries.
+    Earliest,
+    // Identical to Immediately, but without advancing linearizabiity for future
+    // queries.
+    Latest,
 }
 
 #[derive(Debug)]

@@ -95,6 +95,7 @@ Discover
 Distinct
 Double
 Drop
+Earliest
 Else
 Enabled
 End
@@ -158,6 +159,7 @@ Key
 Keys
 Kinesis
 Lateral
+Latest
 Leading
 Least
 Left
@@ -278,6 +280,7 @@ Text
 Then
 Ties
 Time
+Timeline
 Timestamp
 Timing
 To

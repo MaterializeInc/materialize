@@ -10,38 +10,34 @@
 mode cockroach
 
 statement ok
-CREATE VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
+CREATE VIEW data (a) AS VALUES (1)
 
 # Don't parse 'AS OF' as a table alias.
 statement error Expected a timestamp value after 'AS OF', found EOF
 SELECT * FROM data AS OF;
 
-query II
+query I
 SELECT * FROM data
 ----
-1 1
-1 2
-2 1
-3 1
+1
 
-query II
-SELECT * FROM data AS OF now()
+query I
+SELECT * FROM data AS OF 1
 ----
-1 1
-1 2
-2 1
-3 1
+1
+
+query I
+SELECT * FROM data AS OF AT LEAST 1
+----
+1
 
 # This previously would panic on an internal conversion from numeric to
 # primitive int
 
-query II
+query I
 SELECT * FROM data AS OF 192741824E4::numeric;
 ----
-1 1
-1 2
-2 1
-3 1
+1
 
 query error out of range integral type conversion attempted
 SELECT * FROM data AS OF -1;
@@ -57,3 +53,38 @@ SELECT * FROM data AS OF 1.2;
 
 query error cannot call mz_logical_timestamp in this context
 SELECT * FROM data AS OF mz_logical_timestamp();
+
+query error cannot call current_timestamp in this context
+SELECT * FROM data AS OF now();
+
+statement ok
+CREATE TABLE t (i INT);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+statement ok
+INSERT INTO t VALUES (1);
+
+query I
+SELECT * FROM t;
+----
+1
+
+query error Timestamp \(1\) is not valid for all inputs
+SELECT * FROM t AS OF 1
+
+query I
+SELECT * FROM t AS OF AT LEAST 1
+----
+1
+
+query I
+SELECT * FROM t AS OF EARLIEST IN TIMELINE
+----
+1
+
+query I
+SELECT * FROM t AS OF LATEST IN TIMELINE
+----
+1

@@ -1075,28 +1075,28 @@ TAIL foo.bar AS OF 123
 ----
 TAIL foo.bar AS OF 123
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(Value(Number("123"))) })
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))) })
 
 parse-statement
 TAIL foo.bar AS OF now()
 ----
 TAIL foo.bar AS OF now()
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 TAIL foo.bar WITH (snapshot) AS OF now()
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
 TAIL foo.bar WITH (snapshot = false, timestamps) AS OF now()
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: Some(Value(Boolean(false))) }, WithOption { key: Ident("timestamps"), value: None }], as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) })
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: Some(Value(Boolean(false))) }, WithOption { key: Ident("timestamps"), value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT false)

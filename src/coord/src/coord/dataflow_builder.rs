@@ -53,7 +53,7 @@ pub enum ExprPrepStyle<'a> {
     /// time in the specified session.
     OneShot {
         logical_time: Option<u64>,
-        session: &'a Session,
+        session: Option<&'a Session>,
     },
 }
 
@@ -362,7 +362,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &self,
         f: &UnmaterializableFunc,
         logical_time: Option<u64>,
-        session: &Session,
+        session: Option<&Session>,
     ) -> Result<MirScalarExpr, CoordError> {
         let pack_1d_array = |datums: Vec<Datum>| {
             let mut row = Row::default();
@@ -385,38 +385,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         };
 
         match f {
-            UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
-            UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
-                session
-                    .vars()
-                    .search_path()
-                    .iter()
-                    .map(|s| Datum::String(s))
-                    .collect(),
-            ),
-            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-                use crate::catalog::builtin::{
-                    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-                    PG_CATALOG_SCHEMA,
-                };
-                pack_1d_array(
-                    session
-                        .vars()
-                        .search_path()
-                        .iter()
-                        .filter(|s| {
-                            (**s != PG_CATALOG_SCHEMA)
-                                && (**s != INFORMATION_SCHEMA)
-                                && (**s != MZ_CATALOG_SCHEMA)
-                                && (**s != MZ_TEMP_SCHEMA)
-                                && (**s != MZ_INTERNAL_SCHEMA)
-                        })
-                        .map(|s| Datum::String(s))
-                        .collect(),
-                )
-            }
-            UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
-            UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
             UnmaterializableFunc::MzClusterId => {
                 pack(Datum::from(self.catalog.config().cluster_id))
             }
@@ -435,7 +403,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             UnmaterializableFunc::MzVersion => pack(Datum::from(
                 &*self.catalog.config().build_info.human_version(),
             )),
-            UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
             UnmaterializableFunc::PgPostmasterStartTime => {
                 pack(Datum::from(self.catalog.config().start_time))
             }
@@ -449,6 +416,60 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     build_info.version,
                 );
                 pack(Datum::from(&*version))
+            }
+
+            UnmaterializableFunc::CurrentDatabase
+            | UnmaterializableFunc::CurrentSchemasWithSystem
+            | UnmaterializableFunc::CurrentSchemasWithoutSystem
+            | UnmaterializableFunc::CurrentTimestamp
+            | UnmaterializableFunc::CurrentUser
+            | UnmaterializableFunc::PgBackendPid => {
+                let session = match session {
+                    Some(session) => session,
+                    None => coord_bail!("cannot call {f} in this context"),
+                };
+                match f {
+                    UnmaterializableFunc::CurrentDatabase => {
+                        pack(Datum::from(session.vars().database()))
+                    }
+                    UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
+                        session
+                            .vars()
+                            .search_path()
+                            .iter()
+                            .map(|s| Datum::String(s))
+                            .collect(),
+                    ),
+                    UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+                        use crate::catalog::builtin::{
+                            INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+                            MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+                        };
+                        pack_1d_array(
+                            session
+                                .vars()
+                                .search_path()
+                                .iter()
+                                .filter(|s| {
+                                    (**s != PG_CATALOG_SCHEMA)
+                                        && (**s != INFORMATION_SCHEMA)
+                                        && (**s != MZ_CATALOG_SCHEMA)
+                                        && (**s != MZ_TEMP_SCHEMA)
+                                        && (**s != MZ_INTERNAL_SCHEMA)
+                                })
+                                .map(|s| Datum::String(s))
+                                .collect(),
+                        )
+                    }
+                    UnmaterializableFunc::CurrentTimestamp => {
+                        pack(Datum::from(session.pcx().wall_time))
+                    }
+                    UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
+                    UnmaterializableFunc::PgBackendPid => {
+                        pack(Datum::Int32(session.conn_id() as i32))
+                    }
+                    _ => unreachable!(),
+                }
             }
         }
     }
