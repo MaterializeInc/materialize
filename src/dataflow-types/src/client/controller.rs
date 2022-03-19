@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 
@@ -126,7 +127,7 @@ impl<C: Client<T>, T> Controller<C, T> {
 
 impl<C: Client<T>, T: Timestamp + Lattice> Controller<C, T> {
     pub async fn recv(&mut self) -> Option<Response<T>> {
-        let response = self.client.recv().await;
+        let response = self.client.next().await;
         if let Some(response) = response.as_ref() {
             match response {
                 Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {

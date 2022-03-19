@@ -14,12 +14,14 @@
 
 #![deny(missing_docs)]
 
-use anyhow::anyhow;
-use anyhow::Context;
+use std::collections::BTreeMap;
+use std::ops::Bound;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-use std::collections::HashMap;
+use futures::{ready, Stream};
 
 use mz_dataflow_types::client::{
     partitioned::Partitioned, Client, Command, ComputeCommand, ComputeInstanceId, InstanceConfig,
@@ -58,10 +60,15 @@ impl Client for RemoteClient {
         trace!("Sending dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response> {
-        let response = self.client.recv().await;
-        trace!("Receiving dataflow response: {:?}", response);
-        response
+}
+
+impl Stream for RemoteClient {
+    type Item = Response;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let response = ready!(Pin::new(&mut self.client).poll_next(cx));
+        trace!("RECV dataflow response: {:?}", response);
+        Poll::Ready(response)
     }
 }
 
@@ -80,7 +87,11 @@ pub struct SplitClient<S> {
     /// Client on which storage commands are executed, and where virtual compute instances are created.
     storage_client: S,
     /// A map of remote compute instances.
-    compute_clients: HashMap<ComputeInstanceId, ComputeClientFlavor>,
+    compute_clients: BTreeMap<ComputeInstanceId, ComputeClientFlavor>,
+    /// The ID of the compute instance to start from on the next call to
+    /// `poll_next`. If `None`, indicates that the storage client should be
+    /// polled instead.
+    recv_cursor: Option<ComputeInstanceId>,
 }
 
 impl<S: Client> SplitClient<S> {
@@ -89,6 +100,7 @@ impl<S: Client> SplitClient<S> {
         Self {
             storage_client,
             compute_clients: Default::default(),
+            recv_cursor: None,
         }
     }
 }
@@ -145,27 +157,67 @@ impl<S: Client> Client for SplitClient<S> {
 
         Ok(())
     }
-    async fn recv(&mut self) -> Option<Response> {
-        // TODO: We currently don't have a good way to receive from many clients
-        let mut futures = FuturesUnordered::new();
-        for client in self.compute_clients.values_mut() {
-            if let ComputeClientFlavor::Remote(client) = client {
-                futures.push(client.recv());
+}
+
+impl<C: Client> Stream for SplitClient<C> {
+    type Item = Response;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+
+        // This code polls each of the compute clients and the storage client in
+        // turn. To maintain fairness, we start polling from wherever the last
+        // poll left off. If we find a response, we set `recv_cursor` to the
+        // *next* client to poll.
+
+        // Poll the compute clients from the current cursor to the end.
+        if let Some(instance_id) = this.recv_cursor {
+            let mut compute_clients = this.compute_clients.range_mut(instance_id..);
+            while let Some((_id, compute_client)) = compute_clients.next() {
+                if let ComputeClientFlavor::Remote(compute_client) = compute_client {
+                    if let Poll::Ready(res) = Pin::new(compute_client).poll_next(cx) {
+                        this.recv_cursor = compute_clients.next().map(|(id, _)| *id);
+                        return Poll::Ready(res);
+                    }
+                }
             }
         }
-        tokio::select! {
-            response = futures.select_next_some() => response,
-            response = self.storage_client.recv() => response,
+
+        // Poll the storage client.
+        if let Poll::Ready(res) = Pin::new(&mut this.storage_client).poll_next(cx) {
+            this.recv_cursor = this.compute_clients.keys().next().copied();
+            return Poll::Ready(res);
         }
+
+        // Poll the compute clients from the beginning to the current cursor.
+        let upper_bound = match this.recv_cursor {
+            None => Bound::Unbounded,
+            Some(bound) => Bound::Excluded(bound),
+        };
+        let mut compute_clients = this
+            .compute_clients
+            .range_mut((Bound::Unbounded, upper_bound));
+        while let Some((_id, compute_client)) = compute_clients.next() {
+            if let ComputeClientFlavor::Remote(compute_client) = compute_client {
+                if let Poll::Ready(res) = Pin::new(compute_client).poll_next(cx) {
+                    this.recv_cursor = compute_clients.next().map(|(id, _)| *id);
+                    return Poll::Ready(res);
+                }
+            }
+        }
+
+        Poll::Pending
     }
 }
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     use async_trait::async_trait;
     use futures::sink::SinkExt;
-    use futures::stream::StreamExt;
+    use futures::{ready, Stream};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::{TcpStream, ToSocketAddrs};
     use tokio_serde::formats::Bincode;
@@ -193,13 +245,15 @@ pub mod tcp {
             // TODO: something better than panicking.
             self.connection.send(cmd).await.map_err(|err| err.into())
         }
+    }
 
-        async fn recv(&mut self) -> Option<Response> {
+    impl Stream for TcpClient {
+        type Item = Response;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            let response = ready!(Pin::new(&mut self.connection).poll_next(cx));
             // TODO: something better than panicking.
-            self.connection
-                .next()
-                .await
-                .map(|x| x.expect("connection to dataflow server broken"))
+            Poll::Ready(response.transpose().expect("connection to dataflow broken"))
         }
     }
 

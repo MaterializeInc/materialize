@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 use mz_dataflow::DummyBoundary;
 use mz_dataflow_types::sources::AwsExternalId;
 use tokio::net::TcpListener;
@@ -244,7 +244,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => break,
                 Some(cmd) => client.send(cmd).await.unwrap(),
             },
-            Some(response) = client.recv() => conn.send(response).await?,
+            Some(response) = client.next() => conn.send(response).await?,
         }
     }
 

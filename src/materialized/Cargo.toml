@@ -119,7 +119,6 @@ datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
 jsonwebtoken = "8.0.1"
-mz-coordtest = { path = "../coordtest" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }

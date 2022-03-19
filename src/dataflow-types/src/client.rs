@@ -13,15 +13,20 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
+use futures::{ready, Stream};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tracing::trace;
+use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
 use crate::{
@@ -377,88 +382,23 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 }
 
 /// A client to a running dataflow server.
+///
+/// A client implements `Stream`, which yields each response from the dataflow
+/// server.
 #[async_trait(?Send)]
-pub trait Client<T = mz_repr::Timestamp>: std::fmt::Debug {
+pub trait Client<T = mz_repr::Timestamp>:
+    std::fmt::Debug + Stream<Item = Response<T>> + Unpin
+{
     /// Sends a command to the dataflow server.
     ///
     /// The command can error for various reasons.
     async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error>;
-
-    /// Receives the next response from the dataflow server.
-    ///
-    /// This method blocks until the next response is available, or, if the
-    /// dataflow server has been shut down, returns `None`.
-    async fn recv(&mut self) -> Option<Response<T>>;
 }
 
 #[async_trait(?Send)]
 impl Client for Box<dyn Client> {
     async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
-    }
-    async fn recv(&mut self) -> Option<Response> {
-        (**self).recv().await
-    }
-}
-
-/// A helper struct which allows us to interpret a `Client` as a `Stream` of `Response`.
-pub struct ClientAsStream<'a, C: Client + 'a> {
-    client: &'a mut C,
-}
-
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use uuid::Uuid;
-
-impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
-    type Item = Response;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        use futures::Future;
-        Pin::new(&mut self.client.recv()).poll(cx)
-    }
-}
-
-/// A wrapper for enumerating any available result from a client.
-///
-/// Maintains an internal counter, and round robins through clients for fairness.
-pub struct SelectStream<'a, C: Client + 'a> {
-    clients: &'a mut [C],
-    cursor: usize,
-}
-
-impl<'a, C: Client + 'a> SelectStream<'a, C> {
-    /// Create a new [SelectStream], starting from the client at position `cursor`.
-    pub fn new(clients: &'a mut [C], cursor: usize) -> Self {
-        Self { clients, cursor }
-    }
-}
-
-impl<'a, C: Client + 'a> futures::stream::Stream for SelectStream<'a, C> {
-    type Item = (usize, Response);
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut done = true;
-        for _ in 0..self.clients.len() {
-            let cursor = self.cursor;
-            let result = {
-                use futures::Future;
-                Pin::new(&mut self.clients[cursor].recv()).poll(cx)
-            };
-            self.cursor = (self.cursor + 1) % self.clients.len();
-            match result {
-                Poll::Pending => {
-                    done = false;
-                }
-                Poll::Ready(None) => {}
-                Poll::Ready(Some(response)) => {
-                    return Poll::Ready(Some((self.cursor, response)));
-                }
-            }
-        }
-        if done {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
     }
 }
 
@@ -493,10 +433,15 @@ impl Client for LocalClient {
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response> {
-        let response = self.client.recv().await;
+}
+
+impl Stream for LocalClient {
+    type Item = Response;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let response = ready!(Pin::new(&mut self.client).poll_next(cx));
         trace!("RECV dataflow response: {:?}", response);
-        response
+        Poll::Ready(response)
     }
 }
 
@@ -506,8 +451,11 @@ pub mod partitioned {
     use std::collections::hash_map::Entry;
     use std::collections::HashMap;
     use std::iter::Fuse;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     use async_trait::async_trait;
+    use futures::Stream;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
@@ -527,7 +475,7 @@ pub mod partitioned {
     /// and await responses from each of the client shards before it can respond.
     #[derive(Debug)]
     pub struct Partitioned<C: Client> {
-        shards: Vec<C>,
+        shards: Vec<Option<C>>,
         cursor: usize,
         state: PartitionedClientState,
     }
@@ -538,7 +486,7 @@ pub mod partitioned {
             Self {
                 state: PartitionedClientState::new(shards.len()),
                 cursor: 0,
-                shards,
+                shards: shards.into_iter().map(Some).collect(),
             }
         }
     }
@@ -549,28 +497,55 @@ pub mod partitioned {
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
-                shard.send(cmd_part).await?;
+                shard
+                    .as_mut()
+                    .expect("attempt to send to terminated shard")
+                    .send(cmd_part)
+                    .await?;
             }
             Ok(())
         }
+    }
 
-        async fn recv(&mut self) -> Option<Response> {
-            use futures::StreamExt;
-            if let Some(stashed) = self.state.stashed_responses.next() {
-                return Some(stashed);
+    impl<C: Client> Stream for Partitioned<C> {
+        type Item = Response;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            let this = &mut *self;
+
+            if let Some(stashed) = this.state.stashed_responses.next() {
+                return Poll::Ready(Some(stashed));
             }
-            self.cursor = (self.cursor + 1) % self.shards.len();
-            let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
-            while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response).fuse();
-                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
-                self.state.stashed_responses = messages;
-                if let Some(message) = self.state.stashed_responses.next() {
-                    return Some(message);
+
+            // Poll each shard once, starting from where we last left off. We
+            // set done to false if we discover at least one shard that could
+            // still produce data.
+            let mut done = true;
+            for _ in 0..this.shards.len() {
+                let index = this.cursor;
+                this.cursor = (this.cursor + 1) % this.shards.len();
+                if let Some(shard) = &mut this.shards[index] {
+                    match Pin::new(shard).poll_next(cx) {
+                        Poll::Pending => done = false,
+                        Poll::Ready(None) => this.shards[index] = None,
+                        Poll::Ready(Some(response)) => {
+                            done = false;
+                            let messages = this.state.absorb_response(index, response).fuse();
+                            assert!(this.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
+                            this.state.stashed_responses = messages;
+                            if let Some(message) = this.state.stashed_responses.next() {
+                                return Poll::Ready(Some(message));
+                            }
+                        }
+                    }
                 }
             }
-            // Indicate completion of the communication.
-            None
+
+            if done {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
         }
     }
 
@@ -940,7 +915,11 @@ pub mod partitioned {
 
 /// A client backed by a process-local timely worker thread.
 pub mod process_local {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     use async_trait::async_trait;
+    use futures::Stream;
 
     use super::{Client, Command, Response};
 
@@ -961,9 +940,13 @@ pub mod process_local {
             self.worker_thread.unpark();
             Ok(())
         }
+    }
 
-        async fn recv(&mut self) -> Option<Response> {
-            self.feedback_rx.recv().await
+    impl Stream for ProcessLocal {
+        type Item = Response;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.feedback_rx).poll_recv(cx)
         }
     }
 
