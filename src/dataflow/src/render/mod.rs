@@ -144,7 +144,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     debug_name: &str,
     as_of: Option<Antichain<mz_repr::Timestamp>>,
     source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
-    dataflow_id: GlobalId,
+    dataflow_id: uuid::Uuid,
     boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");

@@ -13,7 +13,6 @@ use timely::dataflow::Scope;
 
 use mz_dataflow_types::DataflowError;
 use mz_dataflow_types::SourceInstanceKey;
-use mz_expr::GlobalId;
 use mz_repr::{Diff, Row};
 
 /// A type that can capture a specific source.
@@ -26,7 +25,7 @@ pub trait StorageCapture {
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
         name: &str,
-        dataflow_id: GlobalId,
+        dataflow_id: uuid::Uuid,
     );
 }
 
@@ -38,7 +37,7 @@ impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
         name: &str,
-        dataflow_id: GlobalId,
+        dataflow_id: uuid::Uuid,
     ) {
         self.borrow_mut()
             .capture(id, ok, err, token, name, dataflow_id)
@@ -51,7 +50,7 @@ impl<CR: ComputeReplay> ComputeReplay for Rc<RefCell<CR>> {
         id: SourceInstanceKey,
         scope: &mut G,
         name: &str,
-        dataflow_id: GlobalId,
+        dataflow_id: uuid::Uuid,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -73,7 +72,7 @@ pub trait ComputeReplay {
         id: SourceInstanceKey,
         scope: &mut G,
         name: &str,
-        dataflow_id: GlobalId,
+        dataflow_id: uuid::Uuid,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -90,7 +89,7 @@ impl ComputeReplay for DummyBoundary {
         _id: SourceInstanceKey,
         _scope: &mut G,
         _name: &str,
-        _dataflow_id: GlobalId,
+        _dataflow_id: uuid::Uuid,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -108,7 +107,7 @@ impl StorageCapture for DummyBoundary {
         _err: Collection<G, DataflowError, Diff>,
         _token: Rc<dyn Any>,
         _name: &str,
-        _dataflow_id: GlobalId,
+        _dataflow_id: uuid::Uuid,
     ) {
         panic!("DummyBoundary cannot capture")
     }
@@ -131,7 +130,6 @@ mod event_link {
 
     use mz_dataflow_types::DataflowError;
     use mz_dataflow_types::SourceInstanceKey;
-    use mz_expr::GlobalId;
     use mz_repr::{Diff, Row};
 
     use crate::activator::RcActivator;
@@ -164,7 +162,7 @@ mod event_link {
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             name: &str,
-            _dataflow_id: GlobalId,
+            _dataflow_id: uuid::Uuid,
         ) {
             let boundary = SourceBoundary::new(name, token);
 
@@ -191,7 +189,7 @@ mod event_link {
             id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
-            _dataflow_id: GlobalId,
+            _dataflow_id: uuid::Uuid,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,

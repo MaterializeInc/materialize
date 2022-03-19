@@ -15,7 +15,7 @@ use mz_dataflow_types::DataflowError;
 use mz_expr::GlobalId;
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
-pub type SourceId = (GlobalId, GlobalId);
+pub type SourceId = (uuid::Uuid, GlobalId);
 /// Type alias for a source subscription including a source worker.
 pub type SubscriptionId = (SourceId, WorkerIdentifier);
 
@@ -27,7 +27,6 @@ pub mod server {
     use differential_dataflow::Collection;
     use futures::{SinkExt, TryStreamExt};
     use mz_dataflow_types::{DataflowError, SourceInstanceKey};
-    use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
     use std::any::Any;
     use std::collections::{HashMap, HashSet};
@@ -245,7 +244,7 @@ pub mod server {
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             _name: &str,
-            dataflow_id: GlobalId,
+            dataflow_id: uuid::Uuid,
         ) {
             let subscription_id = ((dataflow_id, id.identifier), ok.inner.scope().index());
             let client_token = Arc::new(());
@@ -341,7 +340,6 @@ pub mod client {
     use differential_dataflow::{AsCollection, Collection};
     use futures::{Sink, SinkExt, TryStreamExt};
     use mz_dataflow_types::{DataflowError, SourceInstanceKey};
-    use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
     use std::any::Any;
     use std::collections::HashMap;
@@ -592,7 +590,7 @@ pub mod client {
             id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
-            dataflow_id: GlobalId,
+            dataflow_id: uuid::Uuid,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,

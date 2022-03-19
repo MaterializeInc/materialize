@@ -225,7 +225,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         let on_entry = self.catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let name = index_entry.name().to_string();
-        let mut dataflow = DataflowDesc::new(name, id);
+        let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
@@ -256,7 +256,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         id: GlobalId,
         sink_description: SinkDesc,
     ) -> Result<DataflowDesc, CoordError> {
-        let mut dataflow = DataflowDesc::new(name, id);
+        let mut dataflow = DataflowDesc::new(name);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)
     }

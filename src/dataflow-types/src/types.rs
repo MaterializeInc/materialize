@@ -143,12 +143,12 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Human readable name
     pub debug_name: String,
     /// Unique ID of the dataflow
-    pub id: GlobalId,
+    pub id: uuid::Uuid,
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String, id: GlobalId) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -157,7 +157,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             sink_exports: Default::default(),
             as_of: Default::default(),
             debug_name: name,
-            id,
+            id: uuid::Uuid::new_v4(),
         }
     }
 

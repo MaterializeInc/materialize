@@ -179,7 +179,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     RenderSources(
         Vec<(
             /* debug_name */ String,
-            /* dataflow_id */ GlobalId,
+            /* dataflow_id */ uuid::Uuid,
             /* as_of */ Option<Antichain<T>>,
             /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc<T>>,
         )>,
