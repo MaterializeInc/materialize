@@ -11,7 +11,7 @@ anyhow = "1.0.55"
 async-stream = "0.3.3"
 async-trait = "0.1.52"
 aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
-aws-smithy-http = "0.38.0"
+aws-smithy-http = "0.39.0"
 aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
