@@ -13,15 +13,19 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::pin::Pin;
+
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use futures::Stream;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tracing::trace;
+use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
 use crate::{
@@ -389,6 +393,21 @@ pub trait Client<T = mz_repr::Timestamp>: std::fmt::Debug {
     /// This method blocks until the next response is available, or, if the
     /// dataflow server has been shut down, returns `None`.
     async fn recv(&mut self) -> Option<Response<T>>;
+
+    /// Returns an adapter that treats the client as a stream.
+    ///
+    /// The stream produces the responses that would be produced by repeated
+    /// calls to `recv`.
+    fn as_stream<'a>(&'a mut self) -> Pin<Box<dyn Stream<Item = Response<T>> + 'a>>
+    where
+        T: 'a,
+    {
+        Box::pin(async_stream::stream! {
+            while let Some(response) = self.recv().await {
+                yield response;
+            }
+        })
+    }
 }
 
 #[async_trait(?Send)]
@@ -398,67 +417,6 @@ impl Client for Box<dyn Client> {
     }
     async fn recv(&mut self) -> Option<Response> {
         (**self).recv().await
-    }
-}
-
-/// A helper struct which allows us to interpret a `Client` as a `Stream` of `Response`.
-pub struct ClientAsStream<'a, C: Client + 'a> {
-    client: &'a mut C,
-}
-
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use uuid::Uuid;
-
-impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
-    type Item = Response;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        use futures::Future;
-        Pin::new(&mut self.client.recv()).poll(cx)
-    }
-}
-
-/// A wrapper for enumerating any available result from a client.
-///
-/// Maintains an internal counter, and round robins through clients for fairness.
-pub struct SelectStream<'a, C: Client + 'a> {
-    clients: &'a mut [C],
-    cursor: usize,
-}
-
-impl<'a, C: Client + 'a> SelectStream<'a, C> {
-    /// Create a new [SelectStream], starting from the client at position `cursor`.
-    pub fn new(clients: &'a mut [C], cursor: usize) -> Self {
-        Self { clients, cursor }
-    }
-}
-
-impl<'a, C: Client + 'a> futures::stream::Stream for SelectStream<'a, C> {
-    type Item = (usize, Response);
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut done = true;
-        for _ in 0..self.clients.len() {
-            let cursor = self.cursor;
-            let result = {
-                use futures::Future;
-                Pin::new(&mut self.clients[cursor].recv()).poll(cx)
-            };
-            self.cursor = (self.cursor + 1) % self.clients.len();
-            match result {
-                Poll::Pending => {
-                    done = false;
-                }
-                Poll::Ready(None) => {}
-                Poll::Ready(Some(response)) => {
-                    return Poll::Ready(Some((self.cursor, response)));
-                }
-            }
-        }
-        if done {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
     }
 }
 
@@ -508,11 +466,13 @@ pub mod partitioned {
     use std::iter::Fuse;
 
     use async_trait::async_trait;
+    use futures::StreamExt;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row, Timestamp};
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch};
+    use tokio_stream::StreamMap;
     use tracing::debug;
 
     use crate::client::ComputeInstanceId;
@@ -528,7 +488,6 @@ pub mod partitioned {
     #[derive(Debug)]
     pub struct Partitioned<C: Client> {
         shards: Vec<C>,
-        cursor: usize,
         state: PartitionedClientState,
     }
 
@@ -537,7 +496,6 @@ pub mod partitioned {
         pub fn new(shards: Vec<C>) -> Self {
             Self {
                 state: PartitionedClientState::new(shards.len()),
-                cursor: 0,
                 shards,
             }
         }
@@ -555,12 +513,15 @@ pub mod partitioned {
         }
 
         async fn recv(&mut self) -> Option<Response> {
-            use futures::StreamExt;
             if let Some(stashed) = self.state.stashed_responses.next() {
                 return Some(stashed);
             }
-            self.cursor = (self.cursor + 1) % self.shards.len();
-            let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
+            let mut stream: StreamMap<_, _> = self
+                .shards
+                .iter_mut()
+                .map(|shard| shard.as_stream())
+                .enumerate()
+                .collect();
             while let Some((index, response)) = stream.next().await {
                 let messages = self.state.absorb_response(index, response).fuse();
                 assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
