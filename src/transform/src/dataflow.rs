@@ -220,14 +220,14 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     for (source_id, source) in dataflow.source_imports.iter_mut() {
         if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
             // Install no-op demand information if none exists.
-            if source.operators.is_none() {
-                source.operators = Some(LinearOperator {
+            if source.arguments.operators.is_none() {
+                source.arguments.operators = Some(LinearOperator {
                     predicates: Vec::new(),
                     projection: (0..source.description.desc.arity()).collect(),
                 })
             }
             // Restrict required columns by those identified as demanded.
-            if let Some(operator) = &mut source.operators {
+            if let Some(operator) = &mut source.arguments.operators {
                 operator.projection.retain(|col| columns.contains(col));
             }
         }
@@ -304,14 +304,14 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     for (source_id, source) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
             // Install no-op predicate information if none exists.
-            if source.operators.is_none() {
-                source.operators = Some(LinearOperator {
+            if source.arguments.operators.is_none() {
+                source.arguments.operators = Some(LinearOperator {
                     predicates: Vec::new(),
                     projection: (0..source.description.desc.arity()).collect(),
                 })
             }
             // Add any predicates that can be pushed to the source.
-            if let Some(operator) = &mut source.operators {
+            if let Some(operator) = &mut source.arguments.operators {
                 operator.predicates.extend(list.iter().cloned());
                 operator.predicates.sort();
             }

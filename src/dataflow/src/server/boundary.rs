@@ -11,8 +11,8 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::DataflowError;
-use mz_dataflow_types::SourceInstanceKey;
+use mz_dataflow_types::{DataflowError, SourceInstanceRequest};
+use mz_expr::GlobalId;
 use mz_repr::{Diff, Row};
 
 /// A type that can capture a specific source.
@@ -20,7 +20,7 @@ pub trait StorageCapture {
     /// Captures the source and binds to `id`.
     fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        id: SourceInstanceKey,
+        id: GlobalId,
         ok: Collection<G, Row, Diff>,
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
@@ -29,10 +29,29 @@ pub trait StorageCapture {
     );
 }
 
+/// A type that can replay specific sources
+pub trait ComputeReplay {
+    /// Replays the source bound to `id`.
+    ///
+    /// `None` is returned if the source does not exist, either because
+    /// it was not there to begin, or has already been replayed. Either
+    /// case is likely an error.
+    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
+        &mut self,
+        scope: &mut G,
+        name: &str,
+        request: SourceInstanceRequest,
+    ) -> (
+        Collection<G, Row, Diff>,
+        Collection<G, DataflowError, Diff>,
+        Rc<dyn Any>,
+    );
+}
+
 impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
     fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        id: SourceInstanceKey,
+        id: GlobalId,
         ok: Collection<G, Row, Diff>,
         err: Collection<G, DataflowError, Diff>,
         token: Rc<dyn Any>,
@@ -47,40 +66,16 @@ impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
 impl<CR: ComputeReplay> ComputeReplay for Rc<RefCell<CR>> {
     fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        id: SourceInstanceKey,
         scope: &mut G,
         name: &str,
-        dataflow_id: uuid::Uuid,
-        as_of: Antichain<mz_repr::Timestamp>,
+        request: SourceInstanceRequest,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
         Rc<dyn Any>,
     ) {
-        self.borrow_mut()
-            .replay(id, scope, name, dataflow_id, as_of)
+        self.borrow_mut().replay(scope, name, request)
     }
-}
-
-/// A type that can replay specific sources
-pub trait ComputeReplay {
-    /// Replays the source bound to `id`.
-    ///
-    /// `None` is returned if the source does not exist, either because
-    /// it was not there to begin, or has already been replayed. Either
-    /// case is likely an error.
-    fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
-        &mut self,
-        id: SourceInstanceKey,
-        scope: &mut G,
-        name: &str,
-        dataflow_id: uuid::Uuid,
-        as_of: Antichain<mz_repr::Timestamp>,
-    ) -> (
-        Collection<G, Row, Diff>,
-        Collection<G, DataflowError, Diff>,
-        Rc<dyn Any>,
-    );
 }
 
 /// A boundary implementation that panics on use.
@@ -89,11 +84,9 @@ pub struct DummyBoundary;
 impl ComputeReplay for DummyBoundary {
     fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        _id: SourceInstanceKey,
         _scope: &mut G,
         _name: &str,
-        _dataflow_id: uuid::Uuid,
-        _as_of: Antichain<mz_repr::Timestamp>,
+        _request: SourceInstanceRequest,
     ) -> (
         Collection<G, Row, Diff>,
         Collection<G, DataflowError, Diff>,
@@ -106,7 +99,7 @@ impl ComputeReplay for DummyBoundary {
 impl StorageCapture for DummyBoundary {
     fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
         &mut self,
-        _id: SourceInstanceKey,
+        _id: GlobalId,
         _ok: Collection<G, Row, Diff>,
         _err: Collection<G, DataflowError, Diff>,
         _token: Rc<dyn Any>,
@@ -117,32 +110,6 @@ impl StorageCapture for DummyBoundary {
     }
 }
 
-use timely::progress::Antichain;
-
-/// Type alias for source subscriptions, (dataflow_id, source_id).
-pub type SourceId = (uuid::Uuid, mz_expr::GlobalId);
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SourceArgs {
-    /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<mz_dataflow_types::LinearOperator>,
-    /// A description of how to persist the source.
-    pub persist:
-        Option<mz_dataflow_types::sources::persistence::SourcePersistDesc<mz_repr::Timestamp>>,
-}
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SourceRequest {
-    pub source_id: mz_expr::GlobalId,
-    pub dataflow_id: uuid::Uuid,
-    pub arguments: SourceArgs,
-    pub as_of: Antichain<mz_repr::Timestamp>,
-}
-
-impl SourceRequest {
-    pub fn unique_id(&self) -> SourceId {
-        (self.dataflow_id, self.source_id)
-    }
-}
-
 pub use boundary_hook::BoundaryHook;
 mod boundary_hook {
 
@@ -150,10 +117,8 @@ mod boundary_hook {
 
     use mz_dataflow_types::client::{Client, Command, Response, StorageCommand};
     use mz_dataflow_types::sources::SourceDesc;
-    use mz_dataflow_types::SourceInstanceDesc;
+    use mz_dataflow_types::{SourceInstanceDesc, SourceInstanceId, SourceInstanceRequest};
     use mz_expr::GlobalId;
-
-    use super::{SourceId, SourceRequest};
 
     /// A client wrapper that observes source instantiation requests and enqueues them as commands.
     #[derive(Debug)]
@@ -161,21 +126,21 @@ mod boundary_hook {
         /// The wrapped client,
         client: S,
         /// Source creation requests to suppress.
-        suppress: BTreeMap<SourceId, u64>,
+        suppress: BTreeMap<SourceInstanceId, u64>,
         /// Enqueue source rendering requests.
-        requests: tokio::sync::mpsc::UnboundedReceiver<SourceRequest>,
+        requests: tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
         /// The number of storage workers, of whom requests will be made.
         workers: u64,
         /// Created sources so that we can form render requests.
         sources: BTreeMap<GlobalId, SourceDesc>,
         /// Pending render requests, awaiting source creation.
-        pending: BTreeMap<GlobalId, Vec<SourceRequest>>,
+        pending: BTreeMap<GlobalId, Vec<SourceInstanceRequest>>,
     }
 
     impl<S> BoundaryHook<S> {
         pub fn new(
             client: S,
-            requests: tokio::sync::mpsc::UnboundedReceiver<SourceRequest>,
+            requests: tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
             workers: u64,
         ) -> Self {
             Self {
@@ -198,15 +163,17 @@ mod boundary_hook {
                     if let Some(requests) = self.pending.remove(&source.id) {
                         render_requests.extend(requests.into_iter().map(|request| {
                             (
-                                format!("TODO"),
+                                format!(
+                                    "SourceDataflow({:?}, {:?})",
+                                    request.dataflow_id, request.source_id
+                                ),
                                 request.dataflow_id,
                                 Some(request.as_of.clone()),
                                 Some((
                                     request.source_id,
                                     SourceInstanceDesc {
                                         description: source.desc.clone(),
-                                        operators: request.arguments.operators,
-                                        persist: request.arguments.persist,
+                                        arguments: request.arguments,
                                     },
                                 ))
                                 .into_iter()
@@ -240,13 +207,12 @@ mod boundary_hook {
                             if !self.suppress.contains_key(&unique_id) {
                                 if let Some(source) = self.sources.get(&request.source_id) {
                                     let command = StorageCommand::RenderSources(vec![(
-                                        format!("TODO"),
+                                        format!("SourceDataflow({:?}, {:?})", request.dataflow_id, request.source_id),
                                         request.dataflow_id,
                                         Some(request.as_of.clone()),
                                         Some((request.source_id, SourceInstanceDesc {
                                             description: source.clone(),
-                                            operators: request.arguments.operators,
-                                            persist: request.arguments.persist,
+                                            arguments: request.arguments,
                                         })).into_iter().collect(),
                                     )]);
                                     self.client.send(Command::Storage(command)).await.unwrap()
@@ -287,8 +253,8 @@ mod event_link {
     use timely::dataflow::operators::capture::EventLink;
     use timely::dataflow::Scope;
 
-    use mz_dataflow_types::DataflowError;
-    use mz_dataflow_types::SourceInstanceKey;
+    use mz_dataflow_types::{DataflowError, SourceInstanceRequest};
+    use mz_expr::GlobalId;
     use mz_repr::{Diff, Row};
 
     use crate::activator::RcActivator;
@@ -302,12 +268,14 @@ mod event_link {
         /// Source boundaries shared between storage and compute.
         shared: BTreeMap<(uuid::Uuid, mz_expr::GlobalId), SourceBoundary>,
         /// Enqueue source rendering requests.
-        requests: tokio::sync::mpsc::UnboundedSender<super::SourceRequest>,
+        requests: tokio::sync::mpsc::UnboundedSender<super::SourceInstanceRequest>,
     }
 
     impl EventLinkBoundary {
         /// Create a new boundary, initializing the state to be empty.
-        pub fn new(requests: tokio::sync::mpsc::UnboundedSender<super::SourceRequest>) -> Self {
+        pub fn new(
+            requests: tokio::sync::mpsc::UnboundedSender<super::SourceInstanceRequest>,
+        ) -> Self {
             Self {
                 shared: BTreeMap::new(),
                 requests,
@@ -318,14 +286,14 @@ mod event_link {
     impl StorageCapture for EventLinkBoundary {
         fn capture<G: Scope<Timestamp = mz_repr::Timestamp>>(
             &mut self,
-            id: SourceInstanceKey,
+            id: GlobalId,
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             name: &str,
             dataflow_id: uuid::Uuid,
         ) {
-            let key = (dataflow_id, id.identifier);
+            let key = (dataflow_id, id);
             // If the compute replayer got here before we did ...
             let boundary = if let Some(boundary) = self.shared.remove(&key) {
                 *boundary.token.borrow_mut() = Some(token);
@@ -345,31 +313,19 @@ mod event_link {
     impl ComputeReplay for EventLinkBoundary {
         fn replay<G: Scope<Timestamp = mz_repr::Timestamp>>(
             &mut self,
-            id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
-            dataflow_id: uuid::Uuid,
-            as_of: timely::progress::Antichain<mz_repr::Timestamp>,
+            request: SourceInstanceRequest,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,
             Rc<dyn Any>,
         ) {
-            let key = (dataflow_id, id.identifier);
+            let key = request.unique_id();
             // If the storage capturer got here before we did ...
             let boundary = if let Some(boundary) = self.shared.remove(&key) {
                 boundary
             } else {
-                let request = super::SourceRequest {
-                    source_id: id.identifier,
-                    dataflow_id,
-                    arguments: super::SourceArgs {
-                        operators: id.operators,
-                        persist: id.persist,
-                    },
-                    as_of,
-                };
-
                 let _ = self.requests.send(request);
                 let boundary = SourceBoundary::new(name);
                 self.shared.insert(key, boundary.clone());

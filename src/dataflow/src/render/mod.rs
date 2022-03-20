@@ -203,8 +203,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     },
                 );
 
-                let source_key = source.with_id(*src_id);
-                boundary.capture(source_key, ok, err, token, &debug_name, dataflow_id);
+                boundary.capture(*src_id, ok, err, token, &debug_name, dataflow_id);
             }
         })
     });
@@ -238,14 +237,15 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let source_key = source.with_id(*source_id);
-                let (mut ok, mut err, token) = boundary.replay(
-                    source_key,
-                    region,
-                    &format!("{name}-{source_id}"),
-                    dataflow.id,
-                    dataflow.as_of.clone().unwrap(),
-                );
+                let request = SourceInstanceRequest {
+                    source_id: *source_id,
+                    dataflow_id: dataflow.id,
+                    arguments: source.arguments.clone(),
+                    as_of: dataflow.as_of.clone().unwrap(),
+                };
+
+                let (mut ok, mut err, token) =
+                    boundary.replay(region, &format!("{name}-{source_id}"), request);
 
                 // We do not trust `replay` to correctly advance times.
                 use timely::dataflow::operators::Map;

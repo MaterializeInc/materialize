@@ -151,8 +151,11 @@ pub(crate) fn import_source<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     SourceInstanceDesc {
         description: src,
-        operators: mut linear_operators,
-        persist,
+        arguments:
+            SourceInstanceArguments {
+                operators: mut linear_operators,
+                persist,
+            },
     }: SourceInstanceDesc,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
