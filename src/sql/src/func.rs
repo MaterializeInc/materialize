@@ -16,6 +16,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use levenshtein_automata::LevenshteinAutomatonBuilder;
 
 use mz_expr::func;
 use mz_ore::collections::CollectionExt;
@@ -2576,6 +2577,26 @@ lazy_static! {
         use ScalarType::*;
         use ParamType::*;
         builtins! {
+            "approx_match" => Scalar {
+                params!(Int64, String, String) => Operation::binary(|_ecx, bound, needle, haystack| {
+                    let bound = match bound.into_literal_int64() {
+                        Some(bound) if 0 < bound && bound <= 5 => bound,
+                        _ => {
+                            // See docs at https://docs.rs/levenshtein_automata/latest/levenshtein_automata/struct.LevenshteinAutomatonBuilder.html .
+                            // The time to construct the automaton grows with this bound, and values of 5 are thought not to be reasonable.
+                            sql_bail!("approx_match error bound must be an integer literal between 1 and 5, inclusive");
+                        },
+                    };
+                    let bound = u8::try_from(bound).expect("known to be in range.");
+                    let needle = match needle.into_literal_string() {
+                        None => sql_bail!("approx_match search string must be a string literal"),
+                        Some(needle) => needle,
+                    };
+                    let builder = LevenshteinAutomatonBuilder::new(bound, true);
+                    let func = UnaryFunc::ApproxMatch(builder.build_dfa());
+                    Ok(HirScalarExpr::CallUnary { func, expr: Box::new(haystack) })
+                }) => Bool, oid::FUNC_APPROX_MATCH_OID;
+            },
             "csv_extract" => Table {
                 params!(Int64, String) => Operation::binary(move |_ecx, ncols, input| {
                     let ncols = match ncols.into_literal_int64() {

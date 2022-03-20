@@ -3269,6 +3269,7 @@ pub enum UnaryFunc {
     AbsFloat32(AbsFloat32),
     AbsFloat64(AbsFloat64),
     AbsNumeric(AbsNumeric),
+    ApproxMatch(levenshtein_automata::DFA),
     CastBoolToString(CastBoolToString),
     CastBoolToStringNonstandard(CastBoolToStringNonstandard),
     CastBoolToInt32(CastBoolToInt32),

@@ -2459,6 +2459,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
+name = "levenshtein_automata"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c2cdeb66e45e9f36bfad5bbdb4d2384e70936afbee843c6f6543f0c551ebb25"
+
+[[package]]
 name = "lexical"
 version = "6.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3260,6 +3266,7 @@ dependencies = [
  "hmac",
  "itertools",
  "lazy_static",
+ "levenshtein_automata",
  "md-5",
  "mz-expr-test-util",
  "mz-lowertest",
@@ -3794,6 +3801,7 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
+ "levenshtein_automata",
  "mz-avro",
  "mz-aws-util",
  "mz-build-info",

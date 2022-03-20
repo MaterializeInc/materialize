@@ -19,6 +19,7 @@ globset = "0.4.8"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
+levenshtein_automata = "0.2.1"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["sts"] }
 mz-build-info = { path = "../build-info" }
