@@ -9,7 +9,7 @@
 
 import os
 import random
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from materialize.mzcompose import Service, ServiceConfig
 
@@ -110,56 +110,6 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port],
-                "environment": environment,
-                "volumes": volumes,
-            }
-        )
-
-        super().__init__(name=name, config=config)
-
-
-class Coordd(Service):
-    def __init__(
-        self,
-        name: str = "coordd",
-        hostname: Optional[str] = None,
-        image: Optional[str] = None,
-        port: int = 6875,
-        memory: Optional[str] = None,
-        data_directory: str = "/share/mzdata",
-        options: str = "",
-        environment: Optional[List[str]] = None,
-        volumes: Optional[List[str]] = None,
-        mzbuild: str = "coordd",
-    ) -> None:
-        if environment is None:
-            environment = []
-
-        # Make sure MZ_DEV=1 is always present
-        if "MZ_DEV=1" not in environment:
-            environment.append("MZ_DEV=1")
-
-        if volumes is None:
-            volumes = DEFAULT_MZ_VOLUMES
-
-        command = (
-            f"--data-directory={data_directory} {options} --listen-addr 0.0.0.0:{port}"
-        )
-
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
-
-        if hostname:
-            config["hostname"] = hostname
-
-        # Depending on the docker-compose version, this may either work or be ignored with a warning
-        # Unfortunately no portable way of setting the memory limit is known
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
-
-        config.update(
-            {
-                "command": command,
                 "ports": [port],
                 "environment": environment,
                 "volumes": volumes,
@@ -529,6 +479,7 @@ class Testdrive(Service):
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
+        materialized_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
@@ -579,6 +530,9 @@ class Testdrive(Service):
 
         if no_reset:
             entrypoint.append("--no-reset")
+
+        for (k, v) in materialized_params.items():
+            entrypoint.append(f"--materialized-param={k}={v}")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
 

@@ -112,34 +112,36 @@ impl StorageCapture for DummyBoundary {
 
 pub use boundary_hook::BoundaryHook;
 mod boundary_hook {
-
     use std::collections::BTreeMap;
+    use std::fmt;
 
-    use mz_dataflow_types::client::{Client, Command, Response, StorageCommand};
+    use async_trait::async_trait;
+
+    use mz_dataflow_types::client::{Command, GenericClient, Response, StorageCommand};
     use mz_dataflow_types::sources::SourceDesc;
     use mz_dataflow_types::{SourceInstanceDesc, SourceInstanceId, SourceInstanceRequest};
     use mz_expr::GlobalId;
 
     /// A client wrapper that observes source instantiation requests and enqueues them as commands.
     #[derive(Debug)]
-    pub struct BoundaryHook<S> {
+    pub struct BoundaryHook<C, T = mz_repr::Timestamp> {
         /// The wrapped client,
-        client: S,
+        client: C,
         /// Source creation requests to suppress.
         suppress: BTreeMap<SourceInstanceId, u64>,
         /// Enqueue source rendering requests.
-        requests: tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
+        requests: tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest<T>>,
         /// The number of storage workers, of whom requests will be made.
         workers: u64,
         /// Created sources so that we can form render requests.
         sources: BTreeMap<GlobalId, SourceDesc>,
         /// Pending render requests, awaiting source creation.
-        pending: BTreeMap<GlobalId, Vec<SourceInstanceRequest>>,
+        pending: BTreeMap<GlobalId, Vec<SourceInstanceRequest<T>>>,
     }
 
-    impl<S> BoundaryHook<S> {
+    impl<C> BoundaryHook<C> {
         pub fn new(
-            client: S,
+            client: C,
             requests: tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
             workers: u64,
         ) -> Self {
@@ -154,9 +156,13 @@ mod boundary_hook {
         }
     }
 
-    #[async_trait::async_trait(?Send)]
-    impl<S: Client> Client for BoundaryHook<S> {
-        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+    #[async_trait]
+    impl<C, T> GenericClient<Command<T>, Response<T>> for BoundaryHook<C, T>
+    where
+        C: GenericClient<Command<T>, Response<T>>,
+        T: fmt::Debug + Clone + Send,
+    {
+        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
             let mut render_requests = Vec::new();
             if let Command::Storage(StorageCommand::CreateSources(sources)) = &cmd {
                 for source in sources.iter() {
@@ -195,7 +201,7 @@ mod boundary_hook {
             }
             Ok(())
         }
-        async fn recv(&mut self) -> Option<Response> {
+        async fn recv(&mut self) -> Option<Response<T>> {
             // The receive logic draws from either the responses of the client, or requests for source instantiation.
             let mut response = None;
             while response.is_none() {

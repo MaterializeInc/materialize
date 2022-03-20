@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::{ComputeInstanceId, DEFAULT_COMPUTE_INSTANCE_ID};
+use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig, DEFAULT_COMPUTE_INSTANCE_ID};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
@@ -388,6 +388,7 @@ pub struct Role {
 pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
+    pub config: InstanceConfig,
     pub logging: Option<DataflowLoggingConfig>,
     pub indexes: HashSet<GlobalId>,
 }
@@ -846,7 +847,7 @@ impl Catalog {
         }
 
         let compute_instances = catalog.storage().load_compute_instances()?;
-        for (id, name) in compute_instances {
+        for (id, name, conf) in compute_instances {
             let logging = match id {
                 // TODO(clusters): this is an *ugly* special case for default
                 // compute instances.
@@ -864,6 +865,7 @@ impl Catalog {
                 id,
                 ComputeInstance {
                     name: name.clone(),
+                    config: conf,
                     id,
                     logging,
                     indexes: HashSet::new(),
@@ -1638,6 +1640,7 @@ impl Catalog {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
+                config: InstanceConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -1733,15 +1736,16 @@ impl Catalog {
                         name,
                     }]
                 }
-                Op::CreateComputeInstance { name } => {
+                Op::CreateComputeInstance { name, config } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
                     vec![Action::CreateComputeInstance {
-                        id: tx.insert_compute_instance(&name)?,
+                        id: tx.insert_compute_instance(&name, &config)?,
                         name,
+                        config,
                     }]
                 }
                 Op::CreateItem {
@@ -1987,13 +1991,14 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_role_update(&name, 1));
                 }
 
-                Action::CreateComputeInstance { id, name } => {
+                Action::CreateComputeInstance { id, name, config } => {
                     info!("create cluster {}", name);
                     state.compute_instances_by_id.insert(
                         id,
                         ComputeInstance {
                             name: name.clone(),
                             id,
+                            config,
                             // TODO(clusters): allow configuring logging per
                             // cluster.
                             logging: None,
@@ -2342,6 +2347,7 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
+        config: InstanceConfig,
     },
     CreateItem {
         id: GlobalId,

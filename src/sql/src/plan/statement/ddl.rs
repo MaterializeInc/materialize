@@ -29,23 +29,22 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::{
-    postgres_source::PostgresSourceDetails,
-    sinks::{
-        AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-        KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
-    },
-    sources::{
-        encoding::{
-            included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding,
-            DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
-        },
-        provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-        DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-        KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-        PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
-        UnplannedSourceEnvelope, UpsertStyle,
-    },
+use mz_dataflow_types::client::InstanceConfig;
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
+use mz_dataflow_types::sinks::{
+    AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
+    KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
+};
+use mz_dataflow_types::sources::encoding::{
+    included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding, DataEncoding,
+    ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+};
+use mz_dataflow_types::sources::{
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+    DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::{CollectionPlan, GlobalId, Id};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -87,12 +86,11 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source, Table, Type,
-    View,
+    AlterItemRenamePlan, AlterNoopPlan, CreateComputeInstancePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index,
+    IndexOption, IndexOptionName, Params, Plan, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2501,7 +2499,7 @@ pub fn plan_create_cluster(
     scx.require_experimental_mode("CREATE CLUSTER")?;
 
     let mut is_virtual = false;
-    let mut size = None;
+    let mut remote_hosts = None;
 
     for option in options {
         match option {
@@ -2511,19 +2509,22 @@ pub fn plan_create_cluster(
                 }
                 is_virtual = true;
             }
-            ClusterOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
+            ClusterOption::Remote(hosts) => {
+                if remote_hosts.is_some() {
+                    bail!("REMOTE specified more than once");
                 }
-                size = Some(s);
+                remote_hosts = Some(hosts);
+            }
+            ClusterOption::Size(_) => {
+                bail_unsupported!("CREATE CLUSTER ... SIZE");
             }
         }
     }
 
-    let config = match (is_virtual, size) {
-        (false, Some(size)) => ComputeInstanceConfig::Real { size },
-        (false, None) | (true, None) => ComputeInstanceConfig::Virtual,
-        (true, Some(_)) => bail!("VIRTUAL and SIZE options cannot be specified together"),
+    let config = match (is_virtual, remote_hosts) {
+        (false, Some(hosts)) => InstanceConfig::Remote(hosts),
+        (false, None) | (true, None) => InstanceConfig::Virtual,
+        (true, Some(_)) => bail!("VIRTUAL and REMOTE options cannot be specified together"),
     };
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {

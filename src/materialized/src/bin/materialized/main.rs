@@ -45,7 +45,7 @@ use mz_ore::now::SYSTEM_TIME;
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
-use materialized::TlsMode;
+use materialized::{StorageConfig, TlsMode};
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -164,6 +164,33 @@ pub struct Args {
     /// Number of dataflow worker threads.
     #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
     workers: WorkerCount,
+    /// Number of storage worker threads.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_WORKERS",
+        value_name = "N",
+        requires_all = &["storage-compute-addr", "storage-controller-addr"],
+        hide = true
+    )]
+    storage_workers: Option<usize>,
+    /// Address of a storage process that compute instances should connect to.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_COMPUTE_ADDR",
+        value_name = "N",
+        requires_all = &["storage-workers", "storage-controller-addr"],
+        hide = true
+    )]
+    storage_compute_addr: Option<String>,
+    /// Address of a storage process that the controller should connect to.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_CONTROLLER_ADDR",
+        value_name = "N",
+        requires_all = &["storage-workers", "storage-compute-addr"],
+        hide = true
+    )]
+    storage_controller_addr: Option<String>,
     /// Log Timely logging itself.
     #[clap(long, hide = true)]
     debug_introspection: bool,
@@ -568,6 +595,20 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
+    let storage = match (
+        args.storage_workers,
+        args.storage_compute_addr,
+        args.storage_controller_addr,
+    ) {
+        (None, None, None) => StorageConfig::Local,
+        (Some(workers), Some(compute_addr), Some(controller_addr)) => StorageConfig::Remote {
+            workers,
+            compute_addr,
+            controller_addr,
+        },
+        _ => unreachable!("clap enforced"),
+    };
+
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // custom telemetry domain or interval is provided, enable telemetry as
     // specified. Otherwise (the defaults), enable the production server for
@@ -756,6 +797,7 @@ dataflow workers: {workers}",
         tls,
         frontegg,
         data_directory,
+        storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,

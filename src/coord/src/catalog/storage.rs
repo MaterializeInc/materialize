@@ -15,6 +15,7 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::client::InstanceConfig;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
@@ -140,6 +141,8 @@ const MIGRATIONS: &[&str] = &[
         name text NOT NULL UNIQUE
     );
     INSERT INTO compute_instances VALUES (1, 'default');",
+    // Introduced in v0.24.0.
+    "ALTER TABLE compute_instances ADD COLUMN config text",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -367,13 +370,19 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_compute_instances(&self) -> Result<Vec<(i64, String)>, Error> {
+    pub fn load_compute_instances(&self) -> Result<Vec<(i64, String, InstanceConfig)>, Error> {
         self.inner
-            .prepare("SELECT id, name FROM compute_instances")?
+            .prepare("SELECT id, name, config FROM compute_instances")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
-                Ok((id, name))
+                let config: Option<String> = row.get(2)?;
+                let config: InstanceConfig = match config {
+                    None => InstanceConfig::Virtual,
+                    Some(config) => serde_json::from_str(&config)
+                        .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
+                };
+                Ok((id, name, config))
             })?
             .collect()
     }
@@ -562,11 +571,17 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn insert_compute_instance(&mut self, cluster_name: &str) -> Result<i64, Error> {
+    pub fn insert_compute_instance(
+        &mut self,
+        cluster_name: &str,
+        config: &InstanceConfig,
+    ) -> Result<i64, Error> {
+        let config = serde_json::to_string(config)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         match self
             .inner
-            .prepare_cached("INSERT INTO compute_instances (name) VALUES (?)")?
-            .execute(params![cluster_name])
+            .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
+            .execute(params![cluster_name, config])
         {
             Ok(_) => Ok(self.inner.last_insert_rowid()),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(

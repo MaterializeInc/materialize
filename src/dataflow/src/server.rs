@@ -91,7 +91,9 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// It uses the default [EventLinkBoundary] to host both compute and storage dataflows.
-pub fn serve(config: Config) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+pub fn serve(
+    config: Config,
+) -> Result<(Server, BoundaryHook<LocalClient<mz_repr::Timestamp>>), anyhow::Error> {
     let workers = config.workers as u64;
     let (requests_tx, requests_rx) = tokio::sync::mpsc::unbounded_channel();
     let (server, client) = serve_boundary(config, move |_| {
@@ -113,7 +115,7 @@ pub fn serve_boundary_requests<
     config: Config,
     requests: tokio::sync::mpsc::UnboundedReceiver<mz_dataflow_types::SourceInstanceRequest>,
     create_boundary: B,
-) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+) -> Result<(Server, BoundaryHook<LocalClient<mz_repr::Timestamp>>), anyhow::Error> {
     let workers = config.workers as u64;
     let (server, client) = serve_boundary(config, create_boundary)?;
     Ok((
@@ -131,7 +133,7 @@ pub fn serve_boundary<
 >(
     config: Config,
     create_boundary: B,
-) -> Result<(Server, LocalClient), anyhow::Error> {
+) -> Result<(Server, LocalClient<mz_repr::Timestamp>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -316,10 +318,8 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                if let Command::Compute(
-                    ComputeCommand::CreateInstance(_config, _logging),
-                    instance_id,
-                ) = &cmd
+                if let Command::Compute(ComputeCommand::InitializeInstance(_logging), instance_id) =
+                    &cmd
                 {
                     let compute_instance = ComputeState {
                         traces: TraceManager::new(

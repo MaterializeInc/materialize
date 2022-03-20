@@ -869,6 +869,8 @@ impl_display!(CreateClusterStatement);
 pub enum ClusterOption {
     /// The `VIRTUAL` option.
     Virtual,
+    /// The `REMOTE` option.
+    Remote(Vec<String>),
     /// The `SIZE [[=] 'size']` option.
     Size(String),
 }
@@ -877,6 +879,17 @@ impl AstDisplay for ClusterOption {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterOption::Virtual => f.write_str("VIRTUAL"),
+            ClusterOption::Remote(hosts) => {
+                f.write_str("REMOTE ");
+                for (i, host) in hosts.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ");
+                    }
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(host));
+                    f.write_str("'");
+                }
+            }
             ClusterOption::Size(size) => {
                 f.write_str("SIZE '");
                 f.write_node(&display::escape_single_quote_string(size));
