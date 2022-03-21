@@ -277,6 +277,17 @@
     description: Encode `b` using the specified textual representation.
     url: encode
 
+  - signature: 'is_approx_match(bound: int, needle: str, haystack: text) -> bool'
+    description: >-
+      Matches the string `needle` against the string `haystack`, returning
+      true if they differ by no more than `bound` insertions, deletions, substitutions, or transpositions.
+      In other words, returns true if the Damerau-Levenshtein distance of `needle` and `haystack` is
+      no more than `bound`.
+
+      `needle` must be a string literal; `bound` must be an integer literal between 1 and 5, inclusive.
+      Large values of `bound` (4 or 5) may cause query planning to take a significant amount of time
+      (though execution will still be fast).
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 
