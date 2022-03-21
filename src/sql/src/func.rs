@@ -241,9 +241,9 @@ impl<R: GetReturnType> Operation<R> {
     fn ternary<F>(f: F) -> Operation<R>
     where
         F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr, HirScalarExpr) -> Result<R, PlanError>
-        + Send
-        + Sync
-        + 'static
+            + Send
+            + Sync
+            + 'static,
     {
         Self::variadic(move |ecx, exprs| {
             assert_eq!(exprs.len(), 3);

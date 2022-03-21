@@ -16,7 +16,14 @@ use quote::{quote, ToTokens};
 use syn::{parse, Data, DeriveInput, Fields};
 
 /// Types defined outside of Materialize used to build test objects.
-const EXTERNAL_TYPES: &[&str] = &["String", "FixedOffset", "Tz", "NaiveDateTime", "Regex", "DFA"];
+const EXTERNAL_TYPES: &[&str] = &[
+    "String",
+    "FixedOffset",
+    "Tz",
+    "NaiveDateTime",
+    "Regex",
+    "DFA",
+];
 const SUPPORTED_ANGLE_TYPES: &[&str] = &["Vec", "Box", "Option"];
 
 /// Macro generating an implementation for the trait MzReflect
