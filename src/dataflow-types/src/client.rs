@@ -64,9 +64,17 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
     /// In-process virtual instance, likely the default instance
-    Virtual,
+    Virtual {
+        /// Logging configuration.
+        logging: Option<LoggingConfig>,
+    },
     /// Out-of-process named instance
-    Remote(Vec<String>),
+    Remote {
+        /// The hosts to connect to.
+        hosts: Vec<String>,
+        /// Logging configuration.
+        logging: Option<LoggingConfig>,
+    },
 }
 
 /// Commands related to the computation and maintenance of views.

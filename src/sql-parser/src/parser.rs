@@ -2472,16 +2472,33 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
-        match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE])? {
+        match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE, INTROSPECTION])? {
             VIRTUAL => Ok(ClusterOption::Virtual),
             REMOTE => {
-                let hosts = self.parse_comma_separated(|parser| parser.parse_literal_string())?;
+                self.expect_token(&Token::LParen)?;
+                let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
+                self.expect_token(&Token::RParen)?;
                 Ok(ClusterOption::Remote(hosts))
             }
             SIZE => {
                 let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::Size(self.parse_literal_string()?))
+                Ok(ClusterOption::Size(self.parse_with_option_value()?))
             }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+                DEBUGGING => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionDebugging(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                GRANULARITY => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionGranularity(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         }
     }
@@ -2835,17 +2852,21 @@ impl<'a> Parser<'a> {
             return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
         }
         let value = if has_value {
-            if let Some(value) = self.maybe_parse(Parser::parse_value) {
-                Some(WithOptionValue::Value(value))
-            } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
-                Some(WithOptionValue::ObjectName(object_name))
-            } else {
-                return self.expected(self.peek_pos(), "option value", self.peek_token());
-            }
+            Some(self.parse_with_option_value()?)
         } else {
             None
         };
         Ok(WithOption { key, value })
+    }
+
+    fn parse_with_option_value(&mut self) -> Result<WithOptionValue, ParserError> {
+        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(WithOptionValue::Value(value))
+        } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
+            Ok(WithOptionValue::ObjectName(object_name))
+        } else {
+            return self.expected(self.peek_pos(), "option value", self.peek_token());
+        }
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {

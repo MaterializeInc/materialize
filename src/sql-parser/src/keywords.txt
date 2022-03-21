@@ -80,6 +80,7 @@ Days
 Deallocate
 Debezium
 Debug
+Debugging
 Dec
 Decimal
 Declare
@@ -120,6 +121,7 @@ Format
 Forward
 From
 Full
+Granularity
 Graph
 Greatest
 Group
@@ -145,6 +147,7 @@ Integer
 Intersect
 Interval
 Into
+Introspection
 Is
 Isnull
 Isolation

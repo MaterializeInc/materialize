@@ -140,9 +140,6 @@ SHOW cluster
 ----
 default
 
-statement error active cluster cannot be dropped
-DROP CLUSTER default
-
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 

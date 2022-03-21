@@ -316,27 +316,39 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                if let Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) =
-                    &cmd
-                {
-                    let compute_instance = ComputeState {
-                        traces: TraceManager::new(
-                            (self.metrics_bundle.1).3.clone(),
-                            self.timely_worker.index(),
-                        ),
-                        dataflow_tokens: HashMap::new(),
-                        tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-                        sink_write_frontiers: HashMap::new(),
-                        pending_peeks: Vec::new(),
-                        reported_frontiers: HashMap::new(),
-                        sink_metrics: (self.metrics_bundle.1).1.clone(),
-                        materialized_logger: None,
-                    };
-                    self.compute_state.insert(*instance_id, compute_instance);
-                    compute_instances.push(*instance_id);
+                let mut should_drop = None;
+                match &cmd {
+                    Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) => {
+                        let compute_instance = ComputeState {
+                            traces: TraceManager::new(
+                                (self.metrics_bundle.1).3.clone(),
+                                self.timely_worker.index(),
+                            ),
+                            dataflow_tokens: HashMap::new(),
+                            tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(
+                                Vec::new(),
+                            )),
+                            sink_write_frontiers: HashMap::new(),
+                            pending_peeks: Vec::new(),
+                            reported_frontiers: HashMap::new(),
+                            sink_metrics: (self.metrics_bundle.1).1.clone(),
+                            materialized_logger: None,
+                        };
+                        self.compute_state.insert(*instance_id, compute_instance);
+                        compute_instances.push(*instance_id);
+                    }
+                    Command::Compute(ComputeCommand::DropInstance, instance_id) => {
+                        should_drop = Some(*instance_id);
+                    }
+                    _ => (),
                 }
 
                 self.handle_command(cmd);
+
+                if let Some(instance_id) = should_drop {
+                    self.compute_state.remove(&instance_id);
+                    compute_instances.retain(|id| *id != instance_id);
+                }
             }
 
             self.metrics_bundle.0.observe_command_finish();

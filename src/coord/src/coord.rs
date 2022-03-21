@@ -126,15 +126,14 @@ use mz_sql::catalog::{
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, TailFrom, TailPlan,
+    AlterItemRenamePlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
-use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
 use mz_sql_parser::ast::RawName;
 use mz_transform::Optimizer;
 
@@ -461,11 +460,7 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
-                .create_instance(
-                    instance.id,
-                    instance.config.clone(),
-                    instance.logging.clone(),
-                )
+                .create_instance(instance.id, instance.config.clone())
                 .await
                 .unwrap();
         }
@@ -2002,13 +1997,12 @@ impl Coordinator {
         let r = self.catalog_transact(vec![op], |_| Ok(())).await;
         match r {
             Ok(()) => {
-                let id = self
+                let instance = self
                     .catalog
                     .resolve_compute_instance(&plan.name)
-                    .expect("compute instance must exist after creation")
-                    .id;
+                    .expect("compute instance must exist after creation");
                 self.dataflow_client
-                    .create_instance(id, plan.config, None)
+                    .create_instance(instance.id, instance.config.clone())
                     .await
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
@@ -4637,9 +4631,11 @@ pub async fn serve(
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
-        default_compute_instance_logging: logging.as_ref().map(|logging| catalog::LoggingConfig {
-            granularity: logging.granularity,
-            log_logging: logging.log_logging,
+        virtual_compute_host_introspection: logging.as_ref().map(|logging| {
+            ComputeInstanceIntrospectionConfig {
+                granularity: logging.granularity,
+                debugging: logging.log_logging,
+            }
         }),
         build_info,
         aws_external_id,
