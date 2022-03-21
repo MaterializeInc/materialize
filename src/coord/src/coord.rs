@@ -487,7 +487,7 @@ impl Coordinator {
                         .load_source_persist_desc(&source)
                         .map_err(CoordError::Persistence)?
                         .map(|p| p.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(Timestamp::minimum);
 
                     // Re-announce the source description.
                     let source_description = self
@@ -527,7 +527,7 @@ impl Coordinator {
                         .table_details
                         .get(&entry.id())
                         .map(|td| td.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(|| self.get_local_write_ts());
 
                     // Re-announce the source description.
                     let source_description = self
@@ -2065,7 +2065,7 @@ impl Coordinator {
                     .table_details
                     .get(&table_id)
                     .map(|td| td.since_ts)
-                    .unwrap_or(0);
+                    .unwrap_or_else(|| self.get_local_write_ts());
 
                 // Announce the creation of the table source.
                 let source_description = self
@@ -2181,7 +2181,7 @@ impl Coordinator {
                     .load_source_persist_desc(&source)
                     .map_err(CoordError::Persistence)?
                     .map(|p| p.since_ts)
-                    .unwrap_or(0);
+                    .unwrap_or_else(Timestamp::minimum);
 
                 let ts_bindings = self
                     .catalog

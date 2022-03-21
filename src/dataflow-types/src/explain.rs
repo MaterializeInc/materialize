@@ -256,12 +256,12 @@ pub struct TimestampSource<T> {
 
 impl<T: fmt::Display + fmt::Debug> fmt::Display for TimestampExplanation<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "     timestamp: {}", self.timestamp)?;
+        writeln!(f, "     timestamp: {:13}", self.timestamp)?;
         writeln!(f, "         since:{:13?}", self.since)?;
         writeln!(f, "         upper:{:13?}", self.upper)?;
         writeln!(f, "     has table: {}", self.has_table)?;
         if let Some(ts) = &self.table_read_ts {
-            writeln!(f, " table read ts: {ts}")?;
+            writeln!(f, " table read ts: {:13}", ts)?;
         }
         for source in &self.sources {
             writeln!(f, "")?;
