@@ -1417,3 +1417,35 @@ query T
 SELECT CONCAT('a'::text, 'b'::char(3), 'c');
 ----
 ab  c
+
+# Tests for `is_approx_match`
+
+statement ok
+CREATE TABLE names (name text);
+
+statement ok
+INSERT INTO names VALUES ('Brandon');
+
+query T
+SELECT is_approx_match(3, 'Brennan', name) FROM names;
+----
+true
+
+query T
+SELECT is_approx_match(2, 'Brennan', name) FROM names;
+----
+false
+
+query T
+SELECT is_approx_match(2, 'Something', NULL);
+----
+NULL
+
+statement error
+SELECT is_approx_match(6, 'Brennan', name) FROM names;
+
+statement error
+SELECT is_approx_match(0, 'Brennan', name) FROM names;
+
+statement error search string must be a string literal
+SELECT is_approx_match(2, name, 'Something') FROM names;
