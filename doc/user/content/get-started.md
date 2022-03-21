@@ -28,15 +28,15 @@ Select an environment and follow the instructions to get the latest stable relea
     docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
     ```
 
-    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
     ```
 
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
 
 {{< /tab >}}
 {{< tab "macOS">}}
@@ -47,23 +47,23 @@ Select an environment and follow the instructions to get the latest stable relea
     brew install MaterializeInc/materialize/materialized
     ```
 
-    **Note:** For a `curl`-based alternative, see [Install]({{< ref "install#curl" >}}).
+    **Note:** For a `curl`-based alternative, see [Install](/install#curl).
 
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
-    materialized -w 1
+    materialized --workers 1
     ```
 
-    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
     ```
 
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
 
 {{< /tab >}}
 
@@ -81,23 +81,23 @@ Select an environment and follow the instructions to get the latest stable relea
     apt install materialized
     ```
 
-    **Note:** For a `curl`-based alternative, see [Install]({{< ref "install#curl-1" >}}).
+    **Note:** For a `curl`-based alternative, see [Install](/install#curl-1).
 
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
-    materialized -w 1
+    materialized --workers 1
     ```
 
-    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
     ```
 
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
 
 {{< /tab >}}
 

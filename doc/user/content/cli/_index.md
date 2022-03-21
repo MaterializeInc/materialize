@@ -261,7 +261,7 @@ The following example demonstrates how to configure a server in `verify-full`
 mode:
 
 ```shell
-$ materialized -w1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
+$ materialized --workers 1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
 ```
 
 Materialize statically links against a vendored copy of [OpenSSL]. It does *not*
