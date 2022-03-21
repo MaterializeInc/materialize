@@ -20,7 +20,7 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
 
 1. In the custom RDS parameter group, set the `rds.logical_replication` static parameter to `1`.
 
-1. The Materialize replica will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the replica's IP address in the security group for the RDS instance.
+1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the instance's IP address in the security group for the RDS instance.
 
     If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
@@ -99,7 +99,9 @@ As a user with the `cloudsqlsuperuser` role, make these changes to the upstream 
 
 1. In the Google Cloud Console, set the `cloudsql.logical_decoding` to `on`. This enables logical replication.
 
-1. The Materialize replica will need access to connect to the upstream database. In the Google Cloud Console, enable access e upstream database for the [Materialize instance's static IP address](/cloud/security/#static-ip-addresses)
+1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, in your Google Cloud Console, enable access on the upstream database for the Materialize replica's IP address.
+
+    If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
 1. Restart the database to apply your changes.
 
@@ -125,7 +127,9 @@ For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/post
 
 Before you start, note that a database restart will be required after making the changes below.
 
-1. The Materialize replica will need access to connect to the upstream database. In your Azure portal, go to the Azure Database for PostgreSQL instance and under the "Connections security" section add your [Materialize instance's IP address](/cloud/security/#static-ip-addresses) to the allowed IP addresses list and click on the "Save" button.
+1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. In your Azure portal, go to the Azure Database for PostgreSQL instance and under the "Connections security" section add your Materialize instance's IP address to the allowed IP addresses list and click on the "Save" button.
+
+    If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
 1. Enable Logical Replication by going to the Azure Database for PostgreSQL instance, then under the "Replication" section click the "Enable Logical Replication" toggle button and click on "Save".
 
@@ -139,7 +143,9 @@ Before you start, note that a database restart will be required after making the
 
 ## DigitalOcean Managed PostgreSQL
 
-The Materialize replica will need firewall access to connect to the upstream database. In the DigitalOcean console, add your [Materialize instance's IP address](/cloud/security/#static-ip-addresses) to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls) for your Managed PostgreSQL Cluster.
+The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, in the DigitalOcean console, add your Materialize instance's IP address to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls) for your Managed PostgreSQL Cluster.
+
+If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
 Connect to your PostgreSQL cluster as the `doadmin` user and create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
 
@@ -147,15 +153,9 @@ Connect to your PostgreSQL cluster as the `doadmin` user and create a [publicati
 CREATE PUBLICATION mz_source FOR TABLE table1, table2;
 ```
 
-**Note:** Because the `doadmin` user, is not a superuser, you will not be able to create a publication for **all** tables.
+**Note:** Because the `doadmin` user is not a superuser, you will not be able to create a publication for _all_ tables.
 
 The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
-
-If a table that you want to replicate has a primary key defined, you can use your default replica identity value. If a table you want to replicate has no primary key defined, you must set the replica identity value to FULL:
-
-```sql
-ALTER TABLE table1 REPLICA IDENTITY FULL;
-```
 
 For more information, see the [Managed Postgres](https://docs.digitalocean.com/products/databases/postgresql/) documentation.
 
