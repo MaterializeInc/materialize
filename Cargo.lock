@@ -2690,7 +2690,6 @@ dependencies = [
  "libc",
  "mz-build-info",
  "mz-coord",
- "mz-coordtest",
  "mz-dataflow",
  "mz-dataflow-types",
  "mz-dataflowd",
@@ -3078,29 +3077,6 @@ dependencies = [
  "uncased",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "mz-coordtest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "datadriven",
- "futures",
- "mz-build-info",
- "mz-coord",
- "mz-dataflow",
- "mz-dataflow-types",
- "mz-expr",
- "mz-ore",
- "mz-repr",
- "mz-sql-parser",
- "serde_json",
- "tempfile",
- "timely",
- "tokio",
 ]
 
 [[package]]
