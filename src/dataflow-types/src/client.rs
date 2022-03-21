@@ -142,7 +142,7 @@ impl ComputeCommandKind {
     pub fn metric_name(&self) -> &'static str {
         match self {
             // TODO: This breaks metrics. Not sure that's a problem.
-            ComputeCommandKind::CreateInstance => "initialize_instance",
+            ComputeCommandKind::CreateInstance => "create_instance",
             ComputeCommandKind::DropInstance => "drop_instance",
             ComputeCommandKind::AllowCompaction => "allow_compute_compaction",
             ComputeCommandKind::CancelPeeks => "cancel_peeks",
