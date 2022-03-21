@@ -1113,8 +1113,9 @@ class StartupEmpty(Startup):
 class StartupLoaded(Startup):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
-    # Create 10^2 = 100 objects of each kind
-    SCALE = 2
+    # Create 10^1.2 ~ 15 objects of each kind
+    # The usable SCALE value is limited by https://github.com/MaterializeInc/materialize/issues/11332
+    SCALE = 1.2
 
     def shared(self) -> Action:
         return TdAction(
@@ -1172,16 +1173,13 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
 
     def benchmark(self) -> BenchmarkingSequence:
         check_tables = "\n".join(
-            f"> SELECT COUNT(*) >= 0 FROM t{i}\ntrue"
-            for i in range(1, (ceil(self.scale())))
+            f"> SELECT COUNT(*) >= 0 FROM t{i}\ntrue" for i in range(0, self.n())
         )
         check_sources = "\n".join(
-            f"> SELECT COUNT(*) > 0 FROM source{i}\ntrue"
-            for i in range(1, (ceil(self.scale())))
+            f"> SELECT COUNT(*) > 0 FROM source{i}\ntrue" for i in range(0, self.n())
         )
         check_views = "\n".join(
-            f"> SELECT COUNT(*) > 0 FROM v{i}\ntrue"
-            for i in range(1, (ceil(self.scale())))
+            f"> SELECT COUNT(*) > 0 FROM v{i}\ntrue" for i in range(0, self.n())
         )
 
         return [
