@@ -42,6 +42,8 @@ use mz_repr::Row;
 pub mod controller;
 pub use controller::Controller;
 
+pub mod replicated;
+
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command<T = mz_repr::Timestamp> {
@@ -316,28 +318,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     start.push(source.id);
                 }
             }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
-                for dataflow in dataflows.iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
-                    }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::AllowCompaction(frontiers), _instance) => {
-                for (id, frontier) in frontiers.iter() {
-                    if frontier.is_empty() {
-                        cease.push(*id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
-                if let Some(logging_config) = logging {
-                    start.extend(logging_config.log_identifiers());
-                }
-            }
+            Command::Compute(command, _instance) => command.frontier_tracking(start, cease),
             _ => {
                 // Other commands have no known impact on frontier tracking.
             }
@@ -350,6 +331,42 @@ impl<T: timely::progress::Timestamp> Command<T> {
         match self {
             Command::Compute(command, _instance) => ComputeCommandKind::from(command).metric_name(),
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
+        }
+    }
+}
+
+impl<T> ComputeCommand<T> {
+    /// Indicates which global ids should start and cease frontier tracking.
+    ///
+    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// added to `cease` will uninstall frontier tracking.
+    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
+        match self {
+            ComputeCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        start.push(*sink_id)
+                    }
+                    for (index_id, _, _) in dataflow.index_exports.iter() {
+                        start.push(*index_id);
+                    }
+                }
+            }
+            ComputeCommand::AllowCompaction(frontiers) => {
+                for (id, frontier) in frontiers.iter() {
+                    if frontier.is_empty() {
+                        cease.push(*id);
+                    }
+                }
+            }
+            ComputeCommand::CreateInstance(logging) => {
+                if let Some(logging_config) = logging {
+                    start.extend(logging_config.log_identifiers());
+                }
+            }
+            _ => {
+                // Other commands have no known impact on frontier tracking.
+            }
         }
     }
 }
@@ -649,7 +666,7 @@ pub mod partitioned {
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
-    use super::{Command, PeekResponse, Response};
+    use super::{Command, ComputeCommand, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
     ///
@@ -681,6 +698,10 @@ pub mod partitioned {
         T: timely::progress::Timestamp + Copy,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+            // A `CreateInstance` command indicates re-initialization.
+            if let Command::Compute(ComputeCommand::CreateInstance(_), _instance) = &cmd {
+                self.state = PartitionedClientState::new(self.shards.len());
+            }
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
@@ -1166,8 +1187,11 @@ pub mod tcp {
         pub async fn reconnect(&mut self) {
             let mut connection = TcpStream::connect(&self.addr).await;
             while connection.is_err() {
+                tracing::warn!("Connect error; reconnecting");
+                std::thread::sleep(std::time::Duration::from_millis(1000));
                 connection = TcpStream::connect(&self.addr).await;
             }
+            tracing::info!("Reconnected");
             self.connection = framed_client(connection.unwrap());
         }
     }
@@ -1188,11 +1212,11 @@ pub mod tcp {
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
             match self.connection.next().await {
-                None => Ok(None),
                 Some(Ok(response)) => Ok(Some(response)),
-                Some(error) => {
+                _ => {
+                    // `None` and `Some(Err)` are both connection errors.
                     self.reconnect().await;
-                    Ok(Some(error?))
+                    Err(anyhow::anyhow!("Connection severed; reconnected"))
                 }
             }
         }
