@@ -69,7 +69,7 @@ As a superuser, make these changes to the upstream database:
     **max_logical_replication_workers**  |  The number of logical replication slots that you intend to be active, or the number of active AWS DMS tasks for change data capture.
     **max_worker_processes**  | The combined values of `max_logical_replication_workers`, `autovacuum_max_workers`, and `max_parallel_workers`.
 
-1. The Materialize replica will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the replica's IP address in the security group for the DB instance.
+1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the instance's IP address in the security group for the DB instance.
 
     If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
