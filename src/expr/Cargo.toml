@@ -24,7 +24,7 @@ hex = "0.4.3"
 hmac = "0.12.1"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-levenshtein_automata = "0.2.1"
+levenshtein_automata = { git = "https://github.com/umanwizard/levenshtein-automata", branch = "master" }
 md-5 = "0.10.1"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
