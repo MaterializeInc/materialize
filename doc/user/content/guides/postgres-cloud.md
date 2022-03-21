@@ -137,7 +137,7 @@ Before you start, note that a database restart will be required after making cha
 
      The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
-## DigitalOcean Managed Postgres
+## DigitalOcean Managed PostgreSQL
 
 The Materialize replica will need firewall access to connect to the upstream database. In the DigitalOcean console, add your [Materialize instance's IP address](/cloud/security/#static-ip-addresses) to the [Trusted Source list](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/#firewalls) for your Managed PostgreSQL Cluster.
 
