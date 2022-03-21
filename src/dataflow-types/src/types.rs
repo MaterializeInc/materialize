@@ -100,21 +100,40 @@ pub struct BuildDesc<P> {
 pub struct SourceInstanceDesc<T = mz_repr::Timestamp> {
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
-    /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<crate::types::LinearOperator>,
-    /// A description of how to persist the source.
-    pub persist: Option<sources::persistence::SourcePersistDesc<T>>,
+    /// Arguments for this instantiation of the source.
+    pub arguments: SourceInstanceArguments<T>,
 }
 
-/// A representation of `SourceInstanceDesc` which elides the source details.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct SourceInstanceKey<T = mz_repr::Timestamp> {
-    /// The globally unique identifier of the source.
-    pub identifier: GlobalId,
+/// Per-source construction arguments.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceInstanceArguments<T = mz_repr::Timestamp> {
     /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<crate::types::LinearOperator>,
+    pub operators: Option<crate::LinearOperator>,
     /// A description of how to persist the source.
-    pub persist: Option<sources::persistence::SourcePersistDesc<T>>,
+    pub persist: Option<crate::sources::persistence::SourcePersistDesc<T>>,
+}
+
+/// Type alias for source subscriptions, (dataflow_id, source_id).
+pub type SourceInstanceId = (uuid::Uuid, mz_expr::GlobalId);
+
+/// A formed request for source instantiation.
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
+    /// The source's own identifier.
+    pub source_id: mz_expr::GlobalId,
+    /// A dataflow identifier that should be unique across dataflows.
+    pub dataflow_id: uuid::Uuid,
+    /// Arguments to the source instantiation.
+    pub arguments: SourceInstanceArguments<T>,
+    /// Frontier beyond which updates must be correct.
+    pub as_of: Antichain<T>,
+}
+
+impl<T> SourceInstanceRequest<T> {
+    /// Source identifier uniquely identifing this instantation.
+    pub fn unique_id(&self) -> SourceInstanceId {
+        (self.dataflow_id, self.source_id)
+    }
 }
 
 /// A description of a dataflow to construct and results to surface.
@@ -143,12 +162,12 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Human readable name
     pub debug_name: String,
     /// Unique ID of the dataflow
-    pub id: GlobalId,
+    pub id: uuid::Uuid,
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String, id: GlobalId) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -157,7 +176,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             sink_exports: Default::default(),
             as_of: Default::default(),
             debug_name: name,
-            id,
+            id: uuid::Uuid::new_v4(),
         }
     }
 
@@ -186,8 +205,10 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             id,
             SourceInstanceDesc {
                 description,
-                operators: None,
-                persist,
+                arguments: SourceInstanceArguments {
+                    operators: None,
+                    persist,
+                },
             },
         );
     }
@@ -335,17 +356,6 @@ where
         let build = self.build_desc(collection_id);
         for id in build.plan.depends_on() {
             self.depends_on_into(id, out)
-        }
-    }
-}
-
-impl SourceInstanceDesc {
-    /// Converts the description to an instance key.
-    pub fn with_id(&self, identifier: GlobalId) -> SourceInstanceKey {
-        SourceInstanceKey {
-            identifier,
-            operators: self.operators.clone(),
-            persist: self.persist.clone(),
         }
     }
 }

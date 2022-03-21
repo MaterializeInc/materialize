@@ -179,7 +179,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     RenderSources(
         Vec<(
             /* debug_name */ String,
-            /* dataflow_id */ GlobalId,
+            /* dataflow_id */ uuid::Uuid,
             /* as_of */ Option<Antichain<T>>,
             /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc<T>>,
         )>,
@@ -407,6 +407,16 @@ pub trait Client<T = mz_repr::Timestamp>: std::fmt::Debug {
                 yield response;
             }
         })
+    }
+}
+
+#[async_trait(?Send)]
+impl Client for Box<dyn Client + Send> {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        (**self).recv().await
     }
 }
 

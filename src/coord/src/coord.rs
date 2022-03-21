@@ -3125,7 +3125,7 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -3252,7 +3252,7 @@ impl Coordinator {
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -3556,7 +3556,7 @@ impl Coordinator {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(
@@ -5358,7 +5358,7 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
 
-        let df = DataflowDesc::new("".into(), GlobalId::Explain);
+        let df = DataflowDesc::new("".into());
         let _: () = self
             .ship_dataflow(df.clone(), DEFAULT_COMPUTE_INSTANCE_ID)
             .await;

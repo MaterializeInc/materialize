@@ -199,8 +199,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .unwrap_or(AwsExternalId::NotProvided),
     };
 
-    let (_server, mut client) = match args.runtime {
-        RuntimeType::LegacyMultiplexed => mz_dataflow::serve(config),
+    let (_server, mut client): (_, Box<dyn Client + Send>) = match args.runtime {
+        RuntimeType::LegacyMultiplexed => {
+            let (server, client) = mz_dataflow::serve(config)?;
+            (server, Box::new(client))
+        }
         RuntimeType::Compute => {
             assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
             let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
@@ -215,12 +218,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            mz_dataflow::serve_boundary(config, move |index| {
+            let (server, client) = mz_dataflow::serve_boundary(config, move |index| {
                 boundary.lock().unwrap()[index % workers].take().unwrap()
-            })
+            })?;
+            (server, Box::new(client))
         }
         RuntimeType::Storage => {
-            let (storage_server, _thread) =
+            let (storage_server, request_rx, _thread) =
                 mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
             let boundary = (0..config.workers)
                 .into_iter()
@@ -228,11 +232,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            mz_dataflow::serve_boundary(config, move |index| {
-                boundary.lock().unwrap()[index % workers].take().unwrap()
-            })
+            let (server, client) =
+                mz_dataflow::serve_boundary_requests(config, request_rx, move |index| {
+                    boundary.lock().unwrap()[index % workers].take().unwrap()
+                })?;
+            (server, Box::new(client))
         }
-    }?;
+    };
 
     let (conn, _addr) = listener.accept().await?;
     info!("coordinator connection accepted");

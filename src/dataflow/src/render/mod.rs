@@ -144,7 +144,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     debug_name: &str,
     as_of: Option<Antichain<mz_repr::Timestamp>>,
     source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
-    dataflow_id: GlobalId,
+    dataflow_id: uuid::Uuid,
     boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
@@ -203,8 +203,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     },
                 );
 
-                let source_key = source.with_id(*src_id);
-                boundary.capture(source_key, ok, err, token, &debug_name, dataflow_id);
+                boundary.capture(*src_id, ok, err, token, &debug_name, dataflow_id);
             }
         })
     });
@@ -238,13 +237,29 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let source_key = source.with_id(*source_id);
-                let (ok, err, token) = boundary.replay(
-                    source_key,
-                    region,
-                    &format!("{name}-{source_id}"),
-                    dataflow.id,
-                );
+                let request = SourceInstanceRequest {
+                    source_id: *source_id,
+                    dataflow_id: dataflow.id,
+                    arguments: source.arguments.clone(),
+                    as_of: dataflow.as_of.clone().unwrap(),
+                };
+
+                let (mut ok, mut err, token) =
+                    boundary.replay(region, &format!("{name}-{source_id}"), request);
+
+                // We do not trust `replay` to correctly advance times.
+                use timely::dataflow::operators::Map;
+                let as_of_frontier1 = dataflow.as_of.clone().unwrap();
+                ok = ok
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
+                    .as_collection();
+
+                let as_of_frontier2 = dataflow.as_of.clone().unwrap();
+                err = err
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
+                    .as_collection();
 
                 // Associate collection bundle with the source identifier.
                 context.insert_id(

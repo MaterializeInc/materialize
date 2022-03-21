@@ -12,12 +12,10 @@ use tokio_serde::formats::Bincode;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use mz_dataflow_types::DataflowError;
-use mz_expr::GlobalId;
+use mz_dataflow_types::SourceInstanceId;
 
-/// Type alias for source subscriptions, (dataflow_id, source_id).
-pub type SourceId = (GlobalId, GlobalId);
 /// Type alias for a source subscription including a source worker.
-pub type SubscriptionId = (SourceId, WorkerIdentifier);
+pub type SubscriptionId = (SourceInstanceId, WorkerIdentifier);
 
 pub mod server {
     //! TCP boundary server
@@ -26,9 +24,6 @@ pub mod server {
     use crate::tcp_boundary::SubscriptionId;
     use differential_dataflow::Collection;
     use futures::{SinkExt, TryStreamExt};
-    use mz_dataflow_types::{DataflowError, SourceInstanceKey};
-    use mz_expr::GlobalId;
-    use mz_repr::{Diff, Row, Timestamp};
     use std::any::Any;
     use std::collections::{HashMap, HashSet};
     use std::rc::Rc;
@@ -44,6 +39,10 @@ pub mod server {
     use tokio::task::JoinHandle;
     use tokio_serde::formats::Bincode;
     use tracing::{debug, info, warn};
+
+    use mz_dataflow_types::DataflowError;
+    use mz_dataflow_types::SourceInstanceRequest;
+    use mz_repr::{Diff, Row, Timestamp};
 
     /// A framed connection from the server's perspective.
     type FramedServer<C> = Framed<C, Command, Response>;
@@ -92,13 +91,22 @@ pub mod server {
         Response(Response),
     }
 
+    /// Alias for a commonly used type for sending source instantiation requests.
+    type SourceRequestSender = tokio::sync::mpsc::UnboundedSender<SourceInstanceRequest>;
+
     /// Start the boundary server listening for connections on `addr`.
     ///
     /// Returns a handle implementing [StorageCapture] and a join handle to await termination.
     pub async fn serve<A: ToSocketAddrs + std::fmt::Display>(
         addr: A,
-    ) -> std::io::Result<(TcpEventLinkHandle, JoinHandle<std::io::Result<()>>)> {
+    ) -> std::io::Result<(
+        TcpEventLinkHandle,
+        tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
+        JoinHandle<std::io::Result<()>>,
+    )> {
         let (worker_tx, worker_rx) = unbounded_channel();
+
+        let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel();
 
         info!("About to bind to {addr}");
         let listener = TcpListener::bind(addr).await?;
@@ -107,15 +115,17 @@ pub mod server {
             listener.local_addr()
         );
 
-        let thread = mz_ore::task::spawn(|| "storage server", accept(listener, worker_rx));
+        let thread =
+            mz_ore::task::spawn(|| "storage server", accept(listener, worker_rx, request_tx));
 
-        Ok((TcpEventLinkHandle { worker_tx }, thread))
+        Ok((TcpEventLinkHandle { worker_tx }, request_rx, thread))
     }
 
     /// Accept connections on `listener` and listening for data on `worker_rx`.
     async fn accept(
         listener: TcpListener,
         mut worker_rx: UnboundedReceiver<WorkerResponse>,
+        render_requests: SourceRequestSender,
     ) -> std::io::Result<()> {
         debug!("server listening {listener:?}");
 
@@ -130,10 +140,11 @@ pub mod server {
                         client_id += 1;
                         match listener.accept().await {
                             Ok((socket, addr)) => {
+                                let render_requests = render_requests.clone();
                                 debug!("Accepting client {client_id} on {addr}...");
                                 let state = Arc::clone(&state);
                                 mz_ore::task::spawn(|| "client loop", async move {
-                                    handle_compute(client_id, Arc::clone(&state), socket).await
+                                    handle_compute(client_id, Arc::clone(&state), socket, render_requests.clone()).await
                                 });
                             }
                             Err(e) => {
@@ -173,10 +184,17 @@ pub mod server {
         client_id: ClientId,
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
+        render_requests: SourceRequestSender,
     ) -> std::io::Result<()> {
         let mut source_ids = HashSet::new();
-        let result =
-            handle_compute_inner(client_id, Arc::clone(&state), socket, &mut source_ids).await;
+        let result = handle_compute_inner(
+            client_id,
+            Arc::clone(&state),
+            socket,
+            &mut source_ids,
+            render_requests,
+        )
+        .await;
         let mut state = state.lock().await;
         for source_id in source_ids {
             state.subscriptions.remove(&source_id);
@@ -191,6 +209,7 @@ pub mod server {
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
         active_source_ids: &mut HashSet<SubscriptionId>,
+        render_requests: SourceRequestSender,
     ) -> std::io::Result<()> {
         let mut connection = framed_server(socket);
 
@@ -200,8 +219,9 @@ pub mod server {
         loop {
             select! {
                 cmd = connection.try_next() => match cmd? {
-                    Some(Command::Subscribe(subscription_id, )) => {
+                    Some(Command::Subscribe(subscription_id, request)) => {
                         debug!("Subscribe client {client_id} to {subscription_id:?}");
+                        let _ = render_requests.send(request);
                         let new = active_source_ids.insert(subscription_id);
                         assert!(new, "Duplicate key: {subscription_id:?}");
                         let stashed = {
@@ -240,14 +260,14 @@ pub mod server {
     impl StorageCapture for TcpEventLinkHandle {
         fn capture<G: Scope<Timestamp = Timestamp>>(
             &mut self,
-            id: SourceInstanceKey,
+            id: mz_expr::GlobalId,
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,
             _name: &str,
-            dataflow_id: GlobalId,
+            dataflow_id: uuid::Uuid,
         ) {
-            let subscription_id = ((dataflow_id, id.identifier), ok.inner.scope().index());
+            let subscription_id = ((dataflow_id, id), ok.inner.scope().index());
             let client_token = Arc::new(());
 
             // Announce that we're capturing data, with the source ID and a token. Once the token
@@ -335,14 +355,9 @@ pub mod client {
     use crate::activator::{ActivatorTrait, ArcActivator};
     use crate::replay::MzReplay;
     use crate::server::boundary::ComputeReplay;
-    use crate::server::tcp_boundary::{
-        length_delimited_codec, Command, Framed, Response, SourceId,
-    };
+    use crate::server::tcp_boundary::{length_delimited_codec, Command, Framed, Response};
     use differential_dataflow::{AsCollection, Collection};
     use futures::{Sink, SinkExt, TryStreamExt};
-    use mz_dataflow_types::{DataflowError, SourceInstanceKey};
-    use mz_expr::GlobalId;
-    use mz_repr::{Diff, Row, Timestamp};
     use std::any::Any;
     use std::collections::HashMap;
     use std::rc::Rc;
@@ -359,6 +374,9 @@ pub mod client {
     use tokio::task::JoinHandle;
     use tokio_serde::formats::Bincode;
     use tracing::{debug, info, warn};
+
+    use mz_dataflow_types::{DataflowError, SourceInstanceId};
+    use mz_repr::{Diff, Row, Timestamp};
 
     /// A framed connection from the client's perspective.
     type FramedClient<C> = Framed<C, Response, Command>;
@@ -423,7 +441,8 @@ pub mod client {
 
     #[derive(Debug)]
     struct ClientState {
-        subscriptions: HashMap<SourceId, SubscriptionState<mz_repr::Timestamp, mz_repr::Diff>>,
+        subscriptions:
+            HashMap<SourceInstanceId, SubscriptionState<mz_repr::Timestamp, mz_repr::Diff>>,
         workers: usize,
     }
 
@@ -444,6 +463,7 @@ pub mod client {
                 Announce::Register {
                     source_id,
                     worker,
+                    request,
                     storage_workers,
                     ok_tx,
                     ok_activator,
@@ -462,7 +482,12 @@ pub mod client {
                     debug!("Subscribing to {source_id:?}");
                     client
                         .send_all(&mut futures::stream::iter(storage_workers.into_iter().map(
-                            |storage_worker| Ok(Command::Subscribe((source_id, storage_worker))),
+                            |storage_worker| {
+                                Ok(Command::Subscribe(
+                                    (source_id, storage_worker),
+                                    request.clone(),
+                                ))
+                            },
                         )))
                         .await?;
                 }
@@ -574,8 +599,9 @@ pub mod client {
     enum Announce {
         /// Provide activators for the source
         Register {
-            source_id: SourceId,
+            source_id: SourceInstanceId,
             worker: WorkerIdentifier,
+            request: mz_dataflow_types::SourceInstanceRequest,
             storage_workers: Vec<WorkerIdentifier>,
             ok_activator: ArcActivator,
             err_activator: ArcActivator,
@@ -583,22 +609,21 @@ pub mod client {
             err_tx: UnboundedSender<EventCore<Timestamp, Vec<(DataflowError, Timestamp, Diff)>>>,
         },
         /// Replayer dropped
-        Drop(SourceId, WorkerIdentifier, Vec<WorkerIdentifier>),
+        Drop(SourceInstanceId, WorkerIdentifier, Vec<WorkerIdentifier>),
     }
 
     impl ComputeReplay for TcpEventLinkClientHandle {
         fn replay<G: Scope<Timestamp = Timestamp>>(
             &mut self,
-            id: SourceInstanceKey,
             scope: &mut G,
             name: &str,
-            dataflow_id: GlobalId,
+            request: mz_dataflow_types::SourceInstanceRequest,
         ) -> (
             Collection<G, Row, Diff>,
             Collection<G, DataflowError, Diff>,
             Rc<dyn Any>,
         ) {
-            let source_id = (dataflow_id, id.identifier);
+            let source_id = request.unique_id();
             // Create a channel to receive worker/replay-specific data channels
             let (ok_tx, ok_rx) = unbounded_channel();
             let (err_tx, err_rx) = unbounded_channel();
@@ -615,6 +640,7 @@ pub mod client {
             let register = Announce::Register {
                 source_id,
                 worker: scope.index(),
+                request,
                 storage_workers: storage_workers.clone(),
                 ok_tx,
                 err_tx,
@@ -708,7 +734,7 @@ pub mod client {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Command {
     /// Subscribe the client to `source_id`.
-    Subscribe(SubscriptionId),
+    Subscribe(SubscriptionId, mz_dataflow_types::SourceInstanceRequest),
     /// Unsubscribe the client from `source_id`.
     Unsubscribe(SubscriptionId),
 }
