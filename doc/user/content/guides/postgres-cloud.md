@@ -141,7 +141,7 @@ Before you start, note that a database restart will be required after making the
 
      The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
-For more information, see the [Azure Database for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding) documentation.  
+For more information, see the [Azure Database for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding) documentation.
 
 ## DigitalOcean Managed PostgreSQL
 
