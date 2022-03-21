@@ -52,7 +52,7 @@ Select an environment and follow the instructions to get the latest stable relea
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
-    materialized -w 1
+    materialized --workers 1
     ```
 
     This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
@@ -86,7 +86,7 @@ Select an environment and follow the instructions to get the latest stable relea
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
-    materialized -w 1
+    materialized --workers 1
     ```
 
     This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
