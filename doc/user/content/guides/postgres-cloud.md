@@ -123,7 +123,7 @@ For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/post
 
 ## Azure Database for PostgreSQL
 
-Before you start, note that a database restart will be required after making changes to the database.
+Before you start, note that a database restart will be required after making the changes below.
 
 1. The Materialize replica will need access to connect to the upstream database. In your Azure portal, go to the Azure Database for PostgreSQL instance and under the "Connections security" section add your [Materialize instance's IP address](/cloud/security/#static-ip-addresses) to the allowed IP addresses list and click on the "Save" button.
 
