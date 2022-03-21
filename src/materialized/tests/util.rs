@@ -152,6 +152,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
         data_directory,
+        orchestrator: None,
         storage: StorageConfig::Local,
         aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

@@ -558,6 +558,7 @@ impl Runner {
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
             storage: materialized::StorageConfig::Local,
+            orchestrator: None,
             aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,

@@ -36,20 +36,21 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
-use clap::{AppSettings, Parser};
+use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_ore::now::SYSTEM_TIME;
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
-use materialized::{StorageConfig, TlsMode};
+use materialized::{OrchestratorConfig, RemoteStorageConfig, StorageConfig, TlsConfig, TlsMode};
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
+use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 
 mod sys;
 mod tracing;
@@ -158,6 +159,20 @@ pub struct Args {
     /// to be used with --experimental.
     #[structopt(long, hide = true)]
     persist_cache_size_limit: Option<usize>,
+
+    // === Platform options. ===
+    /// The service orchestrator implementation to use, if any.
+    #[structopt(long, hide = true, arg_enum)]
+    orchestrator: Option<Orchestrator>,
+    /// The Kubernetes context to use with the Kubernetes orchestrator.
+    ///
+    /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
+    /// production cluster that happens to be the active Kubernetes context.)
+    #[structopt(long, hide = true, default_value = "minikube")]
+    kubernetes_context: String,
+    /// The dataflowd image reference to use.
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
+    dataflowd_image: Option<String>,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -426,6 +441,11 @@ pub struct Args {
     tokio_console: bool,
 }
 
+#[derive(ArgEnum, Debug, Clone)]
+enum Orchestrator {
+    Kubernetes,
+}
+
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
 /// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
@@ -574,7 +594,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         };
         let cert = args.tls_cert.unwrap();
         let key = args.tls_key.unwrap();
-        Some(materialized::TlsConfig { mode, cert, key })
+        Some(TlsConfig { mode, cert, key })
     };
     let frontegg = args
         .frontegg_tenant
@@ -589,6 +609,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
         .transpose()?;
 
+    // Configure orchestrator.
+    let orchestrator = match args.orchestrator {
+        None => None,
+        Some(Orchestrator::Kubernetes) => Some(OrchestratorConfig::Kubernetes {
+            config: KubernetesOrchestratorConfig {
+                context: args.kubernetes_context,
+            },
+            dataflowd_image: args.dataflowd_image.expect("clap enforced"),
+        }),
+    };
+
     // Configure storage.
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
@@ -600,11 +631,13 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         args.storage_controller_addr,
     ) {
         (None, None, None) => StorageConfig::Local,
-        (Some(workers), Some(compute_addr), Some(controller_addr)) => StorageConfig::Remote {
-            workers,
-            compute_addr,
-            controller_addr,
-        },
+        (Some(workers), Some(compute_addr), Some(controller_addr)) => {
+            StorageConfig::Remote(RemoteStorageConfig {
+                workers,
+                compute_addr,
+                controller_addr,
+            })
+        }
         _ => unreachable!("clap enforced"),
     };
 
@@ -801,6 +834,7 @@ max log level: {max_log_level}",
         tls,
         frontegg,
         data_directory,
+        orchestrator,
         storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,

@@ -2500,6 +2500,7 @@ pub fn plan_create_cluster(
 
     let mut is_virtual = false;
     let mut remote_hosts = None;
+    let mut size = None;
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
 
@@ -2533,8 +2534,11 @@ pub fn plan_create_cluster(
                 }
                 introspection_granularity = Some(with_option_type!(Some(interval), Interval));
             }
-            ClusterOption::Size(_) => {
-                bail_unsupported!("CREATE CLUSTER ... SIZE");
+            ClusterOption::Size(s) => {
+                if size.is_some() {
+                    bail!("SIZE specified more than once");
+                }
+                size = Some(with_option_type!(Some(s), String));
             }
         }
     }
@@ -2550,18 +2554,24 @@ pub fn plan_create_cluster(
         }
     };
 
-    let config = match (is_virtual, remote_hosts) {
-        (false, Some(hosts)) => ComputeInstanceConfig::Remote {
+    let config = match (is_virtual, remote_hosts, size) {
+        (false, Some(hosts), None) => ComputeInstanceConfig::Remote {
             hosts,
             introspection,
         },
-        (false, None) | (true, None) => {
+        (false, None, None) | (true, None, None) => {
             if introspection.is_some() {
                 bail!("VIRTUAL clusters do not support configurable introspection");
             }
             ComputeInstanceConfig::Virtual
         }
-        (true, Some(_)) => bail!("VIRTUAL and REMOTE options cannot be specified together"),
+        (false, None, Some(size)) => ComputeInstanceConfig::Managed {
+            size,
+            introspection,
+        },
+        (true, Some(_), _) | (true, _, Some(_)) | (_, Some(_), Some(_)) => {
+            bail!("only one of VIRTUAL, REMOTE, and SIZE may be specified")
+        }
     };
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {

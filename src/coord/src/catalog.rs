@@ -280,6 +280,7 @@ impl CatalogState {
         let introspection = match &config {
             ComputeInstanceConfig::Virtual => &virtual_compute_host_introspection,
             ComputeInstanceConfig::Remote { introspection, .. } => introspection,
+            ComputeInstanceConfig::Managed { introspection, .. } => introspection,
         };
         let logging = match introspection {
             None => None,
@@ -348,6 +349,10 @@ impl CatalogState {
                 hosts,
                 introspection: _,
             } => InstanceConfig::Remote { hosts, logging },
+            ComputeInstanceConfig::Managed {
+                size,
+                introspection: _,
+            } => InstanceConfig::Managed { size, logging },
         };
         self.compute_instances_by_id.insert(
             id,

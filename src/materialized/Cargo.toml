@@ -61,6 +61,8 @@ mz-dataflowd = { path = "../dataflowd" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-ore = { path = "../ore", features = ["task"] }
+mz-orchestrator = { path = "../orchestrator" }
+mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
 mz-process-collector = { path = "../process-collector" }
