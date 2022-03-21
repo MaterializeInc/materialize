@@ -2601,7 +2601,7 @@ lazy_static! {
                         Some(bound) if 0 < bound && bound <= 5 => bound,
                         _ => {
                             // See docs at https://docs.rs/levenshtein_automata/latest/levenshtein_automata/struct.LevenshteinAutomatonBuilder.html .
-                            // The time to construct the automaton grows with this bound, and values of 5 are thought not to be reasonable.
+                            // The time to construct the automaton grows with this bound, and values above 5 are thought not to be reasonable.
                             sql_bail!("is_approx_match error bound must be an integer literal between 1 and 5, inclusive");
                         },
                     };
