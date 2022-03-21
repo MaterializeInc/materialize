@@ -70,7 +70,7 @@ where
             }
         };
         client
-            .send(ComputeCommand::InitializeInstance(logging.clone()))
+            .send(ComputeCommand::CreateInstance(logging.clone()))
             .await?;
         self.compute.insert(
             instance,
@@ -83,10 +83,7 @@ where
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
-            compute
-                .client
-                .send(ComputeCommand::DeinitializeInstance)
-                .await?;
+            compute.client.send(ComputeCommand::DropInstance).await?;
             self.virtual_compute_host.drop_instance(instance);
         }
         Ok(())

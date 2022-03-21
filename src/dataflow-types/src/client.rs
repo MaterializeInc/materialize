@@ -80,9 +80,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
     /// Optionally, request that the logging sources in the contained configuration are installed.
-    InitializeInstance(Option<LoggingConfig>),
+    CreateInstance(Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
-    DeinitializeInstance,
+    DropInstance,
 
     /// Create a sequence of dataflows.
     ///
@@ -142,8 +142,8 @@ impl ComputeCommandKind {
     pub fn metric_name(&self) -> &'static str {
         match self {
             // TODO: This breaks metrics. Not sure that's a problem.
-            ComputeCommandKind::InitializeInstance => "initialize_instance",
-            ComputeCommandKind::DeinitializeInstance => "drop_instance",
+            ComputeCommandKind::CreateInstance => "initialize_instance",
+            ComputeCommandKind::DropInstance => "drop_instance",
             ComputeCommandKind::AllowCompaction => "allow_compute_compaction",
             ComputeCommandKind::CancelPeeks => "cancel_peeks",
             ComputeCommandKind::CreateDataflows => "create_dataflows",
@@ -325,7 +325,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::InitializeInstance(logging), _instance) => {
+            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
                 if let Some(logging_config) = logging {
                     start.extend(logging_config.log_identifiers());
                 }
@@ -449,7 +449,7 @@ where
 
 /// A convenience type for compatibility.
 #[derive(Debug)]
-pub struct LocalClient<T> {
+pub struct LocalClient<T = mz_repr::Timestamp> {
     client: partitioned::Partitioned<process_local::ProcessLocal<T>, T>,
 }
 
@@ -1341,27 +1341,40 @@ where
     };
     mz_ore::task::spawn(|| "split_client", async move {
         let mut instances = HashMap::new();
-        loop {
+        let mut compute_host_alive = true;
+        let mut clients_alive = true;
+        while compute_host_alive && clients_alive {
             tokio::select! {
-                Some(cmd) = compute_host_rx.recv() => match cmd {
-                    ComputeHostCommand::CreateInstance(instance, response_tx) => {
+                biased;
+
+                cmd = compute_host_rx.recv() => match cmd {
+                    Some(ComputeHostCommand::CreateInstance(instance, response_tx)) => {
                         instances.insert(instance, response_tx);
                     }
-                    ComputeHostCommand::DropInstance(instance) => {
+                    Some(ComputeHostCommand::DropInstance(instance)) => {
                         instances.remove(&instance);
                     }
+                    None => compute_host_alive = false,
                 },
-                Some(cmd) = command_rx.recv() => client.send(cmd).await.unwrap(),
+
+                Some(cmd) = command_rx.recv() => match client.send(cmd).await {
+                    Ok(_) => (),
+                    Err(_) => clients_alive = false,
+                },
+
                 Some(res) = client.recv() => match res {
-                    Response::Storage(res) => storage_response_tx.send(res).unwrap(),
+                    Response::Storage(res) => {
+                        let _ = storage_response_tx.send(res);
+                    }
                     Response::Compute(res, instance) => match instances.get(&instance) {
                         None => {
                             error!("received response {res:?} for non-existent compute instance {instance:?}");
                         }
-                        Some(response_tx) => response_tx.send(res).unwrap(),
+                        Some(response_tx) => {
+                            let _ = response_tx.send(res);
+                        }
                     },
                 },
-                else => break,
             }
         }
     });
