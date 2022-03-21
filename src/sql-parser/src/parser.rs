@@ -2472,8 +2472,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
-        match self.expect_one_of_keywords(&[VIRTUAL, SIZE])? {
+        match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE])? {
             VIRTUAL => Ok(ClusterOption::Virtual),
+            REMOTE => {
+                let hosts = self.parse_comma_separated(|parser| parser.parse_literal_string())?;
+                Ok(ClusterOption::Remote(hosts))
+            }
             SIZE => {
                 let _ = self.consume_token(&Token::Eq);
                 Ok(ClusterOption::Size(self.parse_literal_string()?))

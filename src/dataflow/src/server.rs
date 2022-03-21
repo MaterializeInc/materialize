@@ -316,10 +316,8 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                if let Command::Compute(
-                    ComputeCommand::CreateInstance(_config, _logging),
-                    instance_id,
-                ) = &cmd
+                if let Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) =
+                    &cmd
                 {
                     let compute_instance = ComputeState {
                         traces: TraceManager::new(

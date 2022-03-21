@@ -50,10 +50,10 @@ CREATE CLUSTER baz SIZE 'small'
 statement error VIRTUAL specified more than once
 CREATE CLUSTER baz VIRTUAL, VIRTUAL
 
-statement error SIZE specified more than once
+statement error CREATE CLUSTER ... SIZE not yet supported
 CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 
-statement error VIRTUAL and SIZE options cannot be specified together
+statement error CREATE CLUSTER ... SIZE not yet supported
 CREATE CLUSTER baz VIRTUAL, SIZE 'small'
 
 # Test `cluster` session variable.

@@ -91,9 +91,8 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
-    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
+    ComputeInstanceId, ComputeResponse, CreateSourceCommand, Response as DataflowResponse,
+    StorageResponse, TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -127,12 +126,12 @@ use mz_sql::catalog::{
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, ComputeInstanceConfig, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
+    AlterItemRenamePlan, CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
     ShowVariablePlan, TailFrom, TailPlan,
 };
 use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
@@ -239,8 +238,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
-    pub dataflow_instance: InstanceConfig,
+    pub dataflow_client: mz_dataflow_types::client::Controller,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
@@ -262,8 +260,7 @@ struct PendingPeek {
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
-    dataflow_client:
-        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client<T>>>,
+    dataflow_client: &'a mz_dataflow_types::client::Controller<T>,
     catalog: &'a CatalogState,
     persister: &'a PersisterWithConfig,
 }
@@ -271,13 +268,7 @@ pub struct CatalogTxn<'a, T> {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client:
-        mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
-    /// Configuration for the global dataflow instance.
-    ///
-    /// TODO(clusters): make this configurable per cluster, rather than
-    /// globally.
-    dataflow_instance: InstanceConfig,
+    dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -472,7 +463,7 @@ impl Coordinator {
             self.dataflow_client
                 .create_instance(
                     instance.id,
-                    self.dataflow_instance.clone(),
+                    instance.config.clone(),
                     instance.logging.clone(),
                 )
                 .await
@@ -1999,15 +1990,9 @@ impl Coordinator {
         &mut self,
         plan: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        match plan.config {
-            ComputeInstanceConfig::Virtual => {}
-            ComputeInstanceConfig::Real { .. } => {
-                coord_bail!("SIZE not yet supported");
-            }
-        }
-
         let op = catalog::Op::CreateComputeInstance {
             name: plan.name.clone(),
+            config: plan.config.clone(),
         };
         let r = self.catalog_transact(vec![op], |_| Ok(())).await;
         match r {
@@ -2018,7 +2003,7 @@ impl Coordinator {
                     .expect("compute instance must exist after creation")
                     .id;
                 self.dataflow_client
-                    .create_instance(id, self.dataflow_instance.clone(), None)
+                    .create_instance(id, plan.config, None)
                     .await
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
@@ -4626,7 +4611,6 @@ impl Coordinator {
 pub async fn serve(
     Config {
         dataflow_client,
-        dataflow_instance,
         logging,
         storage,
         timestamp_frequency,
@@ -4677,8 +4661,7 @@ pub async fn serve(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client: mz_dataflow_types::client::Controller::new(dataflow_client),
-                dataflow_instance,
+                dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 persister,
