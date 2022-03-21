@@ -201,7 +201,7 @@ mod boundary_hook {
             }
             Ok(())
         }
-        async fn recv(&mut self) -> Option<Response<T>> {
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
             // The receive logic draws from either the responses of the client, or requests for source instantiation.
             let mut response = None;
             while response.is_none() {
@@ -234,11 +234,11 @@ mod boundary_hook {
                         },
                     },
                     resp = self.client.recv() => {
-                        response = resp;
+                        response = resp?;
                     }
                 }
             }
-            response
+            Ok(response)
         }
     }
 }

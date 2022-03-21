@@ -136,18 +136,18 @@ impl<T> Controller<T>
 where
     T: Timestamp + Lattice,
 {
-    pub async fn recv(&mut self) -> Option<Response<T>> {
+    pub async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut compute_stream: StreamMap<_, _> = self
             .compute
             .iter_mut()
             .map(|(id, compute)| (*id, compute.client.as_stream()))
             .collect();
-        let response = tokio::select! {
+        let response: Option<Response<T>> = tokio::select! {
             Some((instance, response)) = compute_stream.next() => {
-                Some(Response::Compute(response, instance))
+                Some(Response::Compute(response?, instance))
             }
-            Some(response) = self.storage.client.recv() => {
-                Some(Response::Storage(response))
+            response = self.storage.client.recv() => {
+                response?.map(Response::Storage)
             }
             else => None,
         };
@@ -170,7 +170,7 @@ where
                 _ => {}
             }
         }
-        response
+        Ok(response)
     }
 }
 

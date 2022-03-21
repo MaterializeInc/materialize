@@ -705,7 +705,12 @@ impl Coordinator {
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
-                Some(m) = self.dataflow_client.recv() => Message::Worker(m),
+                m = self.dataflow_client.recv() => {
+                    match m.unwrap() {
+                        None => break,
+                        Some(r) => Message::Worker(r),
+                    }
+                },
                 Some(m) = metric_scraper_stream.next() => m,
                 m = cmd_rx.recv() => match m {
                     None => break,

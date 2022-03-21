@@ -395,19 +395,25 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     ///
     /// This method blocks until the next response is available, or, if the
     /// dataflow server has been shut down, returns `None`.
-    async fn recv(&mut self) -> Option<R>;
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error>;
 
     /// Returns an adapter that treats the client as a stream.
     ///
     /// The stream produces the responses that would be produced by repeated
     /// calls to `recv`.
-    fn as_stream<'a>(&'a mut self) -> Pin<Box<dyn Stream<Item = R> + Send + 'a>>
+    fn as_stream<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Stream<Item = Result<R, anyhow::Error>> + Send + 'a>>
     where
         R: Send + 'a,
     {
         Box::pin(async_stream::stream! {
-            while let Some(response) = self.recv().await {
-                yield response;
+            loop {
+                match self.recv().await {
+                    Ok(Some(response)) => yield Ok(response),
+                    Err(error) => yield Err(error),
+                    Ok(None) => { return; }
+                }
             }
         })
     }
@@ -442,7 +448,7 @@ where
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
-    async fn recv(&mut self) -> Option<R> {
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         (**self).recv().await
     }
 }
@@ -484,7 +490,7 @@ where
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response<T>> {
+    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let response = self.client.recv().await;
         trace!("RECV dataflow response: {:?}", response);
         response
@@ -508,7 +514,7 @@ where
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
             remotes.push(
-                tcp::TcpClient::connect(addr)
+                tcp::TcpClient::connect(addr.to_string())
                     .await
                     .with_context(|| format!("Connecting to {addr}"))?,
             );
@@ -528,7 +534,7 @@ where
         trace!("Sending dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response<T>> {
+    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let response = self.client.recv().await;
         trace!("Receiving dataflow response: {:?}", response);
         response
@@ -560,11 +566,11 @@ where
         self.client.send(Command::Compute(cmd, self.instance)).await
     }
 
-    async fn recv(&mut self) -> Option<ComputeResponse<T>> {
-        match self.client.recv().await {
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        match self.client.recv().await? {
             Some(Response::Compute(res, instance)) => {
                 assert_eq!(self.instance, instance);
-                Some(res)
+                Ok(Some(res))
             }
             res @ Some(Response::Storage(_)) => {
                 panic!(
@@ -572,7 +578,7 @@ where
                     res
                 );
             }
-            None => None,
+            None => Ok(None),
         }
     }
 }
@@ -600,16 +606,16 @@ where
         self.client.send(Command::Storage(cmd)).await
     }
 
-    async fn recv(&mut self) -> Option<StorageResponse<T>> {
-        match self.client.recv().await {
-            Some(Response::Storage(res)) => Some(res),
+    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+        match self.client.recv().await? {
+            Some(Response::Storage(res)) => Ok(Some(res)),
             res @ Some(Response::Compute(..)) => {
                 panic!(
                     "StorageWrapperClient unexpectedly received compute response: {:?}",
                     res
                 );
             }
-            None => None,
+            None => Ok(None),
         }
     }
 }
@@ -675,9 +681,9 @@ pub mod partitioned {
             Ok(())
         }
 
-        async fn recv(&mut self) -> Option<Response<T>> {
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
             if let Some(stashed) = self.state.stashed_responses.next() {
-                return Some(stashed);
+                return Ok(Some(stashed));
             }
             let mut stream: StreamMap<_, _> = self
                 .shards
@@ -686,15 +692,15 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response).fuse();
+                let messages = self.state.absorb_response(index, response?).fuse();
                 assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
                 self.state.stashed_responses = messages;
                 if let Some(message) = self.state.stashed_responses.next() {
-                    return Some(message);
+                    return Ok(Some(message));
                 }
             }
             // Indicate completion of the communication.
-            None
+            Ok(None)
         }
     }
 
@@ -1091,8 +1097,8 @@ pub mod process_local {
             Ok(())
         }
 
-        async fn recv(&mut self) -> Option<Response<T>> {
-            self.feedback_rx.recv().await
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+            Ok(self.feedback_rx.recv().await)
         }
     }
 
@@ -1129,7 +1135,7 @@ pub mod tcp {
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use tokio::io::{AsyncRead, AsyncWrite};
-    use tokio::net::{TcpStream, ToSocketAddrs};
+    use tokio::net::TcpStream;
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
@@ -1139,13 +1145,22 @@ pub mod tcp {
     #[derive(Debug)]
     pub struct TcpClient<T> {
         connection: FramedClient<TcpStream, T>,
+        addr: String,
     }
 
     impl<T> TcpClient<T> {
         /// Connects a remote client to the specified remote dataflow server.
-        pub async fn connect(addr: impl ToSocketAddrs) -> Result<TcpClient<T>, anyhow::Error> {
-            let connection = framed_client(TcpStream::connect(addr).await?);
-            Ok(Self { connection })
+        pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
+            let connection = framed_client(TcpStream::connect(&addr).await?);
+            Ok(Self { connection, addr })
+        }
+
+        pub async fn reconnect(&mut self) {
+            let mut connection = TcpStream::connect(&self.addr).await;
+            while connection.is_err() {
+                connection = TcpStream::connect(&self.addr).await;
+            }
+            self.connection = framed_client(connection.unwrap());
         }
     }
 
@@ -1155,16 +1170,23 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            // TODO: something better than panicking.
-            self.connection.send(cmd).await.map_err(|err| err.into())
+            // on error, we attempt to reconnect, and communicate the error.
+            let result = self.connection.send(cmd).await;
+            if result.is_err() {
+                self.reconnect().await;
+            }
+            Ok(result?)
         }
 
-        async fn recv(&mut self) -> Option<Response<T>> {
-            // TODO: something better than panicking.
-            self.connection
-                .next()
-                .await
-                .map(|x| x.expect("connection to dataflow server broken"))
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+            match self.connection.next().await {
+                None => Ok(None),
+                Some(Ok(response)) => Ok(Some(response)),
+                Some(error) => {
+                    self.reconnect().await;
+                    Ok(Some(error?))
+                }
+            }
         }
     }
 
@@ -1272,8 +1294,8 @@ mod channel {
             Ok(())
         }
 
-        async fn recv(&mut self) -> Option<R> {
-            self.rx.recv().await
+        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+            Ok(self.rx.recv().await)
         }
     }
 }
@@ -1362,11 +1384,11 @@ where
                     Err(_) => clients_alive = false,
                 },
 
-                Some(res) = client.recv() => match res {
-                    Response::Storage(res) => {
+                response = client.recv() => match response {
+                    Ok(Some(Response::Storage(res))) => {
                         let _ = storage_response_tx.send(res);
                     }
-                    Response::Compute(res, instance) => match instances.get(&instance) {
+                    Ok(Some(Response::Compute(res, instance))) => match instances.get(&instance) {
                         None => {
                             error!("received response {res:?} for non-existent compute instance {instance:?}");
                         }
@@ -1374,6 +1396,12 @@ where
                             let _ = response_tx.send(res);
                         }
                     },
+                    error @ Err(_) => {
+                        error.unwrap();
+                    },
+                    Ok(None) => {
+                        // Nothing, is what the prior code did.
+                    }
                 },
             }
         }
