@@ -239,9 +239,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         select! {
             cmd = conn.try_next() => match cmd? {
                 None => break,
-                Some(cmd) => client.send(cmd).await.unwrap(),
+                Some(cmd) => { client.send(cmd).await.unwrap(); },
             },
-            Some(response) = client.recv() => conn.send(response).await?,
+            res = client.recv() => {
+                match res.unwrap() {
+                    None => break,
+                    Some(response) => { conn.send(response).await?; }
+                }
+            }
         }
     }
 
