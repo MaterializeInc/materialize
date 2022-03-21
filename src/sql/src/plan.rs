@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
@@ -144,7 +144,25 @@ pub struct CreateRolePlan {
 pub struct CreateComputeInstancePlan {
     pub name: String,
     pub if_not_exists: bool,
-    pub config: InstanceConfig,
+    pub config: ComputeInstanceConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ComputeInstanceConfig {
+    Virtual,
+    Remote {
+        hosts: Vec<String>,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+}
+
+/// Configuration of introspection for a compute instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComputeInstanceIntrospectionConfig {
+    /// Whether to introspect the introspection.
+    pub debugging: bool,
+    /// The interval at which to introspect.
+    pub granularity: Duration,
 }
 
 #[derive(Debug)]

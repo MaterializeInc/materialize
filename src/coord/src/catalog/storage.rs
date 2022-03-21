@@ -15,7 +15,6 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::client::InstanceConfig;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
@@ -23,6 +22,7 @@ use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -370,15 +370,17 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_compute_instances(&self) -> Result<Vec<(i64, String, InstanceConfig)>, Error> {
+    pub fn load_compute_instances(
+        &self,
+    ) -> Result<Vec<(i64, String, ComputeInstanceConfig)>, Error> {
         self.inner
             .prepare("SELECT id, name, config FROM compute_instances")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
-                let config: InstanceConfig = match config {
-                    None => InstanceConfig::Virtual,
+                let config: ComputeInstanceConfig = match config {
+                    None => ComputeInstanceConfig::Virtual,
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
                 };
@@ -574,7 +576,7 @@ impl Transaction<'_> {
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
-        config: &InstanceConfig,
+        config: &ComputeInstanceConfig,
     ) -> Result<i64, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;

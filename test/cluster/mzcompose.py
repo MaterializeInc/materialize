@@ -43,7 +43,6 @@ SERVICES = [
         options="--storage-workers=2 --storage-compute-addr=dataflowd_storage:2102 --storage-controller-addr=dataflowd_storage:6876",
     ),
     Testdrive(
-        materialized_params={"cluster": "c"},
         volumes=[
             "mzdata:/share/mzdata",
             "tmp:/share/tmp",
@@ -79,7 +78,10 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_compute_2")
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
+    # Dropping the `default` cluster lightly tests that `materialized` can run
+    # and restart without any virtual clusters in the virtual cluster host.
+    c.sql("DROP CLUSTER default")
     c.sql(
-        "CREATE CLUSTER c REMOTE 'dataflowd_compute_1:6876', 'dataflowd_compute_2:6876'"
+        "CREATE CLUSTER default REMOTE ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
     )
     c.run("testdrive-svc", *glob)

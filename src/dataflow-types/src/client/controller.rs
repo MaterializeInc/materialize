@@ -31,10 +31,9 @@ use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use crate::client::{
-    ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient, InstanceConfig,
-    RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
+    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
+    InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
 };
-use crate::logging::LoggingConfig;
 
 pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
 mod storage;
@@ -60,13 +59,17 @@ where
         &mut self,
         instance: ComputeInstanceId,
         config: InstanceConfig,
-        logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
-        let mut client = match config {
-            InstanceConfig::Virtual => self.virtual_compute_host.create_instance(instance),
-            InstanceConfig::Remote(addr) => {
-                let client = RemoteClient::connect(&addr).await?;
-                Box::new(ComputeWrapperClient::new(client, instance))
+        let (mut client, logging) = match config {
+            InstanceConfig::Virtual { logging } => {
+                let client = self.virtual_compute_host.create_instance(instance);
+                (client, logging)
+            }
+            InstanceConfig::Remote { hosts, logging } => {
+                let client = RemoteClient::connect(&hosts).await?;
+                let client: Box<dyn ComputeClient<T>> =
+                    Box::new(ComputeWrapperClient::new(client, instance));
+                (client, logging)
             }
         };
         client

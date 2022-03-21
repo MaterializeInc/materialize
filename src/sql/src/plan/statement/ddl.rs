@@ -29,7 +29,6 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::client::InstanceConfig;
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
     AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
@@ -86,11 +85,12 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index,
-    IndexOption, IndexOptionName, Params, Plan, Sink, Source, Table, Type, View,
+    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, ComputeInstanceIntrospectionConfig,
+    CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params,
+    Plan, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2500,6 +2500,8 @@ pub fn plan_create_cluster(
 
     let mut is_virtual = false;
     let mut remote_hosts = None;
+    let mut introspection_debugging = None;
+    let mut introspection_granularity = None;
 
     for option in options {
         match option {
@@ -2513,7 +2515,23 @@ pub fn plan_create_cluster(
                 if remote_hosts.is_some() {
                     bail!("REMOTE specified more than once");
                 }
-                remote_hosts = Some(hosts);
+                let mut out = vec![];
+                for host in hosts {
+                    out.push(with_option_type!(Some(host), String));
+                }
+                remote_hosts = Some(out);
+            }
+            ClusterOption::IntrospectionDebugging(enabled) => {
+                if introspection_debugging.is_some() {
+                    bail!("INTROSPECTION DEBUGGING specified more than once");
+                }
+                introspection_debugging = Some(with_option_type!(Some(enabled), bool));
+            }
+            ClusterOption::IntrospectionGranularity(interval) => {
+                if introspection_granularity.is_some() {
+                    bail!("INTROSPECTION GRANULARITY specified more than once");
+                }
+                introspection_granularity = Some(with_option_type!(Some(interval), Interval));
             }
             ClusterOption::Size(_) => {
                 bail_unsupported!("CREATE CLUSTER ... SIZE");
@@ -2521,9 +2539,28 @@ pub fn plan_create_cluster(
         }
     }
 
+    let introspection = match (introspection_debugging, introspection_granularity) {
+        (None | Some(false), None) => None,
+        (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
+            debugging: debugging.unwrap_or(false),
+            granularity: granularity.duration()?,
+        }),
+        (Some(true), None) => {
+            bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
+        }
+    };
+
     let config = match (is_virtual, remote_hosts) {
-        (false, Some(hosts)) => InstanceConfig::Remote(hosts),
-        (false, None) | (true, None) => InstanceConfig::Virtual,
+        (false, Some(hosts)) => ComputeInstanceConfig::Remote {
+            hosts,
+            introspection,
+        },
+        (false, None) | (true, None) => {
+            if introspection.is_some() {
+                bail!("VIRTUAL clusters do not support configurable introspection");
+            }
+            ComputeInstanceConfig::Virtual
+        }
         (true, Some(_)) => bail!("VIRTUAL and REMOTE options cannot be specified together"),
     };
 
@@ -2720,9 +2757,6 @@ pub fn plan_drop_cluster(
         } else {
             bail!("invalid cluster name {}", name.to_string().quoted())
         };
-        if name.as_str() == scx.catalog.active_compute_instance() {
-            bail!("active cluster cannot be dropped");
-        }
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
                 if !instance.indexes().is_empty() && !cascade {
