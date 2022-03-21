@@ -131,7 +131,7 @@ Before you start, note that a database restart will be required after making the
 
     If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
-1. Enable Logical Replication by going to the Azure Database for PostgreSQL instance, then under the "Replication" section click the "Enable Logical Replication" toggle button and click on "Save".
+1. In the Azure portal or using the Azure CLI [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
 
@@ -140,6 +140,8 @@ Before you start, note that a database restart will be required after making the
     ```
 
      The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
+
+For more information, see the [Azure Database for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding) documentation.  
 
 ## DigitalOcean Managed PostgreSQL
 
