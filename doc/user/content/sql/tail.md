@@ -1,20 +1,23 @@
 ---
 title: "TAIL"
-description: "`TAIL` streams updates from an arbitrary `SELECT` statement as they occur."
+description: "`TAIL` streams updates from a source, table, or view as they occur."
 menu:
     main:
         parent: "sql"
 ---
 
-`TAIL` queries and streams updates as they occur from a source, table, view, or an arbitrary `SELECT` statement.
+`TAIL` streams updates from a source, table, or view as they occur.
 
 ## Conceptual framework
 
-While a `SELECT` computes rows at a given time, a
-`TAIL` can compute the same rows and stream their _updates_ over time.
+The `TAIL` statement is a more general form of a [`SELECT`](/sql/select)
+statement. While a `SELECT` statement computes a relation at a moment in time, a
+tail operation computes how a relation *changes* over time.
 
-Fundamentally, `TAIL` produces a sequence of updates as rows. Each row describes either
-the insertion or deletion of a row at a specific time. Update rows, taken together, describe the complete set of changes in order since the TAIL is active.
+Fundamentally, `TAIL` produces a sequence of updates. An update describes either
+the insertion or deletion of a row to the relation at a specific time. Taken
+together, the updates describes the complete set of changes to a relation, in
+order, while the `TAIL` is active.
 
 You can use `TAIL` to:
 
@@ -108,43 +111,9 @@ the nature of the update:
 </tbody>
 </table>
 
-{{< version-changed v0.20.0 >}}
-Support arbitrary SELECT statements in `TAIL`.
-{{</ version-changed >}}
+### Duration
 
-{{< version-changed v0.8.1 >}}
-Columns names added by `TAIL` now prepended by `mz_`.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-The timestamp and diff information moved to leading, well-typed columns.
-Previously the timestamp and diff information was encoded in a human-readable
-string in a trailing [`text`](/sql/types/text) column.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-`TAIL` sends rows to the client normally, i.e., as if they were sent by a
-[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
-a [`COPY TO`](/sql/copy-to) statement.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-`TAIL` is now guaranteed to send timestamps in non-decreasing order.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
-`WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-The [`PROGRESS`](#progress) option has been added.
-{{</ version-changed >}}
-
-### Life of a tail
-
-`TAIL` will continue to run until canceled, session ends, or until all updates the tailed
-item could undergo have been presented. The latter case typically occurs when
+`TAIL` will continue to run until canceled, session ends, or until all updates the tail could undergo have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing
 mode (`tail = false`).
@@ -223,7 +192,7 @@ Below are the recommended ways to work around this.
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [only one `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-Let's see it in action tailing [Materialize time spent internally](/sql/system-catalog/#mz_scheduling_elapsed). <br/><br/>
+Let's see it in action tailing [Materialize's workers time use internally](/sql/system-catalog/#mz_scheduling_elapsed). <br/><br/>
 First, declare a `TAIL` cursor:
 
 ```sql
@@ -439,30 +408,33 @@ See the [examples](#examples) for details.
 Start Materialize with a custom compaction window [`--logical-compaction-window 10000`](/cli/#compaction-window) and create a non-materialized view:
 
 ```sql
-CREATE VIEW most_tired_worker AS
-  SELECT worker, max(elapsed_ns)
+CREATE VIEW most_scheduled_worker AS
+  SELECT
+    worker,
+    SUM(elapsed_ns) as time_working
   FROM mz_scheduling_elapsed
-  WHERE worker = 0
-  GROUP BY worker;
+  GROUP BY worker
+  ORDER BY time_working DESC
+  LIMIT 1;
 ```
 
 Create an index and set a the compaction:
 
 ```sql
-CREATE INDEX most_tired_worker_idx
-  ON most_tired_worker (worker, max)
+CREATE INDEX most_scheduled_worker_idx
+  ON most_scheduled_worker (worker, time_working)
   WITH (logical_compaction_window = '10 seconds');
 ```
 
 Stream out changes from ten seconds before the statement is executed:
 
 ```sql
-COPY (TAIL most_tired_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
+COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 ```
 
 Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
 
-### Relating SNAPSHOT rows with their updates
+### SNAPSHOT rows and their updates
 
 After all the rows from the `SNAPSHOT` have been transmitted, the updates will come as they occur,
 but how is it possible to know which row has been updated? <br/>
@@ -477,3 +449,40 @@ but how is it possible to know which row has been updated? <br/>
 
 If you already know your data, then any _column_ acting as a key will do the work but if the key is unknown, then using a `hash(columns_values)` could serve as your key. <br/><br/>
 Back to the example, _Column 1_ acts as the key to know from where the update comes from; in case this was unknown, hashing the values from _Column 1_ to _Column N_ should reveal the origin row.
+
+---
+
+#### Changelog
+
+{{< version-changed v0.20.0 >}}
+Support arbitrary SELECT statements in `TAIL`.
+{{</ version-changed >}}
+
+{{< version-changed v0.8.1 >}}
+Columns names added by `TAIL` now prepended by `mz_`.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+The timestamp and diff information moved to leading, well-typed columns.
+Previously the timestamp and diff information was encoded in a human-readable
+string in a trailing [`text`](/sql/types/text) column.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+`TAIL` sends rows to the client normally, i.e., as if they were sent by a
+[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
+a [`COPY TO`](/sql/copy-to) statement.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.2 >}}
+`TAIL` is now guaranteed to send timestamps in non-decreasing order.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.2 >}}
+Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
+`WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.2 >}}
+The [`PROGRESS`](#progress) option has been added.
+{{</ version-changed >}}
