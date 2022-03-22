@@ -80,17 +80,14 @@ CIDR differential dataflow paper, a piece of data is called a "record".
 
 A *Timeline* is a unique ID (for disambiguating e.g. two sets of integers), a
 set of *Materialize times* `T`, together with a *meet* (greatest lower bound)
-and *join* (least upper bound), each of which take two elements of `T` and
-yield a third:
+and *join* (least upper bound), which together form a [lattice](https://en.wikipedia.org/wiki/Lattice_(order)).
 
 ```
 meet(t1, t2) => t3
 join(t1, t2) => t3
 ```
 
-Both `meet` and `join` must be associative, commutative, and idempotent. Each
-timeline therefore forms a
-[lattice](https://en.wikipedia.org/wiki/Lattice_(order)).
+As with all lattices, both `meet` and `join` must be associative, commutative, and idempotent.
 
 A *time* is an element of `T`. We define a partial order `<=t` over times in
 the usual way for join semilattices: for any two times `t1` and `t2` in `T`,
@@ -125,7 +122,7 @@ into Materialize times.
 
 ## Collection Versions
 
-A *collection version* is a [multiset](https://en.wikipedia.org/wiki/Multiset)
+A *collection version* is a [multiset](https://en.wikipedia.org/wiki/Multiset) with (potentially) [negative multiplicitie](http://www.futuresoft.yolasite.com/resources/Petri%20net-%20W.%20Reisig%20Book.pdf)
 of data which are all of the same type. Collection versions represent the state
 of a collection at a single instant in time. For example, a collection version
 could store the state of a relation (e.g. table) in SQL, or the state of a
@@ -235,7 +232,8 @@ Given a time `t` and two collection versions `cv1` and `cv2`, we can find their
 ```
 diff(t, cv1, cv2) = { u = [data, t, diff] |
                       (data in cv1 or data in cv2) and
-                      (diff = multiplicity(cv2, data) - multiplicity(cv1, data))
+                      (diff = multiplicity(cv2, data) - multiplicity(cv1, data)) and
+                      (diff != 0)
                     }
 ```
 
