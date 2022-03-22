@@ -165,6 +165,12 @@ where
                         .update_write_frontiers(updates)
                         .await;
                 }
+                Response::Compute(ComputeResponse::PeekResponse(uuid, _response), instance) => {
+                    self.compute_mut(*instance)
+                        .expect("Reference to absent instance")
+                        .remove_peeks(std::iter::once(*uuid))
+                        .await;
+                }
                 Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
                     self.storage_mut()
                         .update_write_frontiers(&feedback.changes)
