@@ -171,6 +171,12 @@ pub async fn configure(
                 Some(log_file) => PathBuf::from(log_file),
                 None => args.data_directory.join("materialized.log"),
             };
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("creating log file directory: {}", parent.display())
+                })?;
+            }
+
             let file = fs::OpenOptions::new()
                 .append(true)
                 .create(true)
@@ -185,11 +191,6 @@ pub async fn configure(
                 .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
                 .with({
                     let file = file.try_clone().expect("failed to clone log file");
-                    if let Some(parent) = path.parent() {
-                        fs::create_dir_all(parent).with_context(|| {
-                            format!("creating log file directory: {}", parent.display())
-                        })?;
-                    }
                     fmt::layer()
                         .with_ansi(false)
                         .with_writer(file)
