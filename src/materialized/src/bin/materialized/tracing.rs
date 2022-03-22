@@ -190,7 +190,7 @@ pub async fn configure(
                     }
                     fmt::layer()
                         .with_ansi(false)
-                        .with_writer(move || file.try_clone().expect("failed to clone log file"))
+                        .with_writer(file)
                         .with_filter(filter.clone())
                 })
                 .with(
