@@ -114,6 +114,8 @@ where
     }
 }
 /// Configures tracing according to the provided command-line arguments.
+/// Returns a `Write` stream that represents the main place `tracing` will
+/// log to
 pub async fn configure(
     args: &Args,
     metrics_registry: &MetricsRegistry,
