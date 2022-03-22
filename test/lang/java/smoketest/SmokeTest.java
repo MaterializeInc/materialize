@@ -34,7 +34,7 @@ class SmokeTest {
         String port = System.getenv("PGPORT");
         if (port == null)
             port = "6875";
-        String url = String.format("jdbc:postgresql://%s:%s/", host, port);
+        String url = String.format("jdbc:postgresql://%s:%s/materialize", host, port);
         conn = DriverManager.getConnection(url, "materialize", null);
     }
 
