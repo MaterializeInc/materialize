@@ -44,6 +44,8 @@ pub(super) struct ComputeControllerState<T> {
     pub(super) client: Box<dyn ComputeClient<T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
+    /// Currently outstanding peeks: identifiers and timestamps.
+    pub(super) peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
 }
 
 /// An immutable controller for a compute instance.
@@ -106,6 +108,7 @@ where
         Self {
             client,
             collections,
+            peeks: Default::default(),
         }
     }
 }
@@ -304,6 +307,12 @@ where
             Err(ComputeError::PeekSinceViolation(id))?;
         }
 
+        // Install a compaction hold on `id` at `timestamp`.
+        let mut updates = BTreeMap::new();
+        updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
+        self.update_read_capabilities(&mut updates).await;
+        self.compute.peeks.insert(uuid, (id, timestamp.clone()));
+
         self.compute
             .client
             .send(ComputeCommand::Peek {
@@ -319,10 +328,12 @@ where
     }
     /// Cancels existing peek requests.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        let uuids = uuids.clone();
+        self.remove_peeks(uuids.iter().cloned()).await;
         self.compute
             .client
-            .send(ComputeCommand::CancelPeeks { uuids })
+            .send(ComputeCommand::CancelPeeks {
+                uuids: uuids.clone(),
+            })
             .await
             .map_err(ComputeError::from)
     }
@@ -511,6 +522,19 @@ where
                 .update_read_capabilities(&mut storage_todo)
                 .await;
         }
+    }
+    /// Removes a registered peek, unblocking compaction that might have waited on it.
+    pub(super) async fn remove_peeks(&mut self, peek_ids: impl IntoIterator<Item = uuid::Uuid>) {
+        let mut updates = peek_ids
+            .into_iter()
+            .flat_map(|uuid| {
+                self.compute
+                    .peeks
+                    .remove(&uuid)
+                    .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
+            })
+            .collect();
+        self.update_read_capabilities(&mut updates).await;
     }
 }
 
