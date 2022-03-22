@@ -114,6 +114,7 @@ pub enum HirRelationExpr {
     Negate {
         input: Box<HirRelationExpr>,
     },
+    /// Keep rows from a dataflow where the row counts are positive.
     Threshold {
         input: Box<HirRelationExpr>,
     },
