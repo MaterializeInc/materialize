@@ -1084,7 +1084,3 @@ SELECT 'table_with_id'::regclass
 # fully qualified names are not yet supported
 statement error object "test.table_with_id" does not exist
 SELECT 'test.table_with_id'::regclass
-
-# over qualified types should return an error
-query error qualified name did not have between 1 and 3 components
-SELECT 'true'::universe.database.schema.bool

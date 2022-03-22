@@ -9,13 +9,10 @@
 
 mode cockroach
 
-statement ok
-CREATE TABLE foo (a integer)
+# over qualified objects should return an error
+query error qualified name did not have between 1 and 3 components
+SELECT * FROM universe.db.schema.foo
 
-statement ok
-INSERT INTO foo VALUES (42)
-
-query I
-SELECT * FROM foo
-----
-42
+# over qualified types should return an error
+query error qualified name did not have between 1 and 3 components
+SELECT 'true'::universe.database.schema.bool
