@@ -22,7 +22,8 @@ use mz_sql_parser::ast::display::AstDisplay;
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_DATABASES,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
@@ -127,6 +128,7 @@ impl CatalogState {
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
+            CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
         };
 
         if let Ok(desc) = entry.desc() {
@@ -454,5 +456,23 @@ impl CatalogState {
             });
         }
         updates
+    }
+
+    fn pack_secret_update(
+        &self,
+        id: GlobalId,
+        schema_id: i64,
+        name: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: MZ_SECRETS.id,
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::Int64(schema_id),
+                Datum::String(name),
+            ]),
+            diff,
+        }]
     }
 }

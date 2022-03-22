@@ -75,6 +75,7 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateComputeInstance(CreateComputeInstancePlan),
     CreateSource(CreateSourcePlan),
+    CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
@@ -171,6 +172,13 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateSecretPlan {
+    pub name: FullName,
+    pub secret: Secret,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
@@ -413,6 +421,11 @@ pub struct Source {
     pub connector: SourceConnector,
     pub desc: RelationDesc,
     pub expr: mz_expr::MirRelationExpr,
+}
+
+#[derive(Clone, Debug)]
+pub struct Secret {
+    pub create_sql: String,
 }
 
 #[derive(Clone, Debug)]

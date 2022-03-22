@@ -24,10 +24,10 @@ use mz_repr::ColumnName;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function,
-    FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption, Statement, TableFactor,
-    TableFunction, UnresolvedObjectName, Value, ViewDefinition,
+    AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption,
+    Statement, TableFactor, TableFunction, UnresolvedObjectName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
@@ -374,6 +374,14 @@ pub fn create_statement(
                 }
             }
         },
+        Statement::CreateSecret(CreateSecretStatement {
+            name,
+            if_not_exists,
+            value: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
 
         _ => unreachable!(),
     }

@@ -196,6 +196,10 @@ pub enum ExecuteResponse {
     CreatedIndex {
         existed: bool,
     },
+    /// The requested secret was created.
+    CreatedSecret {
+        existed: bool,
+    },
     /// The requested sink was created.
     CreatedSink {
         existed: bool,

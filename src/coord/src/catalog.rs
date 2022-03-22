@@ -47,9 +47,9 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{Aug, DatabaseSpecifier, FullName, PartialName, SchemaName};
 use mz_sql::plan::{
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
-    StatementDesc,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc,
 };
 use mz_transform::Optimizer;
 use uuid::Uuid;
@@ -198,7 +198,8 @@ impl CatalogState {
             CatalogItem::Source(_)
             | CatalogItem::Func(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => false,
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_) => false,
         }
     }
 
@@ -435,6 +436,8 @@ impl CatalogState {
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
+            // TODO: what does volatile mean
+            CatalogItem::Secret(_) => Volatile,
         }
     }
 
@@ -518,6 +521,7 @@ pub enum CatalogItem {
     Index(Index),
     Type(Type),
     Func(Func),
+    Secret(Secret),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -612,6 +616,11 @@ pub struct Func {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Secret {
+    pub create_sql: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum Volatility {
     Volatile,
     Nonvolatile,
@@ -639,6 +648,7 @@ impl CatalogItem {
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
+            CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
         }
     }
 
@@ -650,7 +660,8 @@ impl CatalogItem {
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -682,6 +693,7 @@ impl CatalogItem {
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
+            CatalogItem::Secret(_) => &[],
         }
     }
 
@@ -694,7 +706,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
-            | CatalogItem::View(_) => false,
+            | CatalogItem::View(_)
+            | CatalogItem::Secret(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -709,7 +722,11 @@ impl CatalogItem {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
             CatalogItem::Table(table) => table.conn_id,
-            _ => None,
+            CatalogItem::Source(_) => None,
+            CatalogItem::Sink(_) => None,
+            CatalogItem::Secret(_) => None,
+            CatalogItem::Type(_) => None,
+            CatalogItem::Func(_) => None,
         }
     }
 
@@ -762,6 +779,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
+            }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Secret(i))
             }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
@@ -2191,6 +2213,12 @@ impl Catalog {
                 table_persist_name: None,
                 source_persist_details: None,
             },
+            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
+                create_sql: secret.create_sql.clone(),
+                eval_env: None,
+                table_persist_name: None,
+                source_persist_details: None,
+            },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
@@ -2294,6 +2322,9 @@ impl Catalog {
                     typ: typ.inner,
                 },
                 depends_on: typ.depends_on,
+            }),
+            Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
+                create_sql: secret.create_sql,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -2772,6 +2803,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
         }
     }
