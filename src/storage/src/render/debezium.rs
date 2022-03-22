@@ -343,26 +343,15 @@ where
                         time,
                         cap.time(),
                     );
-                    let time = tx_id;
                     if status == "END" {
-                        let mut time_to_use = time.clone();
-                        time_to_use = if ::std::env::var("CHAE_PLUS_ONE").is_ok() {
-                            time_to_use + 1
-                        } else {
-                            time_to_use
-                        };
-                        if ::std::env::var("CHAE_ADD_FIVE").is_ok()
-                            && time.clone() == <G as ScopeParent>::Timestamp::minimum() + 5
-                        {
-                            time_to_use = time_to_use + 5;
-                        }
-                        // not less_equal to lower; less_equal to upper
+                        let data_time = tx_id;
+                        let tx_upper_time = tx_id + 1;
                         channel.borrow_mut().push_back(Message::Progress(Progress {
                             lower: vec![last.borrow().clone()],
-                            upper: vec![(time_to_use.clone())],
-                            counts: vec![(time.clone(), event_count.unwrap() as usize)],
+                            upper: vec![(tx_upper_time.clone())],
+                            counts: vec![(data_time.clone(), event_count.unwrap() as usize)],
                         }));
-                        *last.borrow_mut() = time_to_use;
+                        *last.borrow_mut() = tx_upper_time;
                     }
                 }
             }

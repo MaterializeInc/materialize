@@ -476,6 +476,7 @@ where
                                     //src_id,
                                     //dataflow_id,
                                 );
+                                error_collections.push(tx_src_err);
                                 if let Some(tok) = token {
                                     needed_tokens.push(Rc::new(tok));
                                 }
