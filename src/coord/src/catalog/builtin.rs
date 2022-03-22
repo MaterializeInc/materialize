@@ -1250,6 +1250,16 @@ lazy_static! {
         id: GlobalId::System(4049),
         persistent: false,
     };
+    pub static ref MZ_SECRETS: BuiltinTable = BuiltinTable {
+        name: "mz_secrets",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(4050),
+        persistent: false,
+    };
+
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -2175,6 +2185,7 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
             Builtin::Table(&MZ_CLUSTERS),
+            Builtin::Table(&MZ_SECRETS),
             Builtin::View(&MZ_CATALOG_NAMES),
             Builtin::View(&MZ_ARRANGEMENT_SHARING),
             Builtin::View(&MZ_ARRANGEMENT_SIZES),

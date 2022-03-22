@@ -406,6 +406,7 @@ mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
+mz_secrets
 mz_sinks
 mz_sources
 mz_tables
@@ -435,6 +436,7 @@ mz_metrics_meta       system
 mz_pseudo_types       system
 mz_roles              system
 mz_schemas            system
+mz_secrets            system
 mz_sinks              system
 mz_sources            system
 mz_tables             system
@@ -466,6 +468,7 @@ mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
+mz_secrets
 mz_sinks
 mz_sources
 mz_tables
@@ -498,6 +501,7 @@ mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
+mz_secrets
 mz_sinks
 mz_sources
 mz_tables
@@ -509,7 +513,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-25
+26
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
