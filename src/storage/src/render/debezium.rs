@@ -129,14 +129,11 @@ where
     }
 }
 
-pub(crate) fn render_new<G: Scope>(
+pub(crate) fn render_tx<G: Scope>(
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
     tx_ok: Collection<G, Row, Diff>,
     debug_name: String,
-    //metrics: Metrics,
-    //src_id: GlobalId,
-    //dataflow_id: usize,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
@@ -144,65 +141,67 @@ pub(crate) fn render_new<G: Scope>(
 )
 where
     G: ScopeParent<Timestamp = Timestamp>,
-    //<G as ScopeParent>::Timestamp: FromStr,
-    //<G as ScopeParent>::Timestamp: Lattice,
-    //<G as ScopeParent>::Timestamp: Add<u64, Output = <G as ScopeParent>::Timestamp>,
-    //<G as ScopeParent>::Timestamp: Sub<u64, Output = <G as ScopeParent>::Timestamp>,
-    //<<G as ScopeParent>::Timestamp as FromStr>::Err: std::fmt::Debug,
 {
-    //assert!(!matches!(envelope.mode, DebeziumMode::Upsert));
-
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     // XXX(chae): TODOs
     // - pull tx metadata from another place
     // - handle errors here? decode_cdc just logs and drops errors.  This might not be appropriate here? What is the time domain of the errors?
+    // XXX(chae): use timestamps of END tx messages as timestamp for everything in the transaction
+    // XXX(chae): use dbz deduplication full for tx source
     let channel: Rc<RefCell<VecDeque<Message<_, <G as ScopeParent>::Timestamp, Diff>>>> =
         Rc::new(RefCell::new(VecDeque::new()));
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
-    let count = Rc::new(RefCell::new(0));
+    // XXX(chae): Figure out mapping from tx_id to ts -- including stalling the data pipeline until the tx pipeline has info
+    let tx_map: Rc<RefCell<HashMap<_, Timestamp>>> = Rc::new(RefCell::new(HashMap::new()));
     input.sink(Pipeline, "envelope-debezium", {
         let channel = Rc::clone(&channel);
         let activator = Rc::clone(&activator);
-        let mut dedup_state = HashMap::new();
         let envelope = envelope.clone();
-        let mut data = vec![];
         let debug_name = debug_name.clone();
-        move |input| {
-            while let Some((cap, refmut_data)) = input.next() {
-                let (transaction_idx, tx_id_idx) = match envelope {
-                    DebeziumEnvelope {
-                        mode:
-                            DebeziumMode::Full(DebeziumDedupProjection {
+        let mut data = vec![];
+        let mut dedup_state = HashMap::new();
+        let (transaction_idx, tx_id_idx) = match envelope {
+            DebeziumEnvelope {
+                mode:
+                    DebeziumMode::Full(DebeziumDedupProjection {
+                        transaction_idx,
+                        tx_id_idx,
+                        ..
+                    }),
+                ..
+            }
+            | DebeziumEnvelope {
+                mode:
+                    DebeziumMode::Ordered(DebeziumDedupProjection {
+                        transaction_idx,
+                        tx_id_idx,
+                        ..
+                    }),
+                ..
+            }
+            | DebeziumEnvelope {
+                mode:
+                    DebeziumMode::FullInRange {
+                        projection:
+                            DebeziumDedupProjection {
                                 transaction_idx,
                                 tx_id_idx,
-                                ..
-                            }),
-                        ..
-                    }
-                    | DebeziumEnvelope {
-                        mode:
-                            DebeziumMode::Ordered(DebeziumDedupProjection {
-                                transaction_idx,
-                                tx_id_idx,
-                                ..
-                            }),
-                        ..
-                    }
-                    | DebeziumEnvelope {
-                        mode:
-                            DebeziumMode::FullInRange {
-                                projection:
-                                    DebeziumDedupProjection {
-                                        transaction_idx,
-                                        tx_id_idx,
-                                        ..
-                                    },
                                 ..
                             },
                         ..
-                    } => (transaction_idx, tx_id_idx),
-                    _ => (0, None),
-                };
+                    },
+                ..
+            } => (
+                transaction_idx,
+                tx_id_idx.expect("render_tx should only be called when there's a transaction"),
+            ),
+            DebeziumEnvelope {
+                mode: DebeziumMode::None,
+                ..
+            } => panic!("render_tx should be called with a dedup mode"),
+        };
+        move |input| {
+            while let Some((cap, refmut_data)) = input.next() {
                 //let mut session = output.session(&cap);
                 refmut_data.swap(&mut data);
                 for result in data.drain(..) {
@@ -210,6 +209,12 @@ where
                         Ok(key) => key,
                         Err(err) => {
                             //session.give((Err(err.into()), cap.time().clone(), 1));
+                            channel.borrow_mut().push_back(Message::Updates(vec![(
+                                Err(err.into()),
+                                // XXX(chae): what's the right time domain for errors?
+                                cap.time().clone(),
+                                1,
+                            )]));
                             continue;
                         }
                     };
@@ -217,6 +222,12 @@ where
                         Some(Ok(value)) => value,
                         Some(Err(err)) => {
                             //session.give((Err(err.into()), cap.time().clone(), 1));
+                            channel.borrow_mut().push_back(Message::Updates(vec![(
+                                Err(err.into()),
+                                // XXX(chae): what's the right time domain for errors?
+                                cap.time().clone(),
+                                1,
+                            )]));
                             continue;
                         }
                         None => continue,
@@ -237,7 +248,12 @@ where
                             match res {
                                 Ok(b) => b,
                                 Err(err) => {
-                                    //session.give((Err(err), cap.time().clone(), 1));
+                                    channel.borrow_mut().push_back(Message::Updates(vec![(
+                                        Err(err),
+                                        // XXX(chae): what's the right time domain for errors?
+                                        cap.time().clone(),
+                                        1,
+                                    )]));
                                     continue;
                                 }
                             }
@@ -246,33 +262,21 @@ where
                     };
 
                     if should_use {
-                        let time: <G as ScopeParent>::Timestamp = match tx_id_idx {
-                            Some(tx_id_idx) => match value.iter().nth(transaction_idx).unwrap() {
-                                Datum::List(l) => match l.iter().nth(tx_id_idx).unwrap() {
-                                    Datum::String(s) => match s.parse() {
-                                        Ok(s) => s,
-                                        Err(e) => panic!("blah"),
-                                    },
-                                    d => panic!("type error: expected string, found {:?}", d),
+                        let time = match value.iter().nth(transaction_idx).unwrap() {
+                            Datum::List(l) => match l.iter().nth(tx_id_idx).unwrap() {
+                                Datum::String(s) => match s.parse() {
+                                    Ok(s) => s,
+                                    Err(e) => panic!("blah"),
                                 },
-                                d => {
-                                    panic!("type error: expected record, found {:?}", d)
-                                }
+                                d => panic!("type error: expected string, found {:?}", d),
                             },
-                            None => cap.time().clone(),
+                            d => {
+                                panic!("type error: expected record, found {:?}", d)
+                            }
                         };
 
-                        //let mut session = output.session(&time);
-
-                        eprintln!("TIME: {:?}; TX_ID_IDX {:?}", time, tx_id_idx);
                         match value.iter().nth(before_idx).unwrap() {
                             Datum::List(l) => {
-                                //    session.give((
-                                //    Ok(Row::pack(&l)),
-                                //    //cap.time().clone(),
-                                //    time.clone(),
-                                //    -1,
-                                //));
                                 channel.borrow_mut().push_back(Message::Updates(vec![(
                                     Ok(Row::pack(&l)),
                                     time.clone(),
@@ -284,12 +288,6 @@ where
                         }
                         match value.iter().nth(after_idx).unwrap() {
                             Datum::List(l) => {
-                                //session.give((
-                                //    Ok(Row::pack(&l)),
-                                //    //cap.time().clone()
-                                //    time.clone(),
-                                //    1,
-                                //))
                                 channel.borrow_mut().push_back(Message::Updates(vec![(
                                     Ok(Row::pack(&l)),
                                     time.clone(),
@@ -313,11 +311,10 @@ where
     tx_ok.inner.sink(Pipeline, "envelope-debezium-txdata", {
         let channel = Rc::clone(&channel);
         let activator = Rc::clone(&activator);
+        let tx_map = Rc::clone(&tx_map);
         //let count = Rc::clone(&count);
         //let mut dedup_state = HashMap::new();
-        let envelope = envelope.clone();
         let mut data = vec![];
-        let debug_name = debug_name.clone();
         use timely::progress::Timestamp as _;
         let last = Rc::new(RefCell::new(<G as ScopeParent>::Timestamp::minimum()));
         move |input| {
@@ -343,9 +340,11 @@ where
                         time,
                         cap.time(),
                     );
+                    tx_map.borrow_mut().insert(tx_id, time);
                     if status == "END" {
                         let data_time = tx_id;
                         let tx_upper_time = tx_id + 1;
+                        // XXX(chae): Transform into time domain provided by the tx data rather than using the tx_id as the time
                         channel.borrow_mut().push_back(Message::Progress(Progress {
                             lower: vec![last.borrow().clone()],
                             upper: vec![(tx_upper_time.clone())],

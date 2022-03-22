@@ -470,8 +470,12 @@ where
                                         needed_tokens.push(tx_token);
                                         error_collections.push(tx_source_err);
 
+                                        // XXX: try rendering tx and pass _that_ to render the data stream? rather than the raw colelction.
+                                        //      will do the deduplication and use the time we read in the tx data -- rather than needing the tx_id to be a u64?
+                                        //      would also make error handling more natural?
+                                        //      but would need to handle the mapping between the tx timestamp / tx id so we can assign timestamp to data
                                         let (dbz_render, dbz_err, token) =
-                                            super::debezium::render_new(
+                                            super::debezium::render_tx(
                                                 dbz_envelope,
                                                 &results,
                                                 tx_source_ok,
