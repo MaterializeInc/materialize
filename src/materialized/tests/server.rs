@@ -49,8 +49,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
-    {
-        let server = util::start_server(config.clone())?;
+    for config in [config.clone(), config.logging_granularity(None)] {
+        let server = util::start_server(config)?;
         let mut client = server.connect(postgres::NoTls)?;
         assert_eq!(
             client
@@ -94,13 +94,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<String>>(),
             vec!["u1", "u2", "u3", "u4", "u5", "u6"]
         );
-    }
-
-    {
-        let config = config.logging_granularity(None);
-        if util::start_server(config).is_ok() {
-            panic!("server unexpectedly booted with corrupted catalog")
-        };
     }
 
     Ok(())

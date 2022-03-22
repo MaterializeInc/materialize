@@ -20,6 +20,7 @@
 use super::super::attribute::core::Attributes;
 use super::scalar::*;
 use itertools::Itertools;
+use mz_expr::TableFunc;
 use mz_ore::id_gen::Gen;
 use mz_sql_parser::ast::Ident;
 use std::cell::{Ref, RefCell, RefMut};
@@ -200,6 +201,12 @@ pub(crate) const ARBITRARY_QUANTIFIER: usize = 0b00000000
     | (QuantifierType::PreservedForeach as usize)
     | (QuantifierType::Scalar as usize);
 
+/// A bitmask that matches the discriminant of a subquery [`QuantifierType`].
+pub(crate) const SUBQUERY_QUANTIFIER: usize = 0b00000000
+    | (QuantifierType::All as usize)
+    | (QuantifierType::Existential as usize)
+    | (QuantifierType::Scalar as usize);
+
 #[derive(Debug, Clone)]
 pub(crate) enum BoxType {
     /// A table from the catalog.
@@ -220,9 +227,8 @@ pub(crate) enum BoxType {
     /// that order.
     Select(Select),
     /// The invocation of table function from the catalog.
-    TableFunction(TableFunction),
+    CallTable(CallTable),
     /// SQL's union operator
-    #[allow(dead_code)]
     Union,
     /// Operator that produces a set of rows, with potentially
     /// correlated values.
@@ -296,15 +302,21 @@ impl Select {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct TableFunction {
-    pub parameters: Vec<BoxScalarExpr>,
-    // @todo function metadata from the catalog
+#[derive(Debug, Clone)]
+pub(crate) struct CallTable {
+    pub func: TableFunc,
+    pub exprs: Vec<BoxScalarExpr>,
 }
 
-impl From<TableFunction> for BoxType {
-    fn from(table_function: TableFunction) -> Self {
-        BoxType::TableFunction(table_function)
+impl CallTable {
+    pub fn new(func: TableFunc, exprs: Vec<BoxScalarExpr>) -> CallTable {
+        CallTable { func, exprs }
+    }
+}
+
+impl From<CallTable> for BoxType {
+    fn from(table_funct: CallTable) -> Self {
+        BoxType::CallTable(table_funct)
     }
 }
 
@@ -684,8 +696,8 @@ impl QueryBox {
                     }
                 }
             }
-            BoxType::TableFunction(table_function) => {
-                for p in table_function.parameters.iter() {
+            BoxType::CallTable(table_function) => {
+                for p in table_function.exprs.iter() {
                     f(p)?;
                 }
             }
@@ -736,8 +748,8 @@ impl QueryBox {
                     }
                 }
             }
-            BoxType::TableFunction(table_function) => {
-                for p in table_function.parameters.iter_mut() {
+            BoxType::CallTable(table_function) => {
+                for p in table_function.exprs.iter_mut() {
                     f(p)?;
                 }
             }
@@ -934,7 +946,7 @@ impl BoxType {
             BoxType::Intersect => "Intersect",
             BoxType::OuterJoin(..) => "OuterJoin",
             BoxType::Select(..) => "Select",
-            BoxType::TableFunction(..) => "TableFunction",
+            BoxType::CallTable(..) => "CallTable",
             BoxType::Union => "Union",
             BoxType::Values(..) => "Values",
         }

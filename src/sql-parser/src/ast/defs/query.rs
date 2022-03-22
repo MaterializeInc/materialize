@@ -39,7 +39,7 @@ use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedDataType, Unres
 // that it gets resolved to.
 //
 // Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
-// sql/src/plan/query.rs:resolve_names.
+// sql/src/names.rs:resolve_names.
 pub trait AstInfo: Clone {
     // The type used for table references.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;

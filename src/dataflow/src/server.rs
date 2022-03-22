@@ -48,6 +48,8 @@ use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
+use crate::server::boundary::BoundaryHook;
+
 pub mod boundary;
 mod compute_state;
 mod metrics;
@@ -89,13 +91,36 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// It uses the default [EventLinkBoundary] to host both compute and storage dataflows.
-pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
-    serve_boundary(config, |_| {
-        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new()));
+pub fn serve(config: Config) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (requests_tx, requests_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (server, client) = serve_boundary(config, move |_| {
+        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new(requests_tx.clone())));
         (Rc::clone(&boundary), boundary)
-    })
+    })?;
+
+    Ok((server, BoundaryHook::new(client, requests_rx, workers)))
 }
 
+/// Initiates a timely dataflow computation, processing materialized commands.
+///
+/// * `create_boundary`: A function to obtain the worker-local boundary components.
+pub fn serve_boundary_requests<
+    SC: StorageCapture,
+    CR: ComputeReplay,
+    B: Fn(usize) -> (SC, CR) + Send + Sync + 'static,
+>(
+    config: Config,
+    requests: tokio::sync::mpsc::UnboundedReceiver<mz_dataflow_types::SourceInstanceRequest>,
+    create_boundary: B,
+) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (server, client) = serve_boundary(config, create_boundary)?;
+    Ok((
+        server,
+        crate::server::boundary::BoundaryHook::new(client, requests, workers),
+    ))
+}
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// * `create_boundary`: A function to obtain the worker-local boundary components.
@@ -291,29 +316,39 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                if let Command::Compute(
-                    ComputeCommand::CreateInstance(_config, _logging),
-                    instance_id,
-                ) = &cmd
-                {
-                    let compute_instance = ComputeState {
-                        traces: TraceManager::new(
-                            (self.metrics_bundle.1).3.clone(),
-                            self.timely_worker.index(),
-                        ),
-                        dataflow_tokens: HashMap::new(),
-                        tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-                        sink_write_frontiers: HashMap::new(),
-                        pending_peeks: Vec::new(),
-                        reported_frontiers: HashMap::new(),
-                        sink_metrics: (self.metrics_bundle.1).1.clone(),
-                        materialized_logger: None,
-                    };
-                    self.compute_state.insert(*instance_id, compute_instance);
-                    compute_instances.push(*instance_id);
+                let mut should_drop = None;
+                match &cmd {
+                    Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) => {
+                        let compute_instance = ComputeState {
+                            traces: TraceManager::new(
+                                (self.metrics_bundle.1).3.clone(),
+                                self.timely_worker.index(),
+                            ),
+                            dataflow_tokens: HashMap::new(),
+                            tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(
+                                Vec::new(),
+                            )),
+                            sink_write_frontiers: HashMap::new(),
+                            pending_peeks: Vec::new(),
+                            reported_frontiers: HashMap::new(),
+                            sink_metrics: (self.metrics_bundle.1).1.clone(),
+                            materialized_logger: None,
+                        };
+                        self.compute_state.insert(*instance_id, compute_instance);
+                        compute_instances.push(*instance_id);
+                    }
+                    Command::Compute(ComputeCommand::DropInstance, instance_id) => {
+                        should_drop = Some(*instance_id);
+                    }
+                    _ => (),
                 }
 
                 self.handle_command(cmd);
+
+                if let Some(instance_id) = should_drop {
+                    self.compute_state.remove(&instance_id);
+                    compute_instances.retain(|id| *id != instance_id);
+                }
             }
 
             self.metrics_bundle.0.observe_command_finish();

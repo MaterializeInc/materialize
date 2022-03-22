@@ -33,10 +33,9 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::{
-    client::ComputeInstanceId, sinks::SinkConnectorBuilder, sinks::SinkEnvelope,
-    sources::SourceConnector,
-};
+use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
@@ -148,10 +147,22 @@ pub struct CreateComputeInstancePlan {
     pub config: ComputeInstanceConfig,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeInstanceConfig {
     Virtual,
-    Real { size: String },
+    Remote {
+        hosts: Vec<String>,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+}
+
+/// Configuration of introspection for a compute instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComputeInstanceIntrospectionConfig {
+    /// Whether to introspect the introspection.
+    pub debugging: bool,
+    /// The interval at which to introspect.
+    pub granularity: Duration,
 }
 
 #[derive(Debug)]

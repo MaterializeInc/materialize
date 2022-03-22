@@ -11,7 +11,7 @@
 
 use bytes::BufMut;
 
-use crate::Codec;
+use crate::{Codec, Codec64};
 
 impl Codec for () {
     fn codec_name() -> String {
@@ -104,6 +104,34 @@ impl<T: Codec, E: Codec> Codec for Result<T, E> {
             typ => return Err(format!("Unexpected Result variant: {}.", typ)),
         };
         Ok(result)
+    }
+}
+
+impl Codec64 for i64 {
+    fn codec_name() -> String {
+        "i64".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        i64::from_le_bytes(buf)
+    }
+}
+
+impl Codec64 for u64 {
+    fn codec_name() -> String {
+        "u64".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        u64::from_le_bytes(buf)
     }
 }
 

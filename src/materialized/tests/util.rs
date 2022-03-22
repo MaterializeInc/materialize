@@ -28,7 +28,7 @@ use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-use materialized::TlsMode;
+use materialized::{StorageConfig, TlsMode};
 
 lazy_static! {
     pub static ref KAFKA_ADDRS: mz_kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
@@ -152,6 +152,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
         data_directory,
+        storage: StorageConfig::Local,
         aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,

@@ -1294,21 +1294,21 @@ CREATE CLUSTER cluster SIZE 'small'
 ----
 CREATE CLUSTER cluster SIZE 'small'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small")))] })
 
 parse-statement
 CREATE CLUSTER cluster SIZE = 'small'
 ----
 CREATE CLUSTER cluster SIZE 'small'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size("small")] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small")))] })
 
 parse-statement
 CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
 ----
 CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual, Virtual, Size("small"), Virtual, Size("medium")] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual, Virtual, Size(Value(String("small"))), Virtual, Size(Value(String("medium")))] })
 
 parse-statement
 DROP CLUSTER cluster

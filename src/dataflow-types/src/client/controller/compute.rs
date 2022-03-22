@@ -29,7 +29,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use crate::client::{Client, Command, ComputeCommand, ComputeInstanceId, StorageCommand};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::GlobalId;
@@ -41,8 +41,11 @@ use super::ReadPolicy;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
+    pub(super) client: Box<dyn ComputeClient<T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
+    /// Currently outstanding peeks: identifiers and timestamps.
+    pub(super) peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
 }
 
 /// An immutable controller for a compute instance.
@@ -55,11 +58,10 @@ pub struct ComputeController<'a, T> {
 
 /// A mutable controller for a compute instance.
 #[derive(Debug)]
-pub struct ComputeControllerMut<'a, C, T> {
+pub struct ComputeControllerMut<'a, T> {
     pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a mut ComputeControllerState<T>,
     pub(super) storage: &'a mut super::StorageControllerState<T>,
-    pub(super) client: &'a mut C,
 }
 
 /// Errors arising from compute commands.
@@ -85,8 +87,11 @@ impl From<anyhow::Error> for ComputeError {
     }
 }
 
-impl<T: Timestamp + Lattice> ComputeControllerState<T> {
-    pub(super) fn new(logging: &Option<LoggingConfig>) -> Self {
+impl<T> ComputeControllerState<T>
+where
+    T: Timestamp + Lattice,
+{
+    pub(super) fn new(client: Box<dyn ComputeClient<T>>, logging: &Option<LoggingConfig>) -> Self {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -100,12 +105,19 @@ impl<T: Timestamp + Lattice> ComputeControllerState<T> {
                 );
             }
         }
-        Self { collections }
+        Self {
+            client,
+            collections,
+            peeks: Default::default(),
+        }
     }
 }
 
 // Public interface
-impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
+impl<'a, T> ComputeController<'a, T>
+where
+    T: Timestamp + Lattice,
+{
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
     pub fn storage(&self) -> crate::client::controller::StorageController<T> {
@@ -123,7 +135,10 @@ impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
     }
 }
 
-impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
+impl<'a, T> ComputeControllerMut<'a, T>
+where
+    T: Timestamp + Lattice,
+{
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
@@ -135,10 +150,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(&mut self) -> crate::client::controller::StorageControllerMut<C, T> {
+    pub fn storage_mut(&mut self) -> crate::client::controller::StorageControllerMut<T> {
         crate::client::controller::StorageControllerMut {
             storage: &mut self.storage,
-            client: &mut self.client,
         }
     }
 
@@ -245,27 +259,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             }
         }
 
-        let sources = dataflows
-            .iter()
-            .map(|dataflow| {
-                (
-                    dataflow.debug_name.clone(),
-                    dataflow.id,
-                    dataflow.as_of.clone(),
-                    dataflow.source_imports.clone(),
-                )
-            })
-            .collect();
-
-        self.client
-            .send(Command::Storage(StorageCommand::RenderSources(sources)))
-            .await
-            .expect("Storage command failed; unrecoverable");
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::CreateDataflows(dataflows),
-                self.instance,
-            ))
+        self.compute
+            .client
+            .send(ComputeCommand::CreateDataflows(dataflows))
             .await
             .expect("Compute command failed; unrecoverable");
 
@@ -311,29 +307,33 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             Err(ComputeError::PeekSinceViolation(id))?;
         }
 
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::Peek {
-                    id,
-                    key,
-                    uuid,
-                    timestamp,
-                    finishing,
-                    map_filter_project,
-                },
-                self.instance,
-            ))
+        // Install a compaction hold on `id` at `timestamp`.
+        let mut updates = BTreeMap::new();
+        updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
+        self.update_read_capabilities(&mut updates).await;
+        self.compute.peeks.insert(uuid, (id, timestamp.clone()));
+
+        self.compute
+            .client
+            .send(ComputeCommand::Peek {
+                id,
+                key,
+                uuid,
+                timestamp,
+                finishing,
+                map_filter_project,
+            })
             .await
             .map_err(ComputeError::from)
     }
     /// Cancels existing peek requests.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        let uuids = uuids.clone();
-        self.client
-            .send(Command::Compute(
-                ComputeCommand::CancelPeeks { uuids },
-                self.instance,
-            ))
+        self.remove_peeks(uuids.iter().cloned()).await;
+        self.compute
+            .client
+            .send(ComputeCommand::CancelPeeks {
+                uuids: uuids.clone(),
+            })
             .await
             .map_err(ComputeError::from)
     }
@@ -395,7 +395,10 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
 }
 
 // Internal interface
-impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
+impl<'a, T> ComputeController<'a, T>
+where
+    T: Timestamp + Lattice,
+{
     /// Validate that a collection exists for all identifiers, and error if any do not.
     pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
@@ -405,7 +408,10 @@ impl<'a, T: Timestamp + Lattice> ComputeController<'a, T> {
     }
 }
 
-impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
+impl<'a, T> ComputeControllerMut<'a, T>
+where
+    T: Timestamp + Lattice,
+{
     /// Acquire a mutable reference to the collection state, should it exist.
     pub(super) fn collection_mut(
         &mut self,
@@ -503,11 +509,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
             }
         }
         if !compaction_commands.is_empty() {
-            self.client
-                .send(Command::Compute(
-                    ComputeCommand::AllowCompaction(compaction_commands),
-                    self.instance,
-                ))
+            self.compute
+                .client
+                .send(ComputeCommand::AllowCompaction(compaction_commands))
                 .await
                 .expect("Compute instance command failed; unrecoverable");
         }
@@ -518,6 +522,19 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> ComputeControllerMut<'a, C, T> {
                 .update_read_capabilities(&mut storage_todo)
                 .await;
         }
+    }
+    /// Removes a registered peek, unblocking compaction that might have waited on it.
+    pub(super) async fn remove_peeks(&mut self, peek_ids: impl IntoIterator<Item = uuid::Uuid>) {
+        let mut updates = peek_ids
+            .into_iter()
+            .flat_map(|uuid| {
+                self.compute
+                    .peeks
+                    .remove(&uuid)
+                    .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
+            })
+            .collect();
+        self.update_read_capabilities(&mut updates).await;
     }
 }
 

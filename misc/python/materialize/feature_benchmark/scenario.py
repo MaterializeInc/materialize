@@ -13,6 +13,8 @@ from typing import Dict, List, Optional, Type, Union
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 
+BenchmarkingSequence = Union[MeasurementSource, List[Union[Action, MeasurementSource]]]
+
 
 class RootScenario:
     SCALE: float = 6
@@ -31,7 +33,7 @@ class RootScenario:
     def before(self) -> Action:
         return DummyAction()
 
-    def benchmark(self) -> MeasurementSource:
+    def benchmark(self) -> BenchmarkingSequence:
         assert False
 
     def name(self) -> str:

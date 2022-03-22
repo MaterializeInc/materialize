@@ -28,8 +28,6 @@ use mz_ore::now::SYSTEM_TIME;
 enum RuntimeType {
     /// Host only the compute portion of the dataflow.
     Compute,
-    /// Host host storage and compute portions of the dataflow.
-    LegacyMultiplexed,
     /// Host only the storage portion of the dataflow.
     Storage,
 }
@@ -42,7 +40,7 @@ struct Args {
         long,
         env = "DATAFLOWD_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "0.0.0.0:6876"
+        default_value = "127.0.0.1:6876"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
@@ -82,7 +80,7 @@ struct Args {
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
     /// The type of runtime hosted by this dataflowd
-    #[clap(arg_enum, long, default_value = "legacy-multiplexed")]
+    #[clap(arg_enum, long, required = true)]
     runtime: RuntimeType,
     /// The address of the storage server to bind or connect to.
     #[clap(
@@ -137,10 +135,7 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
         }
 
         assert!(
-            matches!(
-                args.runtime,
-                RuntimeType::LegacyMultiplexed | RuntimeType::Compute
-            ),
+            matches!(args.runtime, RuntimeType::Compute),
             "Storage runtime with TCP boundary doesn't yet horizontally scaled Timely"
         );
         assert_eq!(processes, addresses.len());
@@ -199,8 +194,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .unwrap_or(AwsExternalId::NotProvided),
     };
 
-    let (_server, mut client) = match args.runtime {
-        RuntimeType::LegacyMultiplexed => mz_dataflow::serve(config),
+    let (_server, mut client): (_, Box<dyn Client + Send>) = match args.runtime {
         RuntimeType::Compute => {
             assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
             let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
@@ -215,12 +209,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            mz_dataflow::serve_boundary(config, move |index| {
+            let (server, client) = mz_dataflow::serve_boundary(config, move |index| {
                 boundary.lock().unwrap()[index % workers].take().unwrap()
-            })
+            })?;
+            (server, Box::new(client))
         }
         RuntimeType::Storage => {
-            let (storage_server, _thread) =
+            let (storage_server, request_rx, _thread) =
                 mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
             let boundary = (0..config.workers)
                 .into_iter()
@@ -228,23 +223,30 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            mz_dataflow::serve_boundary(config, move |index| {
-                boundary.lock().unwrap()[index % workers].take().unwrap()
-            })
+            let (server, client) =
+                mz_dataflow::serve_boundary_requests(config, request_rx, move |index| {
+                    boundary.lock().unwrap()[index % workers].take().unwrap()
+                })?;
+            (server, Box::new(client))
         }
-    }?;
+    };
 
     let (conn, _addr) = listener.accept().await?;
     info!("coordinator connection accepted");
 
-    let mut conn = mz_dataflowd::tcp::framed_server(conn);
+    let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
     loop {
         select! {
             cmd = conn.try_next() => match cmd? {
                 None => break,
-                Some(cmd) => client.send(cmd).await.unwrap(),
+                Some(cmd) => { client.send(cmd).await.unwrap(); },
             },
-            Some(response) = client.recv() => conn.send(response).await?,
+            res = client.recv() => {
+                match res.unwrap() {
+                    None => break,
+                    Some(response) => { conn.send(response).await?; }
+                }
+            }
         }
     }
 

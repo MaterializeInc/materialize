@@ -29,25 +29,23 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::{
-    postgres_source::PostgresSourceDetails,
-    sinks::{
-        AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-        KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
-    },
-    sources::{
-        encoding::{
-            included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding,
-            DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
-        },
-        provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-        DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-        KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-        PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
-        UnplannedSourceEnvelope, UpsertStyle,
-    },
+use mz_dataflow_types::postgres_source::PostgresSourceDetails;
+use mz_dataflow_types::sinks::{
+    AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
+    KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
 };
-use mz_expr::{CollectionPlan, GlobalId};
+use mz_dataflow_types::sources::encoding::{
+    included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding, DataEncoding,
+    ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+};
+use mz_dataflow_types::sources::{
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+    DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
+};
+use mz_expr::{CollectionPlan, GlobalId, Id};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
@@ -61,6 +59,7 @@ use mz_sql_parser::ast::{
 };
 
 use crate::ast::display::AstDisplay;
+use crate::ast::visit::Visit;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ClusterOption,
     ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
@@ -77,7 +76,7 @@ use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetai
 use crate::kafka_util;
 use crate::names::{
     resolve_names_data_type, resolve_object_name, Aug, DatabaseSpecifier, FullName,
-    ResolvedClusterName, ResolvedDataType, SchemaName,
+    ResolvedClusterName, ResolvedDataType, ResolvedObjectName, SchemaName,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -86,12 +85,12 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source, Table, Type,
-    View,
+    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, ComputeInstanceIntrospectionConfig,
+    CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params,
+    Plan, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -158,6 +157,7 @@ pub fn describe_create_table(
 pub fn plan_create_table(
     scx: &StatementContext,
     stmt: CreateTableStatement<Aug>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateTableStatement {
         name,
@@ -185,7 +185,6 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
-    let mut depends_on = Vec::new();
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
@@ -199,8 +198,7 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    let (_, expr_depends_on) = query::plan_default_expr(scx, expr, &ty)?;
-                    depends_on.extend(expr_depends_on);
+                    let _ = query::plan_default_expr(scx, expr, &ty)?;
                     default = expr.clone();
                 }
                 ColumnOption::Unique { is_primary } => {
@@ -216,7 +214,6 @@ pub fn plan_create_table(
         }
         column_types.push(ty.nullable(nullable));
         defaults.push(default);
-        depends_on.extend(aug_data_type.get_ids());
     }
 
     for constraint in constraints {
@@ -271,6 +268,7 @@ pub fn plan_create_table(
     let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
+    let depends_on = depends_on.into_iter().collect();
     let table = Table {
         create_sql,
         desc,
@@ -1289,6 +1287,7 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<(FullName, View), anyhow::Error> {
     let create_sql = normalize::create_statement(
         scx,
@@ -1314,7 +1313,6 @@ pub fn plan_view(
         mut expr,
         mut desc,
         finishing,
-        depends_on,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(&params)?;
@@ -1335,6 +1333,7 @@ pub fn plan_view(
         bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
+    let depends_on = depends_on.into_iter().collect();
     let view = View {
         create_sql,
         expr: relation_expr,
@@ -1350,6 +1349,7 @@ pub fn plan_create_view(
     scx: &StatementContext,
     mut stmt: CreateViewStatement<Aug>,
     params: &Params,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateViewStatement {
         temporary,
@@ -1357,7 +1357,7 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let (name, view) = plan_view(scx, definition, params, *temporary)?;
+    let (name, view) = plan_view(scx, definition, params, *temporary, depends_on)?;
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
             if view.expr.depends_on().contains(&item.id()) {
@@ -1403,7 +1403,16 @@ pub fn plan_create_views(
         CreateViewsDefinitions::Literal(view_definitions) => {
             let mut views = Vec::with_capacity(view_definitions.len());
             for mut definition in view_definitions {
-                let view = plan_view(scx, &mut definition, &Params::empty(), temporary)?;
+                let mut depends_on_collector = DependsOnCollector::new();
+                depends_on_collector.visit_view_definition(&definition);
+                let depends_on = depends_on_collector.get_ids().clone();
+                let view = plan_view(
+                    scx,
+                    &mut definition,
+                    &Params::empty(),
+                    temporary,
+                    depends_on,
+                )?;
                 views.push(view);
             }
             Ok(Plan::CreateViews(CreateViewsPlan {
@@ -1556,7 +1565,16 @@ pub fn plan_create_views(
                             with_options: vec![],
                             query,
                         };
-                        views.push(plan_view(scx, &mut viewdef, &Params::empty(), temporary)?);
+                        let mut depends_on_collector = DependsOnCollector::new();
+                        depends_on_collector.visit_view_definition(&viewdef);
+                        let depends_on = depends_on_collector.get_ids().clone();
+                        views.push(plan_view(
+                            scx,
+                            &mut viewdef,
+                            &Params::empty(),
+                            temporary,
+                            depends_on,
+                        )?);
                     }
                     Ok(Plan::CreateViews(CreateViewsPlan {
                         views,
@@ -1919,6 +1937,7 @@ pub fn describe_create_sink(
 pub fn plan_create_sink(
     scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
@@ -2035,9 +2054,6 @@ pub fn plan_create_sink(
         bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
-    let mut depends_on = vec![from.id()];
-    depends_on.extend(from.uses());
-
     let root_user_dependencies = get_root_dependencies(scx, &depends_on);
 
     let connector_builder = match connector {
@@ -2065,6 +2081,7 @@ pub fn plan_create_sink(
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
 
+    let depends_on = depends_on.into_iter().collect();
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
@@ -2132,7 +2149,7 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> anyhow::
 /// dependencies. Those are the root dependencies.
 fn get_root_dependencies<'a>(
     scx: &'a StatementContext,
-    depends_on: &[GlobalId],
+    depends_on: &HashSet<GlobalId>,
 ) -> Vec<&'a dyn CatalogItem> {
     let mut result = Vec::new();
     let mut work_queue: Vec<&GlobalId> = Vec::new();
@@ -2167,6 +2184,7 @@ pub fn describe_create_index(
 pub fn plan_create_index(
     scx: &StatementContext,
     mut stmt: CreateIndexStatement<Aug>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
         name,
@@ -2208,7 +2226,7 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let (keys, exprs_depend_on) = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
+    let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         FullName {
@@ -2251,15 +2269,13 @@ pub fn plan_create_index(
     };
     *in_cluster = Some(ResolvedClusterName(compute_instance));
 
-    let mut depends_on = vec![on.id()];
-    depends_on.extend(exprs_depend_on);
-
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     stmt.on_name.print_id = false;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    let depends_on = depends_on.into_iter().collect();
 
     Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
@@ -2386,10 +2402,13 @@ pub fn plan_create_type(
 
     let inner = match as_type {
         CreateTypeAs::List { .. } => CatalogType::List {
+            // works because you can't create a nested List without intermediate custom types
             element_id: *depends_on.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map { .. } => {
+            // works because you can't create a nested Map without intermediate custom types
             let key_id = *depends_on.get(0).expect("key");
+            let value_id = *depends_on.get(1).expect("value");
             let entry = scx.catalog.get_item_by_id(&key_id);
             match entry.type_details() {
                 Some(CatalogTypeDetails {
@@ -2400,10 +2419,7 @@ pub fn plan_create_type(
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
 
-            CatalogType::Map {
-                key_id,
-                value_id: *depends_on.get(1).expect("value"),
-            }
+            CatalogType::Map { key_id, value_id }
         }
         CreateTypeAs::Record { .. } => CatalogType::Record {
             fields: record_fields,
@@ -2483,7 +2499,9 @@ pub fn plan_create_cluster(
     scx.require_experimental_mode("CREATE CLUSTER")?;
 
     let mut is_virtual = false;
-    let mut size = None;
+    let mut remote_hosts = None;
+    let mut introspection_debugging = None;
+    let mut introspection_granularity = None;
 
     for option in options {
         match option {
@@ -2493,19 +2511,57 @@ pub fn plan_create_cluster(
                 }
                 is_virtual = true;
             }
-            ClusterOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
+            ClusterOption::Remote(hosts) => {
+                if remote_hosts.is_some() {
+                    bail!("REMOTE specified more than once");
                 }
-                size = Some(s);
+                let mut out = vec![];
+                for host in hosts {
+                    out.push(with_option_type!(Some(host), String));
+                }
+                remote_hosts = Some(out);
+            }
+            ClusterOption::IntrospectionDebugging(enabled) => {
+                if introspection_debugging.is_some() {
+                    bail!("INTROSPECTION DEBUGGING specified more than once");
+                }
+                introspection_debugging = Some(with_option_type!(Some(enabled), bool));
+            }
+            ClusterOption::IntrospectionGranularity(interval) => {
+                if introspection_granularity.is_some() {
+                    bail!("INTROSPECTION GRANULARITY specified more than once");
+                }
+                introspection_granularity = Some(with_option_type!(Some(interval), Interval));
+            }
+            ClusterOption::Size(_) => {
+                bail_unsupported!("CREATE CLUSTER ... SIZE");
             }
         }
     }
 
-    let config = match (is_virtual, size) {
-        (false, Some(size)) => ComputeInstanceConfig::Real { size },
-        (false, None) | (true, None) => ComputeInstanceConfig::Virtual,
-        (true, Some(_)) => bail!("VIRTUAL and SIZE options cannot be specified together"),
+    let introspection = match (introspection_debugging, introspection_granularity) {
+        (None | Some(false), None) => None,
+        (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
+            debugging: debugging.unwrap_or(false),
+            granularity: granularity.duration()?,
+        }),
+        (Some(true), None) => {
+            bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
+        }
+    };
+
+    let config = match (is_virtual, remote_hosts) {
+        (false, Some(hosts)) => ComputeInstanceConfig::Remote {
+            hosts,
+            introspection,
+        },
+        (false, None) | (true, None) => {
+            if introspection.is_some() {
+                bail!("VIRTUAL clusters do not support configurable introspection");
+            }
+            ComputeInstanceConfig::Virtual
+        }
+        (true, Some(_)) => bail!("VIRTUAL and REMOTE options cannot be specified together"),
     };
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
@@ -2701,9 +2757,6 @@ pub fn plan_drop_cluster(
         } else {
             bail!("invalid cluster name {}", name.to_string().quoted())
         };
-        if name.as_str() == scx.catalog.active_compute_instance() {
-            bail!("active cluster cannot be dropped");
-        }
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
                 if !instance.indexes().is_empty() && !cascade {
@@ -2936,4 +2989,31 @@ pub fn plan_alter_secret(
     }: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     bail_unsupported!("ALTER SECRET")
+}
+
+struct DependsOnCollector {
+    ids: HashSet<GlobalId>,
+}
+
+impl<'a, 'ast> Visit<'ast, Aug> for DependsOnCollector {
+    fn visit_object_name(&mut self, name: &ResolvedObjectName) {
+        if let Id::Global(id) = name.id {
+            self.ids.insert(id);
+        }
+    }
+
+    fn visit_data_type(&mut self, typ: &ResolvedDataType) {
+        self.ids.extend(typ.get_ids().iter());
+    }
+}
+
+impl DependsOnCollector {
+    fn new() -> Self {
+        DependsOnCollector {
+            ids: HashSet::default(),
+        }
+    }
+    fn get_ids(&self) -> &HashSet<GlobalId> {
+        &self.ids
+    }
 }

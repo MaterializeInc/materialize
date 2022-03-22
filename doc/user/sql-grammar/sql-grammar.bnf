@@ -33,8 +33,8 @@ create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name
+        'INDEX' index_name 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX ON' obj_name ('USING' method)?
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=

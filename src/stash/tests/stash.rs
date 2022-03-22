@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use tempfile::NamedTempFile;
+use timely::progress::Antichain;
 
 use mz_stash::Stash;
-use mz_timely_util::antichain_ext::Max1Antichain;
 
 #[test]
 fn test_stash() -> Result<(), anyhow::Error> {
@@ -75,8 +75,8 @@ fn test_stash() -> Result<(), anyhow::Error> {
         (("widgets".into(), "1".into()), 3, 1),
         (("widgets".into(), "1".into()), 4, 1),
     ])?;
-    orders.seal(Some(3))?;
-    orders.compact(Some(3))?;
+    orders.seal(Antichain::from_elem(3).borrow())?;
+    orders.compact(Antichain::from_elem(3).borrow())?;
     assert_eq!(
         orders.iter()?.collect::<Vec<_>>(),
         &[
@@ -97,15 +97,24 @@ fn test_stash() -> Result<(), anyhow::Error> {
 
     // Test invalid seals, compactions, and updates.
     assert_eq!(
-        orders.seal(Some(2)).unwrap_err().to_string(),
+        orders
+            .seal(Antichain::from_elem(2).borrow())
+            .unwrap_err()
+            .to_string(),
         "stash error: seal request {2} is less than the current upper frontier {3}",
     );
     assert_eq!(
-        orders.compact(Some(2)).unwrap_err().to_string(),
+        orders
+            .compact(Antichain::from_elem(2).borrow())
+            .unwrap_err()
+            .to_string(),
         "stash error: compact request {2} is less than the current since frontier {3}",
     );
     assert_eq!(
-        orders.compact(Some(4)).unwrap_err().to_string(),
+        orders
+            .compact(Antichain::from_elem(4).borrow())
+            .unwrap_err()
+            .to_string(),
         "stash error: compact request {4} is greater than the current upper frontier {3}",
     );
     assert_eq!(
@@ -117,8 +126,8 @@ fn test_stash() -> Result<(), anyhow::Error> {
     );
 
     // Test advancing since and upper to the empty frontier.
-    orders.seal(None)?;
-    orders.compact(None)?;
+    orders.seal(Antichain::new().borrow())?;
+    orders.compact(Antichain::new().borrow())?;
     assert_eq!(
         match orders.iter() {
             Ok(_) => panic!("call to iter unexpectedly succeeded"),
@@ -140,8 +149,8 @@ fn test_stash() -> Result<(), anyhow::Error> {
         other.iter()?.collect::<Vec<_>>(),
         &[(("foo".into(), "bar".into()), 1, 1)],
     );
-    assert_eq!(other.since()?, Max1Antichain::Singular(0),);
-    assert_eq!(other.upper()?, Max1Antichain::Singular(0),);
+    assert_eq!(other.since()?, Antichain::from_elem(0));
+    assert_eq!(other.upper()?, Antichain::from_elem(0));
 
     Ok(())
 }

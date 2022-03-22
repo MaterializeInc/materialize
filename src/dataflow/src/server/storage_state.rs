@@ -346,7 +346,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         &mut self,
         dataflows: Vec<(
             String,
-            GlobalId,
+            uuid::Uuid,
             Option<Antichain<Timestamp>>,
             BTreeMap<GlobalId, SourceInstanceDesc>,
         )>,

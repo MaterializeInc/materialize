@@ -20,11 +20,16 @@ use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use mz_ore::now::NowFn;
+use mz_ore::now::NOW_ZERO;
+use mz_ore::now::SYSTEM_TIME;
 use postgres::Row;
 use regex::Regex;
 use tempfile::NamedTempFile;
@@ -230,13 +235,24 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let config = util::Config::default().workers(2);
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
+    let now = {
+        let nowfn = Arc::clone(&nowfn);
+        NowFn::from(move || (nowfn.lock().unwrap())())
+    };
+    let config = util::Config::default().workers(2).with_now(now);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
+    // Now that the index (and its since) are initialized to 0, we can resume using
+    // system time. Do a read to bump the oracle's state so it will read from the
+    // system clock during inserts below.
+    *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
+    client_writes.batch_execute("SELECT * FROM t")?;
     client_reads.batch_execute(
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
@@ -1033,14 +1049,17 @@ fn test_linearizable() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Test EXPLAIN TIMESTAMP. This cannot be in testdrive because it needs to do
-// a regex replacement of both timestamps and globalids, but testdrive only
-// allows one replacement. We don't need to do the globalid replacement here
-// because this test starts its own server, so generated ids don't change.
+// Test EXPLAIN TIMESTAMP with tables. Mock time to verify initial table since
+// is now(), not 0.
 #[test]
-fn test_explain_timestamp() -> Result<(), Box<dyn Error>> {
+fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-    let config = util::Config::default();
+    let timestamp = Arc::new(Mutex::new(1_000));
+    let now = {
+        let timestamp = Arc::clone(&timestamp);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_re = Regex::new(r"\d{13}").unwrap();
@@ -1051,14 +1070,14 @@ fn test_explain_timestamp() -> Result<(), Box<dyn Error>> {
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(
         explain,
-        "     timestamp: <TIMESTAMP>
-         since:[            0]
+        "     timestamp:          1000
+         since:[         1000]
          upper:[            0]
      has table: true
- table read ts: <TIMESTAMP>
+ table read ts:          1000
 
 source materialize.public.t1 (u1, storage):
- read frontier:[            0]
+ read frontier:[         1000]
 write frontier:[            0]\n",
     );
 

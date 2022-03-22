@@ -12,3 +12,6 @@ Required reading for employed engineers.
 
 * Scalability! But at what COST?
   [[pdf](https://www.usenix.org/system/files/conference/hotos15/hotos15-paper-mcsherry.pdf)]
+
+* How to do distributed locking
+  [[web](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)]

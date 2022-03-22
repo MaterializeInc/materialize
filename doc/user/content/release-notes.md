@@ -19,6 +19,61 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
+{{% version-header v0.23.0 %}}
+
+- **Breaking change.** Change the default [listen address](/cli/#listen-address)
+  to `127.0.0.1:6875`.
+
+  Previously, Materialize would accept HTTP and SQL connections from any machine
+  on the network by default; now it accepts HTTP and SQL connections from only
+  the local machine by default. To return to the old behavior, specify the
+  command line flag `--listen-addr=0.0.0.0:6875`.
+
+  The `materialized` [Docker image](/install/#docker) continues to use a
+  listen address of `0.0.0.0:6875` by default.
+
+- Improve PostgreSQL compatibility:
+
+  - Add the `pg_collation`, `pg_inherits`, and `pg_policy` relations to the
+    [`pg_catalog`](/sql/system-catalog#pg_catalog) schema.
+
+  - Add several columns to the existing `pg_attribute`, `pg_class`, `pg_index`,
+    and `pg_type` relations in the
+    [`pg_catalog`](/sql/system-catalog#pg_catalog) schema.
+
+  - Add the [`pg_get_indexdef`](/sql/functions/#pg_get_indexdef) function.
+
+  - Change the [`pg_get_constraintdef`](/sql/functions/#pg_get_constraintdef)
+    function to always return `NULL` instead of raising an error.
+
+  - Add a `USING <method>` clause to [`CREATE INDEX`], with
+    [`arrangement`](/overview/arrangements) as the only valid method.
+
+  Together these changes enable support for [Apache Superset] and the
+  `\d <object>` command in the  [psql terminal](/connect/cli).
+
+- Support calling [`date_trunc`](/sql/functions/#date_trunc) with
+  [`interval`](/sql/types/interval) values {{% gh 9871 %}}.
+
+- Remove the mandatory default index on [tables](/sql/create-table/#memory-usage).
+
+- Fix a crash when calling [`array_to_string`](/sql/functions/#array_to_string)
+  with an empty array {{% gh 11073 %}}.
+
+- Fix an error when calling [`string_agg`](/sql/functions/#string_agg) with
+  all `NULL` inputs {{% gh 11139 %}}.
+
+- Include information about the experimental
+  [cluster feature](/overview/api-components/#clusters) in
+  [`SHOW INDEX`](/sql/show-index) and [`SHOW SINKS`](/sql/show-sinks).
+
+- Improve recovery of [Postgres sources](/sql/create-source/postgres) when
+  errors occur during initial data loading {{% gh 10938 %}}.
+
+- Make [`CREATE VIEWS`](/sql/create-views) on a [Postgres
+  source](/sql/create-source/postgres) resilient to changes to the upstream
+  publication that are made after the the source is created. {{% gh 11083 %}}
+
 {{% version-header v0.22.0 %}}
 
 - **Breaking change.** Standardize handling of the following [unmaterializable
@@ -2057,6 +2112,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`time`]: /sql/types/time
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamptz
+[Apache Superset]: https://superset.apache.org
 [Postgres sources]: /sql/create-source/postgres
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4

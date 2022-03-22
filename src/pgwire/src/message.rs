@@ -367,6 +367,7 @@ impl ErrorResponse {
             CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::AutomaticTimestampFailure { .. } => SqlState::INTERNAL_ERROR,
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
