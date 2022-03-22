@@ -190,33 +190,31 @@ class Update(DML):
 class UpdateMultiNoIndex(DML):
     """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
 
-    SCALE = 5
+    def before(self) -> Action:
+        # Due to exterme variability in the results, we have no option but to drop and re-create
+        # the table prior to each measurement
+        return TdAction(
+            f"""
+> DROP TABLE IF EXISTS t1;
 
-    def init(self) -> List[Action]:
-        return [
-            self.table_ten(),
-            TdAction(
-                f"""
 > CREATE TABLE t1 (f1 BIGINT);
 
-> INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
+> INSERT INTO t1 SELECT * FROM generate_series(0, {self.n()})
 """
-            ),
-        ]
+        )
 
     def benchmark(self) -> MeasurementSource:
-        updates = 10 * f"> UPDATE t1 SET f1 = f1 + {self.n()}\n"
         return Td(
             f"""
 > SELECT 1
   /* A */
 1
 
-{updates}
+> UPDATE t1 SET f1 = f1 + {self.n()}
 
-> SELECT 1
+> SELECT COUNT(*) FROM t1 WHERE f1 > {self.n()}
   /* B */
-1
+{self.n()}
 """
         )
 
