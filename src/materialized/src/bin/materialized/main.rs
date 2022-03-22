@@ -123,7 +123,7 @@ pub struct Args {
     /// variety of deployments, but setting this flag to true to opt out of the
     /// test is always safe.
     #[clap(long)]
-    disable_persistent_system_tables_test: bool,
+    disable_persistent_system_tables_test: Option<bool>,
 
     /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
     ///
@@ -681,7 +681,8 @@ dataflow workers: {workers}",
         } else {
             false
         };
-        let mut system_table_enabled = !args.disable_persistent_system_tables_test;
+        let system_table_disabled = args.disable_persistent_system_tables_test.unwrap_or(true);
+        let mut system_table_enabled = !system_table_disabled;
         if system_table_enabled && args.logical_compaction_window.is_none() {
             ::tracing::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
             system_table_enabled = false;

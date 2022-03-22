@@ -19,7 +19,7 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-persistent-system-tables-test"
+mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-persistent-system-tables-test=true"
 
 mz_default = Materialized(options=mz_options)
 
