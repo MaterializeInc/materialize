@@ -139,6 +139,8 @@ impl fmt::Display for UnsupportedBoxType {
 #[derive(Debug, Clone)]
 pub struct UnsupportedQuantifierType {
     pub(crate) quantifier_type: QuantifierType,
+    /// Context where error is being thrown.
+    pub(crate) context: String,
 }
 
 impl From<UnsupportedQuantifierType> for QGMError {
@@ -151,8 +153,8 @@ impl fmt::Display for UnsupportedQuantifierType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Unsupported quantifier type in MIR conversion: {}.",
-            self.quantifier_type
+            "Unsupported quantifier type in {}: {}.",
+            self.context, self.quantifier_type
         )
     }
 }
@@ -160,6 +162,9 @@ impl fmt::Display for UnsupportedQuantifierType {
 #[derive(Debug, Clone)]
 pub struct UnsupportedBoxScalarExpr {
     pub(crate) scalar: BoxScalarExpr,
+    /// Context where error is being thrown.
+    pub(crate) context: String,
+    pub(crate) explanation: Option<String>,
 }
 
 impl From<UnsupportedBoxScalarExpr> for QGMError {
@@ -172,9 +177,13 @@ impl fmt::Display for UnsupportedBoxScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Unsupported QGM scalar expression in MIR conversion: {}.",
-            self.scalar
-        )
+            "Unsupported QGM scalar expression in {}: {}.",
+            self.context, self.scalar
+        )?;
+        if let Some(explanation) = &self.explanation {
+            write!(f, " Explanation: {}", explanation)?;
+        }
+        Ok(())
     }
 }
 

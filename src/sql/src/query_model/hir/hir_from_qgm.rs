@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use crate::plan::expr::{ColumnRef, JoinKind};
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 use crate::query_model::attribute::relation_type::RelationType as BoxRelationType;
+use crate::query_model::error::*;
 use crate::query_model::model::*;
 use crate::query_model::{BoxId, Model, QGMError, QuantifierId};
 
@@ -24,8 +25,9 @@ use itertools::Itertools;
 
 use mz_ore::id_gen::IdGen;
 
-impl From<Model> for HirRelationExpr {
-    fn from(model: Model) -> Self {
+impl TryFrom<Model> for HirRelationExpr {
+    type Error = QGMError;
+    fn try_from(model: Model) -> Result<Self, Self::Error> {
         FromModel::default().generate(model)
     }
 }
@@ -56,7 +58,7 @@ struct ColumnMap {
 }
 
 impl FromModel {
-    fn generate(mut self, mut model: Model) -> HirRelationExpr {
+    fn generate(mut self, mut model: Model) -> Result<HirRelationExpr, QGMError> {
         // Derive the RelationType of each box.
         use crate::query_model::attribute::core::{Attribute, RequiredAttributes};
         let attributes = HashSet::from_iter(std::iter::once(
@@ -66,16 +68,13 @@ impl FromModel {
         RequiredAttributes::from(attributes).derive(&mut model, root);
 
         // Convert QGM to HIR.
-        let _ = model.try_visit_pre_post(
+        model.try_visit_pre_post(
             &mut |_, _| -> Result<(), QGMError> {
                 // TODO: add to the context stack
                 Ok(())
             },
-            &mut |model, box_id| -> Result<(), QGMError> {
-                self.convert_subgraph(model, box_id);
-                Ok(())
-            },
-        );
+            &mut |model, box_id| -> Result<(), QGMError> { self.convert_subgraph(model, box_id) },
+        )?;
 
         debug_assert!(self.converted.len() == 1);
         // Retrieve the HIR and put `let`s around it.
@@ -90,7 +89,7 @@ impl FromModel {
                 }
             }
         }
-        result
+        Ok(result)
     }
 
     /// Convert subgraph rooted at `box_id` to [HirRelationExpr].
@@ -98,11 +97,11 @@ impl FromModel {
     /// If the box corresponding to `box_id` has multiple ranging quantifiers,
     /// the [HirRelationExpr] will be in `self.lets`, and it can be looked up in
     /// `self.common_subgraphs`. Otherwise, it will be pushed to `self.converted`.
-    fn convert_subgraph(&mut self, model: &Model, box_id: &BoxId) {
+    fn convert_subgraph(&mut self, model: &Model, box_id: &BoxId) -> Result<(), QGMError> {
         let r#box = model.get_box(*box_id);
         if self.common_subgraphs.get(&box_id).is_some() {
             // Subgraph has already been converted.
-            return;
+            return Ok(());
         }
         let hir = match &r#box.box_type {
             BoxType::Get(Get { id, unique_keys }) => {
@@ -124,19 +123,24 @@ impl FromModel {
                         row.iter()
                             .map(|expr| {
                                 if let BoxScalarExpr::Literal(datum, _) = expr {
-                                    datum.unpack_first()
+                                    Ok(datum.unpack_first())
                                 } else {
-                                    // TODO: the validator should make this branch unreachable.
-                                    panic!("expected all scalars in Values BoxType to be literals");
+                                    // TODO: The validator should make this branch
+                                    // unreachable.
+                                    Err(QGMError::from(UnsupportedBoxScalarExpr {
+                                        context: "HIR conversion".to_string(),
+                                        scalar: expr.clone(),
+                                        explanation: Some("Only literal expressions are supported in Values boxes.".to_string())
+                                    }))
                                 }
                             })
-                            .collect_vec()
+                            .try_collect()
                     })
-                    .collect_vec(),
+                    .try_collect()?,
                 mz_repr::RelationType::new(r#box.attributes.get::<BoxRelationType>().to_owned()),
             ),
             BoxType::Select(select) => {
-                let (rels, scalars) = self.convert_quantifiers(&r#box);
+                let (rels, scalars) = self.convert_quantifiers(&r#box)?;
                 let (join_q_ids, mut join_inputs): (Vec<_>, Vec<_>) = rels.into_iter().unzip();
                 let (map_q_ids, maps): (Vec<_>, Vec<_>) = scalars.into_iter().unzip();
 
@@ -186,7 +190,7 @@ impl FromModel {
                 result
             }
             BoxType::OuterJoin(outer_join) => {
-                let (mut rels, _) = self.convert_quantifiers(&r#box);
+                let (mut rels, _) = self.convert_quantifiers(&r#box)?;
                 let (_, left) = rels.pop().unwrap();
                 let (_, right) = rels.pop().unwrap();
                 let mut quantifier_iter = r#box.input_quantifiers();
@@ -246,6 +250,7 @@ impl FromModel {
         } else {
             self.converted.push(hir);
         }
+        Ok(())
     }
 
     /// Convert the quantifiers of `box` into [HirRelationExpr] and [HirScalarExpr].
@@ -255,10 +260,13 @@ impl FromModel {
     fn convert_quantifiers<'a>(
         &mut self,
         r#box: &BoundRef<'a, QueryBox>,
-    ) -> (
-        Vec<(QuantifierId, HirRelationExpr)>,
-        Vec<(QuantifierId, HirScalarExpr)>,
-    ) {
+    ) -> Result<
+        (
+            Vec<(QuantifierId, HirRelationExpr)>,
+            Vec<(QuantifierId, HirScalarExpr)>,
+        ),
+        QGMError,
+    > {
         let mut rels = Vec::new();
         let mut scalars = Vec::new();
         for q in r#box.input_quantifiers().rev() {
@@ -286,13 +294,16 @@ impl FromModel {
                 QuantifierType::Scalar => {
                     scalars.push((q.id, HirScalarExpr::Select(Box::new(inner_relation))))
                 }
-                QuantifierType::All => {
+                q @ QuantifierType::All => {
                     // TODO: Shouldn't QuantifierType::Any also exist?
-                    unimplemented!()
+                    return Err(QGMError::from(UnsupportedQuantifierType {
+                        quantifier_type: q.clone(),
+                        context: "HIR conversion".to_string(),
+                    }));
                 }
             }
         }
-        (rels, scalars)
+        Ok((rels, scalars))
     }
 
     /// Convert the projection of a box into a Map + Project around the

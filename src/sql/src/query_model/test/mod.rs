@@ -118,9 +118,9 @@ fn run_command(
             Err(err) => Err(err.to_string()),
         }
     } else if matches!(directive, Directive::RoundTrip) {
-        let hir = HirRelationExpr::from(model);
+        let hir = HirRelationExpr::try_from(model)?;
         let model2 = Model::try_from(hir.clone())?;
-        let hir2 = HirRelationExpr::from(model2);
+        let hir2 = HirRelationExpr::try_from(model2)?;
         if !hir.eq(&hir2) {
             Err(format!(
                 "HirRelationExpr is not same after round-trip.\nOld:\n{}\nNew:\n{}\n",
