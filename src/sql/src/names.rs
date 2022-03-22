@@ -490,7 +490,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let raw_name = match normalize::unresolved_object_name(raw_name) {
                     Ok(raw_name) => raw_name,
                     Err(e) => {
-                        self.status = Err(e);
+                        if self.status.is_ok() {
+                            self.status = Err(e);
+                        }
                         return error_response;
                     }
                 };
@@ -532,12 +534,16 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
-                        self.status = Err(e.into());
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
                         return error_response;
                     }
                 };
                 if self.catalog.try_get_item_by_id(&gid).is_none() {
-                    self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                    }
                     return error_response;
                 }
                 self.ids.insert(gid.clone());
