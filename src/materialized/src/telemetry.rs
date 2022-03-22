@@ -87,6 +87,8 @@ pub async fn report_loop(config: Config) {
 // telemetry docs in doc/user/cli/_index.md#telemetry accordingly, and be sure
 // the data is not identifiable.
 fn make_telemetry_query(config: &Config) -> String {
+    let architecture = std::env::consts::ARCH;
+    let os = std::env::consts::OS;
     format!("
         SELECT jsonb_build_object(
             'version', mz_version(),
@@ -94,6 +96,8 @@ fn make_telemetry_query(config: &Config) -> String {
                 'session_id', mz_internal.mz_session_id(),
                 'uptime_seconds', extract(epoch FROM mz_uptime()),
                 'num_workers', {workers},
+                'architecture', '{architecture}',
+                'os', '{os}',
                 'sources', (
                     SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
                     FROM (SELECT connector_type, count(*) FROM mz_sources WHERE id LIKE 'u%' GROUP BY connector_type)
