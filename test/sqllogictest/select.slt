@@ -23,4 +23,3 @@ SELECT * FROM foo
 # over qualified objects should return an error
 query error qualified name did not have between 1 and 3 components
 SELECT * FROM universe.db.schema.foo
-

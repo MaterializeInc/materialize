@@ -490,7 +490,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let raw_name = match normalize::unresolved_object_name(raw_name) {
                     Ok(raw_name) => raw_name,
                     Err(e) => {
-                        self.status = Err(e.into());
+                        self.status = Err(e);
                         return error_response;
                     }
                 };
