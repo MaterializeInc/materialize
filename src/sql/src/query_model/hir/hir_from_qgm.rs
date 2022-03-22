@@ -145,6 +145,7 @@ impl FromModel {
                 let (map_q_ids, maps): (Vec<_>, Vec<_>) = scalars.into_iter().unzip();
 
                 let mut result = if let Some(first) = join_inputs.pop() {
+                    // TODO (#11375): determine if this situation should be allowable.
                     first
                 } else {
                     HirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::new(vec![]))
@@ -162,10 +163,7 @@ impl FromModel {
                     result = result.map(maps);
                 }
                 let column_map = ColumnMap::new(
-                    join_q_ids
-                        .into_iter()
-                        .rev()
-                        .chain(map_q_ids.into_iter().rev()),
+                    Iterator::chain(join_q_ids.into_iter().rev(), map_q_ids.into_iter().rev()),
                     model,
                 );
                 if !select.predicates.is_empty() {
@@ -295,7 +293,6 @@ impl FromModel {
                     scalars.push((q.id, HirScalarExpr::Select(Box::new(inner_relation))))
                 }
                 q @ QuantifierType::All => {
-                    // TODO: Shouldn't QuantifierType::Any also exist?
                     return Err(QGMError::from(UnsupportedQuantifierType {
                         quantifier_type: q.clone(),
                         context: "HIR conversion".to_string(),
@@ -316,7 +313,6 @@ impl FromModel {
     ) -> HirRelationExpr {
         let mut map = Vec::new();
         let mut project = Vec::new();
-        let mut total_columns = column_map.arity();
 
         for column in &r#box.columns {
             let hir_scalar = self.convert_scalar(&column.expr, column_map);
@@ -324,9 +320,8 @@ impl FromModel {
                 // We can skip making a copy of the column.
                 project.push(column);
             } else {
+                project.push(column_map.arity() + map.len());
                 map.push(hir_scalar);
-                project.push(total_columns);
-                total_columns += 1;
             }
         }
 
@@ -336,53 +331,69 @@ impl FromModel {
         result.project(project)
     }
 
-    /// Convert a BoxScalarExpr to [HirScalarExpr].
+    /// Convert a [BoxScalarExpr] to [HirScalarExpr].
     fn convert_scalar(&mut self, expr: &BoxScalarExpr, column_map: &ColumnMap) -> HirScalarExpr {
-        match expr {
+        let mut results = Vec::new();
+        expr.visit_post(&mut |e| match e {
             BoxScalarExpr::BaseColumn(BaseColumn { position, .. }) => {
-                HirScalarExpr::Column(ColumnRef {
+                results.push(HirScalarExpr::Column(ColumnRef {
                     level: 0,
                     column: *position,
-                })
+                }));
             }
             BoxScalarExpr::ColumnReference(ColumnReference {
                 quantifier_id,
                 position,
             }) => {
-                if let Some(column) = column_map.lookup_level_0_col(*quantifier_id, *position) {
+                let converted = if let Some(column) =
+                    column_map.lookup_level_0_col(*quantifier_id, *position)
+                {
                     HirScalarExpr::Column(ColumnRef { level: 0, column })
                 } else {
                     // TODO: calculate the level for a correlated subquery.
                     unimplemented!()
-                }
+                };
+                results.push(converted);
             }
-            BoxScalarExpr::Literal(row, typ) => HirScalarExpr::Literal(row.clone(), typ.clone()),
+            BoxScalarExpr::Literal(row, typ) => {
+                results.push(HirScalarExpr::Literal(row.clone(), typ.clone()))
+            }
             BoxScalarExpr::CallUnmaterializable(func) => {
-                HirScalarExpr::CallUnmaterializable(func.clone())
+                results.push(HirScalarExpr::CallUnmaterializable(func.clone()))
             }
-            BoxScalarExpr::CallUnary { func, expr } => HirScalarExpr::CallUnary {
-                func: func.clone(),
-                expr: Box::new(self.convert_scalar(expr, column_map)),
-            },
-            BoxScalarExpr::CallBinary { func, expr1, expr2 } => HirScalarExpr::CallBinary {
-                func: func.clone(),
-                expr1: Box::new(self.convert_scalar(expr1, column_map)),
-                expr2: Box::new(self.convert_scalar(expr2, column_map)),
-            },
-            BoxScalarExpr::CallVariadic { func, exprs } => HirScalarExpr::CallVariadic {
-                func: func.clone(),
-                exprs: exprs
-                    .iter()
-                    .map(|expr| self.convert_scalar(expr, column_map))
-                    .collect_vec(),
-            },
-            BoxScalarExpr::If { cond, then, els } => HirScalarExpr::If {
-                cond: Box::new(self.convert_scalar(cond, column_map)),
-                then: Box::new(self.convert_scalar(then, column_map)),
-                els: Box::new(self.convert_scalar(els, column_map)),
-            },
+            BoxScalarExpr::CallUnary { func, .. } => {
+                let expr = Box::new(results.pop().unwrap());
+                results.push(HirScalarExpr::CallUnary {
+                    func: func.clone(),
+                    expr,
+                })
+            }
+            BoxScalarExpr::CallBinary { func, .. } => {
+                let expr2 = Box::new(results.pop().unwrap());
+                let expr1 = Box::new(results.pop().unwrap());
+                results.push(HirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1,
+                    expr2,
+                })
+            }
+            BoxScalarExpr::CallVariadic { func, exprs } => {
+                let exprs = results.drain((results.len() - exprs.len())..).collect_vec();
+                results.push(HirScalarExpr::CallVariadic {
+                    func: func.clone(),
+                    exprs,
+                })
+            }
+            BoxScalarExpr::If { .. } => {
+                let els = Box::new(results.pop().unwrap());
+                let then = Box::new(results.pop().unwrap());
+                let cond = Box::new(results.pop().unwrap());
+                results.push(HirScalarExpr::If { els, then, cond });
+            }
             _ => unimplemented!(),
-        }
+        });
+        debug_assert!(results.len() == 1);
+        results.pop().unwrap()
     }
 }
 
@@ -393,11 +404,7 @@ impl ColumnMap {
     {
         let (quantifier_to_input, arities): (HashMap<_, _>, Vec<_>) = quantifiers
             .enumerate()
-            .map(|(index, q_id)| {
-                let q_input_box = model.get_quantifier(q_id).input_box;
-                let input_arity = model.get_box(q_input_box).columns.iter().count();
-                ((q_id, index), input_arity)
-            })
+            .map(|(index, q_id)| ((q_id, index), model.get_quantifier(q_id).output_arity()))
             .unzip();
         let input_mapper = mz_expr::JoinInputMapper::new_from_input_arities(arities.into_iter());
         Self {

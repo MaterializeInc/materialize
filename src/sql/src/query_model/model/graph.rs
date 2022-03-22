@@ -911,6 +911,20 @@ impl<'a> BoundRef<'a, Quantifier> {
     pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
         self.model.get_box(self.parent_box)
     }
+
+    /// The arity of the quantifier from the perspective of the parent box.
+    ///
+    /// Note that this is distinct from the arity of the input box of the
+    /// quantifier. For example, an existential subquery may have any number of
+    /// input columns, but its output is always a single boolean not null
+    /// column.
+    pub fn output_arity(&self) -> usize {
+        if self.quantifier_type.is_subquery() {
+            return 1;
+        } else {
+            self.model.get_box(self.input_box).columns.len()
+        }
+    }
 }
 
 /// Mutable [`Quantifier`] methods that depend on their enclosing [`Model`].
