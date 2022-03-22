@@ -143,7 +143,7 @@ impl<T> SourceInstanceRequest<T> {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
@@ -371,6 +371,42 @@ where
         for id in build.plan.depends_on() {
             self.depends_on_into(id, out)
         }
+    }
+
+    /// Determine a unique id for this dataflow based on the indexes it exports.
+    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
+    pub fn global_id(&self) -> Option<GlobalId> {
+        // TODO: This could be implemented without heap allocation.
+        let mut exports = self.export_ids().collect::<Vec<_>>();
+        exports.sort_unstable();
+        exports.dedup();
+        if exports.len() == 1 {
+            return exports.pop();
+        } else {
+            None
+        }
+    }
+}
+
+impl<P: PartialEq, T: timely::PartialOrder> DataflowDescription<P, T> {
+    /// Determine if a dataflow description is compatible with this dataflow description.
+    ///
+    /// Compatible dataflows have equal exports, imports, and objects to build. The `as_of` of
+    /// the receiver has to be less equal the `other` `as_of`.
+    ///
+    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        let equality = self.index_exports == other.index_exports
+            && self.sink_exports == other.sink_exports
+            && self.objects_to_build == other.objects_to_build
+            && self.index_imports == other.index_imports
+            && self.source_imports == other.source_imports;
+        let partial = if let (Some(as_of), Some(other_as_of)) = (&self.as_of, &other.as_of) {
+            timely::PartialOrder::less_equal(as_of, other_as_of)
+        } else {
+            false
+        };
+        equality && partial
     }
 }
 
@@ -1644,7 +1680,7 @@ pub mod sinks {
     use mz_repr::RelationDesc;
 
     /// A sink for updates to a relational collection.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SinkDesc<T = mz_repr::Timestamp> {
         pub from: GlobalId,
         pub from_desc: RelationDesc,
@@ -1665,7 +1701,7 @@ pub mod sinks {
         pub strict: bool,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
@@ -1753,7 +1789,7 @@ pub mod sinks {
         }
     }
 
-    #[derive(Default, Clone, Debug, Serialize, Deserialize)]
+    #[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct TailSinkConnector {}
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

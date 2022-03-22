@@ -36,17 +36,17 @@ SERVICES = [
     ),
     Dataflowd(
         name="dataflowd_compute_3",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_compute_4",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_storage",
-        options="--workers 2 --storage-addr dataflowd_storage:2102 --runtime storage",
+        options="--workers 2 --storage-addr dataflowd_storage:2102 --runtime storage --linger --reconcile",
         ports=[6876, 2102],
     ),
     Materialized(
@@ -89,7 +89,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
 
     # Dropping the `default` cluster lightly tests that `materialized` can run
     # and restart without any virtual clusters in the virtual cluster host.
-    c.sql("DROP CLUSTER default")
+    c.sql("DROP CLUSTER default CASCADE")
 
     # Create a remote cluster and verify that tests pass.
     c.up("dataflowd_compute_1")
@@ -115,3 +115,10 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # verify that tests still pass.
     c.kill("dataflowd_compute_1")
     c.run("testdrive-svc", *glob)
+
+    # Kill one of the nodes in the first replica of the compute cluster and
+    # verify that tests still pass.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+    c.run("testdrive-svc", "smoke/insert-select.td")

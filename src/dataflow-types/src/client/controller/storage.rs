@@ -108,6 +108,13 @@ pub trait StorageController: Debug + Send {
     ) -> Result<(), anyhow::Error>;
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
+
+    /// Truncate the tables named by specific identifiers.
+    ///
+    /// Truncate removes all rows from the tables, which is achieved by retracting the current table
+    /// state.
+    async fn truncate_tables(&mut self, truncate_tables: Vec<GlobalId>)
+        -> Result<(), StorageError>;
 }
 
 /// Controller state maintained for each storage instance.
@@ -145,7 +152,11 @@ impl From<anyhow::Error> for StorageError {
 }
 
 impl<T> StorageControllerState<T> {
-    pub(super) fn new(client: Box<dyn StorageClient<T>>) -> Self {
+    pub(super) async fn new(mut client: Box<dyn StorageClient<T>>) -> Self {
+        client
+            .send(StorageCommand::CreateInstance())
+            .await
+            .expect("Storage command failed; unrecoverable");
         Self {
             client,
             collections: BTreeMap::default(),
@@ -279,6 +290,17 @@ impl<T: Timestamp + Lattice> StorageController for Controller<T> {
         }
     }
 
+    async fn truncate_tables(
+        &mut self,
+        truncate_tables: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
+        self.state
+            .client
+            .send(StorageCommand::Truncate(truncate_tables))
+            .await?;
+        Ok(())
+    }
+
     async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
@@ -377,9 +399,9 @@ impl<T: Timestamp + Lattice> StorageController for Controller<T> {
 
 impl<T: Timestamp + Lattice> Controller<T> {
     /// Create a new storage controller from a client it should wrap.
-    pub fn new(client: Box<dyn StorageClient<T>>) -> Self {
+    pub async fn new(client: Box<dyn StorageClient<T>>) -> Self {
         Self {
-            state: StorageControllerState::new(client),
+            state: StorageControllerState::new(client).await,
         }
     }
 

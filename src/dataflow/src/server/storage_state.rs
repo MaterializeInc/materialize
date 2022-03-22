@@ -22,7 +22,7 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_dataflow_types::SourceInstanceDesc;
+use mz_dataflow_types::{SourceInstanceDesc, Update};
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
@@ -98,6 +98,58 @@ pub struct TableState<T> {
     pub last_consolidated_size: usize,
     /// Handles to the live local inputs for the table.
     pub inputs: Vec<LocalInput>,
+}
+
+impl TableState<mz_repr::Timestamp> {
+    fn truncate(&mut self) {
+        // Add the retractions to all existing renders of the table.
+        for input in &mut self.inputs {
+            if let Some(capability) = input.capability.upgrade() {
+                let capability = capability.borrow_mut();
+                let mut session = input.handle.session(capability.clone());
+                for (row, _timestamp, diff) in &self.data {
+                    session.give((row.clone(), *capability.time(), -*diff));
+                }
+            }
+        }
+        // Discard entries that are no longer active.
+        self.inputs
+            .retain(|input| input.capability.upgrade().is_some());
+
+        self.data.clear();
+    }
+
+    fn insert(&mut self, updates: Vec<Update>) {
+        // Add the new updates to all existing renders of the table.
+        for input in &mut self.inputs {
+            if let Some(capability) = input.capability.upgrade() {
+                let capability = capability.borrow_mut();
+                let mut session = input.handle.session(capability.clone());
+                for update in &updates {
+                    assert!(update.timestamp >= *capability.time());
+                    session.give((update.row.clone(), update.timestamp, update.diff));
+                }
+            }
+        }
+        // Discard entries that are no longer active.
+        self.inputs
+            .retain(|input| input.capability.upgrade().is_some());
+
+        // Stash the data for use by future renders of the table.
+        for update in updates {
+            self.data.push((update.row, update.timestamp, update.diff));
+        }
+
+        // Consolidate the data in the table if it's doubled in size
+        // since the last consolidation.
+        if self.data.len() > self.last_consolidated_size * 2 {
+            for (_data, time, _diff) in &mut self.data {
+                time.advance_by(self.since.borrow());
+            }
+            differential_dataflow::consolidation::consolidate_updates(&mut self.data);
+            self.last_consolidated_size = self.data.len();
+        }
+    }
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
@@ -182,6 +234,8 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Entry point for applying a storage command.
     pub(crate) fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
+            StorageCommand::CreateInstance() => {}
+            StorageCommand::DropInstance() => {}
             StorageCommand::CreateSources(sources) => {
                 for source in sources {
                     self.setup_timestamp_binding_state(&source);
@@ -287,48 +341,18 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             }
 
             StorageCommand::Insert { id, updates } => {
-                let table_state = match self.storage_state.table_state.get_mut(&id) {
+                match self.storage_state.table_state.get_mut(&id) {
                     Some(table_state) => table_state,
-                    None => panic!(
-                        "table state {} missing for insert at worker {}",
-                        id,
-                        self.timely_worker.index()
-                    ),
-                };
-
-                // Add the new updates to all existing renders of the table.
-                for input in &mut table_state.inputs {
-                    if let Some(capability) = input.capability.upgrade() {
-                        let capability = capability.borrow_mut();
-                        let mut session = input.handle.session(capability.clone());
-                        for update in &updates {
-                            assert!(update.timestamp >= *capability.time());
-                            session.give((update.row.clone(), update.timestamp, update.diff));
-                        }
-                    }
+                    None => panic!("table state {id} missing for insert"),
                 }
-                // Discard entries that are no longer active.
-                table_state
-                    .inputs
-                    .retain(|input| input.capability.upgrade().is_some());
+                .insert(updates);
+            }
 
-                // Stash the data for use by future renders of the table.
-                for update in updates {
-                    table_state
-                        .data
-                        .push((update.row, update.timestamp, update.diff));
-                }
-
-                // Consolidate the data in the table if it's doubled in size
-                // since the last consolidation.
-                if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                    for (_data, time, _diff) in &mut table_state.data {
-                        time.advance_by(table_state.since.borrow());
+            StorageCommand::Truncate(ids) => {
+                for id in ids {
+                    if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
+                        table_state.truncate();
                     }
-                    differential_dataflow::consolidation::consolidate_updates(
-                        &mut table_state.data,
-                    );
-                    table_state.last_consolidated_size = table_state.data.len();
                 }
             }
 

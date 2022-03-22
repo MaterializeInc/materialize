@@ -182,6 +182,10 @@ pub struct CreateSourceCommand<T> {
     doc = "the kind of storage command that was received"
 )]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Indicates the creation of the storage instance, and is the first command.
+    CreateInstance(),
+    /// Indicates the termination of the storage instance, and is the last command.
+    DropInstance(),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Render the enumerated sources.
@@ -209,6 +213,10 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
         /// A list of updates to be introduced to the input.
         updates: Vec<Update<T>>,
     },
+    /// Truncate the contents of tables.
+    ///
+    /// Each entry names a table by its global identifier.
+    Truncate(Vec<GlobalId>),
     /// Update durability information for sources.
     ///
     /// Each entry names a source and provides a frontier before which the source can
@@ -230,10 +238,13 @@ impl StorageCommandKind {
         match self {
             StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
             StorageCommandKind::AllowCompaction => "allow_storage_compaction",
+            StorageCommandKind::CreateInstance => "create_instance",
             StorageCommandKind::CreateSources => "create_sources",
+            StorageCommandKind::DropInstance => "drop_instance",
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",
             StorageCommandKind::RenderSources => "render_sources",
+            StorageCommandKind::Truncate => "truncate",
         }
     }
 }
@@ -308,7 +319,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
 
     /// Indicates which global ids should start and cease frontier tracking.
     ///
-    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// Identifiers added to `start` will install frontier tracking, and identifiers
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {

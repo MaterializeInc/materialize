@@ -165,7 +165,7 @@ pub mod server {
                         let mut state = state.lock().await;
                         if let Some(subscription) = state.subscriptions.get_mut(&response.subscription_id) {
                             if let Some(client_id) = subscription.client_id {
-                                if let Some(channel) = state.channels.get_mut(&client_id){
+                                if let Some(channel) = state.channels.get_mut(&client_id) {
                                     let _ = channel.send(response);
                                 }
                             } else {
@@ -246,6 +246,7 @@ pub mod server {
                         assert!(removed, "Unknown key: {subscription_id:?}");
                     }
                     None => {
+                        info!("Compute client disconnected");
                         return Ok(());
                     }
                 },
