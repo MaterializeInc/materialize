@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 //! A client backed by multiple replicas.
 //!
 //! This client accepts commands and responds as would a correctly implemented client.
@@ -78,7 +87,7 @@ where
             frontiers[replica_index].update_iter(Some((T::minimum(), 1)));
         }
         // Take this opportunity to clean up the history we should present.
-        self.thin_history();
+        self.reduce_history();
         // Replay the commands at the client, creating new dataflow identifiers.
         let client = self.replicas.get_mut(replica_index).unwrap();
         for command in self.history.iter() {
@@ -97,27 +106,117 @@ where
         Ok(())
     }
 
-    /// Thins out `self.history`.
+    /// Reduces `self.history` to a minimal form.
     ///
-    /// This thinning is primarily by peeks that are no longer outstanding, as well as
-    /// consequences thereof (e.g. irrelevance of dataflows serving only those peeks).
-    fn thin_history(&mut self) {
-        // TODO: This could be much more aggressively thinned, down to just the dataflows
-        // that need to be installed, and none of the dataflows that have been dropped.
-        self.history.retain(|cmd| {
-            match cmd {
-                ComputeCommand::Peek { uuid, .. } => {
-                    // If the peek has been responded to or canceled we can remove it.
-                    self.peeks.contains(&uuid)
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    fn reduce_history(&mut self) {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_command = None;
+        let mut drop_command = None;
+
+        for command in self.history.drain(..) {
+            match command {
+                create @ ComputeCommand::CreateInstance(_) => {
+                    // We should be able to handle this, should this client need to be restartable.
+                    assert!(create_command.is_none());
+                    create_command = Some(create);
                 }
-                ComputeCommand::CancelPeeks { .. } => {
-                    // Peek cancelation can always be removed.
-                    // TODO: Should we never add it? Confusing?
-                    false
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
                 }
-                _ => true,
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                peek @ ComputeCommand::Peek { .. } => {
+                    // We could pre-filter here, but seems hard to access `uuid`
+                    // and take ownership of `peek` at the same time.
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { mut uuids } => {
+                    uuids.retain(|uuid| self.peeks.contains(uuid));
+                    live_cancels.extend(uuids);
+                }
+            }
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| {
+            // If any index or sink has not been compacted to the empty frontier, it remains active.
+            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
+            // this is fine and normal, and is not evidence that the collection is not in use.
+            let index_active = dataflow
+                .index_exports
+                .iter()
+                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+            let sink_active = dataflow
+                .sink_exports
+                .iter()
+                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+            index_active || sink_active
+        });
+
+        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut same_as_of = false;
+            let mut as_of = Antichain::new();
+            for (id, _, _) in dataflow.index_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            for (id, _) in dataflow.sink_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            if !same_as_of {
+                dataflow.as_of = Some(as_of);
+            }
+        }
+
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| {
+            if let ComputeCommand::Peek { uuid, .. } = peek {
+                self.peeks.contains(uuid)
+            } else {
+                unreachable!()
             }
         });
+
+        // Reconstitute the commands as a compact history.
+        self.history.push(create_command.unwrap());
+        self.history
+            .push(ComputeCommand::CreateDataflows(live_dataflows));
+        self.history.push(ComputeCommand::AllowCompaction(
+            final_frontiers.into_iter().collect(),
+        ));
+        self.history.extend(live_peeks);
+        self.history.push(ComputeCommand::CancelPeeks {
+            uuids: live_cancels,
+        });
+        if let Some(drop_command) = drop_command {
+            self.history.push(drop_command);
+        }
     }
 }
 
