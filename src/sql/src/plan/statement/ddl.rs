@@ -633,8 +633,7 @@ pub fn plan_create_source(
                     // XXX(chae): should this be for upsert too?
                     let tx_metadata = match with_options.remove("tx_metadata") {
                         Some(Value::String(src)) => {
-                            //let name = scx.allocate_name(normalize::unresolved_object_name(src.clone())?);
-                            // XXX(chae): this seems like I'm breaking a boundary by accessing catalog
+                            // XXX(chae): this seems like I'm breaking a boundary by accessing scx.catalog
                             let item =
                                 scx.catalog
                                     .resolve_item(&normalize::unresolved_object_name(
