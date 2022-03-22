@@ -131,7 +131,7 @@ Before you start, note that a database restart will be required after making the
 
     If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
 
-1. In the Azure portal or using the Azure CLI [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
+1. In the Azure portal or using the Azure CLI, [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
 
