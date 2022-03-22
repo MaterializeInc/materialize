@@ -348,6 +348,8 @@ We record the following data:
 * Number of worker threads
 * Uptime
 * Count of sinks, sources, and views by type
+* System architecture (ARM or x86_64)
+* Operating system type (Linux or macOS)
 
 We use this data to guide our product roadmap. Unless you are using [Materialize
 Cloud](/cloud/), we do not and cannot correlate this
