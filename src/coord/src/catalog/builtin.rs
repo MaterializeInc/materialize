@@ -1501,11 +1501,12 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_namespace AS SELECT
-oid,
-name AS nspname,
+s.oid AS oid,
+s.name AS nspname,
 NULL::pg_catalog.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
-FROM mz_catalog.mz_schemas",
+FROM mz_catalog.mz_schemas s
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5014),
 };
 
@@ -1553,7 +1554,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     -- MZ doesn't support options for relations
     NULL::pg_catalog.text[] as reloptions
 FROM mz_catalog.mz_objects
-JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5015),
 };
 
@@ -1568,7 +1570,8 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
-FROM mz_catalog.mz_databases",
+FROM mz_catalog.mz_databases d
+WHERE (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5016),
 };
 
@@ -1601,6 +1604,7 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
 GROUP BY mz_indexes.oid, mz_objects.oid",
     id: GlobalId::System(5017),
 };
@@ -1609,11 +1613,12 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_description AS SELECT
-    oid as objoid,
+    c.oid as objoid,
     NULL::pg_catalog.oid as classoid,
     0::pg_catalog.int4 as objsubid,
     NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class",
+FROM pg_catalog.pg_class c
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5018),
 };
 
@@ -1663,7 +1668,8 @@ FROM
             UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
             UNION ALL SELECT type_id, 'p' FROM mz_catalog.mz_pseudo_types
         )
-            AS t ON mz_types.id = t.type_id",
+            AS t ON mz_types.id = t.type_id
+    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5019),
 };
 
@@ -1687,7 +1693,8 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     0::pg_catalog.oid as attcollation
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
-JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid",
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
     id: GlobalId::System(5020),
@@ -1702,7 +1709,8 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_schemas.oid AS pronamespace,
     NULL::pg_catalog.text AS proargdefaults
 FROM mz_catalog.mz_functions
-JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id",
+JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5021),
 };
 
@@ -1712,7 +1720,7 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_range AS SELECT
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
-    WHERE false",
+WHERE false",
     id: GlobalId::System(5022),
 };
 
@@ -1724,7 +1732,7 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid AS enumtypid,
     NULL::pg_catalog.float4 AS enumsortorder,
     NULL::pg_catalog.text AS enumlabel
-    WHERE false",
+WHERE false",
     id: GlobalId::System(5023),
 };
 
@@ -1737,11 +1745,10 @@ pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     mz_columns.position AS adnum,
     mz_columns.default AS adbin,
     mz_columns.default AS adsrc
-FROM
-    mz_catalog.mz_columns
+FROM mz_catalog.mz_columns
+    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
-WHERE
-    default IS NOT NULL",
+WHERE default IS NOT NULL",
     id: GlobalId::System(5025),
 };
 
@@ -1921,7 +1928,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid[] as conffeqop,
     NULL::pg_catalog.oid[] as conexclop,
     NULL::pg_catalog.text as conbin
-    WHERE false",
+WHERE false",
     id: GlobalId::System(5034),
 };
 
@@ -1934,6 +1941,7 @@ SELECT n.nspname AS schemaname,
     pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
 FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
 WHERE c.relkind = ANY (ARRAY['r','p'])",
     id: GlobalId::System(5035),
 };
@@ -1954,10 +1962,11 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_roles AS SELECT
-    name AS rolname,
+    r.name AS rolname,
     '********'::pg_catalog.text AS rolpassword,
-    oid AS oid
-FROM mz_catalog.mz_roles",
+    r.oid AS oid
+FROM mz_catalog.mz_roles r
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     id: GlobalId::System(5037),
 };
 
@@ -1970,7 +1979,8 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid AS viewowner
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
-LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE d.name = pg_catalog.current_database()",
     id: GlobalId::System(5038),
 };
 
