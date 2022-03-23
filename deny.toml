@@ -33,6 +33,11 @@ skip = [
 
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },
+
+    # Waiting on https://github.com/colin-kiegel/rust-derive-builder/pull/244
+    { name = "darling_macro", version = "0.12.4" },
+    { name = "darling", version = "0.12.4" },
+    { name = "darling_core", version = "0.12.4" },
 ]
 
 # Use `tracing` instead.
@@ -157,6 +162,14 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
+    # This needs Ord/Eq implementations hacked in so that we
+    # can store its structures in a UnaryFunc.
+    # The implementations are not semantically meaningful,
+    # (and involve disabling an _actually_ semantically meaningful
+    # PartialOrd impl)
+    # so it's unlikely they'd be accepted upstream.
+    "https://github.com/umanwizard/levenshtein-automata.git",
+
     # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
     # a release.
     "https://github.com/lu-zero/autotools-rs.git",

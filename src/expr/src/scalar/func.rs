@@ -159,6 +159,14 @@ pub fn or<'a>(
     }
 }
 
+fn is_approx_match<'a>(dfa: &'a levenshtein_automata::DFA, a: Datum<'a>) -> Datum<'static> {
+    let s = a.unwrap_str();
+    match dfa.eval(s) {
+        levenshtein_automata::Distance::Exact(_) => Datum::True,
+        levenshtein_automata::Distance::AtLeast(_) => Datum::False,
+    }
+}
+
 // TODO(jamii): it would be much more efficient to skip the intermediate
 // repr::jsonb::Jsonb.
 fn cast_string_to_jsonb<'a>(
@@ -3269,6 +3277,13 @@ pub enum UnaryFunc {
     AbsFloat32(AbsFloat32),
     AbsFloat64(AbsFloat64),
     AbsNumeric(AbsNumeric),
+    IsApproxMatch {
+        automaton: levenshtein_automata::DFA,
+        // The following fields are retained for
+        // human-readable formatting.
+        needle: String,
+        bound: u8,
+    },
     CastBoolToString(CastBoolToString),
     CastBoolToStringNonstandard(CastBoolToStringNonstandard),
     CastBoolToInt32(CastBoolToInt32),
@@ -3822,6 +3837,7 @@ impl UnaryFunc {
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
+            IsApproxMatch { automaton, .. } => Ok(is_approx_match(automaton, a)),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
@@ -4065,7 +4081,9 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
+            IsLikeMatch(_) | IsRegexpMatch(_) | IsApproxMatch { .. } => {
+                ScalarType::Bool.nullable(nullable)
+            }
 
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
@@ -4337,7 +4355,9 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsLikeMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
+            IsLikeMatch(_) | IsRegexpMatch(_) | IsApproxMatch { .. } | CastJsonbOrNullToJsonb => {
+                false
+            }
             CastStringToJsonb => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4633,6 +4653,11 @@ impl UnaryFunc {
             ByteLengthString => f.write_str("octet_length"),
             IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
+            IsApproxMatch {
+                automaton: _,
+                needle,
+                bound,
+            } => write!(f, "is_approx_match({bound}, {needle}, _)"),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
             ExtractTime(units) => write!(f, "extract_{}_t", units),
