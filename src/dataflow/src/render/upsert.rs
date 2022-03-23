@@ -490,6 +490,7 @@ where
                                             })
                                         })
                                     };
+                                    tracing::trace!(?decoded_key, ?new_value, ?old_value);
 
                                     if let Some(old_value) = old_value {
                                         // Ensure we put the source in a permanently error'd state
@@ -671,8 +672,9 @@ mod persist {
                     current_values.extend(initial_state.into_iter());
 
                     trace!(
-                        "In {}, initial (restored) upsert state: {:?}",
+                        "In {}, initial (restored) upsert state, count:{}: {:?}",
                         operator_name,
+                        current_values.len(),
                         current_values.iter().take(10).collect::<Vec<_>>()
                     );
                 }
