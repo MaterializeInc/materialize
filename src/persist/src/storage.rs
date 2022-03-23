@@ -330,6 +330,167 @@ impl From<(&str, &str)> for LockInfo {
     }
 }
 
+/// Abstraction over a key value store that provides a compare-and-set/conditional put primitive
+///
+/// "real world" realizations of this api could be etcd / dynamodb / any sql database with transactions?
+pub trait CasKeyVal {
+    /// Returns a reference to the value corresponding to the key.
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
+
+    /// List all of the keys in the map that currently have a value.
+    fn list_keys(&self) -> Result<Vec<String>, Error>;
+
+    /// Conditionally insert/update a key-value pair into the map, if the existing
+    /// value matches expected.
+    ///
+    /// Return true if the cas executed correctly, and false if the current value != expected.
+    ///
+    /// TODO: could also have the return value be the current value here. Doing a simpler thing
+    /// for prototyping.
+    fn cas(
+        &mut self,
+        key: &str,
+        value: Option<Vec<u8>>,
+        expected: Option<Vec<u8>>,
+    ) -> Result<bool, Error>;
+}
+
+/// Abstraction over a key value store that supports atomic inserts, and scans
+/// from a monotonically increasing index
+///
+/// "real world" realizations of this api could be kafka / redpanda.
+pub trait AtomicQueue {
+    /// Append data to the queue, and return the index it was appended at.
+    ///
+    /// Indexes increase monotonically.
+    fn append(&mut self, data: Vec<u8>) -> Result<u64, Error>;
+
+    /// Read all data stored at indexes >= index.
+    fn scan(&self, index: u64) -> Result<Vec<(u64, Vec<u8>)>, Error>;
+
+    /// Delete all data stored at indexes < index
+    fn truncate(&mut self, index: u64) -> Result<(), Error>;
+}
+
+/// WIP
+pub trait Consensus {
+    /// Return the most recently stored data
+    fn head(&self) -> Result<Option<(SeqNo, Vec<u8>)>, Error>;
+
+    /// Atomically insert data at seqno, iff the current HEAD of the data is at seqno - 1.
+    ///
+    /// Return true if the insert is successful (seqno - 1 was the previous version and this
+    /// call to cas wrote at seqno), and false otherwise.
+    fn cas(&mut self, seqno: SeqNo, data: Vec<u8>) -> Result<bool, Error>;
+
+    /// Read all data inserted with sequence numbers >= seqno
+    fn scan(&self, seqno: SeqNo) -> Result<Vec<(SeqNo, Vec<u8>)>, Error>;
+
+    /// Delete all data stored at sequence numbers < seqno
+    fn truncate(&mut self, seqno: SeqNo) -> Result<(), Error>;
+}
+
+const HEAD_KEY: &'static str = "HEAD";
+
+impl<T: CasKeyVal> Consensus for T {
+    fn head(&self) -> Result<Option<(SeqNo, Vec<u8>)>, Error> {
+        let head = self.get(HEAD_KEY)?;
+
+        let head = match head {
+            Some(head) => head,
+            None => return Ok(None),
+        };
+
+        let key = std::str::from_utf8(&head).expect("wip");
+        let seqno = key.parse::<u64>().expect("wip");
+
+        let value = self.get(key)?.expect("wip");
+
+        Ok(Some((SeqNo(seqno), value)))
+    }
+
+    fn cas(&mut self, seqno: SeqNo, data: Vec<u8>) -> Result<bool, Error> {
+        // First, write out the data
+        let key = seqno.0.to_string();
+
+        let write_success = self.cas(&key, Some(data.clone()), None)?;
+
+        // Someone already wrote to this seqno - exit.
+        if !write_success {
+            return Ok(false);
+        }
+
+        // Attempt to repoint HEAD from seqno - 1 to seqno
+        let prev_head = if seqno.0 > 0 {
+            let prev = seqno.0 - 1;
+            let val = prev.to_string().as_bytes().to_vec();
+            Some(val)
+        } else {
+            None
+        };
+
+        let head_repoint_success = self.cas(HEAD_KEY, Some(key.as_bytes().to_vec()), prev_head)?;
+
+        if !head_repoint_success {
+            // Undo the write if we cannot repoint head.
+            // TODO / WIP: I believe safe operation here requires that multiple writers do not try to
+            // write the same data at the same seqno.
+            self.cas(&key, None, Some(data))?;
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Read all data inserted with sequence numbers >= seqno
+    fn scan(&self, seqno: SeqNo) -> Result<Vec<(SeqNo, Vec<u8>)>, Error> {
+        let head = self.head()?;
+
+        let head_seqno = match head {
+            Some((seqno, _)) => seqno,
+            None => return Ok(vec![]),
+        };
+
+        if head_seqno < seqno {
+            return Err(Error::from("requested seqno too big"));
+        }
+
+        let mut ret = vec![];
+        for s in seqno.0..=head_seqno.0 {
+            let key = s.to_string();
+            let value = self.get(&key)?.expect("wip");
+
+            ret.push((SeqNo(s), value));
+        }
+
+        Ok(ret)
+    }
+
+    /// Delete all data stored at sequence numbers < seqno
+    fn truncate(&mut self, seqno: SeqNo) -> Result<(), Error> {
+        let head = self.head()?;
+
+        let head_seqno = match head {
+            Some((seqno, _)) => seqno,
+            None => return Err(Error::from("nothing to truncate")),
+        };
+
+        if head_seqno <= seqno {
+            return Err(Error::from("requested truncation seqno too big"));
+        }
+
+        for s in seqno.0..head_seqno.0 {
+            let key = s.to_string();
+            let value = self.get(&key)?;
+
+            // Remove the value stored at seqno.
+            self.cas(&key, None, value)?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::ops::RangeInclusive;

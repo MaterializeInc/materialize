@@ -25,7 +25,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
 use crate::runtime::{self, RuntimeConfig};
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, BlobRead, CasKeyVal, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -579,6 +579,61 @@ impl MemMultiRegistry {
             &MetricsRegistry::new(),
             None,
         )
+    }
+}
+
+#[derive(Debug, Default)]
+struct MemCasKeyValCore {
+    data: HashMap<String, Vec<u8>>,
+}
+
+impl MemCasKeyValCore {
+    fn list_keys(&self) -> Vec<String> {
+        self.data.keys().cloned().collect()
+    }
+
+    fn get(&self, key: &str) -> Option<Vec<u8>> {
+        self.data.get(key).cloned()
+    }
+
+    fn cas(&mut self, key: &str, value: Option<Vec<u8>>, expected: Option<Vec<u8>>) -> bool {
+        let current = self.data.get(key);
+
+        if current != expected.as_ref() {
+            return false;
+        }
+
+        match value {
+            Some(val) => self.data.insert(key.into(), val),
+            None => self.data.remove(key),
+        };
+
+        return true;
+    }
+}
+
+/// In-memory implementation of [CasKeyVal].
+#[derive(Debug, Default)]
+pub struct MemCasKeyVal {
+    core: Arc<Mutex<MemCasKeyValCore>>,
+}
+
+impl CasKeyVal for MemCasKeyVal {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.core.lock()?.get(key))
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        Ok(self.core.lock()?.list_keys())
+    }
+
+    fn cas(
+        &mut self,
+        key: &str,
+        value: Option<Vec<u8>>,
+        expected: Option<Vec<u8>>,
+    ) -> Result<bool, Error> {
+        Ok(self.core.lock()?.cas(key, value, expected))
     }
 }
 
