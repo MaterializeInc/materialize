@@ -360,7 +360,7 @@ where
 
                 let mut removed_times = Vec::new();
                 for (time, (cap, map)) in to_send.iter_mut() {
-                    if !input.frontier.less_equal(time) {
+                    if !input.frontier.less_equal(time) && !state_input.frontier.less_equal(time) {
                         let mut session = output.session(cap);
                         removed_times.push(time.clone());
                         for (key, data) in map.drain() {
@@ -631,7 +631,7 @@ mod persist {
         };
 
         let mut differential_state_ingester = Some(DifferentialStateIngester::new());
-        let mut state_input_buffer = Vec::new();
+        // let mut state_input_buffer = Vec::new();
         let operator_name = format!("persistent_upsert({})", name);
 
         let new_upsert_oks = upsert_core(
@@ -649,6 +649,7 @@ mod persist {
             ),
             move |state_input, current_values| {
                 state_input.for_each(|_time, data| {
+                    let mut state_input_buffer = vec![];
                     data.swap(&mut state_input_buffer);
                     for state_update in state_input_buffer.drain(..) {
                         trace!("In {}, restored upsert: {:?}", operator_name, state_update);
