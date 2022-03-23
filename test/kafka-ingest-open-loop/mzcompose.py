@@ -146,7 +146,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         options = [
             "--persistent-user-tables",
             "--persistent-kafka-sources",
-            "--disable-persistent-system-tables-test",
+            "--disable-persistent-system-tables-test=true",
         ]
 
     if args.s3_storage == "":
