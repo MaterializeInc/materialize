@@ -63,6 +63,9 @@ Materialize has a [direct PostgreSQL source](/sql/create-source/postgres/) tha
 | Amazon Aurora | {{< supportLevel beta >}} | AWS Aurora can be configured to work with Materialize by enabling logical replication via `rds.logical_replication`. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#aws-aurora) [](#notify) |
 | Amazon Aurora Serverless | {{< supportLevel researching >}} | Aurora serverless V1 does [not currently support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) the logical replication required to integrate. | [](#notify) |
 | Heroku Postgres | {{< supportLevel researching >}} | Heroku Postgres does not open up access to logical replication. But an indirect connection may be possible via Kafka and [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors). | [](#notify) |
+| Azure Database for PostgreSQL | {{< supportLevel beta >}} | Users must [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#azure-database-for-postgresql) [](#notify) |
+| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}} | Logical replication is enabled by default. The `doadmin` user is not a superuser, you will not be able to create a publication for _all_ tables. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#digitalocean-managed-postgresql) [](#notify) |
+| CrunchyBridge Postgres| {{< supportLevel beta >}} | Logical replication is enabled by default. Users can [connect directly via a replication slot](/sql/create-source/postgres/). | [More Info](/sql/create-source/postgres/) [](#notify) |
 
 ### Other Databases
 
