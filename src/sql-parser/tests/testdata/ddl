@@ -1343,14 +1343,14 @@ CREATE SECRET secret AS decode('base64-encoded secret', 'base64')
 ----
 CREATE SECRET secret AS decode('base64-encoded secret', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: Ident("secret"), if_not_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE SECRET IF NOT EXISTS secret AS decode('base64-encoded secret', 'base64')
 ----
 CREATE SECRET IF NOT EXISTS secret AS decode('base64-encoded secret', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: Ident("secret"), if_not_exists: true, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("base64-encoded secret")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 DROP SECRET secret

@@ -127,12 +127,13 @@ use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
+    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
+    TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawName;
 use mz_transform::Optimizer;
@@ -1694,6 +1695,9 @@ impl Coordinator {
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
+            Plan::CreateSecret(plan) => {
+                tx.send(self.sequence_create_secret(plan).await, session);
+            }
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(session, plan, tx).await;
@@ -2013,6 +2017,39 @@ impl Coordinator {
             })) if plan.if_not_exists => {
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: true })
             }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_create_secret(
+        &mut self,
+        plan: CreateSecretPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let CreateSecretPlan {
+            name,
+            secret: _,
+            if_not_exists,
+        } = plan;
+
+        let id = self.catalog.allocate_user_id()?;
+        let oid = self.catalog.allocate_oid()?;
+        let secret = catalog::Secret {
+            create_sql: format!("CREATE SECRET {} AS '********'", name),
+        };
+
+        let ops = vec![catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::Secret(secret.clone()),
+        }];
+
+        match self.catalog_transact(ops, |_| Ok(())).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedSecret { existed: false }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => Err(err),
         }
     }

@@ -607,9 +607,12 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut mz_sql::ast::Statement<Raw>) -> Result<()
             }
         }
 
-        // At the time the migration was written, tables, sources, and
+        // At the time the migration was written, tables, sources, secrets and
         // types could not contain references to functions.
-        Statement::CreateTable(_) | Statement::CreateSource(_) | Statement::CreateType(_) => {}
+        Statement::CreateTable(_)
+        | Statement::CreateSource(_)
+        | Statement::CreateType(_)
+        | Statement::CreateSecret(_) => {}
 
         _ => bail!("catalog item contained inappropriate statement: {}", stmt),
     };
@@ -706,10 +709,9 @@ fn ast_rewrite_type_references_0_6_1(
             }
         },
 
-        // At the time the migration was written, sinks and sources
+        // At the time the migration was written, secrets, sinks and sources
         // could not contain references to types.
-        Statement::CreateSource(_) | Statement::CreateSink(_) => {}
-
+        Statement::CreateSource(_) | Statement::CreateSink(_) | Statement::CreateSecret(_) => {}
         _ => bail!("catalog item contained inappropriate statement: {}", stmt),
     };
 

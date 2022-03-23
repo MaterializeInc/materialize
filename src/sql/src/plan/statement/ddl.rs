@@ -87,10 +87,10 @@ use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, ComputeInstanceIntrospectionConfig,
     CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params,
-    Plan, Sink, Source, Table, Type, View,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
+    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2578,15 +2578,28 @@ pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_secret<T: mz_sql_parser::ast::AstInfo>(
-    _: &StatementContext,
-    CreateSecretStatement {
-        name: _,
-        if_not_exists: _,
-        value: _,
-    }: CreateSecretStatement<T>,
+pub fn plan_create_secret(
+    scx: &StatementContext,
+    stmt: CreateSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("CREATE SECRET")
+    scx.require_experimental_mode("CREATE SECRET")?;
+
+    let CreateSecretStatement {
+        name,
+        if_not_exists,
+        value: _,
+    } = &stmt;
+
+    let name = scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?);
+    let create_sql = normalize::create_statement(&scx, Statement::CreateSecret(stmt.clone()))?;
+
+    let secret = Secret { create_sql };
+
+    Ok(Plan::CreateSecret(CreateSecretPlan {
+        name,
+        secret,
+        if_not_exists: *if_not_exists,
+    }))
 }
 
 pub fn describe_drop_database(
@@ -2835,7 +2848,8 @@ pub fn plan_drop_item(
                     | CatalogItemType::Source
                     | CatalogItemType::View
                     | CatalogItemType::Sink
-                    | CatalogItemType::Type => {
+                    | CatalogItemType::Type
+                    | CatalogItemType::Secret => {
                         bail!(
                             "cannot drop {}: still depended upon by catalog item '{}'",
                             catalog_entry.name(),

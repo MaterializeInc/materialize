@@ -785,7 +785,7 @@ impl_display!(CreateRoleOption);
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
-    pub name: Ident,
+    pub name: UnresolvedObjectName,
     pub if_not_exists: bool,
     pub value: Expr<T>,
 }

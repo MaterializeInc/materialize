@@ -1082,6 +1082,9 @@ where
             ExecuteResponse::CreatedIndex { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "index")
             }
+            ExecuteResponse::CreatedSecret { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "secret")
+            }
             ExecuteResponse::CreatedSource { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "source")
             }
