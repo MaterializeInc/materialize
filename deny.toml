@@ -157,13 +157,6 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
-    # a release.
-    "https://github.com/lu-zero/autotools-rs.git",
-
-    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55
-    "https://github.com/blackbeam/rust_mysql_common.git",
-
     # Waiting on several PRs to a mostly-abandoned upstream library.
     "https://github.com/MaterializeInc/pubnub-rust.git",
 
