@@ -168,7 +168,21 @@ where
                 .sink_exports
                 .iter()
                 .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-            index_active || sink_active
+
+            let retain = index_active || sink_active;
+
+            // If we are going to drop the dataflow, we should remove the frontier information so that we
+            // do not instruct anyone to compact a frontier they have not heard of.
+            if !retain {
+                for (id, _, _) in dataflow.index_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+                for (id, _) in dataflow.sink_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+            }
+
+            retain
         });
 
         // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.

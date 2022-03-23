@@ -1173,6 +1173,10 @@ pub mod tcp {
     /// A client to a remote dataflow server.
     #[derive(Debug)]
     pub struct TcpClient<T> {
+        /// Indicates if `self.connection` recently produced an error and has yet to be reconnected.
+        ///
+        /// Used to suppress `send` commands to a known-errored connection.
+        errored: bool,
         connection: FramedClient<TcpStream, T>,
         addr: String,
     }
@@ -1181,9 +1185,14 @@ pub mod tcp {
         /// Connects a remote client to the specified remote dataflow server.
         pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
             let connection = framed_client(TcpStream::connect(&addr).await?);
-            Ok(Self { connection, addr })
+            Ok(Self {
+                errored: false,
+                connection,
+                addr,
+            })
         }
 
+        /// Reconnects the underlying `connection`.
         pub async fn reconnect(&mut self) {
             let mut connection = TcpStream::connect(&self.addr).await;
             while connection.is_err() {
@@ -1202,12 +1211,13 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            // on error, we attempt to reconnect, and communicate the error.
-            let result = self.connection.send(cmd).await;
-            if result.is_err() {
-                self.reconnect().await;
+            if !self.errored {
+                let result = self.connection.send(cmd).await;
+                self.errored = result.is_err();
             }
-            Ok(result?)
+            // Erroring would signal a reset, but we are not yet ready to receive restarted commands.
+            // Instead, let `recv` handle the reconnection, and communicate an error once it has.
+            Ok(())
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
@@ -1216,6 +1226,7 @@ pub mod tcp {
                 _ => {
                     // `None` and `Some(Err)` are both connection errors.
                     self.reconnect().await;
+                    self.errored = false;
                     Err(anyhow::anyhow!("Connection severed; reconnected"))
                 }
             }
