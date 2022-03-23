@@ -434,6 +434,7 @@ where
                                                             )
                                                             .map_err(DataflowError::from)
                                                         } else {
+                                                            tracing::trace!("got empty eval");
                                                             Ok(None)
                                                         }
                                                     }
@@ -644,7 +645,7 @@ mod persist {
             &restored_upsert_oks,
             Exchange::new(
                 move |((key, _data), _ts, _diff): &((Result<Row, DecodeError>, _), _, _)| {
-                    key.hashed()
+                    Some(key).hashed()
                 },
             ),
             move |state_input, current_values| {
