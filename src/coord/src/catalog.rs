@@ -436,8 +436,7 @@ impl CatalogState {
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
-            // TODO: what does volatile mean
-            CatalogItem::Secret(_) => Volatile,
+            CatalogItem::Secret(_) => Nonvolatile,
         }
     }
 

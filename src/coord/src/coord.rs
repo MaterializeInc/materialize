@@ -2034,7 +2034,7 @@ impl Coordinator {
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
-            create_sql: format!("CREATE SECRET {} as '********'", name),
+            create_sql: format!("CREATE SECRET {} AS '********'", name),
         };
 
         let ops = vec![catalog::Op::CreateItem {
