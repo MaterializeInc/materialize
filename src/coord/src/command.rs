@@ -252,6 +252,8 @@ pub enum ExecuteResponse {
     DroppedSink,
     /// The requested type was dropped.
     DroppedType,
+    /// The requested secret was dropped.
+    DroppedSecret,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.

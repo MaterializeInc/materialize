@@ -317,7 +317,8 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::Index, ObjectType::Index)
-            | (CatalogItemType::Type, ObjectType::Type) => true,
+            | (CatalogItemType::Type, ObjectType::Type)
+            | (CatalogItemType::Secret, ObjectType::Secret) => true,
             (_, _) => false,
         }
     }
