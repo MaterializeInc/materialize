@@ -697,18 +697,22 @@ td > .default_button {
 
     &.level-production {
         color: $success;
+        fill: $success;
     }
 
      &.level-alpha, &.level-beta {
         color: $progress;
+        fill: $progress;
     }
 
     &.level-in-development {
         color: $warning;
+        fill: $warning;
     }
 
     &.level-researching, &.level-not-supported {
         color: $danger;
+        fill: $danger;
     }
 }
 
