@@ -47,7 +47,7 @@ BEGIN;
 
 DECLARE messages_cursor CURSOR FOR ( SELECT * FROM historical_messages );
 
--- Fetch only a hundred rows 
+-- Fetch only a hundred rows
 FETCH 100 messages_cursor;
 
 COMMIT;
