@@ -114,7 +114,7 @@ The following popular PostgreSQL libraries and drivers have been tested and conf
 | Node.js | {{< supportLevel production >}} | The [`node-postgres` library](https://node-postgres.com/) can be used to [manage](/guides/node-js/#manage-sources-views-and-indexes), [query](/guides/node-js/#query) and even [stream](/guides/node-js/#stream) data from Materialize. | [More Info](/guides/node-js/) |
 | Python | {{< supportLevel production >}} | The [`psycopg2` python package](https://pypi.org/project/psycopg2/) can be used to interact with Materialize as if it were a PostgreSQL DB. | |
 | Java | {{< supportLevel production >}} | The popular [PostgreSQL JDBC driver](https://jdbc.postgresql.org/) can be used to interact with Materialize as if it were a PostgreSQL DB. |  |
-| Golang | {{< supportLevel production >}} | TODO: Confirm which Go drivers have been tested. |  |
+| Golang | {{< supportLevel production >}} | The [`pgx` - PostgreSQL Driver and Toolkit]https://github.com/jackc/pgx) for Golang has been confirmed to work with Materialize. | [More Info](/guides/golang/) |
 | PHP | {{< supportLevel production >}} | The standard PHP [PostgreSQL Extension](https://www.php.net/manual/en/ref.pgsql.php) can be used to interact with Materialize as if it were a PostgreSQL DB. |  |
 
 ## Frameworks and ORMs
