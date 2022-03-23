@@ -23,7 +23,7 @@ expect.
 
 ```sql
 select_pred
-  [ CROSS | NATURAL [ FULL [ OUTER ] | LEFT [ OUTER ] | RIGHT [ OUTER ] | INNER ] ] JOIN 
+  [ CROSS | NATURAL [ FULL [ OUTER ] | LEFT [ OUTER ] | RIGHT [ OUTER ] | INNER ] ] JOIN
   table_name | [ LATERAL ] { ( select_stmt ) | table_func_call } | ( join_expr )
   [ [ AS ] table_alias ( col_alias [, ... ] ) ]
   select_post

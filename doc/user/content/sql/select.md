@@ -50,7 +50,7 @@ Scenario | `SELECT` behavior
   [ FROM table_expr [, ...] ]
   [ join_expr ]
   [ WHERE expr ]
-  [ GROUP BY col_ref [, ... ] ] 
+  [ GROUP BY col_ref [, ... ] ]
   [ OPTION ( option = val [, ...] ) ]
   [ HAVING expr ]
   [ ORDER BY col_ref [ ASC | DESC ] [, ... ] ]
