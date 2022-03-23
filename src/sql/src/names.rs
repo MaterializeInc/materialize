@@ -389,12 +389,12 @@ impl<'a> NameResolver<'a> {
             UnresolvedDataType::Other { name, typ_mod } => {
                 let (name, item) = match name {
                     RawName::Name(name) => {
-                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let name = normalize::unresolved_object_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
                         (item.name().clone().into(), item)
                     }
                     RawName::Id(id, name) => {
-                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let name = normalize::unresolved_object_name(name)?;
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item_by_id(&gid);
                         (name, item)
@@ -475,22 +475,41 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         object_name: <Raw as AstInfo>::ObjectName,
     ) -> <Aug as AstInfo>::ObjectName {
+        let error_response = ResolvedObjectName {
+            id: Id::Global(GlobalId::System(0)),
+            raw_name: PartialName {
+                database: None,
+                schema: None,
+                item: "".to_string(),
+            },
+            print_id: false,
+        };
+
         match object_name {
             RawName::Name(raw_name) => {
+                let raw_name = match normalize::unresolved_object_name(raw_name) {
+                    Ok(raw_name) => raw_name,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e);
+                        }
+                        return error_response;
+                    }
+                };
+
                 // Check if unqualified name refers to a CTE.
-                if raw_name.0.len() == 1 {
-                    let norm_name = normalize::ident(raw_name.0[0].clone());
+                if raw_name.database.is_none() && raw_name.schema.is_none() {
+                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
                     if let Some(id) = self.ctes.get(&norm_name) {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
-                            raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                            raw_name,
                             print_id: false,
                         };
                     }
                 }
 
-                let name = normalize::unresolved_object_name(raw_name).unwrap();
-                match self.catalog.resolve_item(&name) {
+                match self.catalog.resolve_item(&raw_name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
                         let print_id = !matches!(
@@ -507,11 +526,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        ResolvedObjectName {
-                            id: Id::Local(LocalId::new(0)),
-                            raw_name: name,
-                            print_id: false,
-                        }
+                        error_response
                     }
                 }
             }
@@ -519,12 +534,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
-                        self.status = Err(e.into());
-                        GlobalId::User(0)
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        return error_response;
                     }
                 };
-                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
-                    self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                if self.catalog.try_get_item_by_id(&gid).is_none() {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                    }
+                    return error_response;
                 }
                 self.ids.insert(gid.clone());
                 ResolvedObjectName {
