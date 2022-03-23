@@ -632,6 +632,7 @@ mod persist {
         };
 
         let mut differential_state_ingester = Some(DifferentialStateIngester::new());
+        let mut row_packer = mz_repr::Row::default();
         // let mut state_input_buffer = Vec::new();
         let operator_name = format!("persistent_upsert({})", name);
 
@@ -641,7 +642,7 @@ mod persist {
             position_or,
             as_of_frontier.clone(),
             source_arity,
-            upsert_envelope,
+            upsert_envelope.clone(),
             &restored_upsert_oks,
             Exchange::new(
                 move |((key, _data), _ts, _diff): &((Result<Row, DecodeError>, _), _, _)| {
@@ -671,7 +672,12 @@ mod persist {
                         .take()
                         .expect("already finished ingesting")
                         .finish();
-                    current_values.extend(initial_state.into_iter());
+                    current_values.extend(initial_state.into_iter().map(|(k, v)| {
+                        (
+                            k,
+                            v.map(|v| thin(&upsert_envelope.key_indices, &v, &mut row_packer)),
+                        )
+                    }));
 
                     trace!(
                         "In {}, initial (restored) upsert state, count:{}: {:?}",

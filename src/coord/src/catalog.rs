@@ -220,6 +220,7 @@ impl CatalogState {
 
     #[tracing::instrument(level = "trace", skip(self))]
     fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
+        info!("gus");
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
