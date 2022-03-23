@@ -15,12 +15,24 @@ If the `PREPARE` statement specified some parameters, you must pass values compa
 
 ## Syntax
 
+```sql
+EXECUTE name ( parameter_value [, ...] )
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "execute.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
 **name**  | The name of the prepared statement to execute.
-**parameter**  |  The actual value of a parameter to the prepared statement.
+**parameter_value**  |  The actual value of a parameter to the prepared statement.
 
 ## Example
 

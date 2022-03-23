@@ -14,7 +14,20 @@ menu:
 
 ## Syntax
 
+```sql
+CREATE [ MATERIALIZED ] [ TEMP | TEMPORARY ] VIEWS [ IF NOT EXISTS ]
+FROM SOURCE src_name ( "upstream_table" AS "new_view_name" [, ... ] )
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-views.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

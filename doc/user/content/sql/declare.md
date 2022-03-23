@@ -18,9 +18,37 @@ fetch only some of the rows at a time.
 
 ## Syntax
 
+```sql
+DECLARE cursor_name CURSOR [ WITHOUT HOLD ] FOR query
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "declare.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
+**WITHOUT HOLD** | Explicit mention of default behavior. The cursor closes at the end of a transaction
 _cursor&lowbar;name_ | The name of the cursor to be created.
 _query_ | The query ([`SELECT`](/sql/select) or [`TAIL`](/sql/tail)) that will provide the rows to be returned by the cursor.
+
+## Example
+
+Create a cursor for a query over millions of rows:
+
+```sql
+BEGIN;
+
+DECLARE messages_cursor CURSOR FOR ( SELECT * FROM historical_messages );
+
+-- Fetch only a hundred rows 
+FETCH 100 messages_cursor;
+
+COMMIT;
+```

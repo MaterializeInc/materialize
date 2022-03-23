@@ -33,7 +33,21 @@ You might want to create indexes when...
 
 ## Syntax
 
+```sql
+CREATE INDEX index_name ON obj_name [ USING method ]
+    ( col_expr [, ... ] )
+    [ WITH ( field = val [, ... ] ) ]
+
+CREATE DEFAULT INDEX obj_name [ USING method ]
+    [ WITH ( field = val [, ... ] ) ]
+```
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
 {{< diagram "create-index.svg" >}}
+</details>
+<br/>
 
 Field | Use
 ------|-----

@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW [ FULL ] [ MATERIALIZED ] VIEWS [ FROM schema_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-views.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

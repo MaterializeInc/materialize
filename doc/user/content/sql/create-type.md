@@ -26,7 +26,22 @@ encoding and decoding][binary] for these types, as well.
 
 ## Syntax
 
+```sql
+  CREATE TYPE type_name AS ( field_name field_type [, ... ] )
+  CREATE TYPE type_name AS LIST ( property=value [, ... ] )
+  CREATE TYPE type_name AS MAP ( property=value [, ... ] )
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-type.svg" >}}
+
+</details>
+<br/>
+
 
  Field               | Use
 ---------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------

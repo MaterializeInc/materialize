@@ -24,7 +24,21 @@ You might want to `INSERT` data into tables when:
 
 ## Syntax
 
+```sql
+  INSERT INTO table_name [ [ AS ] alias ]
+  [ ( col_name [, ... ] ) ]
+  { VALUES ( expr [ , ... ] ) [, ... ] | query }
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "insert.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

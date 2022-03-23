@@ -18,7 +18,25 @@ query in memory. For more information, see [API Components: Materialized views](
 
 ## Syntax
 
+```sql
+  CREATE [ TEMP | TEMPORARY ] MATERIALIZED VIEW [ IF NOT EXISTS ] view_name
+  [ ( col_ident [, ... ] ) ]
+  AS select_stmt
+
+  CREATE OR REPLACE [ TEMP | TEMPORARY ] MATERIALIZED VIEW view_name
+  [ ( col_ident [, ... ] ) ]
+  AS select_stmt
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-materialized-view.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

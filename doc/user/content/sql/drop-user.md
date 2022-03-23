@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP USER [ IF EXISTS ] role_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-user.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
@@ -22,6 +34,13 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](.
 ## Details
 
 `DROP USER` is an alias for [`DROP ROLE`](../drop-role).
+
+## Example
+
+Drop user named _developer_:
+```sql
+DROP USER developer;
+```
 
 ## Related pages
 

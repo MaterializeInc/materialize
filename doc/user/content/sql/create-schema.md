@@ -24,6 +24,18 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
+```sql
+CREATE SCHEMA [ IF NOT EXISTS ] schema_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
+
+</details>
+<br/>
 {{< diagram "create-schema.svg" >}}
 
 Field | Use

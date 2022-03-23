@@ -20,7 +20,25 @@ shorthand for performing the query. For more information, see [API Components: S
 
 ## Syntax
 
+```sql
+CREATE [ TEMP | TEMPORARY ] VIEW [ IF NOT EXISTS ] view_name
+    [ ( col_ident [, ... ] ) ]
+    AS select_stmt
+
+CREATE OR REPLACE VIEW view_name
+    [ ( col_ident [, ... ] ) ]
+    AS select_stmt
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-view.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

@@ -11,7 +11,19 @@ instances.
 
 ## Syntax
 
+```sql
+SHOW [ FULL ] [ MATERIALIZED ] SOURCES [ FROM schema_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-sources.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

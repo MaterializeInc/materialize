@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW CREATE TABLE table_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-create-table.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

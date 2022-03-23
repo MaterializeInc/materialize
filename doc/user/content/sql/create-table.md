@@ -40,11 +40,23 @@ use a [source](/sql/create-source) instead.
 
 ## Syntax
 
+```sql
+CREATE [ TEMP | TEMPORARY ] TABLE table_name
+  ( col_name col_type [ NOT NULL | DEFAULT expr ] [, ... ] )
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-table.svg" >}}
 
 ### `col_option`
 
 {{< diagram "col-option.svg" >}}
+</details>
+<br/>
 
 Field | Use
 ------|-----

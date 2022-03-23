@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW CREATE SINK sink_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-create-sink.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

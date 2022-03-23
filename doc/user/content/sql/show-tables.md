@@ -10,6 +10,18 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW [ EXTENDED ] [ FULL ] TABLES [ FROM schema_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
+
+</details>
+<br/>
 {{< diagram "show-tables.svg" >}}
 
 Field | Use

@@ -10,7 +10,21 @@ menu:
 
 ## Syntax
 
+```sql
+  UPDATE table_name [ [ AS ] alias ]
+  SET column_name = expr [, ... ]
+  WHERE condition
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "update-stmt.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

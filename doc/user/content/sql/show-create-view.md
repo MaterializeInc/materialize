@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW CREATE VIEW view_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-create-view.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

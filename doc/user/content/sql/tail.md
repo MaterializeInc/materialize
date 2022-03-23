@@ -26,7 +26,21 @@ Clients can use `TAIL` to:
 
 ## Syntax
 
+```sql
+TAIL object_name | ( select_stmt )
+  [ WITH ( option_name = option_value [, ...] )
+  [ AS OF timestamp_expression ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "tail-stmt.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

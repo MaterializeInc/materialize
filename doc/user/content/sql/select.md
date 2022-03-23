@@ -43,7 +43,32 @@ Scenario | `SELECT` behavior
 
 ## Syntax
 
+```sql
+  WITH cte_ident [ ( col_ident [, ... ] ) ] AS ( select_stmt ) [, ...]
+  SELECT [ 'ALL' | 'DISTINCT' [ ON ( col_ref [, ... ] ) ]
+  target_elem [, ... ]
+  [ FROM table_expr [, ...] ]
+  [ join_expr ]
+  [ WHERE expr ]
+  [ GROUP BY col_ref [, ... ] ] 
+  [ OPTION ( option = val [, ...] ) ]
+  [ HAVING expr ]
+  [ ORDER BY col_ref [ ASC | DESC ] [, ... ] ]
+  [ LIMIT expr ]
+  [ OFFSET expr ]
+  [ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ]  another_select_stmt ]
+  [ AS OF timestamp_expression ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "select-stmt.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

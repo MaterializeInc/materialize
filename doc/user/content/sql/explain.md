@@ -24,7 +24,21 @@ into Materialize's behavior for specific queries, e.g. performance.
 
 ## Syntax
 
+```sql
+  EXPLAIN [ TYPED ]
+  [ [ 'RAW' | 'DECORRELATED' | 'OPTIMIZED' ] PLAN FOR ]
+  select_stmt | VIEW view_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "explain.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
@@ -33,6 +47,8 @@ Field | Use
 **DECORRELATED** | Display the decorrelated plan
 **OPTIMIZED** | _(Default)_ Display the optimized plan
 **VIEW** | Display the plan for an existing view
+_select&lowbar;stmt_ | The [`SELECT` statement](../select) plan to explain.
+_view&lowbar;name_ | The view query you want to explain. You can find available view names through [`SHOW VIEWS`](../show-views).
 
 {{< version-changed v0.4.0 >}}
 Accept `EXPLAIN <statement>` as shorthand for `EXPLAIN PLAN FOR <statement>`.

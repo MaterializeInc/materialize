@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+ALTER INDEX name SET ( ENABLED )
+ALTER INDEX name SET ( field = val [, ... ] )
+ALTER INDEX name RESET ( field [, ... ] )
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
 {{< diagram "alter-index.svg" >}}
+</details>
+<br/>
 
 Field | Use
 ------|-----

@@ -13,7 +13,19 @@ database without confirmation. Use with care! {{< /warning >}}
 
 ## Syntax
 
+```sql
+DROP DATABASE [ IF EXISTS ] database_name [ CASCADE | RESTRICT ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-database.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

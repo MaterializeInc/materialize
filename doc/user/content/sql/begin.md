@@ -9,7 +9,19 @@ menu:
 
 ## Syntax
 
+```sql
+BEGIN [ transaction_mode [, ... ] ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "begin.svg" >}}
+
+</details>
+<br/>
 
 Supported `transaction_mode` option values:
 
@@ -53,3 +65,17 @@ The first `SELECT` in a transaction assumes that any object in that `SELECT` and
 If a later `SELECT` references another object, the transaction will fail.
 This can happen if the object is in a schema not referenced by the first `SELECT`.
 It can also happen if a new object (table, view, source, or index) was created after the transaction started, even if the new object is in the same schemas as the first `SELECT`.
+
+## Examples
+
+Straightforward transaction block:
+
+```sql
+BEGIN;
+```
+
+Transaction block with isolation and read only modes:
+
+```sql
+BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY;
+```

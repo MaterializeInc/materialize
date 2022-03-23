@@ -21,6 +21,35 @@ Sink source type | Description
 
 ## Syntax
 
+```sql
+CREATE SINK [ IF NOT EXISTS ] sink_name
+    FROM item_name
+    INTO { sink_kafka_connector | 'AVRO OCF' path }
+    [ WITH [ ( option = val [, ... ] ) ] ]
+    [ FORMAT sink_format_spec ]
+    [ ENVELOPE { DEBEZIUM | UPSERT } ]
+    [ WITH SNAPSHOT | WITHOUT SNAPSHOT ]
+
+-- sink_kafka_connector is:
+    KAFKA BROKER host TOPIC topic-prefix
+    [ KEY ( key_column [, ... ] ) ]
+    [ CONSISTENCY ( TOPIC consistency_topic [ FORMAT consistency_format_spec ] ) ]
+
+-- sink_format_spec is:
+    JSON | AVRO USING {
+        CONFLUENT SCHEMA REGISTRY url [ with_options ] |
+        SCHEMA FILE schema_file_path |
+    }
+
+-- consistency_format_spec is:
+    AVRO USING CONFLUENT SCHEMA REGISTRY url [ with_options ]
+```
+
+<br/>
+<details>
+<summary>Diagrams</summary>
+<br>
+
 {{< diagram "create-sink.svg" >}}
 
 #### `sink_kafka_connector`
@@ -34,6 +63,8 @@ Sink source type | Description
 #### `consistency_format_spec`
 
 {{< diagram "consistency-format-spec.svg" >}}
+</details>
+<br/>
 
 Field | Use
 ------|-----
