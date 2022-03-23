@@ -44,7 +44,7 @@ Scenario | `SELECT` behavior
 ## Syntax
 
 ```sql
-  WITH cte_ident [ ( col_ident [, ... ] ) ] AS ( select_stmt ) [, ...]
+  [ WITH cte_ident [ ( col_ident [, ... ] ) ] AS ( select_stmt ) [, ...] ]
   SELECT [ 'ALL' | 'DISTINCT' [ ON ( col_ref [, ... ] ) ]
   target_elem [, ... ]
   [ FROM table_expr [, ...] ]
