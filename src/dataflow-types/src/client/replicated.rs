@@ -41,10 +41,7 @@ pub struct ActiveReplication<C, T> {
     /// Frontier information, both from each replica and unioned across all replicas.
     uppers: HashMap<GlobalId, (Antichain<T>, Vec<MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
-    ///
-    /// In principle, this history can be thinned down, either periodically,
-    /// or pro-actively when new replicas are introduced.
-    history: Vec<ComputeCommand<T>>,
+    history: crate::client::ComputeCommandHistory<T>,
     /// Cursor to use among the replicas
     cursor: usize,
 }
@@ -59,7 +56,7 @@ where
             replicas,
             peeks: HashSet::new(),
             uppers: HashMap::new(),
-            history: Vec::new(),
+            history: Default::default(),
             cursor: 0,
         }
     }
@@ -87,7 +84,7 @@ where
             frontiers[replica_index].update_iter(Some((T::minimum(), 1)));
         }
         // Take this opportunity to clean up the history we should present.
-        self.reduce_history();
+        self.history.reduce(&self.peeks);
         // Replay the commands at the client, creating new dataflow identifiers.
         let client = self.replicas.get_mut(replica_index).unwrap();
         for command in self.history.iter() {
@@ -104,133 +101,6 @@ where
         }
 
         Ok(())
-    }
-
-    /// Reduces `self.history` to a minimal form.
-    ///
-    /// This action not only simplifies the issued history, but importantly reduces the instructions
-    /// to only reference inputs from times that are still certain to be valid. Commands that allow
-    /// compaction of a collection also remove certainty that the inputs will be available for times
-    /// not greater or equal to that compaction frontier.
-    fn reduce_history(&mut self) {
-        // First determine what the final compacted frontiers will be for each collection.
-        // These will determine for each collection whether the command that creates it is required,
-        // and if required what `as_of` frontier should be used for its updated command.
-        let mut final_frontiers = std::collections::BTreeMap::new();
-        let mut live_dataflows = Vec::new();
-        let mut live_peeks = Vec::new();
-        let mut live_cancels = std::collections::BTreeSet::new();
-
-        let mut create_command = None;
-        let mut drop_command = None;
-
-        for command in self.history.drain(..) {
-            match command {
-                create @ ComputeCommand::CreateInstance(_) => {
-                    // We should be able to handle this, should this client need to be restartable.
-                    assert!(create_command.is_none());
-                    create_command = Some(create);
-                }
-                cmd @ ComputeCommand::DropInstance => {
-                    assert!(drop_command.is_none());
-                    drop_command = Some(cmd);
-                }
-                ComputeCommand::CreateDataflows(dataflows) => {
-                    live_dataflows.extend(dataflows);
-                }
-                ComputeCommand::AllowCompaction(frontiers) => {
-                    for (id, frontier) in frontiers {
-                        final_frontiers.insert(id, frontier.clone());
-                    }
-                }
-                peek @ ComputeCommand::Peek { .. } => {
-                    // We could pre-filter here, but seems hard to access `uuid`
-                    // and take ownership of `peek` at the same time.
-                    live_peeks.push(peek);
-                }
-                ComputeCommand::CancelPeeks { mut uuids } => {
-                    uuids.retain(|uuid| self.peeks.contains(uuid));
-                    live_cancels.extend(uuids);
-                }
-            }
-        }
-
-        // Discard dataflows whose outputs have all been allowed to compact away.
-        live_dataflows.retain(|dataflow| {
-            // If any index or sink has not been compacted to the empty frontier, it remains active.
-            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
-            // this is fine and normal, and is not evidence that the collection is not in use.
-            let index_active = dataflow
-                .index_exports
-                .iter()
-                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-            let sink_active = dataflow
-                .sink_exports
-                .iter()
-                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-
-            let retain = index_active || sink_active;
-
-            // If we are going to drop the dataflow, we should remove the frontier information so that we
-            // do not instruct anyone to compact a frontier they have not heard of.
-            if !retain {
-                for (id, _, _) in dataflow.index_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-                for (id, _) in dataflow.sink_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-            }
-
-            retain
-        });
-
-        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
-        for dataflow in live_dataflows.iter_mut() {
-            let mut same_as_of = false;
-            let mut as_of = Antichain::new();
-            for (id, _, _) in dataflow.index_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
-                    as_of.extend(frontier.clone());
-                } else {
-                    same_as_of = true;
-                }
-            }
-            for (id, _) in dataflow.sink_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
-                    as_of.extend(frontier.clone());
-                } else {
-                    same_as_of = true;
-                }
-            }
-            if !same_as_of {
-                dataflow.as_of = Some(as_of);
-            }
-        }
-
-        // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| {
-            if let ComputeCommand::Peek { uuid, .. } = peek {
-                self.peeks.contains(uuid)
-            } else {
-                unreachable!()
-            }
-        });
-
-        // Reconstitute the commands as a compact history.
-        self.history.push(create_command.unwrap());
-        self.history
-            .push(ComputeCommand::CreateDataflows(live_dataflows));
-        self.history.push(ComputeCommand::AllowCompaction(
-            final_frontiers.into_iter().collect(),
-        ));
-        self.history.extend(live_peeks);
-        self.history.push(ComputeCommand::CancelPeeks {
-            uuids: live_cancels,
-        });
-        if let Some(drop_command) = drop_command {
-            self.history.push(drop_command);
-        }
     }
 }
 

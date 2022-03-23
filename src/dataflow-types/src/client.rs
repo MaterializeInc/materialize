@@ -371,6 +371,158 @@ impl<T> ComputeCommand<T> {
     }
 }
 
+#[derive(Debug)]
+struct ComputeCommandHistory<T> {
+    commands: Vec<ComputeCommand<T>>,
+}
+
+impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    pub fn push(&mut self, command: ComputeCommand<T>) {
+        self.commands.push(command);
+    }
+    /// Reduces `self.history` to a minimal form.
+    ///
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    ///
+    /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
+    /// response or cancelation.
+    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_command = None;
+        let mut drop_command = None;
+
+        for command in self.commands.drain(..) {
+            match command {
+                create @ ComputeCommand::CreateInstance(_) => {
+                    // We should be able to handle this, should this client need to be restartable.
+                    assert!(create_command.is_none());
+                    create_command = Some(create);
+                }
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
+                }
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                peek @ ComputeCommand::Peek { .. } => {
+                    // We could pre-filter here, but seems hard to access `uuid`
+                    // and take ownership of `peek` at the same time.
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { mut uuids } => {
+                    uuids.retain(|uuid| peeks.contains(uuid));
+                    live_cancels.extend(uuids);
+                }
+            }
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| {
+            // If any index or sink has not been compacted to the empty frontier, it remains active.
+            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
+            // this is fine and normal, and is not evidence that the collection is not in use.
+            let index_active = dataflow
+                .index_exports
+                .iter()
+                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+            let sink_active = dataflow
+                .sink_exports
+                .iter()
+                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+
+            let retain = index_active || sink_active;
+
+            // If we are going to drop the dataflow, we should remove the frontier information so that we
+            // do not instruct anyone to compact a frontier they have not heard of.
+            if !retain {
+                for (id, _, _) in dataflow.index_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+                for (id, _) in dataflow.sink_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+            }
+
+            retain
+        });
+
+        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut same_as_of = false;
+            let mut as_of = Antichain::new();
+            for (id, _, _) in dataflow.index_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            for (id, _) in dataflow.sink_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            if !same_as_of {
+                dataflow.as_of = Some(as_of);
+            }
+        }
+
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| {
+            if let ComputeCommand::Peek { uuid, .. } = peek {
+                peeks.contains(uuid)
+            } else {
+                unreachable!()
+            }
+        });
+
+        // Reconstitute the commands as a compact history.
+        self.commands.push(create_command.unwrap());
+        self.commands
+            .push(ComputeCommand::CreateDataflows(live_dataflows));
+        self.commands.push(ComputeCommand::AllowCompaction(
+            final_frontiers.into_iter().collect(),
+        ));
+        self.commands.extend(live_peeks);
+        self.commands.push(ComputeCommand::CancelPeeks {
+            uuids: live_cancels,
+        });
+        if let Some(drop_command) = drop_command {
+            self.commands.push(drop_command);
+        }
+    }
+    /// Iterate through the contained commands.
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+        self.commands.iter()
+    }
+}
+
+impl<T> Default for ComputeCommandHistory<T> {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+        }
+    }
+}
+
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
