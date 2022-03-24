@@ -1367,7 +1367,7 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
-    #[instrument(skip_all, fields(conn_id = %session.conn_id(), user = %session.user()))]
+    #[instrument(skip_all, fields(conn_id = %session.conn_id(), user = %session.user(), otel.kind = "server"))]
     async fn handle_execute(
         &mut self,
         portal_name: String,
