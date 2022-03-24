@@ -118,6 +118,18 @@ tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing
 mode (`tail = false`).
 
+{{< warning >}}
+
+Many PostgreSQL drivers wait for a query to complete before returning its
+results. Since `TAIL` can run forever, naively executing a `TAIL` using your
+driver's standard query API may never return.
+
+Either use an API in your driver that does not buffer rows or use the
+[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
+See the [examples](#examples) for details.
+
+{{< /warning >}}
+
 ### `AS OF`
 
 The `AS OF` clause specifies the time at which a `TAIL` operation begins.
@@ -228,9 +240,6 @@ FETCH ALL c WITH (timeout='0s');
 
 ### Using clients
 
-{{< tabs tabID="Clients" >}}
-{{< tab "Shell">}}
-
 If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
 
 ```sql
@@ -239,10 +248,6 @@ COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
 
 [`bigint`]: /sql/types/bigint
 [`numeric`]: /sql/types/numeric
-
-{{< /tab >}}
-
-{{< tab "Python">}}
 
 #### `FETCH` with Python and psycopg2
 
@@ -288,9 +293,6 @@ with conn.cursor() as cur:
         print(row)
 ```
 
-{{< /tab >}}
-{{< tab "C#">}}
-
 #### `FETCH` with C# and Npgsql
 
 ```csharp
@@ -309,9 +311,6 @@ while (true)
     }
 }
 ```
-
-{{< /tab >}}
-{{< tab "Node.js">}}
 
 #### `FETCH` with Node.js and pg
 
@@ -335,10 +334,6 @@ async function main() {
 main();
 ```
 
-{{< /tab >}}
-
-{{< tab "PHP">}}
-
 #### `FETCH` with PHP
 
 ```php
@@ -359,10 +354,6 @@ main();
      print_r($result);
  }
 ```
-
-{{< /tab >}}
-
-{{< tab "Java">}}
 
 #### `FETCH` with Java
 
@@ -387,21 +378,6 @@ main();
       }
   }
 ```
-
-{{< /tab >}}
-{{< /tabs >}}
-
-{{< warning >}}
-
-Many PostgreSQL drivers wait for a query to complete before returning its
-results. Since `TAIL` can run forever, naively executing a `TAIL` using your
-driver's standard query API may never return.
-
-Either use an API in your driver that does not buffer rows or use the
-[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
-See the [examples](#examples) for details.
-
-{{< /warning >}}
 
 ### Using `AS OF`
 
@@ -434,7 +410,7 @@ COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 
 Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
 
-### SNAPSHOT rows and their updates
+### Relating rows with their updates
 
 After all the rows from the `SNAPSHOT` have been transmitted, the updates will come as they occur,
 but how is it possible to know which row has been updated? <br/>
@@ -448,7 +424,7 @@ but how is it possible to know which row has been updated? <br/>
 | 2            | false         | 1       | id1      |      | value4   |
 
 If you already know your data, then any _column_ acting as a key will do the work but if the key is unknown, then using a `hash(columns_values)` could serve as your key. <br/><br/>
-Back to the example, _Column 1_ acts as the key to know from where the update comes from; in case this was unknown, hashing the values from _Column 1_ to _Column N_ should reveal the origin row.
+Back to the example, `Column 1` acts as the key to know from where the update comes from; in case this was unknown, hashing the values from `Column 1` to `Column N` should reveal the origin row.
 
 ---
 
@@ -462,18 +438,6 @@ Support arbitrary SELECT statements in `TAIL`.
 Columns names added by `TAIL` now prepended by `mz_`.
 {{</ version-changed >}}
 
-{{< version-changed v0.5.1 >}}
-The timestamp and diff information moved to leading, well-typed columns.
-Previously the timestamp and diff information was encoded in a human-readable
-string in a trailing [`text`](/sql/types/text) column.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-`TAIL` sends rows to the client normally, i.e., as if they were sent by a
-[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
-a [`COPY TO`](/sql/copy-to) statement.
-{{</ version-changed >}}
-
 {{< version-changed v0.5.2 >}}
 `TAIL` is now guaranteed to send timestamps in non-decreasing order.
 {{</ version-changed >}}
@@ -485,4 +449,16 @@ Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 
 {{< version-changed v0.5.2 >}}
 The [`PROGRESS`](#progress) option has been added.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+The timestamp and diff information moved to leading, well-typed columns.
+Previously the timestamp and diff information was encoded in a human-readable
+string in a trailing [`text`](/sql/types/text) column.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+`TAIL` sends rows to the client normally, i.e., as if they were sent by a
+[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
+a [`COPY TO`](/sql/copy-to) statement.
 {{</ version-changed >}}
