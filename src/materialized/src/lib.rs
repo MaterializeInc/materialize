@@ -408,9 +408,11 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     boundary.lock().unwrap()[index % workers].take().unwrap()
                 })?;
             let (_, virtual_compute_host) = mz_dataflow_types::client::split_client(compute_client);
-            let storage_client = Box::new(StorageWrapperClient::new(
-                RemoteClient::connect(&[controller_addr]).await?,
-            ));
+            let storage_client = Box::new(StorageWrapperClient::new({
+                let mut client = RemoteClient::new(&[controller_addr]);
+                client.connect().await;
+                client
+            }));
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_client,
