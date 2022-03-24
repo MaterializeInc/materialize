@@ -17,7 +17,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::pin::Pin;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
@@ -714,20 +713,22 @@ where
     T: timely::progress::Timestamp + Copy,
 {
     /// Construct a client backed by multiple tcp connections
-    pub async fn connect(
-        addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display],
-    ) -> Result<Self, anyhow::Error> {
+    pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
-            remotes.push(
-                tcp::TcpClient::connect(addr.to_string())
-                    .await
-                    .with_context(|| format!("Connecting to {addr}"))?,
-            );
+            remotes.push(tcp::TcpClient::new(addr.to_string()));
         }
-        Ok(Self {
+        Self {
             client: partitioned::Partitioned::new(remotes),
-        })
+        }
+    }
+
+    /// Construct a client backed by multiple tcp connections
+    pub async fn connect(&mut self) {
+        // TODO: initiate connections concurrently.
+        for remote in self.client.shards.iter_mut() {
+            remote.connect().await;
+        }
     }
 }
 
@@ -855,7 +856,7 @@ pub mod partitioned {
     /// and await responses from each of the client shards before it can respond.
     #[derive(Debug)]
     pub struct Partitioned<C, T> {
-        shards: Vec<C>,
+        pub shards: Vec<C>,
         state: PartitionedClientState<T>,
     }
 
@@ -1355,37 +1356,45 @@ pub mod tcp {
     use crate::client::{Command, GenericClient, Response};
 
     /// A client to a remote dataflow server.
+    ///
+    /// If the client experiences errors, it will attempt a reconnection in the `recv` method and
+    /// produce an error for the call in which that reconnection happens, allowing a bearer to
+    /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
+    /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     #[derive(Debug)]
     pub struct TcpClient<T> {
-        /// Indicates if `self.connection` recently produced an error and has yet to be reconnected.
-        ///
-        /// Used to suppress `send` commands to a known-errored connection.
-        errored: bool,
-        connection: FramedClient<TcpStream, T>,
+        connection: Option<FramedClient<TcpStream, T>>,
         addr: String,
     }
 
     impl<T> TcpClient<T> {
-        /// Connects a remote client to the specified remote dataflow server.
-        pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
-            let connection = framed_client(TcpStream::connect(&addr).await?);
-            Ok(Self {
-                errored: false,
-                connection,
+        /// Creates a new `TcpClient` initially in a disconnected state.
+        ///
+        /// Use the `connect()` method to put the client into a connected state.
+        pub fn new(addr: String) -> TcpClient<T> {
+            Self {
+                connection: None,
                 addr,
-            })
+            }
         }
 
-        /// Reconnects the underlying `connection`.
-        pub async fn reconnect(&mut self) {
-            let mut connection = TcpStream::connect(&self.addr).await;
-            while connection.is_err() {
-                tracing::warn!("Connect error; reconnecting");
-                time::sleep(Duration::from_secs(1)).await;
-                connection = TcpStream::connect(&self.addr).await;
+        /// Reports whether the client is actively connected.
+        pub fn connected(&self) -> bool {
+            self.connection.is_some()
+        }
+
+        /// Connects the underlying `connection`.
+        pub async fn connect(&mut self) {
+            if self.connection.is_none() {
+                let mut connection = TcpStream::connect(&self.addr).await;
+                while connection.is_err() {
+                    tracing::warn!("Connect error; reconnecting");
+                    time::sleep(Duration::from_secs(1)).await;
+                    connection = TcpStream::connect(&self.addr).await;
+                }
+                tracing::info!("Reconnected");
+                self.connection = Some(framed_client(connection.unwrap()));
             }
-            tracing::info!("Reconnected");
-            self.connection = framed_client(connection.unwrap());
         }
     }
 
@@ -1395,24 +1404,30 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            if !self.errored {
-                let result = self.connection.send(cmd).await;
-                self.errored = result.is_err();
+            if let Some(connection) = &mut self.connection {
+                let result = connection.send(cmd).await;
+                if result.is_err() {
+                    self.connection = None;
+                }
+                Ok(result?)
+            } else {
+                Err(anyhow::anyhow!("Sent into disconnected channel"))
             }
-            // Erroring would signal a reset, but we are not yet ready to receive restarted commands.
-            // Instead, let `recv` handle the reconnection, and communicate an error once it has.
-            Ok(())
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            match self.connection.next().await {
-                Some(Ok(response)) => Ok(Some(response)),
-                _ => {
-                    // `None` and `Some(Err)` are both connection errors.
-                    self.reconnect().await;
-                    self.errored = false;
-                    Err(anyhow::anyhow!("Connection severed; reconnected"))
+            if let Some(connection) = &mut self.connection {
+                match connection.next().await {
+                    Some(Ok(response)) => Ok(Some(response)),
+                    _ => {
+                        self.connection = None;
+                        self.connect().await;
+                        Err(anyhow::anyhow!("Connection severed; reconnected"))
+                    }
                 }
+            } else {
+                self.connect().await;
+                Err(anyhow::anyhow!("Connection severed; reconnected"))
             }
         }
     }

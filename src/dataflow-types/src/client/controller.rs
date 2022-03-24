@@ -85,7 +85,7 @@ where
                 (client, logging)
             }
             InstanceConfig::Remote { hosts, logging } => {
-                let client = RemoteClient::connect(&hosts).await?;
+                let client = RemoteClient::new(&hosts);
                 let client = ComputeWrapperClient::new(client, instance);
                 let client = crate::client::replicated::ActiveReplication::new(vec![client]);
                 (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
@@ -129,7 +129,7 @@ where
                     .iter()
                     .map(|h| format!("{h}:6876"))
                     .collect();
-                let client = RemoteClient::connect(&addrs).await?;
+                let client = RemoteClient::new(&addrs);
                 let client: Box<dyn ComputeClient<T>> =
                     Box::new(ComputeWrapperClient::new(client, instance));
                 (client, logging)

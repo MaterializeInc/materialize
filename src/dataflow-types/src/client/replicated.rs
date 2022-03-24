@@ -162,10 +162,10 @@ where
                     dataflow.id = uuid::Uuid::new_v4();
                 }
             }
-            let mut result = self.replicas[index].send(command).await;
-            while result.is_err() {
-                result = self.hydrate_replica(index).await;
-            }
+
+            // Errors are suppressed by this client, which awaits a reconnection in `recv` and
+            // will rehydrate the client when that happens.
+            let _ = self.replicas[index].send(command).await;
         }
 
         Ok(())
