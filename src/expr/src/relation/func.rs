@@ -514,6 +514,18 @@ fn order_aggregate_datums<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    order_aggregate_datums_with_rank(datums, order_by).map(|(expr, _order_row)| expr)
+}
+
+// Assuming datums is a List, sort them by the 2nd through Nth elements
+// corresponding to order_by, then return the 1st element and computed order by expression.
+fn order_aggregate_datums_with_rank<'a, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = (Datum<'a>, Row)>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     let mut rows: Vec<(Datum, Row)> = datums
         .into_iter()
         .filter_map(|d| {
@@ -534,7 +546,7 @@ where
         compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(&right))
     };
     rows.sort_by(&mut sort_by);
-    rows.into_iter().map(|(expr, _order_row)| expr)
+    rows.into_iter()
 }
 
 fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
@@ -577,6 +589,44 @@ where
         .flatten()
         .zip(1i64..)
         .map(|(d, i)| {
+            temp_storage.make_datum(|packer| {
+                packer.push_list(vec![Datum::Int64(i), d]);
+            })
+        });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
+fn dense_rank<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Keep the row used for ordering around, as it is used to determine the rank
+    let datums = order_aggregate_datums_with_rank(datums, order_by);
+
+    let mut datums = datums
+        .into_iter()
+        .map(|(d0, row)| d0.unwrap_list().iter().map(move |d1| (d1, row.clone())))
+        .flatten();
+
+    let datums = datums
+        .next()
+        .map_or(vec![], |(first_datum, first_row)| {
+            // Folding with (last order_by row, last assigned rank, output vec)
+            datums.fold((first_row, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_row)| {
+                let (ref mut acc_row, ref mut acc_rank, ref mut output) = acc;
+                // Identity is based on the order_by expression
+                if *acc_row != next_row {
+                    *acc_rank += 1;
+                    *acc_row = next_row;
+                }
+
+                (*output).push((next_datum, *acc_rank));
+                acc
+            })
+        }.2).into_iter().map(|(d, i)| {
             temp_storage.make_datum(|packer| {
                 packer.push_list(vec![Datum::Int64(i), d]);
             })
@@ -654,6 +704,9 @@ pub enum AggregateFunc {
     RowNumber {
         order_by: Vec<ColumnOrder>,
     },
+    DenseRank {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -706,6 +759,7 @@ impl AggregateFunc {
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
             AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
+            AggregateFunc::DenseRank { order_by } => dense_rank(datums, temp_storage, order_by),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -732,6 +786,7 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
+            AggregateFunc::DenseRank { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -767,6 +822,29 @@ impl AggregateFunc {
                         fields: vec![
                             (
                                 ColumnName::from("?row_number?"),
+                                ScalarType::Int64.nullable(false),
+                            ),
+                            (ColumnName::from("?record?"), {
+                                let inner = match &fields[0].1.scalar_type {
+                                    ScalarType::List { element_type, .. } => element_type.clone(),
+                                    _ => unreachable!(),
+                                };
+                                inner.nullable(false)
+                            }),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                },
+                _ => unreachable!(),
+            },
+            AggregateFunc::DenseRank { .. } => match input_type.scalar_type {
+                ScalarType::Record { ref fields, .. } => ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (
+                                ColumnName::from("?dense_rank?"),
                                 ScalarType::Int64.nullable(false),
                             ),
                             (ColumnName::from("?record?"), {
@@ -1071,6 +1149,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
             AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
             AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
+            AggregateFunc::DenseRank { .. } => f.write_str("dense_rank"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

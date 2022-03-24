@@ -469,3 +469,163 @@ ORDER BY row_number() OVER ()
 a
 b
 c
+
+# dense_rank
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank
+----
+1  a
+2  b
+3  c
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank
+----
+1  a
+2  b
+2  b
+3  c
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank
+----
+1  a
+2  b
+2  b
+3  c
+3  c
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+2  b
+3  a
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+2  b
+2  b
+3  a
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+1  c
+2  b
+2  b
+3  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY dense_rank, x
+----
+1  a
+1  b
+2  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY dense_rank, x
+----
+1  a
+1  a
+1  a
+2  b
+2  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+ORDER BY dense_rank, x
+----
+1  b
+1  c
+2  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY dense_rank, x
+----
+1  a
+1  b
+1  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2
+ORDER BY q DESC, a1.x DESC
+----
+1  c
+1  c
+1  c
+1  b
+1  b
+1  b
+1  a
+1  a
+1  a
+
+# Make sure a non-column expression following the window function is correctly
+# handled.
+query ITT
+WITH t (x) AS (VALUES ('a'))
+SELECT dense_rank() OVER (PARTITION BY NULL) AS q, x, 'b'
+FROM t
+----
+1 a b
+
+
+query IITT
+WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC, z), x, y, z
+FROM t
+ORDER BY y, x DESC, z
+----
+1  3  a    1
+2  2  a    1
+2  2  a    1
+3  1  a    1
+1  4  b    0
+2  4  b    1
+1  3  c    1
+2  2  c  NaN
+3  1  c  NaN
+
+
+# NaNs have the same rank
+query IITT
+WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY z DESC), x, y, z
+FROM t
+ORDER BY y, z DESC, x
+----
+1  1  a    1
+1  2  a    1
+1  2  a    1
+1  3  a    1
+1  4  b    1
+2  4  b    0
+1  1  c  NaN
+1  2  c  NaN
+2  3  c    1
