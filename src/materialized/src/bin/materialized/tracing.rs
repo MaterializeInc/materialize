@@ -18,6 +18,8 @@ use anyhow::Context as _;
 use hyper::client::HttpConnector;
 use hyper_proxy::ProxyConnector;
 use hyper_tls::HttpsConnector;
+use opentelemetry::sdk::{trace, Resource};
+use opentelemetry::KeyValue;
 use prometheus::IntCounterVec;
 use tonic::metadata::{MetadataKey, MetadataMap};
 use tonic::transport::Endpoint;
@@ -97,11 +99,15 @@ where
             otlp_exporter
         };
 
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(otlp_exporter)
-            .install_batch(opentelemetry::runtime::Tokio)
-            .unwrap();
+        let tracer =
+            opentelemetry_otlp::new_pipeline()
+                .tracing()
+                .with_trace_config(trace::config().with_resource(Resource::new(vec![
+                    KeyValue::new("service.name", "materialized"),
+                ])))
+                .with_exporter(otlp_exporter)
+                .install_batch(opentelemetry::runtime::Tokio)
+                .unwrap();
         let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
         let stack = stack.with(otel_layer);
