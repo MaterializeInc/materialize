@@ -1471,7 +1471,8 @@ pub mod monoids {
             | AggregateFunc::ArrayConcat { .. }
             | AggregateFunc::ListConcat { .. }
             | AggregateFunc::StringAgg { .. }
-            | AggregateFunc::RowNumber { .. } => None,
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::DenseRank { .. } => None,
         }
     }
 }

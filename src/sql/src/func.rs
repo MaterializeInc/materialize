@@ -2458,6 +2458,9 @@ lazy_static! {
             "row_number" => ScalarWindow {
                 params!() => ScalarWindowFunc::RowNumber, 3100;
             },
+            "dense_rank" => ScalarWindow {
+                params!() => ScalarWindowFunc::DenseRank, 3102;
+            },
 
             // Table functions.
             "generate_series" => Table {
