@@ -48,6 +48,7 @@ impl Base64Format {
         match b {
             b'A'..=b'Z' => Ok(b - b'A'),
             b'a'..=b'z' => Ok(b - b'a' + 26),
+            b'0'..=b'9' => Ok(b + 4),
             b'+' => Ok(62),
             b'/' => Ok(63),
             _ => Err(EvalError::InvalidBase64Symbol(char::from(b))),
