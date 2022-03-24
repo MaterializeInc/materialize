@@ -21,7 +21,7 @@ spec:
   containers:
   - name: psql
     image: materialize/psql
-    args: [postgres://materialize:materialize@materialized.default.svc.cluster.local/materialize]
+    command: [sleep, "1000000000"]
 EOF
 kubectl wait --for=condition=ready pod psql
 kubectl exec -it psql -- psql postgres://materialize:materialize@materialized.default.svc.cluster.local:6875/materialize
