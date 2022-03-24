@@ -246,9 +246,6 @@ If you want to use `TAIL` from an interactive SQL session (for example in `psql`
 COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
 ```
 
-[`bigint`]: /sql/types/bigint
-[`numeric`]: /sql/types/numeric
-
 #### `FETCH` with Python and psycopg2
 
 ```python
@@ -312,49 +309,6 @@ while (true)
 }
 ```
 
-#### `FETCH` with Node.js and pg
-
-```js
-import pg from "pg";
-
-async function main() {
-    const client = new pg.Client(
-        "postgres://materialize@localhost:6875/materialize"
-    );
-    await client.connect();
-
-    await client.query("BEGIN");
-    await client.query("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed");
-    while (true) {
-        const res = await client.query("FETCH ALL c");
-        console.log(res.rows);
-    }
-}
-
-main();
-```
-
-#### `FETCH` with PHP
-
-```php
- <?php
- // Include the Postgres connection details
- require 'connect.php';
- // Begin a transaction
- $connection->beginTransaction();
- // Declare a cursor
- $statement = $connection->prepare('DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed');
- // Execute the statement
- $statement->execute();
- /* Fetch all of the remaining rows in the result set */
- while (true) {
-     $tail = $connection->prepare('FETCH ALL c');
-     $tail->execute();
-     $result = $tail->fetchAll(PDO::FETCH_ASSOC);
-     print_r($result);
- }
-```
-
 #### `FETCH` with Java
 
 ```java
@@ -379,6 +333,11 @@ main();
   }
 ```
 
+| Additional guides                  |
+| ---------------------- |
+| [Node.js](/guides/node-js/#stream)          |
+| [PHP](/guides/php-pdo/#stream)          |
+| [GO](/guides/golang/#stream) |
 ### Using `AS OF`
 
 Start Materialize with a custom compaction window [`--logical-compaction-window 10000`](/cli/#compaction-window) and create a non-materialized view:
