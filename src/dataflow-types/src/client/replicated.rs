@@ -76,11 +76,11 @@ where
             })
         }
         self.replicas.push(client);
-        self.hydrate_replica(self.replicas.len() - 1).await.unwrap();
+        self.hydrate_replica(self.replicas.len() - 1).await;
     }
 
     /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    async fn hydrate_replica(&mut self, replica_index: usize) -> Result<(), anyhow::Error> {
+    async fn hydrate_replica(&mut self, replica_index: usize) {
         // Zero out frontiers maintained by this replica.
         for (_id, (_, frontiers)) in self.uppers.iter_mut() {
             frontiers[replica_index] = timely::progress::frontier::MutableAntichain::new();
@@ -99,12 +99,9 @@ where
                     dataflow.id = uuid::Uuid::new_v4();
                 }
             }
-            // TODO(mcsherry): This will panic if we fail on rehydration.
-            // Ideally we don't do that, or figure out what we should do (try again?).
-            client.send(command).await?;
+            // Suppress errors, as we will observe them in `recv` and react there.
+            let _ = client.send(command).await;
         }
-
-        Ok(())
     }
 }
 
@@ -237,7 +234,7 @@ where
 
                 if let Some(replica_index) = errored_replica {
                     tracing::warn!("Rehydrating replica {:?}", replica_index);
-                    self.hydrate_replica(replica_index).await.unwrap();
+                    self.hydrate_replica(replica_index).await;
                 }
 
                 clean_recv = errored_replica.is_none();
