@@ -226,6 +226,12 @@ impl<'a> DotGenerator<'a> {
                     rows.push(format!("ROW: {}", separated(", ", row.iter())))
                 }
             }
+            BoxType::CallTable(call_table) => {
+                // display function call
+                let func = &call_table.func;
+                let args = &call_table.exprs;
+                rows.push(format!("CALL: {}({})", func, separated(", ", args)));
+            }
             _ => {}
         }
 
@@ -238,19 +244,10 @@ impl<'a> DotGenerator<'a> {
             rows.extend(predicates.iter().map(|p| p.to_string()));
         }
 
-        // TODO: print UNIQUE KEY for all nodes if the derived attribute is present
-        if let BoxType::Get(get) = &b.box_type {
-            if !get.unique_keys.is_empty() {
-                rows.push(format!(
-                    "UNIQUE KEY {}",
-                    separated(
-                        " ",
-                        get.unique_keys.iter().map(|key_set| format!(
-                            "[{}]",
-                            separated(", ", key_set.iter().map(|k| k.to_string()))
-                        ))
-                    )
-                ));
+        if let Some(unique_keys) = get_unique_keys(b) {
+            for key in unique_keys {
+                let key = key.iter().map(|column| format!("C{}", column));
+                rows.push(format!("UNIQUE KEY: {}", separated(", ", key)));
             }
         }
 
@@ -315,6 +312,17 @@ impl<'a> DotGenerator<'a> {
 
     fn end_line(&mut self) {
         self.output.push('\n');
+    }
+}
+
+fn get_unique_keys(b: &QueryBox) -> Option<Vec<Vec<usize>>> {
+    // TODO: return value of UniqueKeys attribute if present and
+    // fallback to the Get and CallTable base cases otherwise
+    // (TBD once the attribute has been added to the codebase)
+    match &b.box_type {
+        BoxType::CallTable(call_table) => Some(call_table.func.output_type().keys),
+        BoxType::Get(get) => Some(get.unique_keys.clone()),
+        _ => None,
     }
 }
 

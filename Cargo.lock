@@ -68,6 +68,9 @@ name = "anyhow"
 version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
+dependencies = [
+ "backtrace",
+]
 
 [[package]]
 name = "arbitrary"
@@ -208,9 +211,9 @@ dependencies = [
 
 [[package]]
 name = "async-stream"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "171374e7e3b2504e0e5236e3b59260560f9fe94bfe9ac39ba5e4e929c5590625"
+checksum = "dad5c83079eae9969be7fadefe640a1c566901f05ff91ab221de4b6f68d9507e"
 dependencies = [
  "async-stream-impl",
  "futures-core",
@@ -218,9 +221,9 @@ dependencies = [
 
 [[package]]
 name = "async-stream-impl"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "648ed8c8d2ce5409ccd57453d9d1b214b342a0d69376a6feda1fd6cae3299308"
+checksum = "10f203db73a71dfa2fb6dd22763990fa26f3d2625a6da2da900d23b87d26be27"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2647,7 +2650,7 @@ checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
 
 [[package]]
 name = "materialized"
-version = "0.22.1-dev"
+version = "0.23.1-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -2687,7 +2690,6 @@ dependencies = [
  "libc",
  "mz-build-info",
  "mz-coord",
- "mz-coordtest",
  "mz-dataflow",
  "mz-dataflow-types",
  "mz-dataflowd",
@@ -3078,29 +3080,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-coordtest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "datadriven",
- "futures",
- "mz-build-info",
- "mz-coord",
- "mz-dataflow",
- "mz-dataflow-types",
- "mz-expr",
- "mz-ore",
- "mz-repr",
- "mz-sql-parser",
- "serde_json",
- "tempfile",
- "timely",
- "tokio",
-]
-
-[[package]]
 name = "mz-dataflow"
 version = "0.0.0"
 dependencies = [
@@ -3177,6 +3156,7 @@ name = "mz-dataflow-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "aws-config",
  "aws-smithy-http",
@@ -3212,6 +3192,9 @@ dependencies = [
  "serde_regex",
  "timely",
  "tokio",
+ "tokio-serde",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "url",
  "uuid",
@@ -3561,6 +3544,22 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mz-persist-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bytes",
+ "crossbeam-channel",
+ "differential-dataflow",
+ "futures-util",
+ "mz-persist-types",
+ "serde",
+ "timely",
  "uuid",
 ]
 
@@ -4228,9 +4227,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.16.0+1.1.1l"
+version = "111.18.0+1.1.1n"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ab2173f69416cf3ec12debb5823d244127d23a9b127d5a5189aa97c5fa2859f"
+checksum = "7897a926e1e8d00219127dc020130eca4292e5ca666dd592480d72c3eca2ff6c"
 dependencies = [
  "cc",
 ]
@@ -5630,9 +5629,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.88"
+version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebd69e719f31e88618baa1eaa6ee2de5c9a1c004f1e9ecdb58e8352a13f20a01"
+checksum = "ea297be220d52398dcc07ce15a209fce436d361735ac1db700cab3b6cdfb9f54"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5848,7 +5847,7 @@ checksum = "25eb0ca3468fc0acc11828786797f6ef9aa1555e4a211a60d64cc8e4d1be47d6"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#dd6187c5988e1b500d5b542bd69dc1ce97e4fb46"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5866,12 +5865,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#dd6187c5988e1b500d5b542bd69dc1ce97e4fb46"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#dd6187c5988e1b500d5b542bd69dc1ce97e4fb46"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5887,7 +5886,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#dd6187c5988e1b500d5b542bd69dc1ce97e4fb46"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
 dependencies = [
  "columnation",
  "serde",
@@ -5896,7 +5895,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#dd6187c5988e1b500d5b542bd69dc1ce97e4fb46"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
 
 [[package]]
 name = "tinytemplate"

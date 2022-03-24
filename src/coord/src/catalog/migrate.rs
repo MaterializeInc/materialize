@@ -796,7 +796,8 @@ fn semantic_use_id_for_table_format_0_7_1(
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     // Resolve Statement<Raw> to Statement<Aug>
-    let resolved = resolve_names_stmt(&mut StatementContext::new(None, cat), stmt.clone()).unwrap();
+    let (resolved, _) =
+        resolve_names_stmt(&mut StatementContext::new(None, cat), stmt.clone()).unwrap();
     // Use consistent intermediary format between Aug and Raw.
     let create_sql = resolved.to_ast_string_stable();
     // Convert Statement<Aug> to Statement<Raw> (Aug is a subset of Raw's

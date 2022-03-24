@@ -27,6 +27,13 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum CoordError {
+    /// Query needs AS OF <time> or indexes to succeed.
+    AutomaticTimestampFailure {
+        /// The names of any unmaterialized sources.
+        unmaterialized: Vec<String>,
+        /// Vec<(Objectname, Vec<Index names w/ enabled stats>)>.
+        disabled_indexes: Vec<(String, Vec<String>)>,
+    },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -120,6 +127,41 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            CoordError::AutomaticTimestampFailure {
+                unmaterialized,
+                disabled_indexes,
+            } => {
+                let unmaterialized_err = if unmaterialized.is_empty() {
+                    "".into()
+                } else {
+                    format!(
+                        "\nUnmaterialized sources:\n\t{}",
+                        itertools::join(unmaterialized, "\n\t")
+                    )
+                };
+
+                let disabled_indexes_err = if disabled_indexes.is_empty() {
+                    "".into()
+                } else {
+                    let d = disabled_indexes.iter().fold(
+                        String::default(),
+                        |acc, (object_name, disabled_indexes)| {
+                            format!(
+                                "{}\n\n\t{}\n\tDisabled indexes:\n\t\t{}",
+                                acc,
+                                object_name,
+                                itertools::join(disabled_indexes, "\n\t\t")
+                            )
+                        },
+                    );
+                    format!("\nSources w/ disabled indexes:{}", d)
+                };
+
+                Some(format!(
+                    "The query transitively depends on the following:{}{}",
+                    unmaterialized_err, disabled_indexes_err
+                ))
+            }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
             CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -167,6 +209,33 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            CoordError::AutomaticTimestampFailure {
+                unmaterialized,
+                disabled_indexes,
+            } => {
+                let unmaterialized_hint = if unmaterialized.is_empty() {
+                    ""
+                } else {
+                    "\n- Use `SELECT ... AS OF` to manually choose a timestamp for your query.
+- Create indexes on the listed unmaterialized sources or on the views derived from those sources"
+                };
+                let disabled_indexes_hint = if disabled_indexes.is_empty() {
+                    ""
+                } else {
+                    "ALTER INDEX ... SET ENABLED to enable indexes"
+                };
+
+                Some(format!(
+                    "{}{}{}",
+                    unmaterialized_hint,
+                    if !unmaterialized_hint.is_empty() {
+                        "\n-"
+                    } else {
+                        ""
+                    },
+                    disabled_indexes_hint
+                ))
+            }
             CoordError::Catalog(c) => c.hint(),
             CoordError::ConstrainedParameter {
                 valid_values: Some(valid_values),
@@ -213,6 +282,9 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            CoordError::AutomaticTimestampFailure { .. } => {
+                f.write_str("unable to automatically determine a query timestamp")
+            }
             CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter {

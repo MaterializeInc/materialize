@@ -687,3 +687,51 @@ td > .default_button {
         display: block;
     }
 }
+
+.level-of-support {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    position: relative;
+    top: 5px;
+
+    &.level-production {
+        color: $success;
+    }
+
+     &.level-alpha, &.level-beta {
+        color: $progress;
+    }
+
+    &.level-in-development {
+        color: $warning;
+    }
+
+    &.level-researching, &.level-not-supported {
+        color: $danger;
+    }
+}
+
+.copy_button {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-family: 'Encode Sans Expanded';
+    font-size: 0.8rem;
+    line-height: 2;
+    &.success {
+        opacity:0.8;
+        background: #70F2A3;
+    }
+}
+
+pre {
+    position: relative;
+
+    &:hover {
+        .copy_button {
+            display: inline-block;
+        }
+    }
+}

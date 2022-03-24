@@ -869,18 +869,36 @@ impl_display!(CreateClusterStatement);
 pub enum ClusterOption {
     /// The `VIRTUAL` option.
     Virtual,
-    /// The `SIZE [[=] 'size']` option.
-    Size(String),
+    /// The `REMOTE (<host> [, <host> ...])` option.
+    Remote(Vec<WithOptionValue>),
+    /// The `SIZE [[=] <size>]` option.
+    Size(WithOptionValue),
+    /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
+    IntrospectionGranularity(WithOptionValue),
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
+    IntrospectionDebugging(WithOptionValue),
 }
 
 impl AstDisplay for ClusterOption {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterOption::Virtual => f.write_str("VIRTUAL"),
+            ClusterOption::Remote(hosts) => {
+                f.write_str("REMOTE (");
+                display::comma_separated(hosts);
+                f.write_str(")");
+            }
             ClusterOption::Size(size) => {
-                f.write_str("SIZE '");
-                f.write_node(&display::escape_single_quote_string(size));
-                f.write_str("'");
+                f.write_str("SIZE ");
+                f.write_node(size);
+            }
+            ClusterOption::IntrospectionGranularity(granularity) => {
+                f.write_str("INTROSPECTION GRANULARITY ");
+                f.write_node(granularity);
+            }
+            ClusterOption::IntrospectionDebugging(debugging) => {
+                f.write_str("INTROSPECTION DEBUGGING ");
+                f.write_node(debugging);
             }
         }
     }

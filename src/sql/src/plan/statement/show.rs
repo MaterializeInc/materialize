@@ -56,7 +56,7 @@ pub fn plan_show_create_view(
         let view_sql = view.create_sql();
         let parsed = parse::parse(view_sql)?;
         let parsed = parsed[0].clone();
-        let mut resolved = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -92,7 +92,7 @@ pub fn plan_show_create_table(
     if let CatalogItemType::Table = table.item_type() {
         let name = table.name().to_string();
         let parsed = parse::parse(table.create_sql())?.into_element();
-        let mut resolved = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };

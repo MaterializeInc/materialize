@@ -13,15 +13,22 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
+use std::pin::Pin;
+
+use anyhow::Context;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
-use tracing::trace;
+use tokio::sync::mpsc;
+use tracing::{error, trace};
+use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
 use crate::{
@@ -57,9 +64,17 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
     /// In-process virtual instance, likely the default instance
-    Virtual,
+    Virtual {
+        /// Logging configuration.
+        logging: Option<LoggingConfig>,
+    },
     /// Out-of-process named instance
-    Remote(Vec<String>),
+    Remote {
+        /// The hosts to connect to.
+        hosts: Vec<String>,
+        /// Logging configuration.
+        logging: Option<LoggingConfig>,
+    },
 }
 
 /// Commands related to the computation and maintenance of views.
@@ -73,7 +88,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
     /// Optionally, request that the logging sources in the contained configuration are installed.
-    CreateInstance(InstanceConfig, Option<LoggingConfig>),
+    CreateInstance(Option<LoggingConfig>),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -175,7 +190,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     RenderSources(
         Vec<(
             /* debug_name */ String,
-            /* dataflow_id */ GlobalId,
+            /* dataflow_id */ uuid::Uuid,
             /* as_of */ Option<Antichain<T>>,
             /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc<T>>,
         )>,
@@ -318,7 +333,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                 }
             }
-            Command::Compute(ComputeCommand::CreateInstance(_config, logging), _instance) => {
+            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
                 if let Some(logging_config) = logging {
                     start.extend(logging_config.log_identifiers());
                 }
@@ -377,100 +392,88 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 }
 
 /// A client to a running dataflow server.
-#[async_trait(?Send)]
-pub trait Client<T = mz_repr::Timestamp> {
+#[async_trait]
+pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// Sends a command to the dataflow server.
     ///
     /// The command can error for various reasons.
-    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error>;
+    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>;
 
     /// Receives the next response from the dataflow server.
     ///
     /// This method blocks until the next response is available, or, if the
     /// dataflow server has been shut down, returns `None`.
-    async fn recv(&mut self) -> Option<Response<T>>;
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error>;
+
+    /// Returns an adapter that treats the client as a stream.
+    ///
+    /// The stream produces the responses that would be produced by repeated
+    /// calls to `recv`.
+    fn as_stream<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Stream<Item = Result<R, anyhow::Error>> + Send + 'a>>
+    where
+        R: Send + 'a,
+    {
+        Box::pin(async_stream::stream! {
+            loop {
+                match self.recv().await {
+                    Ok(Some(response)) => yield Ok(response),
+                    Err(error) => yield Err(error),
+                    Ok(None) => { return; }
+                }
+            }
+        })
+    }
 }
 
-#[async_trait(?Send)]
-impl Client for Box<dyn Client> {
-    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+/// A client to a combined storage and compute server.
+pub trait Client<T = mz_repr::Timestamp>: GenericClient<Command<T>, Response<T>> {}
+
+impl<C, T> Client<T> for C where C: GenericClient<Command<T>, Response<T>> {}
+
+/// A client to a storage server.
+pub trait StorageClient<T = mz_repr::Timestamp>:
+    GenericClient<StorageCommand<T>, StorageResponse<T>>
+{
+}
+
+impl<C, T> StorageClient<T> for C where C: GenericClient<StorageCommand<T>, StorageResponse<T>> {}
+
+/// A client to a compute server.
+pub trait ComputeClient<T = mz_repr::Timestamp>:
+    GenericClient<ComputeCommand<T>, ComputeResponse<T>>
+{
+}
+
+impl<C, T> ComputeClient<T> for C where C: GenericClient<ComputeCommand<T>, ComputeResponse<T>> {}
+
+#[async_trait]
+impl<C, R> GenericClient<C, R> for Box<dyn GenericClient<C, R>>
+where
+    C: Send,
+{
+    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response> {
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         (**self).recv().await
     }
 }
 
-/// A helper struct which allows us to interpret a `Client` as a `Stream` of `Response`.
-pub struct ClientAsStream<'a, C: Client + 'a> {
-    client: &'a mut C,
-}
-
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use uuid::Uuid;
-
-impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
-    type Item = Response;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        use futures::Future;
-        Pin::new(&mut self.client.recv()).poll(cx)
-    }
-}
-
-/// A wrapper for enumerating any available result from a client.
-///
-/// Maintains an internal counter, and round robins through clients for fairness.
-pub struct SelectStream<'a, C: Client + 'a> {
-    clients: &'a mut [C],
-    cursor: usize,
-}
-
-impl<'a, C: Client + 'a> SelectStream<'a, C> {
-    /// Create a new [SelectStream], starting from the client at position `cursor`.
-    pub fn new(clients: &'a mut [C], cursor: usize) -> Self {
-        Self { clients, cursor }
-    }
-}
-
-impl<'a, C: Client + 'a> futures::stream::Stream for SelectStream<'a, C> {
-    type Item = (usize, Response);
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut done = true;
-        for _ in 0..self.clients.len() {
-            let cursor = self.cursor;
-            let result = {
-                use futures::Future;
-                Pin::new(&mut self.clients[cursor].recv()).poll(cx)
-            };
-            self.cursor = (self.cursor + 1) % self.clients.len();
-            match result {
-                Poll::Pending => {
-                    done = false;
-                }
-                Poll::Ready(None) => {}
-                Poll::Ready(Some(response)) => {
-                    return Poll::Ready(Some((self.cursor, response)));
-                }
-            }
-        }
-        if done {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
 /// A convenience type for compatibility.
-pub struct LocalClient {
-    client: partitioned::Partitioned<process_local::ProcessLocal>,
+#[derive(Debug)]
+pub struct LocalClient<T = mz_repr::Timestamp> {
+    client: partitioned::Partitioned<process_local::ProcessLocal<T>, T>,
 }
 
-impl LocalClient {
+impl<T> LocalClient<T>
+where
+    T: timely::progress::Timestamp + Copy,
+{
     pub fn new(
-        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<Response>>,
-        worker_txs: Vec<crossbeam_channel::Sender<Command>>,
+        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<Response<T>>>,
+        worker_txs: Vec<crossbeam_channel::Sender<Command<T>>>,
         worker_threads: Vec<std::thread::Thread>,
     ) -> Self {
         assert_eq!(feedback_rxs.len(), worker_threads.len());
@@ -486,16 +489,142 @@ impl LocalClient {
     }
 }
 
-#[async_trait(?Send)]
-impl Client for LocalClient {
-    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+#[async_trait]
+impl<T> GenericClient<Command<T>, Response<T>> for LocalClient<T>
+where
+    T: timely::progress::Timestamp + Copy,
+{
+    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Option<Response> {
+    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let response = self.client.recv().await;
         trace!("RECV dataflow response: {:?}", response);
         response
+    }
+}
+
+/// A convenience type for compatibility.
+#[derive(Debug)]
+pub struct RemoteClient<T> {
+    client: partitioned::Partitioned<tcp::TcpClient<T>, T>,
+}
+
+impl<T> RemoteClient<T>
+where
+    T: timely::progress::Timestamp + Copy,
+{
+    /// Construct a client backed by multiple tcp connections
+    pub async fn connect(
+        addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display],
+    ) -> Result<Self, anyhow::Error> {
+        let mut remotes = Vec::with_capacity(addrs.len());
+        for addr in addrs.iter() {
+            remotes.push(
+                tcp::TcpClient::connect(addr.to_string())
+                    .await
+                    .with_context(|| format!("Connecting to {addr}"))?,
+            );
+        }
+        Ok(Self {
+            client: partitioned::Partitioned::new(remotes),
+        })
+    }
+}
+
+#[async_trait]
+impl<T> GenericClient<Command<T>, Response<T>> for RemoteClient<T>
+where
+    T: timely::progress::Timestamp + Copy + Unpin,
+{
+    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+        trace!("Sending dataflow command: {:?}", cmd);
+        self.client.send(cmd).await
+    }
+    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+        let response = self.client.recv().await;
+        trace!("Receiving dataflow response: {:?}", response);
+        response
+    }
+}
+
+/// An adapter that converts a client to a compute client.
+#[derive(Debug)]
+pub struct ComputeWrapperClient<C> {
+    client: C,
+    instance: ComputeInstanceId,
+}
+
+impl<C> ComputeWrapperClient<C> {
+    /// Constructs a new compute wrapper client for the specified compute
+    /// instance ID.
+    pub fn new(client: C, instance: ComputeInstanceId) -> ComputeWrapperClient<C> {
+        ComputeWrapperClient { instance, client }
+    }
+}
+
+#[async_trait]
+impl<C, T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeWrapperClient<C>
+where
+    C: GenericClient<Command<T>, Response<T>>,
+    T: fmt::Debug + Send + 'static,
+{
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        self.client.send(Command::Compute(cmd, self.instance)).await
+    }
+
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        match self.client.recv().await? {
+            Some(Response::Compute(res, instance)) => {
+                assert_eq!(self.instance, instance);
+                Ok(Some(res))
+            }
+            res @ Some(Response::Storage(_)) => {
+                panic!(
+                    "ComputeWrapperClient unexpectedly received storage response: {:?}",
+                    res
+                );
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// An adapter that converts a client to a storage client.
+#[derive(Debug)]
+pub struct StorageWrapperClient<C> {
+    client: C,
+}
+
+impl<C> StorageWrapperClient<C> {
+    /// Constructs a new storage wrapper client.
+    pub fn new(client: C) -> StorageWrapperClient<C> {
+        StorageWrapperClient { client }
+    }
+}
+
+#[async_trait]
+impl<C, T> GenericClient<StorageCommand<T>, StorageResponse<T>> for StorageWrapperClient<C>
+where
+    C: GenericClient<Command<T>, Response<T>>,
+    T: fmt::Debug + Send + 'static,
+{
+    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
+        self.client.send(Command::Storage(cmd)).await
+    }
+
+    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+        match self.client.recv().await? {
+            Some(Response::Storage(res)) => Ok(Some(res)),
+            res @ Some(Response::Compute(..)) => {
+                panic!(
+                    "StorageWrapperClient unexpectedly received compute response: {:?}",
+                    res
+                );
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -507,14 +636,16 @@ pub mod partitioned {
     use std::iter::Fuse;
 
     use async_trait::async_trait;
+    use futures::StreamExt;
 
     use mz_expr::GlobalId;
-    use mz_repr::{Diff, Row, Timestamp};
+    use mz_repr::{Diff, Row};
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch};
+    use tokio_stream::StreamMap;
     use tracing::debug;
 
-    use crate::client::ComputeInstanceId;
+    use crate::client::{ComputeInstanceId, GenericClient};
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
@@ -524,26 +655,32 @@ pub mod partitioned {
     ///
     /// Such a client needs to broadcast (partitioned) commands to all of its clients,
     /// and await responses from each of the client shards before it can respond.
-    pub struct Partitioned<C: Client> {
+    #[derive(Debug)]
+    pub struct Partitioned<C, T> {
         shards: Vec<C>,
-        cursor: usize,
-        state: PartitionedClientState,
+        state: PartitionedClientState<T>,
     }
 
-    impl<C: Client> Partitioned<C> {
+    impl<C, T> Partitioned<C, T>
+    where
+        T: timely::progress::Timestamp + Copy,
+    {
         /// Create a client partitioned across multiple client shards.
         pub fn new(shards: Vec<C>) -> Self {
             Self {
                 state: PartitionedClientState::new(shards.len()),
-                cursor: 0,
                 shards,
             }
         }
     }
 
-    #[async_trait(?Send)]
-    impl<C: Client> Client for Partitioned<C> {
-        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+    #[async_trait]
+    impl<C, T> GenericClient<Command<T>, Response<T>> for Partitioned<C, T>
+    where
+        C: Client<T>,
+        T: timely::progress::Timestamp + Copy,
+    {
+        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
@@ -552,23 +689,26 @@ pub mod partitioned {
             Ok(())
         }
 
-        async fn recv(&mut self) -> Option<Response> {
-            use futures::StreamExt;
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
             if let Some(stashed) = self.state.stashed_responses.next() {
-                return Some(stashed);
+                return Ok(Some(stashed));
             }
-            self.cursor = (self.cursor + 1) % self.shards.len();
-            let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
+            let mut stream: StreamMap<_, _> = self
+                .shards
+                .iter_mut()
+                .map(|shard| shard.as_stream())
+                .enumerate()
+                .collect();
             while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response).fuse();
+                let messages = self.state.absorb_response(index, response?).fuse();
                 assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
                 self.state.stashed_responses = messages;
                 if let Some(message) = self.state.stashed_responses.next() {
-                    return Some(message);
+                    return Ok(Some(message));
                 }
             }
             // Indicate completion of the communication.
-            None
+            Ok(None)
         }
     }
 
@@ -579,6 +719,7 @@ pub mod partitioned {
     /// This exists so we can consolidate rows and
     /// sort them by timestamp before passing them to the consumer
     /// (currently, coord.rs).
+    #[derive(Debug)]
     struct PendingTail<T> {
         /// `frontiers[i]` is an antichain representing the times at which we may
         /// still receive results from worker `i`.
@@ -688,10 +829,25 @@ pub mod partitioned {
         stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
     }
 
-    impl PartitionedClientState {
+    // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
+    impl<T: std::fmt::Debug> std::fmt::Debug for PartitionedClientState<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PartitionedClientState<T>")
+                .field("uppers", &self.uppers)
+                .field("peek_responses", &self.peek_responses)
+                .field("parts", &self.parts)
+                .field("pending_tails", &self.pending_tails)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl<T> PartitionedClientState<T>
+    where
+        T: timely::progress::Timestamp + Copy,
+    {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
-            let stashed_responses: Box<dyn Iterator<Item = Response> + Send> =
+            let stashed_responses: Box<dyn Iterator<Item = Response<T>> + Send> =
                 Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
@@ -705,7 +861,7 @@ pub mod partitioned {
         /// Observes commands that move past, and prepares state for responses.
         ///
         /// In particular, this method installs and removes upper frontier maintenance.
-        pub fn observe_command(&mut self, command: &Command) {
+        pub fn observe_command(&mut self, command: &Command<T>) {
             // Temporary storage for identifiers to add to and remove from frontier tracking.
             let mut start = Vec::new();
             let mut cease = Vec::new();
@@ -718,10 +874,7 @@ pub mod partitioned {
             // Apply the determined effects of the command to `self.uppers`.
             for id in start.into_iter() {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                frontier.update_iter(Some((
-                    <Timestamp as timely::progress::Timestamp>::minimum(),
-                    self.parts as i64,
-                )));
+                frontier.update_iter(Some((T::minimum(), self.parts as i64)));
                 let previous = self.uppers.insert((id, instance), frontier);
                 assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
             }
@@ -737,8 +890,8 @@ pub mod partitioned {
         pub fn absorb_response(
             &mut self,
             shard_id: usize,
-            message: Response,
-        ) -> Box<dyn Iterator<Item = Response> + Send> {
+            message: Response<T>,
+        ) -> Box<dyn Iterator<Item = Response<T>> + Send> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     for (id, changes) in list.iter_mut() {
@@ -848,7 +1001,7 @@ pub mod partitioned {
                                 change_batch: Default::default(),
                                 buffer: Vec::new(),
                                 parts: self.parts,
-                                reported_frontier: Antichain::from_elem(0),
+                                reported_frontier: Antichain::from_elem(T::minimum()),
                             })
                         });
 
@@ -862,7 +1015,7 @@ pub mod partitioned {
                         Some(entry) => entry,
                     };
 
-                    let responses: Box<dyn Iterator<Item = Response> + Send> = match response {
+                    let responses: Box<dyn Iterator<Item = Response<T>> + Send> = match response {
                         TailResponse::Progress(frontier) => {
                             if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
                                 let data = entry.consolidate_up_to(new_frontier.clone());
@@ -925,20 +1078,26 @@ pub mod partitioned {
 
 /// A client backed by a process-local timely worker thread.
 pub mod process_local {
+    use std::fmt;
+
     use async_trait::async_trait;
 
-    use super::{Client, Command, Response};
+    use super::{Command, GenericClient, Response};
 
     /// A client to a dataflow server running in the current process.
-    pub struct ProcessLocal {
-        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
-        worker_tx: crossbeam_channel::Sender<Command>,
+    #[derive(Debug)]
+    pub struct ProcessLocal<T> {
+        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response<T>>,
+        worker_tx: crossbeam_channel::Sender<Command<T>>,
         worker_thread: std::thread::Thread,
     }
 
-    #[async_trait(?Send)]
-    impl Client for ProcessLocal {
-        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+    #[async_trait]
+    impl<T> GenericClient<Command<T>, Response<T>> for ProcessLocal<T>
+    where
+        T: fmt::Debug + Send,
+    {
+        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
             self.worker_tx
                 .send(cmd)
                 .expect("worker command receiver should not drop first");
@@ -946,16 +1105,16 @@ pub mod process_local {
             Ok(())
         }
 
-        async fn recv(&mut self) -> Option<Response> {
-            self.feedback_rx.recv().await
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+            Ok(self.feedback_rx.recv().await)
         }
     }
 
-    impl ProcessLocal {
+    impl<T> ProcessLocal<T> {
         /// Create a new instance of [ProcessLocal] from its parts.
         pub fn new(
-            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
-            worker_tx: crossbeam_channel::Sender<Command>,
+            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response<T>>,
+            worker_tx: crossbeam_channel::Sender<Command<T>>,
             worker_thread: std::thread::Thread,
         ) -> Self {
             Self {
@@ -967,7 +1126,7 @@ pub mod process_local {
     }
 
     // We implement `Drop` so that we can wake each of the workers and have them notice the drop.
-    impl Drop for ProcessLocal {
+    impl<T> Drop for ProcessLocal<T> {
         fn drop(&mut self) {
             // Drop the worker handle.
             let (tx, _rx) = crossbeam_channel::unbounded();
@@ -976,4 +1135,284 @@ pub mod process_local {
             self.worker_thread.unpark();
         }
     }
+}
+
+/// A client to a remote dataflow server.
+pub mod tcp {
+    use async_trait::async_trait;
+    use futures::sink::SinkExt;
+    use futures::stream::StreamExt;
+    use tokio::io::{AsyncRead, AsyncWrite};
+    use tokio::net::TcpStream;
+    use tokio_serde::formats::Bincode;
+    use tokio_util::codec::LengthDelimitedCodec;
+
+    use crate::client::{Command, GenericClient, Response};
+
+    /// A client to a remote dataflow server.
+    #[derive(Debug)]
+    pub struct TcpClient<T> {
+        connection: FramedClient<TcpStream, T>,
+        addr: String,
+    }
+
+    impl<T> TcpClient<T> {
+        /// Connects a remote client to the specified remote dataflow server.
+        pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
+            let connection = framed_client(TcpStream::connect(&addr).await?);
+            Ok(Self { connection, addr })
+        }
+
+        pub async fn reconnect(&mut self) {
+            let mut connection = TcpStream::connect(&self.addr).await;
+            while connection.is_err() {
+                connection = TcpStream::connect(&self.addr).await;
+            }
+            self.connection = framed_client(connection.unwrap());
+        }
+    }
+
+    #[async_trait]
+    impl<T> GenericClient<Command<T>, Response<T>> for TcpClient<T>
+    where
+        T: timely::progress::Timestamp + Copy + Unpin,
+    {
+        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+            // on error, we attempt to reconnect, and communicate the error.
+            let result = self.connection.send(cmd).await;
+            if result.is_err() {
+                self.reconnect().await;
+            }
+            Ok(result?)
+        }
+
+        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+            match self.connection.next().await {
+                None => Ok(None),
+                Some(Ok(response)) => Ok(Some(response)),
+                Some(error) => {
+                    self.reconnect().await;
+                    Ok(Some(error?))
+                }
+            }
+        }
+    }
+
+    /// A framed connection to a dataflowd server.
+    pub type Framed<C, T, U> = tokio_serde::Framed<
+        tokio_util::codec::Framed<C, LengthDelimitedCodec>,
+        T,
+        U,
+        Bincode<T, U>,
+    >;
+
+    /// A framed connection from the server's perspective.
+    pub type FramedServer<C, T> = Framed<C, Command<T>, Response<T>>;
+
+    /// A framed connection from the client's perspective.
+    pub type FramedClient<C, T> = Framed<C, Response<T>, Command<T>>;
+
+    fn length_delimited_codec() -> LengthDelimitedCodec {
+        // NOTE(benesch): using an unlimited maximum frame length is problematic
+        // because Tokio never shrinks its buffer. Sending or receiving one large
+        // message of size N means the client will hold on to a buffer of size
+        // N forever. We should investigate alternative transport protocols that
+        // do not have this limitation.
+        let mut codec = LengthDelimitedCodec::new();
+        codec.set_max_frame_length(usize::MAX);
+        codec
+    }
+
+    /// Constructs a framed connection for the server.
+    pub fn framed_server<C, T>(conn: C) -> FramedServer<C, T>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+
+    /// Constructs a framed connection for the client.
+    pub fn framed_client<C, T>(conn: C) -> FramedClient<C, T>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+}
+
+/// A client composed of channels.
+mod channel {
+    use std::fmt;
+
+    use async_trait::async_trait;
+    use derivative::Derivative;
+
+    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+
+    use crate::client::GenericClient;
+
+    /// A client composed of channels.
+    #[derive(Derivative)]
+    #[derivative(Debug)]
+    pub struct ChannelClient<C1, C2, R> {
+        tx: UnboundedSender<C2>,
+        rx: UnboundedReceiver<R>,
+        #[derivative(Debug = "ignore")]
+        command_map: Box<dyn Fn(C1) -> C2 + Send>,
+    }
+
+    /// Create a new channel client.
+    ///
+    /// Commands sent to the client are transformed via `command_map` and then
+    /// sent over `tx`.
+    ///
+    /// Returns the channel client and a channel transmitter that sends
+    /// responses to the client.
+    impl<C1, C2, R> ChannelClient<C1, C2, R> {
+        pub fn new(
+            tx: UnboundedSender<C2>,
+            command_map: Box<dyn Fn(C1) -> C2 + Send>,
+        ) -> (ChannelClient<C1, C2, R>, UnboundedSender<R>) {
+            let (response_tx, response_rx) = mpsc::unbounded_channel();
+            let client = ChannelClient {
+                tx,
+                rx: response_rx,
+                command_map,
+            };
+            (client, response_tx)
+        }
+    }
+
+    #[async_trait]
+    impl<C1, C2, R> GenericClient<C1, R> for ChannelClient<C1, C2, R>
+    where
+        C1: fmt::Debug + Send + 'static,
+        C2: fmt::Debug + Send + Sync + 'static,
+        R: fmt::Debug + Send,
+    {
+        async fn send(&mut self, cmd: C1) -> Result<(), anyhow::Error> {
+            let cmd = (self.command_map)(cmd);
+            self.tx.send(cmd)?;
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+            Ok(self.rx.recv().await)
+        }
+    }
+}
+
+/// A handle to a compute host for virtual compute instances.
+pub struct VirtualComputeHost<T> {
+    command_tx: mpsc::UnboundedSender<Command<T>>,
+    compute_host_tx: mpsc::UnboundedSender<ComputeHostCommand<T>>,
+}
+
+impl<T> VirtualComputeHost<T>
+where
+    T: fmt::Debug + Send + Sync + 'static,
+{
+    /// Creates a new instance in the virtual compute host.
+    ///
+    /// The behavior is undefined if a compute instance with the same ID already
+    /// exists on the host.
+    pub fn create_instance(&self, instance: ComputeInstanceId) -> Box<dyn ComputeClient<T>> {
+        let (client, response_tx) = channel::ChannelClient::new(
+            self.command_tx.clone(),
+            Box::new(move |command| Command::Compute(command, instance)),
+        );
+        self.compute_host_tx
+            .send(ComputeHostCommand::CreateInstance(instance, response_tx))
+            .unwrap();
+        Box::new(client)
+    }
+
+    /// Drops an existing instance on the virtual compute host.
+    pub fn drop_instance(&self, instance: ComputeInstanceId) {
+        self.compute_host_tx
+            .send(ComputeHostCommand::DropInstance(instance))
+            .unwrap();
+    }
+}
+
+#[derive(Debug)]
+enum ComputeHostCommand<T> {
+    CreateInstance(ComputeInstanceId, mpsc::UnboundedSender<ComputeResponse<T>>),
+    DropInstance(ComputeInstanceId),
+}
+
+/// Splits a dataflow client into a storage half and a compute half.
+///
+/// The compute half is a `VirtualComputeHost` which can be used to create
+/// and destroy virtual clusters dynamically.
+///
+/// If the underlying dataflow server is not running both a storage and compute
+/// runtime, it is the caller's responsibility to ignore the inactive half.
+pub fn split_client<C, T>(mut client: C) -> (Box<dyn StorageClient<T>>, VirtualComputeHost<T>)
+where
+    C: Client<T> + Send + 'static,
+    T: fmt::Debug + Send + Sync + 'static,
+{
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (compute_host_tx, mut compute_host_rx) = mpsc::unbounded_channel();
+    let (storage_client, storage_response_tx) = channel::ChannelClient::new(
+        command_tx.clone(),
+        Box::new(|command| Command::Storage(command)),
+    );
+    let virtual_compute_host = VirtualComputeHost {
+        command_tx,
+        compute_host_tx,
+    };
+    mz_ore::task::spawn(|| "split_client", async move {
+        let mut instances = HashMap::new();
+        let mut compute_host_alive = true;
+        let mut clients_alive = true;
+        while compute_host_alive && clients_alive {
+            tokio::select! {
+                biased;
+
+                cmd = compute_host_rx.recv() => match cmd {
+                    Some(ComputeHostCommand::CreateInstance(instance, response_tx)) => {
+                        instances.insert(instance, response_tx);
+                    }
+                    Some(ComputeHostCommand::DropInstance(instance)) => {
+                        instances.remove(&instance);
+                    }
+                    None => compute_host_alive = false,
+                },
+
+                Some(cmd) = command_rx.recv() => match client.send(cmd).await {
+                    Ok(_) => (),
+                    Err(_) => clients_alive = false,
+                },
+
+                response = client.recv() => match response {
+                    Ok(Some(Response::Storage(res))) => {
+                        let _ = storage_response_tx.send(res);
+                    }
+                    Ok(Some(Response::Compute(res, instance))) => match instances.get(&instance) {
+                        None => {
+                            error!("received response {res:?} for non-existent compute instance {instance:?}");
+                        }
+                        Some(response_tx) => {
+                            let _ = response_tx.send(res);
+                        }
+                    },
+                    error @ Err(_) => {
+                        error.unwrap();
+                    },
+                    Ok(None) => {
+                        // Nothing, is what the prior code did.
+                    }
+                },
+            }
+        }
+    });
+    (Box::new(storage_client), virtual_compute_host)
 }

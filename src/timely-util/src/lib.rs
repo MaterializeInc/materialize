@@ -17,5 +17,4 @@
 
 #![warn(missing_docs)]
 
-pub mod antichain_ext;
 pub mod operators_async_ext;

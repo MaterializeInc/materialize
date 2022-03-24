@@ -50,3 +50,29 @@ pub trait Codec: Sized + 'static {
     // without any copies, see if we can make the types work out for that.
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
 }
+
+/// Encoding and decoding operations for a type usable as a persisted timestamp
+/// or diff.
+pub trait Codec64: Sized + 'static {
+    /// Name of the codec.
+    ///
+    /// This name is stored for the timestamp and diff when a stream is first
+    /// created and the same timestamp and diff codec must be used for that
+    /// stream afterward.
+    fn codec_name() -> String;
+
+    /// Encode a timestamp or diff for permanent storage.
+    ///
+    /// This must perfectly round-trip Self through [Codec64::decode]. If the
+    /// encode function for this codec ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    fn encode(&self) -> [u8; 8];
+
+    /// Decode a timestamp or diff previous encoded with this codec's
+    /// [Codec64::encode].
+    ///
+    /// This must perfectly round-trip Self through [Codec64::encode]. If the
+    /// encode function for this codec ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    fn decode(buf: [u8; 8]) -> Self;
+}

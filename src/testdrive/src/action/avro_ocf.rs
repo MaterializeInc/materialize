@@ -27,12 +27,14 @@ pub struct WriteAction {
     schema: String,
     records: Vec<String>,
     codec: Option<Codec>,
+    repeat: usize,
 }
 
 pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, anyhow::Error> {
     let path = cmd.args.string("path")?;
     let schema = cmd.args.string("schema")?;
     let codec = cmd.args.opt_parse("codec")?;
+    let repeat = cmd.args.opt_parse("repeat")?.unwrap_or(1);
 
     let records = cmd.input;
     cmd.args.done()?;
@@ -45,6 +47,7 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, anyhow::Error
         schema,
         records,
         codec,
+        repeat,
     })
 }
 
@@ -62,7 +65,10 @@ impl SyncAction for WriteAction {
             .with_context(|| format!("creating Avro OCF file: {}", path.display()))?;
         let schema = avro::parse_schema(&self.schema).context("parsing avro schema")?;
         let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
-        write_records(&mut writer, &self.records)?;
+        for _ in 0..self.repeat {
+            write_records(&mut writer, &self.records)?;
+        }
+        writer.flush().context("flushing avro writer")?;
         file.sync_all()
             .with_context(|| format!("syncing Avro OCF file: {}", path.display()))?;
         Ok(ControlFlow::Continue)
@@ -72,17 +78,23 @@ impl SyncAction for WriteAction {
 pub struct AppendAction {
     path: String,
     records: Vec<String>,
+    repeat: usize,
 }
 
 pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Error> {
     let path = cmd.args.string("path")?;
+    let repeat = cmd.args.opt_parse("repeat")?.unwrap_or(1);
     let records = cmd.input;
     cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
         bail!("separators in paths are forbidden");
     }
-    Ok(AppendAction { path, records })
+    Ok(AppendAction {
+        path,
+        records,
+        repeat,
+    })
 }
 
 impl SyncAction for AppendAction {
@@ -95,7 +107,10 @@ impl SyncAction for AppendAction {
         println!("Appending to {}", path.display());
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut writer = Writer::append_to(file)?;
-        write_records(&mut writer, &self.records)?;
+        for _ in 0..self.repeat {
+            write_records(&mut writer, &self.records)?;
+        }
+        writer.flush().context("flushing avro writer")?;
         Ok(ControlFlow::Continue)
     }
 }
@@ -112,7 +127,6 @@ where
         )?;
         writer.append(record).context("writing avro record")?;
     }
-    writer.flush().context("flushing avro writer")?;
     Ok(())
 }
 

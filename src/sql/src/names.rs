@@ -292,8 +292,8 @@ impl fmt::Display for ResolvedDataType {
 }
 
 impl ResolvedDataType {
-    pub(crate) fn get_ids(&self) -> HashSet<GlobalId> {
-        let mut ids = HashSet::new();
+    pub(crate) fn get_ids(&self) -> Vec<GlobalId> {
+        let mut ids = Vec::new();
         match self {
             ResolvedDataType::AnonymousList(typ) => {
                 ids.extend(typ.get_ids());
@@ -306,7 +306,7 @@ impl ResolvedDataType {
                 ids.extend(value_type.get_ids());
             }
             ResolvedDataType::Named { id, .. } => {
-                ids.insert(id.clone());
+                ids.push(id.clone());
             }
         };
         ids
@@ -588,12 +588,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve_names_stmt(
     scx: &mut StatementContext,
     stmt: Statement<Raw>,
-) -> Result<Statement<Aug>, PlanError> {
+) -> Result<(Statement<Aug>, HashSet<GlobalId>), PlanError> {
     let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_statement(stmt);
     n.status?;
-    scx.ids.extend(n.ids.iter());
-    Ok(result)
+    Ok((result, n.ids))
 }
 
 pub fn resolve_names_stmt_show(
@@ -613,7 +612,6 @@ pub fn resolve_names(qcx: &mut QueryContext, query: Query<Raw>) -> Result<Query<
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_query(query);
     n.status?;
-    qcx.extend_ids(&n.ids);
     Ok(result)
 }
 
@@ -621,7 +619,6 @@ pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Exp
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_expr(expr);
     n.status?;
-    qcx.extend_ids(&n.ids);
     Ok(result)
 }
 
@@ -668,7 +665,6 @@ where
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = f(&mut n);
     n.status?;
-    qcx.extend_ids(&n.ids);
     Ok(result)
 }
 

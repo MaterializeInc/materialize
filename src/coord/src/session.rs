@@ -309,6 +309,7 @@ impl<T: CoordTimestamp> Session<T> {
         stmt: Option<Statement<Raw>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<mz_pgrepr::Format>,
+        catalog_revision: u64,
     ) -> Result<(), CoordError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
@@ -319,6 +320,7 @@ impl<T: CoordTimestamp> Session<T> {
             Portal {
                 stmt,
                 desc,
+                catalog_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     types: params.into_iter().map(|(_d, t)| t).collect(),
@@ -340,14 +342,14 @@ impl<T: CoordTimestamp> Session<T> {
     /// Retrieves a reference to the specified portal.
     ///
     /// If there is no such portal, returns `None`.
-    pub fn get_portal(&self, portal_name: &str) -> Option<&Portal> {
+    pub fn get_portal_unverified(&self, portal_name: &str) -> Option<&Portal> {
         self.portals.get(portal_name)
     }
 
     /// Retrieves a mutable reference to the specified portal.
     ///
     /// If there is no such portal, returns `None`.
-    pub fn get_portal_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
+    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
         self.portals.get_mut(portal_name)
     }
 
@@ -358,6 +360,7 @@ impl<T: CoordTimestamp> Session<T> {
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
+        catalog_revision: u64,
     ) -> Result<String, CoordError> {
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
 
@@ -369,6 +372,7 @@ impl<T: CoordTimestamp> Session<T> {
                     entry.insert(Portal {
                         stmt,
                         desc,
+                        catalog_revision,
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
@@ -467,6 +471,8 @@ pub struct Portal {
     pub stmt: Option<Statement<Raw>>,
     /// The statement description.
     pub desc: StatementDesc,
+    /// The most recent catalog revision that has verified this statement.
+    pub catalog_revision: u64,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.

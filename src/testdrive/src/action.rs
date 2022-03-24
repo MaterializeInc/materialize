@@ -91,6 +91,8 @@ pub struct Config {
     /// The connection parameters for the materialized instance that testdrive
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
+    /// Session parameters to set after connecting to materialized.
+    pub materialized_params: Vec<(String, String)>,
     /// An optional path to the catalog file for the materialized instance.
     ///
     /// If present, testdrive will periodically verify that the on-disk catalog
@@ -681,6 +683,12 @@ pub async fn create_state(
             join.expect("pgconn_task unexpectedly canceled")
                 .context("running SQL connection")
         });
+        for (key, value) in &config.materialized_params {
+            pgclient
+                .batch_execute(&format!("SET {key} = {value}"))
+                .await
+                .context("setting session parameter")?;
+        }
 
         // Old versions of Materialize did not support `current_user`, so we
         // fail gracefully.

@@ -85,15 +85,14 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
-    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
+    ComputeInstanceId, ComputeResponse, CreateSourceCommand, Response as DataflowResponse,
+    StorageResponse, TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -127,15 +126,14 @@ use mz_sql::catalog::{
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, ComputeInstanceConfig, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, TailFrom, TailPlan,
+    AlterItemRenamePlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
-use mz_sql::plan::{OptimizerConfig, StatementDesc, View};
 use mz_sql_parser::ast::RawName;
 use mz_transform::Optimizer;
 
@@ -239,8 +237,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: Box<dyn mz_dataflow_types::client::Client + Send>,
-    pub dataflow_instance: InstanceConfig,
+    pub dataflow_client: mz_dataflow_types::client::Controller,
     pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
@@ -262,8 +259,7 @@ struct PendingPeek {
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
-    dataflow_client:
-        &'a mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client<T>>>,
+    dataflow_client: &'a mz_dataflow_types::client::Controller<T>,
     catalog: &'a CatalogState,
     persister: &'a PersisterWithConfig,
 }
@@ -271,13 +267,7 @@ pub struct CatalogTxn<'a, T> {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
-    dataflow_client:
-        mz_dataflow_types::client::Controller<Box<dyn mz_dataflow_types::client::Client>>,
-    /// Configuration for the global dataflow instance.
-    ///
-    /// TODO(clusters): make this configurable per cluster, rather than
-    /// globally.
-    dataflow_instance: InstanceConfig,
+    dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -470,11 +460,7 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
-                .create_instance(
-                    instance.id,
-                    self.dataflow_instance.clone(),
-                    instance.logging.clone(),
-                )
+                .create_instance(instance.id, instance.config.clone())
                 .await
                 .unwrap();
         }
@@ -496,7 +482,7 @@ impl Coordinator {
                         .load_source_persist_desc(&source)
                         .map_err(CoordError::Persistence)?
                         .map(|p| p.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(Timestamp::minimum);
 
                     // Re-announce the source description.
                     let source_description = self
@@ -536,7 +522,7 @@ impl Coordinator {
                         .table_details
                         .get(&entry.id())
                         .map(|td| td.since_ts)
-                        .unwrap_or(0);
+                        .unwrap_or_else(|| self.get_local_write_ts());
 
                     // Re-announce the source description.
                     let source_description = self
@@ -714,7 +700,12 @@ impl Coordinator {
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
-                Some(m) = self.dataflow_client.recv() => Message::Worker(m),
+                m = self.dataflow_client.recv() => {
+                    match m.unwrap() {
+                        None => break,
+                        Some(r) => Message::Worker(r),
+                    }
+                },
                 Some(m) = metric_scraper_stream.next() => m,
                 m = cmd_rx.recv() => match m {
                     None => break,
@@ -822,23 +813,24 @@ impl Coordinator {
             DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), _instance) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
-                let PendingPeek {
+                if let Some(PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                } = self
-                    .pending_peeks
-                    .remove(&uuid)
-                    .expect("no more PeekResponses after closing peek channel");
-                rows_tx
-                    .send(response)
-                    .expect("Peek endpoint terminated prematurely");
-                let uuids = self
-                    .client_pending_peeks
-                    .get_mut(&conn_id)
-                    .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
-                uuids.remove(&uuid);
-                if uuids.is_empty() {
-                    self.client_pending_peeks.remove(&conn_id);
+                }) = self.pending_peeks.remove(&uuid)
+                {
+                    rows_tx
+                        .send(response)
+                        .expect("Peek endpoint terminated prematurely");
+                    let uuids = self
+                        .client_pending_peeks
+                        .get_mut(&conn_id)
+                        .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
+                    uuids.remove(&uuid);
+                    if uuids.is_empty() {
+                        self.client_pending_peeks.remove(&conn_id);
+                    }
+                } else {
+                    warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
             DataflowResponse::Compute(
@@ -1191,7 +1183,7 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.handle_verify_prepared_statement(&mut session, &name);
+                let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
             }
         }
@@ -1267,7 +1259,14 @@ impl Coordinator {
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
+        session.set_portal(
+            name,
+            desc,
+            Some(stmt),
+            params,
+            result_formats,
+            self.catalog.transient_revision(),
+        )?;
         Ok(())
     }
 
@@ -1300,7 +1299,7 @@ impl Coordinator {
     }
 
     /// Verify a prepared statement is still valid.
-    fn handle_verify_prepared_statement(
+    fn verify_prepared_statement(
         &self,
         session: &mut Session,
         name: &str,
@@ -1309,29 +1308,59 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(CoordError::UnknownPreparedStatement(name.to_string())),
         };
-        if ps.catalog_revision != self.catalog.transient_revision() {
-            let desc = self.describe(
+        if let Some(revision) =
+            self.verify_statement_revision(session, ps.sql(), ps.desc(), ps.catalog_revision)?
+        {
+            let ps = session
+                .get_prepared_statement_mut_unverified(name)
+                .expect("known to exist");
+            ps.catalog_revision = revision;
+        }
+
+        Ok(())
+    }
+
+    /// Verify a portal is still valid.
+    fn verify_portal(&self, session: &mut Session, name: &str) -> Result<(), CoordError> {
+        let portal = match session.get_portal_unverified(&name) {
+            Some(portal) => portal,
+            None => return Err(CoordError::UnknownCursor(name.to_string())),
+        };
+        if let Some(revision) = self.verify_statement_revision(
+            &session,
+            portal.stmt.as_ref(),
+            &portal.desc,
+            portal.catalog_revision,
+        )? {
+            let portal = session
+                .get_portal_unverified_mut(&name)
+                .expect("known to exist");
+            portal.catalog_revision = revision;
+        }
+        Ok(())
+    }
+
+    fn verify_statement_revision(
+        &self,
+        session: &Session,
+        stmt: Option<&Statement<Raw>>,
+        desc: &StatementDesc,
+        catalog_revision: u64,
+    ) -> Result<Option<u64>, CoordError> {
+        let current_revision = self.catalog.transient_revision();
+        if catalog_revision != current_revision {
+            let current_desc = self.describe(
                 session,
-                ps.sql().cloned(),
-                ps.desc()
-                    .param_types
-                    .iter()
-                    .map(|ty| Some(ty.clone()))
-                    .collect(),
+                stmt.cloned(),
+                desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
             )?;
-            if &desc != ps.desc() {
+            if &current_desc != desc {
                 Err(CoordError::ChangedPlan)
             } else {
-                // If the descs are the same, we can bump our version to declare that ps is
-                // correct as of now.
-                let ps = session
-                    .get_prepared_statement_mut_unverified(name)
-                    .expect("known to exist");
-                ps.catalog_revision = self.catalog.transient_revision();
-                Ok(())
+                Ok(Some(current_revision))
             }
         } else {
-            Ok(())
+            Ok(None)
         }
     }
 
@@ -1342,10 +1371,13 @@ impl Coordinator {
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
-        let portal = match session.get_portal(&portal_name) {
-            Some(portal) => portal,
-            None => return tx.send(Err(CoordError::UnknownCursor(portal_name)), session),
-        };
+        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+            return tx.send(Err(err), session);
+        }
+
+        let portal = session
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist");
 
         let stmt = match &portal.stmt {
             Some(stmt) => stmt,
@@ -1883,16 +1915,14 @@ impl Coordinator {
         plan: ExecutePlan,
     ) -> Result<String, CoordError> {
         // Verify the stmt is still valid.
-        self.handle_verify_prepared_statement(session, &plan.name)?;
-        let ps = session.get_prepared_statement_unverified(&plan.name);
-        match ps {
-            Some(ps) => {
-                let sql = ps.sql().cloned();
-                let desc = ps.desc().clone();
-                session.create_new_portal(sql, desc, plan.params, Vec::new())
-            }
-            None => Err(CoordError::UnknownPreparedStatement(plan.name)),
-        }
+        self.verify_prepared_statement(session, &plan.name)?;
+        let ps = session
+            .get_prepared_statement_unverified(&plan.name)
+            .expect("known to exist");
+        let sql = ps.sql().cloned();
+        let desc = ps.desc().clone();
+        let revision = ps.catalog_revision;
+        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
     async fn sequence_create_database(
@@ -1960,26 +1990,19 @@ impl Coordinator {
         &mut self,
         plan: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        match plan.config {
-            ComputeInstanceConfig::Virtual => {}
-            ComputeInstanceConfig::Real { .. } => {
-                coord_bail!("SIZE not yet supported");
-            }
-        }
-
         let op = catalog::Op::CreateComputeInstance {
             name: plan.name.clone(),
+            config: plan.config.clone(),
         };
         let r = self.catalog_transact(vec![op], |_| Ok(())).await;
         match r {
             Ok(()) => {
-                let id = self
+                let instance = self
                     .catalog
                     .resolve_compute_instance(&plan.name)
-                    .expect("compute instance must exist after creation")
-                    .id;
+                    .expect("compute instance must exist after creation");
                 self.dataflow_client
-                    .create_instance(id, self.dataflow_instance.clone(), None)
+                    .create_instance(instance.id, instance.config.clone())
                     .await
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
@@ -2041,7 +2064,7 @@ impl Coordinator {
                     .table_details
                     .get(&table_id)
                     .map(|td| td.since_ts)
-                    .unwrap_or(0);
+                    .unwrap_or_else(|| self.get_local_write_ts());
 
                 // Announce the creation of the table source.
                 let source_description = self
@@ -2157,7 +2180,7 @@ impl Coordinator {
                     .load_source_persist_desc(&source)
                     .map_err(CoordError::Persistence)?
                     .map(|p| p.since_ts)
-                    .unwrap_or(0);
+                    .unwrap_or_else(Timestamp::minimum);
 
                 let ts_bindings = self
                     .catalog
@@ -2580,14 +2603,19 @@ impl Coordinator {
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
+        let mut instance_ids = Vec::new();
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
+            instance_ids.push(instance.id);
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
+        for id in instance_ids {
+            self.dataflow_client.drop_instance(id).await.unwrap();
+        }
         Ok(ExecuteResponse::DroppedComputeInstance)
     }
 
@@ -2917,6 +2945,40 @@ impl Coordinator {
         session: &mut Session,
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        // TODO: remove this function when sources are linearizable.
+        // See: #11048.
+        fn check_no_unmaterialized_sources(
+            catalog: &Catalog,
+            id_bundle: &CollectionIdBundle,
+        ) -> Result<(), CoordError> {
+            let mut unmaterialized = vec![];
+            let mut disabled_indexes = vec![];
+            for id in &id_bundle.storage_ids {
+                let entry = catalog.get_by_id(id);
+                if entry.is_table() {
+                    continue;
+                }
+                let mut indexes = catalog.state().get_indexes_on(*id).peekable();
+                if indexes.peek().is_none() {
+                    unmaterialized.push(entry.name().to_string());
+                } else {
+                    let disabled_index_names = indexes
+                        .filter(|(_id, idx)| !idx.enabled)
+                        .map(|(id, _idx)| catalog.get_by_id(&id).name().to_string())
+                        .collect();
+                    disabled_indexes.push((entry.name().to_string(), disabled_index_names));
+                }
+            }
+            if unmaterialized.is_empty() && disabled_indexes.is_empty() {
+                Ok(())
+            } else {
+                Err(CoordError::AutomaticTimestampFailure {
+                    unmaterialized,
+                    disabled_indexes,
+                })
+            }
+        }
+
         let PeekPlan {
             mut source,
             when,
@@ -2991,6 +3053,7 @@ impl Coordinator {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
+            check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -3023,6 +3086,9 @@ impl Coordinator {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
+            if when == QueryWhen::Immediately {
+                check_no_unmaterialized_sources(&self.catalog, &id_bundle)?;
+            }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
@@ -3043,7 +3109,7 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id), view_id);
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -3170,7 +3236,7 @@ impl Coordinator {
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id), id);
+                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -3474,7 +3540,7 @@ impl Coordinator {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"), GlobalId::Explain);
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(
@@ -4544,7 +4610,6 @@ impl Coordinator {
 pub async fn serve(
     Config {
         dataflow_client,
-        dataflow_instance,
         logging,
         storage,
         timestamp_frequency,
@@ -4566,9 +4631,11 @@ pub async fn serve(
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
-        default_compute_instance_logging: logging.as_ref().map(|logging| catalog::LoggingConfig {
-            granularity: logging.granularity,
-            log_logging: logging.log_logging,
+        virtual_compute_host_introspection: logging.as_ref().map(|logging| {
+            ComputeInstanceIntrospectionConfig {
+                granularity: logging.granularity,
+                debugging: logging.log_logging,
+            }
         }),
         build_info,
         aws_external_id,
@@ -4595,8 +4662,7 @@ pub async fn serve(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
-                dataflow_client: mz_dataflow_types::client::Controller::new(dataflow_client),
-                dataflow_instance,
+                dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 persister,
@@ -4736,7 +4802,12 @@ pub fn describe(
         // FETCH's description depends on the current session, which describe_statement
         // doesn't (and shouldn't?) have access to, so intercept it here.
         Statement::Fetch(FetchStatement { ref name, .. }) => {
-            match session.get_portal(name.as_str()).map(|p| p.desc.clone()) {
+            // Unverified portal is ok here because Coordinator::execute will verify the
+            // named portal during execution.
+            match session
+                .get_portal_unverified(name.as_str())
+                .map(|p| p.desc.clone())
+            {
                 Some(desc) => Ok(desc),
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }
@@ -5271,7 +5342,7 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
 
-        let df = DataflowDesc::new("".into(), GlobalId::Explain);
+        let df = DataflowDesc::new("".into());
         let _: () = self
             .ship_dataflow(df.clone(), DEFAULT_COMPUTE_INSTANCE_ID)
             .await;

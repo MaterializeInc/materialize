@@ -76,23 +76,46 @@ class Benchmark:
 
             print("init() done")
 
-        # Use zip() to run both the before() and the benchmark() sections
-        for i, _before_result, measurement in zip(
-            range(sys.maxsize),
-            scenario.before()(executor=self._executor),
-            scenario.benchmark()(executor=self._executor),
-        ):
+        for i in range(sys.maxsize):
+            # Run the before() section once for each measurement
+            before = scenario.before()
+            for before_item in before if isinstance(before, list) else [before]:
+                before_item.run(executor=self._executor)
+
+            # Collect timestamps from any part of the workload being benchmarked
+            timestamps = []
+            benchmark = scenario.benchmark()
+            for benchmark_item in (
+                benchmark if isinstance(benchmark, list) else [benchmark]
+            ):
+                item_timestamps = benchmark_item.run(executor=self._executor)
+                if item_timestamps:
+                    timestamps.extend(
+                        item_timestamps
+                        if isinstance(item_timestamps, list)
+                        else [item_timestamps]
+                    )
+
+            assert (
+                len(timestamps) == 2
+            ), f"benchmark() did not return exactly 2 timestamps: scenario: {scenario}, timestamps: {timestamps}"
+            assert (
+                timestamps[1] >= timestamps[0]
+            ), f"Second timestamp reported not greater than first: scenario: {scenario}, timestamps: {timestamps}"
+
+            measurement = timestamps[1] - timestamps[0]
             if self._filter and getattr(self._filter, "filter")(measurement):
                 continue
 
-            print(f"Measurement: {measurement}")
+            print(f"Measurement {i}: {measurement}")
 
             self._aggregation.append(measurement)
 
             for termination_condition in self._termination_conditions:
                 if termination_condition.terminate(measurement):
                     return self._aggregation.aggregate(), i + 1
-        assert False, "Source exhausted before termination condition reached"
+
+        assert False, "unreachable"
 
 
 class Report:

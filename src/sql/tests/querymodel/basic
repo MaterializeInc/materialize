@@ -571,7 +571,7 @@ digraph G {
     }
     subgraph cluster0 {
         label = "Box0:Get"
-        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY [0] [1, 2] }" ]
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY: C0| UNIQUE KEY: C1, C2 }" ]
         {
             rank = same
         }
@@ -609,7 +609,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Get"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY [0] [1, 2] }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| 2: C2| UNIQUE KEY: C0| UNIQUE KEY: C1, C2 }" ]
         {
             rank = same
         }
@@ -1219,4 +1219,168 @@ digraph G {
     Q4 -> boxhead3 [ lhead = cluster3 ]
     Q2 -> boxhead2 [ lhead = cluster2 ]
     Q1 -> boxhead1 [ lhead = cluster1 ]
+}
+
+build
+(select true as a) union (select false as b);
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "(select true as a) union (select false as b);"
+    node [ shape = box ]
+    subgraph cluster9 {
+        label = "Box9:Select"
+        boxhead9 [ shape = record, label = "{ Distinct: Enforce| 0: Q8.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q8 [ label = "Q8(F)" ]
+        }
+    }
+    subgraph cluster8 {
+        label = "Box8:Union"
+        boxhead8 [ shape = record, label = "{ Distinct: Preserve| 0: Q6.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q6 [ label = "Q6(F)" ]
+            Q7 [ label = "Q7(F)" ]
+        }
+    }
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C1 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: Q1.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: true }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster7 {
+        label = "Box7:Select"
+        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: Q5.C1 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q5 [ label = "Q5(F)" ]
+        }
+    }
+    subgraph cluster6 {
+        label = "Box6:Select"
+        boxhead6 [ shape = record, label = "{ Distinct: Preserve| 0: Q4.C0| 1: Q4.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q4 [ label = "Q4(F)" ]
+        }
+    }
+    subgraph cluster5 {
+        label = "Box5:Select"
+        boxhead5 [ shape = record, label = "{ Distinct: Preserve| 0: false }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q3 [ label = "Q3(F)" ]
+        }
+    }
+    subgraph cluster4 {
+        label = "Box4:Values"
+        boxhead4 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q8 -> boxhead8 [ lhead = cluster8 ]
+    Q6 -> boxhead3 [ lhead = cluster3 ]
+    Q7 -> boxhead7 [ lhead = cluster7 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q5 -> boxhead6 [ lhead = cluster6 ]
+    Q4 -> boxhead5 [ lhead = cluster5 ]
+    Q3 -> boxhead4 [ lhead = cluster4 ]
+}
+
+build
+select * from generate_series(0, 10, 2);
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "select * from generate_series(0, 10, 2);"
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:CallTable"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| CALL: generate_series(0, 10, 2)| UNIQUE KEY: C0 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+
+build
+select * from (values (1, 2), (3, 4));
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "select * from (values (1, 2), (3, 4));"
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:CallTable"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1| CALL: wrap2(1, 2, 3, 4) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
 }

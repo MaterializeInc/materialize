@@ -24,7 +24,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{Client, Command, CreateSourceCommand, StorageCommand};
+use crate::client::{CreateSourceCommand, StorageClient, StorageCommand};
 use crate::sources::SourceDesc;
 use crate::Update;
 use mz_expr::GlobalId;
@@ -32,6 +32,7 @@ use mz_expr::GlobalId;
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T> {
+    pub(super) client: Box<dyn StorageClient<T>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -45,9 +46,8 @@ pub struct StorageController<'a, T> {
 }
 
 /// A mutable controller for a storage instance.
-pub struct StorageControllerMut<'a, C, T> {
+pub struct StorageControllerMut<'a, T> {
     pub(super) storage: &'a mut StorageControllerState<T>,
-    pub(super) client: &'a mut C,
 }
 
 #[derive(Debug)]
@@ -68,8 +68,9 @@ impl From<anyhow::Error> for StorageError {
 }
 
 impl<T> StorageControllerState<T> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(client: Box<dyn StorageClient<T>>) -> Self {
         Self {
+            client,
             collections: BTreeMap::default(),
         }
     }
@@ -86,7 +87,7 @@ impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
     }
 }
 
-impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
+impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> StorageController<'b, T> {
         StorageController {
@@ -132,8 +133,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
             self.storage.collections.insert(binding.id, collection);
         }
 
-        self.client
-            .send(Command::Storage(StorageCommand::CreateSources(bindings)))
+        self.storage
+            .client
+            .send(StorageCommand::CreateSources(bindings))
             .await
             .expect("Storage command failed; unrecoverable");
 
@@ -153,8 +155,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
         id: GlobalId,
         updates: Vec<Update<T>>,
     ) -> Result<(), StorageError> {
-        self.client
-            .send(Command::Storage(StorageCommand::Insert { id, updates }))
+        self.storage
+            .client
+            .send(StorageCommand::Insert { id, updates })
             .await
             .map_err(StorageError::from)
     }
@@ -162,10 +165,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
         &mut self,
         updates: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), StorageError> {
-        self.client
-            .send(Command::Storage(StorageCommand::DurabilityFrontierUpdates(
-                updates,
-            )))
+        self.storage
+            .client
+            .send(StorageCommand::DurabilityFrontierUpdates(updates))
             .await
             .map_err(StorageError::from)
     }
@@ -191,10 +193,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
         &mut self,
         advance_to: T,
     ) -> Result<(), StorageError> {
-        self.client
-            .send(Command::Storage(StorageCommand::AdvanceAllLocalInputs {
-                advance_to,
-            }))
+        self.storage
+            .client
+            .send(StorageCommand::AdvanceAllLocalInputs { advance_to })
             .await
             .map_err(StorageError::from)
     }
@@ -252,7 +253,7 @@ impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
     }
 }
 
-impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
+impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub(super) fn collection_mut(
         &mut self,
@@ -334,10 +335,9 @@ impl<'a, C: Client<T>, T: Timestamp + Lattice> StorageControllerMut<'a, C, T> {
             }
         }
         if !compaction_commands.is_empty() {
-            self.client
-                .send(Command::Storage(StorageCommand::AllowCompaction(
-                    compaction_commands,
-                )))
+            self.storage
+                .client
+                .send(StorageCommand::AllowCompaction(compaction_commands))
                 .await
                 .expect(
                     "Failed to send storage command; aborting as compute instance state corrupted",

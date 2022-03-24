@@ -97,7 +97,7 @@ impl CatalogState {
         name: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let compute_instance_id = &self.compute_instance_names[name];
+        let compute_instance_id = &self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: MZ_CLUSTERS.id,
             row: Row::pack_slice(&[Datum::Int64(*compute_instance_id), Datum::String(&name)]),

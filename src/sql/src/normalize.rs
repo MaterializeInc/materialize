@@ -382,7 +382,7 @@ pub fn create_statement(
 }
 
 macro_rules! with_option_type {
-    ($name:ident, String) => {
+    ($name:expr, String) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
             Some(crate::ast::WithOptionValue::ObjectName(name)) => {
@@ -391,7 +391,7 @@ macro_rules! with_option_type {
             _ => ::anyhow::bail!("expected String"),
         }
     };
-    ($name:ident, bool) => {
+    ($name:expr, bool) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
             // Bools, if they have no '= value', are true.
@@ -399,7 +399,7 @@ macro_rules! with_option_type {
             _ => ::anyhow::bail!("expected bool"),
         }
     };
-    ($name:ident, Interval) => {
+    ($name:expr, Interval) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
                 mz_repr::strconv::parse_interval(&value)?
@@ -573,7 +573,7 @@ mod tests {
         )?
         .into_element();
 
-        let stmt = resolve_names_stmt(scx, parsed)?;
+        let (stmt, _) = resolve_names_stmt(scx, parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(

@@ -25,6 +25,7 @@ services:
       antithesis-net:
         ipv4_address: 10.0.0.12
     command:
+      --listen-addr 0.0.0.0:6875
       --data-directory=/share/mzdata
       --workers 1
       --experimental
