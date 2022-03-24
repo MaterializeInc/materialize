@@ -3,8 +3,8 @@ title: "Temporal Filters"
 description: "Perform time-windowed computation over temporal data."
 weight:
 menu:
-  main:
-    parent: guides
+    main:
+        parent: guides
 ---
 
 Temporal filters allow you to implement several windowing idioms (tumbling, hopping, and sliding), in addition to more nuanced temporal queries.
@@ -17,12 +17,12 @@ Even if your input data does not change, your query results can change as the ti
 
 You can only use `mz_logical_timestamp()` to establish a temporal filter under the following conditions:
 
-- `mz_logical_timestamp` appears in a `WHERE` or `HAVING` clause.
-- The clause must directly compare `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`,
-or be part of a conjunction phrase (`AND`) which directly compares `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`.
-- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
+-   `mz_logical_timestamp` appears in a `WHERE` or `HAVING` clause.
+-   The clause must directly compare `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`,
+    or be part of a conjunction phrase (`AND`) which directly compares `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`.
+-   The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
 
-  At the moment, you can't use the `!=` operator with `mz_logical_timestamp()` (we're working on it).
+    At the moment, you can't use the `!=` operator with `mz_logical_timestamp()` (we're working on it).
 
 Let's take a look at an example.
 
@@ -80,7 +80,7 @@ Tumbling windows are useful for maintaining constantly refreshed answers to ques
 **Hopping windows** are windows whose duration is an integer multiple of their period. This creates fixed-size windows that may overlap, with records belonging to multiple windows.
 
 {{< note >}}
-In some systems, these are called "sliding windows".  Materialize reserves that term for a different use case, discussed below.
+In some systems, these are called "sliding windows". Materialize reserves that term for a different use case, discussed below.
 {{< /note >}}
 
 Here we specify a hopping window that has the period `PERIOD_MS` and covers `INTERVALS` number of intervals:
@@ -147,7 +147,10 @@ Grace periods can be applied to any of the moving window idioms.
 
 ## Example
 
+### Windowing
+
 <!-- This example also appears in now_and_mz_logical_timestamp -->
+
 For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
 
 ```sql
@@ -192,6 +195,7 @@ Then, before 100,000 ms (or 1.67 minutes) elapse, run the following query to see
 ```sql
 SELECT *, mz_logical_timestamp() FROM valid;
 ```
+
 ```nofmt
  content |   insert_ms   |   delete_ms   | mz_logical_timestamp
 ---------+---------------+---------------+----------------------
@@ -202,3 +206,57 @@ SELECT *, mz_logical_timestamp() FROM valid;
 ```
 
 If you run this query again after 1.67 minutes from the first insertion, you'll see only two results, because the first result no longer satisfies the predicate.
+
+### Bucketing
+
+It is common to use buckets to represent the time window where a row belongs. Materialize [date functions](/sql/functions/#date-and-time-func) will help us here. <br/>
+Let's continue with the last example:
+
+```sql
+CREATE MATERIALIZED VIEW valid_buckets AS
+SELECT
+  content,
+  insert_ms,
+  delete_ms,
+  -- Trunc timestamps to the minute and use them as buckets
+  DATE_TRUNC('minute', to_timestamp(insert_ms / 1000)) as insert_bucket,
+  DATE_TRUNC('minute', to_timestamp(delete_ms / 1000)) as delete_bucket
+FROM events
+WHERE mz_logical_timestamp() >= insert_ms
+  AND mz_logical_timestamp() < delete_ms;
+```
+
+Re-insert some rows to make sure there is data available, and run the following query to see all the records and their respective buckets:
+
+```sql
+SELECT * FROM valid_buckets;
+```
+
+```nofmt
+ content |   insert_ms   |   delete_ms   |     insert_bucket      |     delete_bucket
+---------+---------------+---------------+------------------------+------------------------
+ goodbye | 1647551752960 | 1647551952960 | 2022-03-17 21:15:00+00 | 2022-03-17 21:19:00+00
+ hello   | 1647551752687 | 1647551852687 | 2022-03-17 21:15:00+00 | 2022-03-17 21:17:00+00
+ welcome | 1647551752694 | 1647551902694 | 2022-03-17 21:15:00+00 | 2022-03-17 21:18:00+00
+(3 rows)
+```
+
+It's is possible to go even more beyond aggregating by the buckets:
+
+```sql
+SELECT
+  insert_bucket,
+  COUNT(1)
+FROM valid_buckets
+GROUP BY 1;
+```
+
+```nofmt
+     insert_bucket      | count
+------------------------+-------
+ 2022-03-17 21:15:00+00 |     3
+(1 row)
+```
+
+For this case querying and aggregating is relatively effortless;
+if the aggregation query were expensive, creating a Materialized View doing the aggregation would make more sense.
