@@ -42,6 +42,8 @@ use mz_repr::Row;
 pub mod controller;
 pub use controller::Controller;
 
+pub mod replicated;
+
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command<T = mz_repr::Timestamp> {
@@ -323,28 +325,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     start.push(source.id);
                 }
             }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
-                for dataflow in dataflows.iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
-                    }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::AllowCompaction(frontiers), _instance) => {
-                for (id, frontier) in frontiers.iter() {
-                    if frontier.is_empty() {
-                        cease.push(*id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
-                if let Some(logging_config) = logging {
-                    start.extend(logging_config.log_identifiers());
-                }
-            }
+            Command::Compute(command, _instance) => command.frontier_tracking(start, cease),
             _ => {
                 // Other commands have no known impact on frontier tracking.
             }
@@ -357,6 +338,216 @@ impl<T: timely::progress::Timestamp> Command<T> {
         match self {
             Command::Compute(command, _instance) => ComputeCommandKind::from(command).metric_name(),
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
+        }
+    }
+}
+
+impl<T> ComputeCommand<T> {
+    /// Indicates which global ids should start and cease frontier tracking.
+    ///
+    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// added to `cease` will uninstall frontier tracking.
+    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
+        match self {
+            ComputeCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        start.push(*sink_id)
+                    }
+                    for (index_id, _, _) in dataflow.index_exports.iter() {
+                        start.push(*index_id);
+                    }
+                }
+            }
+            ComputeCommand::AllowCompaction(frontiers) => {
+                for (id, frontier) in frontiers.iter() {
+                    if frontier.is_empty() {
+                        cease.push(*id);
+                    }
+                }
+            }
+            ComputeCommand::CreateInstance(logging) => {
+                if let Some(logging_config) = logging {
+                    start.extend(logging_config.log_identifiers());
+                }
+            }
+            _ => {
+                // Other commands have no known impact on frontier tracking.
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ComputeCommandHistory<T> {
+    commands: Vec<ComputeCommand<T>>,
+}
+
+impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    pub fn push(&mut self, command: ComputeCommand<T>) {
+        self.commands.push(command);
+    }
+    /// Reduces `self.history` to a minimal form.
+    ///
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    ///
+    /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
+    /// response or cancelation.
+    ///
+    /// Returns the number of distinct commands that remain.
+    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_command = None;
+        let mut drop_command = None;
+
+        for command in self.commands.drain(..) {
+            match command {
+                create @ ComputeCommand::CreateInstance(_) => {
+                    // We should be able to handle this, should this client need to be restartable.
+                    assert!(create_command.is_none());
+                    create_command = Some(create);
+                }
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
+                }
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                peek @ ComputeCommand::Peek { .. } => {
+                    // We could pre-filter here, but seems hard to access `uuid`
+                    // and take ownership of `peek` at the same time.
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { mut uuids } => {
+                    uuids.retain(|uuid| peeks.contains(uuid));
+                    live_cancels.extend(uuids);
+                }
+            }
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| {
+            // If any index or sink has not been compacted to the empty frontier, it remains active.
+            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
+            // this is fine and normal, and is not evidence that the collection is not in use.
+            let index_active = dataflow
+                .index_exports
+                .iter()
+                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+            let sink_active = dataflow
+                .sink_exports
+                .iter()
+                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+
+            let retain = index_active || sink_active;
+
+            // If we are going to drop the dataflow, we should remove the frontier information so that we
+            // do not instruct anyone to compact a frontier they have not heard of.
+            if !retain {
+                for (id, _, _) in dataflow.index_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+                for (id, _) in dataflow.sink_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+            }
+
+            retain
+        });
+
+        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut same_as_of = false;
+            let mut as_of = Antichain::new();
+            for (id, _, _) in dataflow.index_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            for (id, _) in dataflow.sink_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            if !same_as_of {
+                dataflow.as_of = Some(as_of);
+            }
+        }
+
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| {
+            if let ComputeCommand::Peek { uuid, .. } = peek {
+                peeks.contains(uuid)
+            } else {
+                unreachable!()
+            }
+        });
+
+        // Record the volume of post-compaction commands.
+        let mut command_count = 1;
+        command_count += live_dataflows.len();
+        command_count += final_frontiers.len();
+        command_count += live_peeks.len();
+        command_count += live_cancels.len();
+        if drop_command.is_some() {
+            command_count += 1;
+        }
+
+        // Reconstitute the commands as a compact history.
+        self.commands.push(create_command.unwrap());
+        self.commands
+            .push(ComputeCommand::CreateDataflows(live_dataflows));
+        self.commands.push(ComputeCommand::AllowCompaction(
+            final_frontiers.into_iter().collect(),
+        ));
+        self.commands.extend(live_peeks);
+        self.commands.push(ComputeCommand::CancelPeeks {
+            uuids: live_cancels,
+        });
+        if let Some(drop_command) = drop_command {
+            self.commands.push(drop_command);
+        }
+
+        command_count
+    }
+    /// Iterate through the contained commands.
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+        self.commands.iter()
+    }
+
+    /// Report the number of commands.
+    ///
+    /// Importantly, each command can be arbitrarily complicated, so this number could be small
+    /// even while we have few commands that cause many actions to be taken.
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+}
+
+impl<T> Default for ComputeCommandHistory<T> {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
         }
     }
 }
@@ -656,7 +847,7 @@ pub mod partitioned {
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
-    use super::{Command, PeekResponse, Response};
+    use super::{Command, ComputeCommand, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
     ///
@@ -688,6 +879,10 @@ pub mod partitioned {
         T: timely::progress::Timestamp + Copy,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+            // A `CreateInstance` command indicates re-initialization.
+            if let Command::Compute(ComputeCommand::CreateInstance(_), _instance) = &cmd {
+                self.state = PartitionedClientState::new(self.shards.len());
+            }
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
@@ -1146,11 +1341,14 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::time::Duration;
+
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
+    use tokio::time;
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
@@ -1159,6 +1357,10 @@ pub mod tcp {
     /// A client to a remote dataflow server.
     #[derive(Debug)]
     pub struct TcpClient<T> {
+        /// Indicates if `self.connection` recently produced an error and has yet to be reconnected.
+        ///
+        /// Used to suppress `send` commands to a known-errored connection.
+        errored: bool,
         connection: FramedClient<TcpStream, T>,
         addr: String,
     }
@@ -1167,14 +1369,22 @@ pub mod tcp {
         /// Connects a remote client to the specified remote dataflow server.
         pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
             let connection = framed_client(TcpStream::connect(&addr).await?);
-            Ok(Self { connection, addr })
+            Ok(Self {
+                errored: false,
+                connection,
+                addr,
+            })
         }
 
+        /// Reconnects the underlying `connection`.
         pub async fn reconnect(&mut self) {
             let mut connection = TcpStream::connect(&self.addr).await;
             while connection.is_err() {
+                tracing::warn!("Connect error; reconnecting");
+                time::sleep(Duration::from_secs(1)).await;
                 connection = TcpStream::connect(&self.addr).await;
             }
+            tracing::info!("Reconnected");
             self.connection = framed_client(connection.unwrap());
         }
     }
@@ -1185,21 +1395,23 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            // on error, we attempt to reconnect, and communicate the error.
-            let result = self.connection.send(cmd).await;
-            if result.is_err() {
-                self.reconnect().await;
+            if !self.errored {
+                let result = self.connection.send(cmd).await;
+                self.errored = result.is_err();
             }
-            Ok(result?)
+            // Erroring would signal a reset, but we are not yet ready to receive restarted commands.
+            // Instead, let `recv` handle the reconnection, and communicate an error once it has.
+            Ok(())
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
             match self.connection.next().await {
-                None => Ok(None),
                 Some(Ok(response)) => Ok(Some(response)),
-                Some(error) => {
+                _ => {
+                    // `None` and `Some(Err)` are both connection errors.
                     self.reconnect().await;
-                    Ok(Some(error?))
+                    self.errored = false;
+                    Err(anyhow::anyhow!("Connection severed; reconnected"))
                 }
             }
         }

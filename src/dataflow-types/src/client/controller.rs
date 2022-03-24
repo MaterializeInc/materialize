@@ -86,9 +86,9 @@ where
             }
             InstanceConfig::Remote { hosts, logging } => {
                 let client = RemoteClient::connect(&hosts).await?;
-                let client: Box<dyn ComputeClient<T>> =
-                    Box::new(ComputeWrapperClient::new(client, instance));
-                (client, logging)
+                let client = ComputeWrapperClient::new(client, instance);
+                let client = crate::client::replicated::ActiveReplication::new(vec![client]);
+                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
             }
             InstanceConfig::Managed { size: _, logging } => {
                 let OrchestratorConfig {
