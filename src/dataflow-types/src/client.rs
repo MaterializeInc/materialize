@@ -1387,8 +1387,8 @@ pub mod tcp {
         pub async fn connect(&mut self) {
             if self.connection.is_none() {
                 let mut connection = TcpStream::connect(&self.addr).await;
-                while connection.is_err() {
-                    tracing::warn!("Connect error; reconnecting");
+                while let Err(e) = connection {
+                    tracing::warn!("Connect error: {e}; reconnecting");
                     time::sleep(Duration::from_secs(1)).await;
                     connection = TcpStream::connect(&self.addr).await;
                 }

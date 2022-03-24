@@ -372,6 +372,7 @@ pub mod client {
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::task::JoinHandle;
+    use tokio::time;
     use tokio_serde::formats::Bincode;
     use tracing::{debug, info, warn};
 
@@ -550,11 +551,16 @@ pub mod client {
     ) -> std::io::Result<(TcpEventLinkClientHandle, JoinHandle<std::io::Result<()>>)> {
         let (announce_tx, announce_rx) = unbounded_channel();
         info!("About to connect to {addr:?}");
-        let stream = TcpStream::connect(addr).await?;
+        let mut stream = TcpStream::connect(&addr).await;
+        while let Err(e) = stream {
+            tracing::warn!("Connect error: {e}; reconnecting");
+            time::sleep(Duration::from_secs(1)).await;
+            stream = TcpStream::connect(&addr).await;
+        }
         info!("Connected to storage server");
         let thread = mz_ore::task::spawn(
             || "storage client",
-            run_client(stream, announce_rx, workers),
+            run_client(stream.unwrap(), announce_rx, workers),
         );
 
         Ok((
