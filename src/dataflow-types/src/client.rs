@@ -389,7 +389,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     ///
     /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
     /// response or cancelation.
-    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) {
+    ///
+    /// Returns the number of distinct commands that remain.
+    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
@@ -494,6 +496,16 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             }
         });
 
+        // Record the volume of post-compaction commands.
+        let mut command_count = 1;
+        command_count += live_dataflows.len();
+        command_count += final_frontiers.len();
+        command_count += live_peeks.len();
+        command_count += live_cancels.len();
+        if drop_command.is_some() {
+            command_count += 1;
+        }
+
         // Reconstitute the commands as a compact history.
         self.commands.push(create_command.unwrap());
         self.commands
@@ -508,10 +520,20 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
         }
+
+        command_count
     }
     /// Iterate through the contained commands.
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
         self.commands.iter()
+    }
+
+    /// Report the number of commands.
+    ///
+    /// Importantly, each command can be arbitrarily complicated, so this number could be small
+    /// even while we have few commands that cause many actions to be taken.
+    pub fn len(&self) -> usize {
+        self.commands.len()
     }
 }
 

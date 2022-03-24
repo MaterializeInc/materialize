@@ -44,6 +44,8 @@ pub struct ActiveReplication<C, T> {
     history: crate::client::ComputeCommandHistory<T>,
     /// Cursor to use among the replicas
     cursor: usize,
+    /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
+    last_command_count: usize,
 }
 
 impl<C: ComputeClient<T>, T> ActiveReplication<C, T>
@@ -58,6 +60,7 @@ where
             uppers: HashMap::new(),
             history: Default::default(),
             cursor: 0,
+            last_command_count: 0,
         }
     }
 
@@ -84,7 +87,8 @@ where
             frontiers[replica_index].update_iter(Some((T::minimum(), 1)));
         }
         // Take this opportunity to clean up the history we should present.
-        self.history.reduce(&self.peeks);
+        self.last_command_count = self.history.reduce(&self.peeks);
+
         // Replay the commands at the client, creating new dataflow identifiers.
         let client = self.replicas.get_mut(replica_index).unwrap();
         for command in self.history.iter() {
@@ -141,6 +145,11 @@ where
 
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
+
+        // If we have reached a point that justifies history reduction, do that.
+        if self.history.len() > 2 * self.last_command_count {
+            self.last_command_count = self.history.reduce(&self.peeks);
+        }
 
         // Clone the command for each active replica.
         let replicas_len = self.replicas.len();
