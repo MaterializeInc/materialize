@@ -1312,11 +1312,14 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::time::Duration;
+
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
+    use tokio::time;
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
@@ -1349,7 +1352,7 @@ pub mod tcp {
             let mut connection = TcpStream::connect(&self.addr).await;
             while connection.is_err() {
                 tracing::warn!("Connect error; reconnecting");
-                std::thread::sleep(std::time::Duration::from_millis(1000));
+                time::sleep(Duration::from_secs(1)).await;
                 connection = TcpStream::connect(&self.addr).await;
             }
             tracing::info!("Reconnected");
