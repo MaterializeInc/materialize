@@ -20,8 +20,7 @@ pub enum DecodeError {
     Text(String),
 }
 
-// We only want to support persisting DecodeError for now, and not the full DataflowError, which is
-// a bit more complex.
+// See also the `Codec` impl for `DataflowError`
 impl Codec for DecodeError {
     fn codec_name() -> String {
         "DecodeError".into()
@@ -98,6 +97,36 @@ pub enum DataflowError {
     DecodeError(DecodeError),
     EvalError(EvalError),
     SourceError(SourceError),
+}
+
+impl Codec for DataflowError {
+    fn codec_name() -> String {
+        "DataflowError".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        match serde_json::to_writer(buf.writer(), self) {
+            Ok(ok) => ok,
+            Err(e) => panic!("Encoding error, trying to encode {}: {}", self, e),
+        };
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        // We first check if we are decoding a `DecodeError`, as we
+        // are replacing persisted `DecodeError` callsites with
+        // persisted `DataflowError`'s
+        //
+        // TODO(guswynn): make sure we decode backards compatibly
+        // if we switch to using protobuf
+        DecodeError::decode(buf)
+            .map(DataflowError::from)
+            .or_else(|_| {
+                serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?
+            })
+    }
 }
 
 impl Display for DataflowError {
