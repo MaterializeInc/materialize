@@ -85,7 +85,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{error, warn};
+use tracing::{error, instrument, warn};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -1238,6 +1238,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(level = "debug", skip_all, fields(statement = %stmt, ?params), err)]
     async fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -1366,6 +1367,7 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
+    #[instrument(skip_all, fields(conn_id = %session.conn_id(), user = %session.user()))]
     async fn handle_execute(
         &mut self,
         portal_name: String,

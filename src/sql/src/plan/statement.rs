@@ -19,6 +19,7 @@ use anyhow::bail;
 use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use tracing::instrument;
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{
@@ -201,6 +202,7 @@ pub fn describe(
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
+#[instrument(level = "trace", skip_all, err)]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
