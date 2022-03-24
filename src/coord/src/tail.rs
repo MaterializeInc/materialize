@@ -49,30 +49,11 @@ impl PendingTail {
     pub(crate) fn process_response(&mut self, response: TailResponse) -> bool {
         let mut row_buf = Row::default();
         match response {
-            TailResponse::Progress(upper) => {
-                if self.emit_progress && !upper.is_empty() {
-                    assert_eq!(
-                        upper.len(),
-                        1,
-                        "TAIL only supports single-dimensional timestamps"
-                    );
-                    let mut packer = row_buf.packer();
-                    packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
-                    packer.push(Datum::True);
-                    // Fill in the diff column and all table columns with NULL.
-                    for _ in 0..(self.arity + 1) {
-                        packer.push(Datum::Null);
-                    }
-
-                    let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
-                    if result.is_err() {
-                        // TODO(benesch): we should actually drop the sink if the
-                        // receiver has gone away. E.g. form a DROP SINK command?
-                    }
-                }
-                upper.is_empty()
-            }
-            TailResponse::Rows(mut rows) => {
+            TailResponse::Batch(mz_dataflow_types::TailBatch {
+                lower: _,
+                upper,
+                updates: mut rows,
+            }) => {
                 // Sort results by time. We use stable sort here because it will produce deterministic
                 // results since the cursor will always produce rows in the same order.
                 // TODO: Is sorting necessary?
@@ -106,7 +87,28 @@ impl PendingTail {
                     // TODO(benesch): we should actually drop the sink if the
                     // receiver has gone away. E.g. form a DROP SINK command?
                 }
-                false
+
+                if self.emit_progress && !upper.is_empty() {
+                    assert_eq!(
+                        upper.len(),
+                        1,
+                        "TAIL only supports single-dimensional timestamps"
+                    );
+                    let mut packer = row_buf.packer();
+                    packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
+                    packer.push(Datum::True);
+                    // Fill in the diff column and all table columns with NULL.
+                    for _ in 0..(self.arity + 1) {
+                        packer.push(Datum::Null);
+                    }
+
+                    let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
+                    if result.is_err() {
+                        // TODO(benesch): we should actually drop the sink if the
+                        // receiver has gone away. E.g. form a DROP SINK command?
+                    }
+                }
+                upper.is_empty()
             }
             TailResponse::Dropped => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
