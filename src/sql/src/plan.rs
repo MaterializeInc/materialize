@@ -155,6 +155,10 @@ pub enum ComputeInstanceConfig {
         hosts: Vec<String>,
         introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
+    Managed {
+        size: String,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
 }
 
 /// Configuration of introspection for a compute instance.

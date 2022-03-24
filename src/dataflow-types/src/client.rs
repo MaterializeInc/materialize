@@ -75,6 +75,13 @@ pub enum InstanceConfig {
         /// Logging configuration.
         logging: Option<LoggingConfig>,
     },
+    /// A remote but managed instance.
+    Managed {
+        /// The size of the cluster.
+        size: String,
+        /// Logging configuration.
+        logging: Option<LoggingConfig>,
+    },
 }
 
 /// Commands related to the computation and maintenance of views.
