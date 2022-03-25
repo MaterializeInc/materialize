@@ -142,6 +142,9 @@ steps:
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
+    timeout_in_minutes: 5
+    # https://github.com/MaterializeInc/materialize/issues/11390
+    soft_fail: true
     inputs: [test/cluster]
     plugins:
       - ./ci/plugins/mzcompose:
