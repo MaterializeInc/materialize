@@ -35,65 +35,77 @@ use super::{ComputeCommand, ComputeResponse};
 #[derive(Debug)]
 pub struct ActiveReplication<C, T> {
     /// The replicas themselves.
-    replicas: Vec<C>,
+    replicas: HashMap<uuid::Uuid, C>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Reported frontier of each in-progress tail.
     tails: HashMap<GlobalId, Antichain<T>>,
-    /// Frontier information, both from each replica and unioned across all replicas.
-    uppers: HashMap<GlobalId, (Antichain<T>, Vec<MutableAntichain<T>>)>,
+    /// Frontier information, both unioned across all replicas and from each individual replica.
+    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<uuid::Uuid, MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: crate::client::ComputeCommandHistory<T>,
-    /// Cursor to use among the replicas
-    cursor: usize,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
     last_command_count: usize,
+}
+
+impl<C, T> Default for ActiveReplication<C, T> {
+    fn default() -> Self {
+        Self {
+            replicas: Default::default(),
+            peeks: Default::default(),
+            tails: Default::default(),
+            uppers: Default::default(),
+            history: Default::default(),
+            last_command_count: 0,
+        }
+    }
 }
 
 impl<C: ComputeClient<T>, T> ActiveReplication<C, T>
 where
     T: timely::progress::Timestamp,
 {
-    /// Creates a new active replica client from a list of active replicas.
-    pub fn new(replicas: Vec<C>) -> Self {
-        Self {
-            replicas,
-            peeks: HashSet::new(),
-            tails: HashMap::new(),
-            uppers: HashMap::new(),
-            history: Default::default(),
-            cursor: 0,
-            last_command_count: 0,
-        }
-    }
-
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica(&mut self, client: C) {
+    pub async fn add_replica(&mut self, client: C) -> uuid::Uuid {
+        let identifier = uuid::Uuid::new_v4();
         for (_, frontiers) in self.uppers.values_mut() {
-            frontiers.push({
+            frontiers.insert(identifier, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
                 frontier.update_iter(Some((T::minimum(), 1)));
                 frontier
-            })
+            });
         }
-        self.replicas.push(client);
-        self.hydrate_replica(self.replicas.len() - 1).await;
+        self.replicas.insert(identifier, client);
+        self.hydrate_replica(&identifier).await;
+        identifier
+    }
+
+    /// Remove a replica by its identifier.
+    pub fn remove_replica(&mut self, id: uuid::Uuid) {
+        self.replicas.remove(&id);
+        for (_frontier, frontiers) in self.uppers.iter_mut() {
+            frontiers.1.remove(&id);
+        }
     }
 
     /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    async fn hydrate_replica(&mut self, replica_index: usize) {
+    async fn hydrate_replica(&mut self, replica_id: &uuid::Uuid) {
         // Zero out frontiers maintained by this replica.
         for (_id, (_, frontiers)) in self.uppers.iter_mut() {
-            frontiers[replica_index] = timely::progress::frontier::MutableAntichain::new();
-            frontiers[replica_index].update_iter(Some((T::minimum(), 1)));
+            *frontiers.get_mut(replica_id).unwrap() =
+                timely::progress::frontier::MutableAntichain::new();
+            frontiers
+                .get_mut(replica_id)
+                .unwrap()
+                .update_iter(Some((T::minimum(), 1)));
         }
         // Take this opportunity to clean up the history we should present.
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let client = self.replicas.get_mut(replica_index).unwrap();
+        let client = self.replicas.get_mut(replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
             // Replace dataflow identifiers with new unique ids.
@@ -128,13 +140,13 @@ where
             let frontier = timely::progress::Antichain::from_elem(T::minimum());
             let frontiers = self
                 .replicas
-                .iter()
-                .map(|_| {
+                .keys()
+                .map(|id| {
                     let mut frontier = timely::progress::frontier::MutableAntichain::new();
                     frontier.update_iter(Some((T::minimum(), 1)));
-                    frontier
+                    (*id, frontier)
                 })
-                .collect::<Vec<_>>();
+                .collect();
             let previous = self.uppers.insert(id, (frontier, frontiers));
             assert!(previous.is_none());
         }
@@ -152,9 +164,7 @@ where
         }
 
         // Clone the command for each active replica.
-        let replicas_len = self.replicas.len();
-        for index in 0..replicas_len {
-            // for (index, client) in self.replicas.iter_mut().enumerate() {
+        for (_id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
@@ -165,7 +175,7 @@ where
 
             // Errors are suppressed by this client, which awaits a reconnection in `recv` and
             // will rehydrate the client when that happens.
-            let _ = self.replicas[index].send(command).await;
+            let _ = replica.send(command).await;
         }
 
         Ok(())
@@ -182,13 +192,10 @@ where
                 let mut errored_replica = None;
 
                 // Receive responses from any of the replicas, and take appropriate action.
-                self.cursor = (self.cursor + 1) % self.replicas.len();
-                let (head, tail) = self.replicas.split_at_mut(self.cursor);
-                let mut stream: tokio_stream::StreamMap<_, _> = tail
+                let mut stream: tokio_stream::StreamMap<_, _> = self
+                    .replicas
                     .iter_mut()
-                    .chain(head.iter_mut())
-                    .map(|shard| shard.as_stream())
-                    .enumerate()
+                    .map(|(id, shard)| (*id, shard.as_stream()))
                     .collect();
 
                 use futures::StreamExt;
@@ -206,13 +213,16 @@ where
                             for (id, changes) in list.iter_mut() {
                                 if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
                                     // Apply changes to replica `replica_id`
-                                    frontiers[replica_id].update_iter(changes.drain());
+                                    frontiers
+                                        .get_mut(&replica_id)
+                                        .unwrap()
+                                        .update_iter(changes.drain());
                                     // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
                                     // Working
                                     changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
                                     frontier.clear();
                                     for (time1, _neg_one) in changes.iter() {
-                                        for time2 in frontiers[replica_id].frontier().iter() {
+                                        for time2 in frontiers[&replica_id].frontier().iter() {
                                             frontier.insert(time1.join(time2));
                                         }
                                     }
@@ -284,9 +294,9 @@ where
                 }
                 drop(stream);
 
-                if let Some(replica_index) = errored_replica {
-                    tracing::warn!("Rehydrating replica {:?}", replica_index);
-                    self.hydrate_replica(replica_index).await;
+                if let Some(replica_id) = errored_replica {
+                    tracing::warn!("Rehydrating replica {:?}", replica_id);
+                    self.hydrate_replica(&replica_id).await;
                 }
 
                 clean_recv = errored_replica.is_none();
