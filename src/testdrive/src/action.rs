@@ -282,7 +282,7 @@ impl State {
     async fn delete_bucket_objects(&self, bucket: String) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
+            .retry_async(|_| async {
                 // loop until error or response has no continuation token
                 let mut continuation_token = None;
                 loop {
@@ -321,7 +321,7 @@ impl State {
     pub async fn reset_sqs(&self) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
+            .retry_async(|_| async {
                 for queue_url in &self.sqs_queues_created {
                     self.sqs_client
                         .delete_queue()

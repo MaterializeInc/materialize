@@ -57,7 +57,7 @@ impl Action for CreateStreamAction {
 
         Retry::default()
             .max_duration(cmp::max(state.default_timeout, Duration::from_secs(60)))
-            .retry_async_canceling(|_| async {
+            .retry_async(|_| async {
                 let description = state
                     .kinesis_client
                     .describe_stream()
