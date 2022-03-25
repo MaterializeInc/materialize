@@ -38,6 +38,8 @@ pub struct ActiveReplication<C, T> {
     replicas: Vec<C>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
+    /// Reported frontier of each in-progress tail.
+    tails: HashMap<GlobalId, Antichain<T>>,
     /// Frontier information, both from each replica and unioned across all replicas.
     uppers: HashMap<GlobalId, (Antichain<T>, Vec<MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
@@ -57,6 +59,7 @@ where
         Self {
             replicas,
             peeks: HashSet::new(),
+            tails: HashMap::new(),
             uppers: HashMap::new(),
             history: Default::default(),
             cursor: 0,
@@ -221,8 +224,57 @@ where
                                 return Ok(Some(ComputeResponse::FrontierUppers(list)));
                             }
                         }
-                        Ok(_message) => {
-                            unimplemented!("TAIL not yet implemented for replication");
+                        Ok(ComputeResponse::TailResponse(id, response)) => {
+                            use crate::{TailBatch, TailResponse};
+                            match response {
+                                TailResponse::Batch(TailBatch {
+                                    lower: _,
+                                    upper,
+                                    mut updates,
+                                }) => {
+                                    // It is sufficient to compare `upper` against the last reported frontier for `id`,
+                                    // and if `upper` is not less or equal to that frontier, some progress has happened.
+                                    // If so, we retain only the updates greater or equal to that last reported frontier,
+                                    // and announce a batch from that frontier to its join with `upper`.
+
+                                    // Ensure that we have a recorded frontier ready to go.
+                                    let entry = self
+                                        .tails
+                                        .entry(id)
+                                        .or_insert_with(|| Antichain::from_elem(T::minimum()));
+                                    // If the upper frontier has changed, we have a statement to make.
+                                    // This happens if there is any element of `entry` not greater or
+                                    // equal to some element of `upper`.
+                                    use differential_dataflow::lattice::Lattice;
+                                    let new_upper = entry.join(&upper);
+                                    if &new_upper != entry {
+                                        let new_lower = entry.clone();
+                                        entry.clone_from(&new_upper);
+                                        updates.retain(|(time, _data, _diff)| {
+                                            new_lower.less_equal(time)
+                                        });
+                                        return Ok(Some(ComputeResponse::TailResponse(
+                                            id,
+                                            TailResponse::Batch(TailBatch {
+                                                lower: new_lower,
+                                                upper: new_upper,
+                                                updates,
+                                            }),
+                                        )));
+                                    }
+                                }
+                                TailResponse::Dropped => {
+                                    // Introduce a new terminal frontier to suppress all future responses.
+                                    // We cannot simply remove the entry, as we currently create new entries in response
+                                    // to observed responses; if we pre-load the entries in response to commands we can
+                                    // clean up the state here.
+                                    self.tails.insert(id, Antichain::new());
+                                    return Ok(Some(ComputeResponse::TailResponse(
+                                        id,
+                                        TailResponse::Dropped,
+                                    )));
+                                }
+                            }
                         }
                         Err(_error) => {
                             errored_replica = Some(replica_id);
