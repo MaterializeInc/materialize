@@ -33,7 +33,7 @@ use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobRead, LockInfo};
+use crate::location::{Atomicity, Blob, BlobMulti, BlobRead, LocationError, LockInfo};
 
 /// Configuration for opening an [S3Blob] or [S3BlobRead].
 #[derive(Clone, Debug)]
@@ -731,6 +731,74 @@ impl Blob for S3Blob {
             .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
+        Ok(())
+    }
+}
+
+/// Implementation of [BlobMulti] backed by S3.
+#[derive(Debug)]
+pub struct S3BlobMulti {
+    core: S3BlobCore,
+}
+
+#[async_trait]
+impl BlobMulti for S3BlobMulti {
+    type Config = S3BlobConfig;
+
+    async fn open_multi(_deadline: Instant, config: S3BlobConfig) -> Result<Self, LocationError> {
+        let core = S3BlobCore {
+            client: Some(config.client),
+            bucket: config.bucket,
+            prefix: config.prefix,
+            max_keys: 1_000,
+            multipart_config: MultipartConfig::default(),
+        };
+        Ok(S3BlobMulti { core })
+    }
+
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
+        let value = self.core.get(key).await?;
+        Ok(value)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, LocationError> {
+        let keys = self.core.list_keys().await?;
+        Ok(keys)
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), LocationError> {
+        // TODO: Move this impl here once we delete S3Blob.
+        let mut hack = S3Blob {
+            core: S3BlobCore {
+                client: self.core.client.clone(),
+                bucket: self.core.bucket.clone(),
+                prefix: self.core.prefix.clone(),
+                max_keys: self.core.max_keys,
+                multipart_config: self.core.multipart_config.clone(),
+            },
+        };
+        hack.set(key, value, atomic).await?;
+        Ok(())
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), LocationError> {
+        // TODO: Move this impl here once we delete S3Blob.
+        let mut hack = S3Blob {
+            core: S3BlobCore {
+                client: self.core.client.clone(),
+                bucket: self.core.bucket.clone(),
+                prefix: self.core.prefix.clone(),
+                max_keys: self.core.max_keys,
+                multipart_config: self.core.multipart_config.clone(),
+            },
+        };
+        hack.delete(key).await?;
         Ok(())
     }
 }

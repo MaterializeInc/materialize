@@ -94,6 +94,33 @@ impl Add<u64> for SeqNo {
     }
 }
 
+/// An error coming from an underlying durability system (e.g. s3) or from
+/// invalid data received from one.
+///
+/// TODO: Split this into an enum with variants for failures which mean the
+/// operation _definitely didn't occur_ (e.g. permission denied) vs ones that
+/// _might have occurred_ (e.g. timeout).
+#[derive(Debug)]
+pub struct LocationError {
+    inner: anyhow::Error,
+}
+
+impl std::fmt::Display for LocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "storage: {}", self.inner)
+    }
+}
+
+impl std::error::Error for LocationError {}
+
+impl From<Error> for LocationError {
+    fn from(x: Error) -> Self {
+        LocationError {
+            inner: anyhow::Error::new(x),
+        }
+    }
+}
+
 /// An abstraction over an append-only bytes log.
 ///
 /// Each written entry is assigned a unique, incrementing SeqNo, which can be
@@ -369,6 +396,41 @@ impl From<(&str, &str)> for LockInfo {
             details: details.to_owned(),
         }
     }
+}
+
+/// An abstraction over read-write access to a `bytes key`->`bytes value` store.
+///
+/// TODO: Rename this to Blob when we delete Blob.
+#[async_trait]
+pub trait BlobMulti: Sized {
+    /// The configuration necessary to open this type of storage.
+    type Config;
+
+    /// Opens the given location for non-exclusive read-write access.
+    async fn open_multi(deadline: Instant, config: Self::Config) -> Result<Self, LocationError>;
+
+    /// Returns a reference to the value corresponding to the key.
+    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError>;
+
+    /// List all of the keys in the map.
+    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, LocationError>;
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(
+        &self,
+        deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), LocationError>;
+
+    /// Remove a key from the map.
+    ///
+    /// Succeeds if the key does not exist.
+    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), LocationError>;
 }
 
 #[cfg(test)]

@@ -14,13 +14,14 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::location::LocationError;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::error::{InvalidUsage, LocationError};
+use crate::error::InvalidUsage;
 use crate::r#impl::shard::Shard;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).

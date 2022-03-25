@@ -14,6 +14,7 @@ use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write as StdWrite};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use fail::fail_point;
@@ -21,7 +22,7 @@ use fail::fail_point;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::location::{Atomicity, Blob, BlobMulti, BlobRead, LocationError, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
@@ -519,6 +520,62 @@ impl Blob for FileBlob {
             )))
         });
 
+        Ok(())
+    }
+}
+
+/// Implementation of [BlobMulti] backed by files.
+#[derive(Debug)]
+pub struct FileBlobMulti {
+    core: FileBlobCore,
+}
+
+#[async_trait]
+impl BlobMulti for FileBlobMulti {
+    type Config = FileBlobConfig;
+
+    async fn open_multi(_deadline: Instant, config: FileBlobConfig) -> Result<Self, LocationError> {
+        let core = FileBlobCore {
+            base_dir: Some(config.base_dir),
+        };
+        Ok(FileBlobMulti { core })
+    }
+
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
+        let value = self.core.get(key)?;
+        Ok(value)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, LocationError> {
+        let keys = self.core.list_keys()?;
+        Ok(keys)
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), LocationError> {
+        // TODO: Move this impl here once we delete FileBlob.
+        let mut hack = FileBlob {
+            core: FileBlobCore {
+                base_dir: self.core.base_dir.clone(),
+            },
+        };
+        hack.set(key, value, atomic).await?;
+        Ok(())
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), LocationError> {
+        // TODO: Move this impl here once we delete FileBlob.
+        let mut hack = FileBlob {
+            core: FileBlobCore {
+                base_dir: self.core.base_dir.clone(),
+            },
+        };
+        hack.delete(key).await?;
         Ok(())
     }
 }

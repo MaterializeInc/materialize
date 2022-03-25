@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::location::LocationError;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -30,7 +31,6 @@ use tokio::sync::Mutex;
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::error::LocationError;
 use crate::r#impl::shard::{Shard, State};
 use crate::read::ReadHandle;
 use crate::write::WriteHandle;
@@ -54,6 +54,12 @@ pub(crate) mod r#impl {
 // TODOs
 // - Decide if the inner and outer error of the two-level errors should be
 //   swapped.
+// - Split LocationError into definitely failed vs maybe failed variants.
+// - Add a cache around location usage.
+// - Add blob_impl_test and log_impl_test style suites for BlobMulti impls.
+// - Crate mz_persist_client shouldn't depend on mz_persist. Pull common code
+//   out into mz_persist_types or a new crate.
+// - Hook up timeouts into various location impls.
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist. This location can contain any number of persist shards.
