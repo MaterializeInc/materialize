@@ -826,7 +826,7 @@ impl QueryBox {
     fn input_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -837,7 +837,7 @@ impl QueryBox {
     fn ranging_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.ranging_quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -847,12 +847,12 @@ impl QueryBox {
 /// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
 impl<'a> BoundRef<'a, QueryBox> {
     /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
-    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn input_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().input_quantifiers(self.model)
     }
 
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
-    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn ranging_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
 
@@ -910,6 +910,20 @@ impl<'a> BoundRef<'a, Quantifier> {
     /// Resolve a bound reference to the parent box of this quantifier.
     pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
         self.model.get_box(self.parent_box)
+    }
+
+    /// The arity of the quantifier from the perspective of the parent box.
+    ///
+    /// Note that this is distinct from the arity of the input box of the
+    /// quantifier. For example, an existential subquery may have any number of
+    /// input columns, but its output is always a single boolean not null
+    /// column.
+    pub fn output_arity(&self) -> usize {
+        if self.quantifier_type.is_subquery() {
+            return 1;
+        } else {
+            self.model.get_box(self.input_box).columns.len()
+        }
     }
 }
 
