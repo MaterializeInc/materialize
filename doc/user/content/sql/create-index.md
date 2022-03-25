@@ -188,7 +188,7 @@ CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
 
 SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
 
--- Filtering by using an expression in one field and a literal in another field
+-- Filter using an expression in one field and a literal in another field
 CREATE INDEX active_customers_exp_field_idx ON active_customers (upper(guid), geo_id);
 
 SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7' and geo_id = 'ID_8482';
