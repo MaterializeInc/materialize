@@ -21,7 +21,7 @@ use fail::fail_point;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
@@ -546,7 +546,7 @@ fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, E
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, log_impl_test};
+    use crate::location::tests::{blob_impl_test, log_impl_test};
 
     use super::*;
 

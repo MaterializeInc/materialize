@@ -27,8 +27,8 @@ use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatchPart, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
+use crate::location::{Atomicity, Blob, BlobRead};
 use crate::pfuture::PFuture;
-use crate::storage::{Atomicity, Blob, BlobRead};
 
 /// User hints for [BlobCache] operations.
 #[derive(Debug)]
@@ -615,8 +615,8 @@ impl<D> BlobCacheCore<D> {
 
 #[cfg(test)]
 mod tests {
+    use crate::location::SeqNo;
     use crate::mem::MemRegistry;
-    use crate::storage::SeqNo;
 
     use super::*;
 

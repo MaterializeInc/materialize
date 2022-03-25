@@ -29,7 +29,7 @@ use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
 };
-use crate::storage::SeqNo;
+use crate::location::SeqNo;
 
 lazy_static! {
     /// The Arrow schema we use to encode ((K, V), T, D) tuples.

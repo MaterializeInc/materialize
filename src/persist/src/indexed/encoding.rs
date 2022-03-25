@@ -41,7 +41,7 @@ use crate::indexed::columnar::parquet::{
 };
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::snapshot::UnsealedSnapshot;
-use crate::storage::{BlobRead, SeqNo};
+use crate::location::{BlobRead, SeqNo};
 
 /// An internally unique id for a persisted stream. External users identify
 /// streams with a string, which is then mapped internally to this.

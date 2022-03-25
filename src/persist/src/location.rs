@@ -380,8 +380,8 @@ pub mod tests {
 
     use crate::error::Error;
     use crate::gen::persist::ProtoMeta;
+    use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
     use crate::mem::MemRegistry;
-    use crate::storage::Atomicity::{AllowNonAtomic, RequireAtomic};
 
     use super::*;
 

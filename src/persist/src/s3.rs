@@ -33,7 +33,7 @@ use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
+use crate::location::{Atomicity, Blob, BlobRead, LockInfo};
 
 /// Configuration for opening an [S3Blob] or [S3BlobRead].
 #[derive(Clone, Debug)]
@@ -867,7 +867,7 @@ impl MinElapsed {
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
-    use crate::storage::tests::blob_impl_test;
+    use crate::location::tests::blob_impl_test;
     use tracing::info;
 
     use super::*;

@@ -36,9 +36,9 @@ use mz_persist::indexed::cache::BlobCache;
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobUnsealedBatch, Id, TraceBatchMeta};
 use mz_persist::indexed::metrics::Metrics;
 use mz_persist::indexed::{Cmd, Indexed};
+use mz_persist::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use mz_persist::mem::MemRegistry;
 use mz_persist::pfuture::{PFuture, PFutureHandle};
-use mz_persist::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use mz_persist::workload::{self, DataGenerator};
 
 fn new_file_log(name: &str, parent: &Path) -> FileLog {

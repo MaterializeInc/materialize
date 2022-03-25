@@ -29,7 +29,7 @@ use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::{Cmd, CmdRead, Indexed};
-use crate::storage::{Blob, BlobRead, Log};
+use crate::location::{Blob, BlobRead, Log};
 use futures_executor::block_on;
 
 pub(crate) enum RuntimeCmd {

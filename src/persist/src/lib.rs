@@ -25,12 +25,12 @@ pub mod error;
 pub mod file;
 pub mod gen;
 pub mod indexed;
+pub mod location;
 pub mod mem;
 pub mod operators;
 pub mod pfuture;
 pub mod runtime;
 pub mod s3;
-pub mod storage;
 pub mod unreliable;
 pub mod workload;
 

@@ -15,7 +15,7 @@ use std::{error, fmt, io, sync};
 
 use arrow2::error::ArrowError;
 
-use crate::storage::{Log, SeqNo};
+use crate::location::{Log, SeqNo};
 
 /// A persistence related error.
 #[derive(Debug, Clone)]

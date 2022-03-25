@@ -28,8 +28,8 @@ use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta, UnsealedSnapshotMeta};
 use crate::indexed::metrics::Metrics;
+use crate::location::{Blob, BlobRead};
 use crate::pfuture::PFuture;
-use crate::storage::{Blob, BlobRead};
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]

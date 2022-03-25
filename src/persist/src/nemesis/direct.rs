@@ -118,7 +118,7 @@ use crate::nemesis::{
 };
 use crate::operators::source::PersistedSource;
 use crate::pfuture::PFuture;
-use crate::storage::SeqNo;
+use crate::location::SeqNo;
 use crate::unreliable::UnreliableHandle;
 
 /// A handle to the "ingestd" (input) side of a persisted collection.
@@ -573,7 +573,7 @@ mod tests {
     use crate::nemesis::generator::GeneratorConfig;
     use crate::runtime::RuntimeConfig;
     use crate::s3::{S3Blob, S3BlobConfig};
-    use crate::storage::Blob;
+    use crate::location::Blob;
     use crate::unreliable::{UnreliableBlob, UnreliableLog};
     use crate::{nemesis, runtime};
 

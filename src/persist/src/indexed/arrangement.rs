@@ -29,7 +29,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::snapshot::{ArrangementSnapshot, Snapshot, TraceSnapshot};
 use crate::indexed::{BlobUnsealedBatch, Id};
-use crate::storage::{Blob, BlobRead, SeqNo};
+use crate::location::{Blob, BlobRead, SeqNo};
 
 /// A persistent, compacting data structure containing indexed `(Key, Value,
 /// Time, i64)` entries.

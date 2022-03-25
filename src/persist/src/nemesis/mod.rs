@@ -78,10 +78,10 @@ use timely::progress::Antichain;
 use tracing::{debug, info, warn};
 
 use crate::error::Error;
+use crate::location::SeqNo;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 use crate::pfuture::PFuture;
-use crate::storage::SeqNo;
 
 pub mod direct;
 pub mod generator;

@@ -40,9 +40,9 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::indexed::snapshot::ArrangementSnapshot;
+use crate::location::{Blob, BlobRead, Log, SeqNo};
 use crate::mem::MemBlob;
 use crate::pfuture::{PFuture, PFutureHandle};
-use crate::storage::{Blob, BlobRead, Log, SeqNo};
 use crate::unreliable::UnreliableBlob;
 
 /// The description of a persisted stream.
