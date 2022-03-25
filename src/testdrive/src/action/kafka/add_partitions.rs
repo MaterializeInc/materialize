@@ -87,7 +87,7 @@ impl Action for AddPartitionsAction {
 
         Retry::default()
             .max_duration(state.default_timeout)
-            .retry_async_canceling(|_| async {
+            .retry_async(|_| async {
                 let metadata = state.kafka_producer.client().fetch_metadata(
                     Some(&topic_name),
                     Some(cmp::max(state.default_timeout, Duration::from_secs(1))),

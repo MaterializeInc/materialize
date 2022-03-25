@@ -62,7 +62,6 @@ use std::thread;
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::time::error::Elapsed;
 use tokio::time::{self, Duration, Instant, Sleep};
 
 /// The state of a retry operation constructed with [`Retry`].
@@ -212,36 +211,6 @@ impl Retry {
             }
         }
         Err(err.expect("retry produces at least one element"))
-    }
-
-    /// Like [`Retry::retry_async`] but the operation will be canceled if the
-    /// maximum duration is reached.
-    ///
-    /// Specifically, if the maximum duration is reached, the operation `f` will
-    /// be forcibly canceled by dropping it, and an [`Elapsed`] error will be
-    /// returned. Canceling `f` can be surprising if the operation is not
-    /// programmed to expect the possibility of not resuming from an `await`
-    /// point; if you wish to always run `f` to completion, use
-    /// [`Retry::retry_async`] instead.
-    pub async fn retry_async_canceling<F, U, T, E>(self, mut f: F) -> Result<T, E>
-    where
-        F: FnMut(RetryState) -> U,
-        U: Future<Output = Result<T, E>>,
-        E: From<Elapsed>,
-    {
-        let start = Instant::now();
-        let max_duration = self.max_duration;
-        self.retry_async(|state| {
-            let fut = time::timeout(max_duration.saturating_sub(start.elapsed()), f(state));
-            async move {
-                match fut.await {
-                    Ok(Ok(t)) => Ok(t),
-                    Ok(Err(e)) => Err(e),
-                    Err(e) => Err(e.into()),
-                }
-            }
-        })
-        .await
     }
 
     /// Convert into [`RetryStream`]
