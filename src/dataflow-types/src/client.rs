@@ -830,17 +830,13 @@ where
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
-    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
-    use std::iter::Fuse;
 
     use async_trait::async_trait;
     use futures::StreamExt;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row};
-    use timely::order::PartialOrder;
-    use timely::progress::{Antichain, ChangeBatch};
     use tokio_stream::StreamMap;
     use tracing::debug;
 
@@ -893,9 +889,6 @@ pub mod partitioned {
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            if let Some(stashed) = self.state.stashed_responses.next() {
-                return Ok(Some(stashed));
-            }
             let mut stream: StreamMap<_, _> = self
                 .shards
                 .iter_mut()
@@ -903,10 +896,7 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response?).fuse();
-                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
-                self.state.stashed_responses = messages;
-                if let Some(message) = self.state.stashed_responses.next() {
+                if let Some(message) = self.state.absorb_response(index, response?) {
                     return Ok(Some(message));
                 }
             }
@@ -917,95 +907,6 @@ pub mod partitioned {
 
     use timely::progress::frontier::MutableAntichain;
     use uuid::Uuid;
-
-    /// Buffer for partial results for a `TAIL`.
-    /// This exists so we can consolidate rows and
-    /// sort them by timestamp before passing them to the consumer
-    /// (currently, coord.rs).
-    #[derive(Debug)]
-    struct PendingTail<T> {
-        /// `frontiers[i]` is an antichain representing the times at which we may
-        /// still receive results from worker `i`.
-        frontiers: HashMap<usize, Antichain<T>>,
-        /// Consolidated frontiers
-        change_batch: ChangeBatch<T>,
-        /// The results (possibly unsorted) which have not yet been delivered.
-        buffer: Vec<(T, Row, Diff)>,
-        /// The number of unique shard IDs expected.
-        parts: usize,
-        /// The last progress message that has been reported to the consumer.
-        reported_frontier: Antichain<T>,
-    }
-
-    impl<T: timely::progress::Timestamp + Copy> PendingTail<T> {
-        /// Return all the updates with time less than `upper`,
-        /// in sorted and consolidated representation.
-        pub fn consolidate_up_to(&mut self, upper: Antichain<T>) -> Vec<(T, Row, Diff)> {
-            differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
-            let split_point = self
-                .buffer
-                .partition_point(|(t, _, _)| !upper.less_equal(t));
-            self.buffer.drain(0..split_point).collect()
-        }
-
-        pub fn push_data<I: IntoIterator<Item = (T, Row, Diff)>>(&mut self, data: I) {
-            self.buffer.extend(data);
-        }
-
-        pub fn record_progress(
-            &mut self,
-            shard_id: usize,
-            progress: Antichain<T>,
-        ) -> Option<Antichain<T>> {
-            // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
-            // We would need to have the tail workers report both their old frontier and their new frontier, rather
-            // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
-            // behave like PEEKs.
-            match self.frontiers.entry(shard_id) {
-                Entry::Occupied(mut oe) => {
-                    for element in oe.get().elements() {
-                        self.change_batch.update(*element, -1);
-                    }
-                    assert!(
-                        PartialOrder::less_than(oe.get(), &progress),
-                        "Timestamps should advance"
-                    );
-                    for element in progress.elements() {
-                        self.change_batch.update(*element, 1);
-                    }
-                    oe.insert(progress);
-                }
-                Entry::Vacant(ve) => {
-                    for element in progress.elements() {
-                        self.change_batch.update(*element, 1);
-                    }
-                    ve.insert(progress);
-                }
-            }
-            assert!(self.frontiers.len() <= self.parts);
-            if self.frontiers.len() == self.parts {
-                self.change_batch.compact();
-                let mut min_frontier = Antichain::new();
-                if let Some(time) = self.change_batch.iter().next().map(|(time, _)| *time) {
-                    min_frontier.insert(time);
-                }
-
-                // assert!(self.reported_frontier.less_equal(&min_frontier));
-                assert!(PartialOrder::less_equal(
-                    &self.reported_frontier,
-                    &min_frontier
-                ));
-                if PartialOrder::less_than(&self.reported_frontier, &min_frontier) {
-                    self.reported_frontier = min_frontier.clone();
-                    Some(min_frontier)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-    }
 
     /// Maintained state for sharded dataflow clients.
     ///
@@ -1022,14 +923,10 @@ pub mod partitioned {
         parts: usize,
         /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
         /// back until their timestamps are complete.
-        ///
-        /// `None` is a sentinel value indicating that the tail has been dropped and no
-        /// further messages should be forwarded.
-        ///
-        /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail<T>>>,
-        /// The next responses to return immediately, if any
-        stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
+        pending_tails: HashMap<
+            (GlobalId, Option<ComputeInstanceId>),
+            Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
+        >,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -1050,14 +947,11 @@ pub mod partitioned {
     {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
-            let stashed_responses: Box<dyn Iterator<Item = Response<T>> + Send> =
-                Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
-                stashed_responses: stashed_responses.fuse(),
             }
         }
 
@@ -1094,7 +988,7 @@ pub mod partitioned {
             &mut self,
             shard_id: usize,
             message: Response<T>,
-        ) -> Box<dyn Iterator<Item = Response<T>> + Send> {
+        ) -> Option<Response<T>> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     for (id, changes) in list.iter_mut() {
@@ -1119,15 +1013,12 @@ pub mod partitioned {
                     }
 
                     if list.is_empty() {
-                        Box::new(None.into_iter())
+                        None
                     } else {
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::FrontierUppers(list),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Response::Compute(
+                            ComputeResponse::FrontierUppers(list),
+                            instance,
+                        ))
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
@@ -1152,12 +1043,9 @@ pub mod partitioned {
                         }
                     }
 
-                    Box::new(
-                        Some(Response::Storage(StorageResponse::TimestampBindings(
-                            feedback,
-                        )))
-                        .into_iter(),
-                    )
+                    Some(Response::Storage(StorageResponse::TimestampBindings(
+                        feedback,
+                    )))
                 }
                 Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
@@ -1183,15 +1071,12 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&uuid);
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::PeekResponse(uuid, response),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Response::Compute(
+                            ComputeResponse::PeekResponse(uuid, response),
+                            instance,
+                        ))
                     } else {
-                        Box::new(None.into_iter())
+                        None
                     }
                 }
                 Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
@@ -1199,13 +1084,10 @@ pub mod partitioned {
                         .pending_tails
                         .entry((id, Some(instance)))
                         .or_insert_with(|| {
-                            Some(PendingTail {
-                                frontiers: HashMap::new(),
-                                change_batch: Default::default(),
-                                buffer: Vec::new(),
-                                parts: self.parts,
-                                reported_frontier: Antichain::from_elem(T::minimum()),
-                            })
+                            let mut frontier = MutableAntichain::new();
+                            frontier
+                                .update_iter(std::iter::once((T::minimum(), self.parts as i64)));
+                            Some((frontier, Vec::new()))
                         });
 
                     let entry = match maybe_entry {
@@ -1213,66 +1095,59 @@ pub mod partitioned {
                             // This tail has been dropped;
                             // we should permanently block
                             // any messages from it
-                            return Box::new(None.into_iter());
+                            return None;
                         }
                         Some(entry) => entry,
                     };
 
-                    let responses: Box<dyn Iterator<Item = Response<T>> + Send> = match response {
-                        TailResponse::Progress(frontier) => {
-                            if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
-                                let data = entry.consolidate_up_to(new_frontier.clone());
-                                let progress_response = TailResponse::Progress(new_frontier);
-                                if data.is_empty() {
-                                    Box::new(
-                                        Some(Response::Compute(
-                                            ComputeResponse::TailResponse(id, progress_response),
-                                            instance,
-                                        ))
-                                        .into_iter(),
-                                    )
-                                } else {
-                                    // Return the data first, then the progress message.
-                                    Box::new(
-                                        [
-                                            Response::Compute(
-                                                ComputeResponse::TailResponse(
-                                                    id,
-                                                    TailResponse::Rows(data),
-                                                ),
-                                                instance,
-                                            ),
-                                            Response::Compute(
-                                                ComputeResponse::TailResponse(
-                                                    id,
-                                                    progress_response,
-                                                ),
-                                                instance,
-                                            ),
-                                        ]
-                                        .into_iter(),
-                                    )
+                    use crate::TailBatch;
+                    use differential_dataflow::consolidation::consolidate_updates;
+                    match response {
+                        TailResponse::Batch(TailBatch {
+                            lower,
+                            upper,
+                            mut updates,
+                        }) => {
+                            let old_frontier = entry.0.frontier().to_owned();
+                            entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
+                            entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
+                            entry.1.append(&mut updates);
+                            let new_frontier = entry.0.frontier().to_owned();
+                            if old_frontier != new_frontier {
+                                consolidate_updates(&mut entry.1);
+                                let mut ship = Vec::new();
+                                let mut keep = Vec::new();
+                                for (time, data, diff) in entry.1.drain(..) {
+                                    if new_frontier.less_equal(&time) {
+                                        keep.push((time, data, diff));
+                                    } else {
+                                        ship.push((time, data, diff));
+                                    }
                                 }
+                                entry.1 = keep;
+                                Some(Response::Compute(
+                                    ComputeResponse::TailResponse(
+                                        id,
+                                        TailResponse::Batch(TailBatch {
+                                            lower: old_frontier,
+                                            upper: new_frontier,
+                                            updates: ship,
+                                        }),
+                                    ),
+                                    instance,
+                                ))
                             } else {
-                                Box::new(None.into_iter())
+                                None
                             }
-                        }
-                        TailResponse::Rows(rows) => {
-                            entry.push_data(rows);
-                            Box::new(None.into_iter())
                         }
                         TailResponse::Dropped => {
                             *maybe_entry = None;
-                            Box::new(
-                                Some(Response::Compute(
-                                    ComputeResponse::TailResponse(id, TailResponse::Dropped),
-                                    instance,
-                                ))
-                                .into_iter(),
-                            )
+                            Some(Response::Compute(
+                                ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                instance,
+                            ))
                         }
-                    };
-                    responses
+                    }
                 }
             }
         }

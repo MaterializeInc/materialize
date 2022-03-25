@@ -17,10 +17,8 @@ use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
-use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
-use timely::PartialOrder;
 
 use mz_dataflow_types::{
     sinks::{SinkAsOf, SinkDesc, TailSinkConnector},
@@ -63,6 +61,7 @@ where
         let tail_protocol_handle = Rc::new(RefCell::new(Some(TailProtocol {
             sink_id,
             tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
+            prev_upper: Antichain::from_elem(Timestamp::minimum()),
         })));
         let tail_protocol_weak = Rc::downgrade(&tail_protocol_handle);
 
@@ -92,14 +91,11 @@ fn tail<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Initialize to the minimal input frontier.
-    let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
-
+    let mut results = Vec::new();
     sinked_collection
         .inner
         .sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
             input.for_each(|_, rows| {
-                let mut results = vec![];
                 for ((k, v), time, diff) in rows.iter() {
                     assert!(k.is_none(), "tail does not support keys");
                     let row = v.as_ref().expect("tail must have values");
@@ -112,20 +108,10 @@ fn tail<G>(
                         results.push((*time, row.clone(), *diff));
                     }
                 }
-
-                // Emit data if configured, otherwise it is an error to have data to send.
-                if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
-                    tail_protocol.send_rows(results);
-                }
             });
 
-            let progress = update_progress(&mut input_frontier, input.frontier().frontier());
-
-            // Only emit updates if this operator/worker received actual data for emission.
-            if let (Some(tail_protocol), Some(progress)) =
-                (tail_protocol_handle.borrow_mut().deref_mut(), progress)
-            {
-                tail_protocol.send_progress(progress);
+            if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
+                tail_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
             }
         })
 }
@@ -138,35 +124,44 @@ fn tail<G>(
 struct TailProtocol {
     pub sink_id: GlobalId,
     pub tail_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, TailResponse)>>>>,
+    pub prev_upper: Antichain<Timestamp>,
 }
 
 impl TailProtocol {
-    /// Send the current upper frontier of the tail.
-    fn send_progress(&mut self, upper: Antichain<Timestamp>) {
-        let input_exhausted = upper.is_empty();
-        let buffer = self
-            .tail_response_buffer
-            .as_mut()
-            .expect("The tail response buffer is only cleared on drop.");
-        buffer
-            .borrow_mut()
-            .push((self.sink_id, TailResponse::Progress(upper)));
-        if input_exhausted {
-            // The dataflow's input has been exhausted; clear the channel,
-            // to avoid sending `TailResponse::Dropped`.
-            self.tail_response_buffer = None;
-        }
-    }
+    fn send_batch(&mut self, upper: Antichain<Timestamp>, rows: &mut Vec<(Timestamp, Row, Diff)>) {
+        if self.prev_upper != upper {
+            let mut ship = Vec::new();
+            let mut keep = Vec::new();
+            differential_dataflow::consolidation::consolidate_updates(rows);
+            for (time, data, diff) in rows.drain(..) {
+                if upper.less_equal(&time) {
+                    keep.push((time, data, diff));
+                } else {
+                    ship.push((time, data, diff));
+                }
+            }
+            *rows = keep;
 
-    /// Send further rows as responses.
-    fn send_rows(&mut self, rows: Vec<(Timestamp, Row, Diff)>) {
-        let buffer = self
-            .tail_response_buffer
-            .as_mut()
-            .expect("Unexpectedly saw more rows! The tail response buffer should only have been cleared when either the dataflow was dropped or the input was exhausted.");
-        buffer
-            .borrow_mut()
-            .push((self.sink_id, TailResponse::Rows(rows)));
+            let input_exhausted = upper.is_empty();
+            let buffer = self
+                .tail_response_buffer
+                .as_mut()
+                .expect("The tail response buffer is only cleared on drop.");
+            buffer.borrow_mut().push((
+                self.sink_id,
+                TailResponse::Batch(mz_dataflow_types::TailBatch {
+                    lower: self.prev_upper.clone(),
+                    upper: upper.clone(),
+                    updates: ship,
+                }),
+            ));
+            self.prev_upper = upper;
+            if input_exhausted {
+                // The dataflow's input has been exhausted; clear the channel,
+                // to avoid sending `TailResponse::Dropped`.
+                self.tail_response_buffer = None;
+            }
+        }
     }
 }
 
@@ -177,27 +172,5 @@ impl Drop for TailProtocol {
                 .borrow_mut()
                 .push((self.sink_id, TailResponse::Dropped));
         }
-    }
-}
-
-// Checks if there is progress between `current_input_frontier` and
-// `new_input_frontier`. If yes, updates the `current_input_frontier` to
-// `new_input_frontier` and returns a [`Row`] that encodes this progress. If
-// there is no progress, returns [`None`].
-fn update_progress(
-    current_input_frontier: &mut Antichain<Timestamp>,
-    new_input_frontier: AntichainRef<Timestamp>,
-) -> Option<Antichain<Timestamp>> {
-    // Test to see if strict progress has occurred. This is true if the new
-    // frontier is not less or equal to the old frontier.
-    let progress = !PartialOrder::less_equal(&new_input_frontier, &current_input_frontier.borrow());
-
-    if progress {
-        current_input_frontier.clear();
-        current_input_frontier.extend(new_input_frontier.iter().cloned());
-
-        Some(new_input_frontier.to_owned())
-    } else {
-        None
     }
 }
