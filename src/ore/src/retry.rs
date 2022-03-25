@@ -62,6 +62,7 @@ use std::thread;
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
+use tokio::time::error::Elapsed;
 use tokio::time::{self, Duration, Instant, Sleep};
 
 /// The state of a retry operation constructed with [`Retry`].
@@ -85,7 +86,8 @@ pub struct Retry {
     initial_backoff: Duration,
     factor: f64,
     clamp_backoff: Duration,
-    limit: RetryLimit,
+    max_duration: Duration,
+    max_tries: usize,
 }
 
 impl Retry {
@@ -120,9 +122,7 @@ impl Retry {
     /// If the operation is still failing after `max_tries`, then
     /// [`retry`](Retry::retry) will return the last error.
     ///
-    /// Maximum durations and maximum tries are mutually exclusive within a
-    /// given `Retry` operation. Calls to `max_tries` will override any
-    /// previous calls to `max_tries` or [`max_duration`](Retry::max_duration).
+    /// Calls to `max_tries` will override any previous calls to `max_tries`.
     ////
     /// # Panics
     ///
@@ -131,7 +131,7 @@ impl Retry {
         if max_tries == 0 {
             panic!("max tries must be greater than zero");
         }
-        self.limit = RetryLimit::Tries(max_tries);
+        self.max_tries = max_tries;
         self
     }
 
@@ -141,11 +141,10 @@ impl Retry {
     /// the operation will be retried once more and [`retry`](Retry::retry) will
     /// return the last error.
     ///
-    /// Maximum durations and maximum tries are mutually exclusive within a
-    /// given `Retry` operation. Calls to `max_duration` will override any
-    /// previous calls to `max_duration` or [`max_tries`](Retry::max_tries).
+    /// Calls to `max_duration` will override any previous calls to
+    /// `max_duration`.
     pub fn max_duration(mut self, duration: Duration) -> Self {
-        self.limit = RetryLimit::Duration(duration);
+        self.max_duration = duration;
         self
     }
 
@@ -175,17 +174,11 @@ impl Retry {
         let mut i = 0;
         let mut next_backoff = Some(cmp::min(self.initial_backoff, self.clamp_backoff));
         loop {
-            match self.limit {
-                RetryLimit::Tries(max_tries) if i + 1 >= max_tries => next_backoff = None,
-                RetryLimit::Duration(max_duration) => {
-                    let elapsed = start.elapsed();
-                    if elapsed > max_duration {
-                        next_backoff = None;
-                    } else if elapsed + next_backoff.unwrap() > max_duration {
-                        next_backoff = Some(max_duration - elapsed);
-                    }
-                }
-                _ => (),
+            let elapsed = start.elapsed();
+            if elapsed > self.max_duration || i + 1 >= self.max_tries {
+                next_backoff = None;
+            } else if elapsed + next_backoff.unwrap() > self.max_duration {
+                next_backoff = Some(self.max_duration - elapsed);
             }
             let state = RetryState { i, next_backoff };
             match f(state) {
@@ -221,6 +214,36 @@ impl Retry {
         Err(err.expect("retry produces at least one element"))
     }
 
+    /// Like [`Retry::retry_async`] but the operation will be canceled if the
+    /// maximum duration is reached.
+    ///
+    /// Specifically, if the maximum duration is reached, the operation `f` will
+    /// be forcibly canceled by dropping it, and an [`Elapsed`] error will be
+    /// returned. Canceling `f` can be surprising if the operation is not
+    /// programmed to expect the possibility of not resuming from an `await`
+    /// point; if you wish to always run `f` to completion, use
+    /// [`Retry::retry_async`] instead.
+    pub async fn retry_async_canceling<F, U, T, E>(self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(RetryState) -> U,
+        U: Future<Output = Result<T, E>>,
+        E: From<Elapsed>,
+    {
+        let start = Instant::now();
+        let max_duration = self.max_duration;
+        self.retry_async(|state| {
+            let fut = time::timeout(max_duration.saturating_sub(start.elapsed()), f(state));
+            async move {
+                match fut.await {
+                    Ok(Ok(t)) => Ok(t),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(e.into()),
+                }
+            }
+        })
+        .await
+    }
+
     /// Convert into [`RetryStream`]
     pub fn into_retry_stream(self) -> RetryStream {
         RetryStream {
@@ -241,7 +264,8 @@ impl Default for Retry {
             initial_backoff: Duration::from_millis(125),
             factor: 2.0,
             clamp_backoff: Duration::MAX,
-            limit: RetryLimit::Duration(Duration::from_secs(30)),
+            max_tries: usize::MAX,
+            max_duration: Duration::MAX,
         }
     }
 }
@@ -285,17 +309,11 @@ impl Stream for RetryStream {
             }
         }
 
-        match retry.limit {
-            RetryLimit::Tries(max_tries) if *this.i + 1 >= max_tries => *this.next_backoff = None,
-            RetryLimit::Duration(max_duration) => {
-                let elapsed = this.start.elapsed();
-                if elapsed > max_duration {
-                    *this.next_backoff = None;
-                } else if elapsed + this.next_backoff.unwrap() > max_duration {
-                    *this.next_backoff = Some(max_duration - elapsed);
-                }
-            }
-            _ => (),
+        let elapsed = this.start.elapsed();
+        if elapsed > retry.max_duration || *this.i + 1 >= retry.max_tries {
+            *this.next_backoff = None;
+        } else if elapsed + this.next_backoff.unwrap() > retry.max_duration {
+            *this.next_backoff = Some(retry.max_duration - elapsed);
         }
 
         let state = RetryState {
@@ -416,12 +434,6 @@ where
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum RetryLimit {
-    Duration(Duration),
-    Tries(usize),
 }
 
 #[cfg(test)]
