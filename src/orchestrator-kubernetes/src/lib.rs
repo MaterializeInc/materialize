@@ -22,6 +22,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
+use kube::error::Error;
 use maplit::btreemap;
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
@@ -228,18 +229,31 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&mut self, id: &str) -> Result<(), anyhow::Error> {
-        self.stateful_set_api
-            .delete(id, &DeleteParams::default())
-            .await?;
-        Ok(())
+        let name = format!("{}-{id}", self.namespace);
+        let res = self
+            .stateful_set_api
+            .delete(&name, &DeleteParams::default())
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(Error::Api(e)) if e.code == 404 => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let stateful_sets = self.stateful_set_api.list(&ListParams::default()).await?;
+        let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
-            .map(|ss| ss.metadata.name.unwrap())
+            .filter_map(|ss| {
+                ss.metadata
+                    .name
+                    .unwrap()
+                    .strip_prefix(&name_prefix)
+                    .map(Into::into)
+            })
             .collect())
     }
 }

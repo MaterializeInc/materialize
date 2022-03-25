@@ -130,9 +130,9 @@ where
                     .map(|h| format!("{h}:6876"))
                     .collect();
                 let client = RemoteClient::new(&addrs);
-                let client: Box<dyn ComputeClient<T>> =
-                    Box::new(ComputeWrapperClient::new(client, instance));
-                (client, logging)
+                let client = ComputeWrapperClient::new(client, instance);
+                let client = crate::client::replicated::ActiveReplication::new(vec![client]);
+                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
             }
         };
         client
