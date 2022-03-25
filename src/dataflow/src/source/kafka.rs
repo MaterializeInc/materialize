@@ -9,32 +9,36 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread;
 use std::time::Duration;
 
-use mz_dataflow_types::sources::AwsExternalId;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
+use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
-    MzOffset,
+    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset,
+    KafkaSourceConnector, MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
+use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
+
+mod metrics;
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -67,15 +71,9 @@ pub struct KafkaSourceReader {
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
-    _metadata_thread_handle: UnparkOnDrop<()>,
-}
-
-struct UnparkOnDrop<T>(JoinHandle<T>);
-
-impl<T> Drop for UnparkOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.thread().unpark();
-    }
+    _metadata_thread_handle: UnparkOnDropHandle<()>,
+    /// A handle to the partition specific metrics
+    partition_metrics: KafkaPartitionMetrics,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -94,7 +92,7 @@ impl SourceReader for KafkaSourceReader {
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         logger: Option<Logger>,
-        _: SourceBaseMetrics,
+        base_metrics: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kafka(kc) => kc,
@@ -159,26 +157,26 @@ impl SourceReader for KafkaSourceReader {
                 // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 .unwrap_or_else(|| Duration::from_secs(300));
 
-            let handle = std::thread::Builder::new()
+            thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
                     while let Some(partition_info) = partition_info.upgrade() {
                         match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
-                                std::thread::park_timeout(metadata_refresh_frequency);
+                                thread::park_timeout(metadata_refresh_frequency);
                             }
-                            Err(_) => std::thread::park_timeout(Duration::from_secs(30)),
+                            Err(_) => thread::park_timeout(Duration::from_secs(30)),
                         }
                     }
                 })
-                .unwrap();
-            UnparkOnDrop(handle)
+                .unwrap()
+                .unpark_on_drop()
         };
-
+        let partition_ids = start_offsets.keys().copied().collect();
         Ok(KafkaSourceReader {
-            topic_name: topic,
-            source_name,
+            topic_name: topic.clone(),
+            source_name: source_name.clone(),
             id: source_id,
             partition_consumers: VecDeque::new(),
             consumer,
@@ -191,6 +189,13 @@ impl SourceReader for KafkaSourceReader {
             last_stats: None,
             partition_info,
             _metadata_thread_handle: metadata_thread_handle,
+            partition_metrics: KafkaPartitionMetrics::new(
+                base_metrics,
+                partition_ids,
+                topic,
+                source_name,
+                source_id,
+            ),
         })
     }
 
@@ -397,7 +402,25 @@ impl KafkaSourceReader {
                     old: self.last_stats.take(),
                     new: Some(stats.clone()),
                 });
-                self.last_stats = Some(stats);
+                self.last_stats = Some(stats.clone());
+            }
+
+            match serde_json::from_str::<Statistics>(&stats.to_string()) {
+                Ok(statistics) => {
+                    let topic = statistics.topics.get(&self.topic_name);
+                    match topic {
+                        Some(topic) => {
+                            for (id, partition) in &topic.partitions {
+                                self.partition_metrics
+                                    .set_offset_max(*id, partition.hi_offset);
+                            }
+                        }
+                        None => error!("No stats found for topic: {}", &self.topic_name),
+                    }
+                }
+                Err(e) => {
+                    error!("failed decoding librdkafka statistics JSON: {}", e);
+                }
             }
         }
     }

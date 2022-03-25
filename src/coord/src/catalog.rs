@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -19,43 +19,43 @@ use chrono::{DateTime, TimeZone, Utc};
 use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_dataflow_types::{
-    sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
-    sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
-};
-use mz_expr::PartitionId;
-use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
-use mz_repr::Timestamp;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::{
-    sinks::{SinkConnector, SinkConnectorBuilder},
-    sources::{AwsExternalId, SourceConnector, Timeline},
+use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
+use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
+use mz_dataflow_types::sources::{
+    AwsExternalId, ExternalSourceConnector, MzOffset, SourceConnector, Timeline,
 };
+use mz_expr::PartitionId;
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
+use mz_repr::Timestamp;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw};
+use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use mz_sql::names::{Aug, DatabaseSpecifier, FullName, PartialName, SchemaName};
 use mz_sql::plan::{
-    CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc,
 };
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
@@ -104,7 +104,6 @@ const SYSTEM_USER: &str = "mz_system";
 pub struct Catalog {
     state: CatalogState,
     storage: Arc<Mutex<storage::Connection>>,
-    oid_counter: u32,
     transient_revision: u64,
 }
 
@@ -113,16 +112,35 @@ pub struct CatalogState {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
-    /// Contains only enabled indexes from objects in the catalog; does not
-    /// contain indexes disabled by e.g. the disable_user_indexes flag.
-    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
+    compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
+    compute_instances_by_name: HashMap<String, ComputeInstanceId>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
+    oid_counter: u32,
+    system_index_counter: u64,
 }
 
 impl CatalogState {
+    fn allocate_system_index_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.system_index_counter;
+        if id == u64::max_value() {
+            return Err(Error::new(ErrorKind::IdExhaustion));
+        }
+        self.system_index_counter += 1;
+        Ok(GlobalId::System(id))
+    }
+
+    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
+        let oid = self.oid_counter;
+        if oid == u32::max_value() {
+            return Err(Error::new(ErrorKind::OidExhaustion));
+        }
+        self.oid_counter += 1;
+        Ok(oid)
+    }
+
     /// Encapsulates the logic for creating a source description for a source or table in the catalog.
     pub fn source_description_for(
         &self,
@@ -152,71 +170,6 @@ impl CatalogState {
         }
     }
 
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.enabled_indexes
-    }
-
-    /// Finds the nearest indexes that can satisfy the views or sources whose
-    /// identifiers are listed in `ids`.
-    ///
-    /// Returns the identifiers of all discovered indexes, and the identifiers of
-    /// the discovered unmaterialized sources required to satisfy ids. The returned list
-    /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
-        fn has_indexes(catalog: &CatalogState, id: GlobalId) -> bool {
-            matches!(
-                catalog.get_by_id(&id).item(),
-                CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_)
-            )
-        }
-
-        fn inner(
-            catalog: &CatalogState,
-            id: GlobalId,
-            indexes: &mut Vec<GlobalId>,
-            unmaterialized: &mut Vec<GlobalId>,
-        ) {
-            if !has_indexes(catalog, id) {
-                return;
-            }
-
-            // Include all indexes on an id so the dataflow builder can safely use any
-            // of them.
-            if !catalog.enabled_indexes[&id].is_empty() {
-                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
-                return;
-            }
-
-            match catalog.get_by_id(&id).item() {
-                view @ CatalogItem::View(_) => {
-                    // Unmaterialized view. Recursively search its dependencies.
-                    for id in view.uses() {
-                        inner(catalog, *id, indexes, unmaterialized)
-                    }
-                }
-                CatalogItem::Source(_) => {
-                    // Unmaterialized source. Record that we are missing at
-                    // least one index.
-                    unmaterialized.push(id);
-                }
-                CatalogItem::Table(_) => (),
-                _ => unreachable!(),
-            }
-        }
-
-        let mut indexes = vec![];
-        let mut unmaterialized = vec![];
-        for id in ids {
-            inner(self, *id, &mut indexes, &mut unmaterialized)
-        }
-        indexes.sort();
-        indexes.dedup();
-
-        unmaterialized.sort();
-        unmaterialized.dedup();
-        (indexes, unmaterialized)
-    }
-
     /// Computes the IDs of any indexes that transitively depend on this catalog
     /// entry.
     pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
@@ -241,11 +194,12 @@ impl CatalogState {
         match self.get_by_id(&id).item() {
             CatalogItem::Table(_) => true,
             item @ CatalogItem::View(_) => item.uses().iter().any(|id| self.uses_tables(*id)),
+            CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => false,
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_) => false,
         }
     }
 
@@ -253,9 +207,37 @@ impl CatalogState {
         &self.by_id[id]
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
+    /// Returns all indexes on this object known in the catalog.
+    pub fn get_indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
+        self.get_by_id(&id)
+            .used_by()
+            .iter()
+            .filter_map(move |uses_id| match self.get_by_id(uses_id).item() {
+                CatalogItem::Index(index) if index.on == id => Some((*uses_id, index)),
+                _ => None,
+            })
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
+    fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
+        }
+
+        if !id.is_system() {
+            if let CatalogItem::Index(Index {
+                compute_instance, ..
+            })
+            | CatalogItem::Sink(Sink {
+                compute_instance, ..
+            }) = item
+            {
+                self.compute_instances_by_id
+                    .get_mut(&compute_instance)
+                    .unwrap()
+                    .indexes
+                    .insert(id);
+            };
         }
 
         let entry = CatalogEntry {
@@ -274,9 +256,6 @@ impl CatalogState {
                 ),
             }
         }
-
-        self.populate_enabled_indexes(id, entry.item());
-
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
         let schema = self
             .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
@@ -291,26 +270,100 @@ impl CatalogState {
         self.by_id.insert(entry.id, entry.clone());
     }
 
-    pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
-        match item {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.entry(id).or_insert_with(Vec::new);
-            }
-            CatalogItem::Index(index) => {
-                if index.enabled {
-                    let idxs = self
-                        .enabled_indexes
-                        .get_mut(&index.on)
-                        .expect("object known to exist");
-
-                    // If index not already enabled, add it.
-                    if !idxs.iter().any(|(index_id, _)| index_id == &id) {
-                        idxs.push((id, index.keys.clone()));
-                    }
+    fn insert_compute_instance(
+        &mut self,
+        id: ComputeInstanceId,
+        name: String,
+        config: ComputeInstanceConfig,
+        virtual_compute_host_introspection: Option<ComputeInstanceIntrospectionConfig>,
+    ) {
+        let introspection = match &config {
+            ComputeInstanceConfig::Virtual => &virtual_compute_host_introspection,
+            ComputeInstanceConfig::Remote { introspection, .. } => introspection,
+            ComputeInstanceConfig::Managed { introspection, .. } => introspection,
+        };
+        let logging = match introspection {
+            None => None,
+            Some(introspection) => {
+                let mut active_logs = HashMap::new();
+                for log in BUILTINS.logs() {
+                    let source_name = FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: log.schema.into(),
+                        item: log.name.into(),
+                    };
+                    let index_name = format!("{}_primary_idx", log.name);
+                    // TODO(clusters): Avoid panicking here on ID exhaustion
+                    // before stabilization.
+                    //
+                    // The system index counter is a u64, so it is hard to
+                    // imagine exhausting it. The OID counter is an i32,
+                    // however, and could more plausibly be exhausted.
+                    // Preallocating OIDs for each logging index is eminently
+                    // doable, but annoying enough that we don't bother now.
+                    let index_id = self
+                        .allocate_system_index_id()
+                        .expect("cannot return error here");
+                    let oid = self.allocate_oid().expect("cannot return error here");
+                    self.insert_item(
+                        index_id,
+                        oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: MZ_CATALOG_SCHEMA.into(),
+                            item: index_name.clone(),
+                        },
+                        CatalogItem::Index(Index {
+                            on: log.id,
+                            keys: log
+                                .variant
+                                .index_by()
+                                .into_iter()
+                                .map(MirScalarExpr::Column)
+                                .collect(),
+                            create_sql: super::coord::index_sql(
+                                index_name,
+                                id,
+                                source_name,
+                                &log.variant.desc(),
+                                &log.variant.index_by(),
+                            ),
+                            conn_id: None,
+                            depends_on: vec![log.id],
+                            enabled: true,
+                            compute_instance: id,
+                        }),
+                    );
+                    active_logs.insert(log.variant.clone(), index_id);
                 }
+                Some(DataflowLoggingConfig {
+                    granularity_ns: introspection.granularity.as_nanos(),
+                    log_logging: introspection.debugging,
+                    active_logs,
+                })
             }
-            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
-        }
+        };
+        let config = match config {
+            ComputeInstanceConfig::Virtual => InstanceConfig::Virtual { logging },
+            ComputeInstanceConfig::Remote {
+                hosts,
+                introspection: _,
+            } => InstanceConfig::Remote { hosts, logging },
+            ComputeInstanceConfig::Managed {
+                size,
+                introspection: _,
+            } => InstanceConfig::Managed { size, logging },
+        };
+        self.compute_instances_by_id.insert(
+            id,
+            ComputeInstance {
+                name: name.clone(),
+                config,
+                id,
+                indexes: HashSet::new(),
+            },
+        );
+        self.compute_instances_by_name.insert(name, id);
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -388,6 +441,7 @@ impl CatalogState {
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
+            CatalogItem::Secret(_) => Nonvolatile,
         }
     }
 
@@ -405,6 +459,7 @@ impl CatalogState {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
+    compute_instance: String,
     database: String,
     search_path: &'a [&'a str],
     user: String,
@@ -444,6 +499,14 @@ pub struct Role {
     pub oid: u32,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstance {
+    pub name: String,
+    pub id: ComputeInstanceId,
+    pub config: InstanceConfig,
+    pub indexes: HashSet<GlobalId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
     item: CatalogItem,
@@ -462,6 +525,7 @@ pub enum CatalogItem {
     Index(Index),
     Type(Type),
     Func(Func),
+    Secret(Secret),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -469,7 +533,7 @@ pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr<Raw>>,
+    pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub persist_name: Option<String>,
@@ -508,6 +572,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -532,7 +597,12 @@ pub struct Index {
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    // TODO(benesch): we'd ideally delete this field and instead derive it from
+    // whether the index is present in the compute controller or not. But it is
+    // presently hard to have an `enabled` field in `mz_indexes` if this field
+    // does not exist in the catalog.
     pub enabled: bool,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -547,6 +617,11 @@ pub struct Type {
 pub struct Func {
     #[serde(skip)]
     pub inner: &'static mz_sql::func::Func,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Secret {
+    pub create_sql: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -577,6 +652,7 @@ impl CatalogItem {
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
+            CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
         }
     }
 
@@ -588,7 +664,8 @@ impl CatalogItem {
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -620,6 +697,7 @@ impl CatalogItem {
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
+            CatalogItem::Secret(_) => &[],
         }
     }
 
@@ -632,7 +710,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
-            | CatalogItem::View(_) => false,
+            | CatalogItem::View(_)
+            | CatalogItem::Secret(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -647,7 +726,11 @@ impl CatalogItem {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
             CatalogItem::Table(table) => table.conn_id,
-            _ => None,
+            CatalogItem::Source(_) => None,
+            CatalogItem::Sink(_) => None,
+            CatalogItem::Secret(_) => None,
+            CatalogItem::Type(_) => None,
+            CatalogItem::Func(_) => None,
         }
     }
 
@@ -701,6 +784,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Secret(i))
+            }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
@@ -743,6 +831,13 @@ impl CatalogEntry {
     pub fn source(&self) -> Option<&Source> {
         match self.item() {
             CatalogItem::Source(src) => Some(src),
+            _ => None,
+        }
+    }
+
+    pub fn sink(&self) -> Option<&Sink> {
+        match self.item() {
+            CatalogItem::Sink(sink) => Some(sink),
             _ => None,
         }
     }
@@ -795,15 +890,16 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 by_name: BTreeMap::new(),
                 by_id: BTreeMap::new(),
                 by_oid: HashMap::new(),
-                enabled_indexes: HashMap::new(),
                 ambient_schemas: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
+                compute_instances_by_id: HashMap::new(),
+                compute_instances_by_name: HashMap::new(),
                 roles: HashMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
@@ -819,8 +915,9 @@ impl Catalog {
                     now: config.now.clone(),
                     disable_user_indexes: config.disable_user_indexes,
                 },
+                oid_counter: FIRST_USER_OID,
+                system_index_counter: FIRST_SYSTEM_INDEX_ID,
             },
-            oid_counter: FIRST_USER_OID,
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
         };
@@ -889,8 +986,7 @@ impl Catalog {
                 item: builtin.name().into(),
             };
             match builtin {
-                Builtin::Log(log) if config.enable_logging => {
-                    let index_name = format!("{}_primary_idx", log.name);
+                Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         log.id,
@@ -906,45 +1002,9 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        log.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name.clone(),
-                        },
-                        CatalogItem::Index(Index {
-                            on: log.id,
-                            keys: log
-                                .variant
-                                .index_by()
-                                .into_iter()
-                                .map(MirScalarExpr::Column)
-                                .collect(),
-                            create_sql: super::coord::index_sql(
-                                index_name,
-                                name,
-                                &log.variant.desc(),
-                                &log.variant.index_by(),
-                            ),
-                            conn_id: None,
-                            depends_on: vec![log.id],
-                            enabled: catalog.index_enabled_by_default(&log.index_id),
-                        }),
-                    );
                 }
 
                 Builtin::Table(table) => {
-                    let index_name = format!("{}_primary_idx", table.name);
-                    let index_columns = table.desc.typ().default_key();
-                    let index_sql = super::coord::index_sql(
-                        index_name.clone(),
-                        name.clone(),
-                        &table.desc,
-                        &index_columns,
-                    );
                     let oid = catalog.allocate_oid()?;
                     let persist_name = if table.persistent {
                         config
@@ -966,30 +1026,9 @@ impl Catalog {
                             persist_name,
                         }),
                     );
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        table.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name,
-                        },
-                        CatalogItem::Index(Index {
-                            on: table.id,
-                            keys: index_columns
-                                .iter()
-                                .map(|i| MirScalarExpr::Column(*i))
-                                .collect(),
-                            create_sql: index_sql,
-                            conn_id: None,
-                            depends_on: vec![table.id],
-                            enabled: catalog.index_enabled_by_default(&table.index_id),
-                        }),
-                    );
                 }
 
-                Builtin::View(view) if config.enable_logging || !view.needs_logs => {
+                Builtin::View(view) => {
                     let table_persist_name = None;
                     let source_persist_details = None;
                     let item = catalog
@@ -1039,10 +1078,27 @@ impl Catalog {
                         CatalogItem::Func(Func { inner: func.inner }),
                     );
                 }
-
-                _ => (),
             }
         }
+
+        let compute_instances = catalog.storage().load_compute_instances()?;
+        for (id, name, conf) in compute_instances {
+            catalog.state.insert_compute_instance(
+                id,
+                name,
+                conf,
+                // Only one virtual compute instance can configure logging or
+                // else the virtual compute host will panic. We arbitrarily
+                // choose to attach the virtual compute host's logging to the
+                // first virtual cluster we see. If the user drops this cluster
+                // then they lose access to the logs. This is a bit silly, but
+                // it preserves the existing behavior of the binary without
+                // inventing a bunch of new concepts just to support virtual
+                // clusters.
+                config.virtual_compute_host_introspection.take(),
+            );
+        }
+
         if !config.skip_migrations {
             let last_seen_version = catalog.storage().get_catalog_content_version()?;
             crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
@@ -1092,6 +1148,9 @@ impl Catalog {
         }
         for (role_name, _role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
+        }
+        for (name, _id) in &catalog.state.compute_instances_by_name {
+            builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
         }
 
         Ok((catalog, builtin_table_updates))
@@ -1164,7 +1223,10 @@ impl Catalog {
         let storage = storage::Connection::open(path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
-            enable_logging: true,
+            virtual_compute_host_introspection: Some(ComputeInstanceIntrospectionConfig {
+                granularity: Duration::from_secs(1),
+                debugging: false,
+            }),
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -1186,6 +1248,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
+            compute_instance: session.vars().cluster().into(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
@@ -1197,6 +1260,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
+            compute_instance: "default".into(),
             database: "materialize".into(),
             search_path: &[],
             user,
@@ -1214,17 +1278,12 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
-        let oid = self.oid_counter;
-        if oid == u32::max_value() {
-            return Err(Error::new(ErrorKind::OidExhaustion));
-        }
-        self.oid_counter += 1;
-        Ok(oid)
+        self.state.allocate_oid()
     }
 
     pub fn resolve_schema(
@@ -1291,6 +1350,18 @@ impl Catalog {
             name,
             conn_id,
         )
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: &str,
+    ) -> Result<&ComputeInstance, SqlCatalogError> {
+        let id = self
+            .state
+            .compute_instances_by_name
+            .get(name)
+            .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+        Ok(&self.state.compute_instances_by_id[id])
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -1369,10 +1440,6 @@ impl Catalog {
         self.state.get_by_id(id)
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
-        self.state.insert_item(id, oid, name, item)
-    }
-
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         self.state.get_by_oid(oid)
     }
@@ -1397,7 +1464,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
+    fn item_exists_in_temp_schemas(&self, conn_id: u32, item_name: &str) -> bool {
         self.state.temporary_schemas[&conn_id]
             .items
             .contains_key(item_name)
@@ -1420,7 +1487,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn get_schema(
+    pub fn get_schema(
         &self,
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
@@ -1495,36 +1562,6 @@ impl Catalog {
             }
             ops.push(Op::DropItem(id));
         }
-    }
-
-    /// Returns the [`Op`]s necessary to enable an index.
-    ///
-    /// # Panics
-    /// Panics if `id` is not the `id` of a [`CatalogItem::Index`].
-    pub fn enable_index_ops(&mut self, id: GlobalId) -> Result<Vec<Op>, Error> {
-        Ok(match &self.get_by_id(&id).item {
-            // no-op
-            CatalogItem::Index(index) if index.enabled => vec![],
-            CatalogItem::Index(index) => {
-                if let CatalogItem::Table(_) = self.get_by_id(&index.on).item() {
-                    let default_idx_id = self
-                        .default_index_for(index.on)
-                        .expect("table must have default index");
-                    if id != default_idx_id {
-                        self.ensure_default_index_enabled(index.on)?;
-                    }
-                }
-
-                vec![Op::UpdateItem {
-                    id,
-                    to_item: CatalogItem::Index(Index {
-                        enabled: true,
-                        ..index.clone()
-                    }),
-                }]
-            }
-            _ => unreachable!("cannot enable non-indexes"),
-        })
     }
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
@@ -1657,6 +1694,11 @@ impl Catalog {
                 oid: u32,
                 name: String,
             },
+            CreateComputeInstance {
+                id: ComputeInstanceId,
+                name: String,
+                config: ComputeInstanceConfig,
+            },
             CreateItem {
                 id: GlobalId,
                 oid: u32,
@@ -1672,6 +1714,9 @@ impl Catalog {
                 schema_name: String,
             },
             DropRole {
+                name: String,
+            },
+            DropComputeInstance {
                 name: String,
             },
             DropItem(GlobalId),
@@ -1746,6 +1791,18 @@ impl Catalog {
                         id: tx.insert_role(&name)?,
                         oid,
                         name,
+                    }]
+                }
+                Op::CreateComputeInstance { name, config } => {
+                    if is_reserved_name(&name) {
+                        return Err(CoordError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(name),
+                        )));
+                    }
+                    vec![Action::CreateComputeInstance {
+                        id: tx.insert_compute_instance(&name, &config)?,
+                        name,
+                        config,
                     }]
                 }
                 Op::CreateItem {
@@ -1831,21 +1888,14 @@ impl Catalog {
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
                 }
+                Op::DropComputeInstance { name } => {
+                    tx.remove_compute_instance(&name)?;
+                    builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
+                    vec![Action::DropComputeInstance { name }]
+                }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
-                    // Prevent dropping a table's default index unless the table
-                    // is being dropped too.
                     match entry.item() {
-                        CatalogItem::Index(Index { on, .. }) => {
-                            if self.get_by_id(on).is_table()
-                                && self.default_index_for(*on) == Some(id)
-                                && !drop_ids.contains(on)
-                            {
-                                return Err(CoordError::Catalog(Error::new(
-                                    ErrorKind::MandatoryTableIndex(entry.name().to_string()),
-                                )));
-                            }
-                        }
                         CatalogItem::Source(_) => {
                             tx.delete_timestamp_bindings(id)?;
                         }
@@ -1998,6 +2048,12 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_role_update(&name, 1));
                 }
 
+                Action::CreateComputeInstance { id, name, config } => {
+                    info!("create cluster {}", name);
+                    state.insert_compute_instance(id, name.clone(), config, None);
+                    builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
+                }
+
                 Action::CreateItem {
                     id,
                     oid,
@@ -2026,6 +2082,23 @@ impl Catalog {
                     }
                 }
 
+                Action::DropComputeInstance { name } => {
+                    let id = state
+                        .compute_instances_by_name
+                        .remove(&name)
+                        .expect("can only drop known instances");
+
+                    let instance = state
+                        .compute_instances_by_id
+                        .remove(&id)
+                        .expect("can only drop known instances");
+
+                    assert!(
+                        instance.indexes.is_empty(),
+                        "not all items dropped before compute instance"
+                    );
+                }
+
                 Action::DropItem(id) => {
                     let metadata = state.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
@@ -2045,21 +2118,24 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
-                    if let CatalogItem::Index(index) = &metadata.item {
-                        let indexes = state
-                            .enabled_indexes
-                            .get_mut(&index.on)
-                            .expect("catalog out of sync");
-                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
-                        match i {
-                            Some(i) => {
-                                indexes.remove(i);
-                            }
-                            None if !index.enabled => {}
-                            None => panic!("catalog out of sync"),
-                        };
-                    }
-                    state.enabled_indexes.remove(&id);
+
+                    if let CatalogItem::Index(Index {
+                        compute_instance, ..
+                    })
+                    | CatalogItem::Sink(Sink {
+                        compute_instance, ..
+                    }) = metadata.item
+                    {
+                        assert!(
+                            state
+                                .compute_instances_by_id
+                                .get_mut(&compute_instance)
+                                .unwrap()
+                                .indexes
+                                .remove(&id),
+                            "catalog out of sync"
+                        );
+                    };
                 }
 
                 Action::UpdateItem {
@@ -2075,11 +2151,6 @@ impl Catalog {
                         id
                     );
                     assert_eq!(old_entry.uses(), to_item.uses());
-
-                    // Handle updating any indexes. n.b. only supports enabling
-                    // indexes; does not support disabling indexes.
-                    state.populate_enabled_indexes(id, &to_item);
-
                     let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut state
                         .get_schema_mut(&old_entry.name.database, &old_entry.name.schema, conn_id)
@@ -2142,6 +2213,12 @@ impl Catalog {
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
+                eval_env: None,
+                table_persist_name: None,
+                source_persist_details: None,
+            },
+            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
+                create_sql: secret.create_sql.clone(),
                 eval_env: None,
                 table_persist_name: None,
                 source_persist_details: None,
@@ -2227,6 +2304,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
+                compute_instance: index.compute_instance,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2239,6 +2317,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on: sink.depends_on,
+                compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
@@ -2247,6 +2326,9 @@ impl Catalog {
                     typ: typ.inner,
                 },
                 depends_on: typ.depends_on,
+            }),
+            Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
+                create_sql: secret.create_sql,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -2260,15 +2342,6 @@ impl Catalog {
         !self.config().disable_user_indexes || !id.is_user()
     }
 
-    /// Returns a mapping that indicates all indices that are available for each
-    /// item in the catalog.
-    ///
-    /// Note that when `self.config.disable_user_indexes` is `true`, this does
-    /// not include any user indexes.
-    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.state.enabled_indexes
-    }
-
     /// Returns whether or not an index is enabled.
     ///
     /// # Panics
@@ -2279,52 +2352,6 @@ impl Catalog {
             CatalogItem::Index(index) => index.enabled,
             _ => unreachable!("cannot call is_index_enabled on non-idex"),
         }
-    }
-
-    /// Returns all indexes on this object known in the catalog.
-    pub fn get_indexes_on(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.get_by_id(&id)
-            .used_by()
-            .iter()
-            .filter(|uses_id| match self.get_by_id(uses_id).item() {
-                CatalogItem::Index(index) => index.on == id,
-                _ => false,
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Returns the default index for the specified `id`.
-    ///
-    /// Panics if `id` does not exist, or if `id` is not an object on which
-    /// indexes can be built.
-    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
-        // The default index is the index with the smallest ID, i.e. the one
-        // created in closest temporal proximity to the object itself.
-        self.get_indexes_on(id).iter().min().cloned()
-    }
-
-    /// Returns an error if the object's default index is disabled.
-    ///
-    /// Note that this function is really only meant to be used with tables.
-    ///
-    /// # Panics
-    /// Panics if the object identified with `id` does not have a default index.
-    pub fn ensure_default_index_enabled(&self, id: GlobalId) -> Result<(), Error> {
-        let default_idx_id = self
-            .default_index_for(id)
-            .expect("object must have default index");
-        if !self.is_index_enabled(&default_idx_id) {
-            return Err(Error::new(ErrorKind::DefaultIndexDisabled {
-                idx_on: self.get_by_id(&id).name().to_string(),
-                default_idx: self.get_by_id(&default_idx_id).name().to_string(),
-            }));
-        }
-        Ok(())
-    }
-
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
-        self.state.nearest_indexes(ids)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
@@ -2348,67 +2375,8 @@ impl Catalog {
         self.state.by_id.values()
     }
 
-    /// Returns all tables, views, and sources in the same schemas as a set of
-    /// input ids. The indexes of all relations are included.
-    pub fn schema_adjacent_indexed_relations(
-        &self,
-        ids: &[GlobalId],
-        conn_id: u32,
-    ) -> Vec<GlobalId> {
-        // Find all relations referenced by the expression. Find their parent schemas
-        // and add all tables, views, and sources in those schemas to a set.
-        let mut relations: HashSet<GlobalId> = HashSet::new();
-        let mut schemas = HashSet::new();
-        let mut schema_ids = VecDeque::new();
-        for id in ids {
-            // Always add in the user-specified ids.
-            relations.insert(*id);
-            let entry = self.get_by_id(&id);
-            let name = entry.name();
-            schemas.insert((&name.database, &*name.schema));
-        }
-
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
-        let system_schemas = &[
-            (&DatabaseSpecifier::Ambient, MZ_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, PG_CATALOG_SCHEMA),
-            (&DatabaseSpecifier::Ambient, INFORMATION_SCHEMA),
-        ];
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
-            schemas.extend(system_schemas);
-        }
-
-        for (db, schema) in schemas {
-            if let Some(schema) = self.get_schema(db, schema, conn_id) {
-                schema_ids.extend(schema.items.values());
-                while let Some(id) = schema_ids.pop_front() {
-                    let entry = self.get_by_id(id);
-                    let ty = entry.item_type();
-                    match ty {
-                        SqlCatalogItemType::Table => {
-                            relations.insert(*id);
-                        }
-                        SqlCatalogItemType::View | SqlCatalogItemType::Source => {
-                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
-                            relations.extend(indexes);
-                            // Add in the view/source if fully materialized.
-                            if unmaterialized.is_empty() {
-                                relations.insert(*id);
-                                if let SqlCatalogItemType::View = ty {
-                                    // Add transitive items from views.
-                                    if let CatalogItem::View(view) = entry.item() {
-                                        schema_ids.extend(&view.depends_on);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        relations.into_iter().collect()
+    pub fn compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
+        self.state.compute_instances_by_id.values()
     }
 }
 
@@ -2431,6 +2399,10 @@ pub enum Op {
         name: String,
         oid: u32,
     },
+    CreateComputeInstance {
+        name: String,
+        config: ComputeInstanceConfig,
+    },
     CreateItem {
         id: GlobalId,
         oid: u32,
@@ -2445,6 +2417,9 @@ pub enum Op {
         schema_name: String,
     },
     DropRole {
+        name: String,
+    },
+    DropComputeInstance {
         name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
@@ -2619,6 +2594,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
                     .join(",")
             ),
+            PgLegacyChar => "\"char\"".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let res = if self
@@ -2639,7 +2615,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
         &self.user
     }
 
@@ -2649,8 +2625,12 @@ impl SessionCatalog for ConnCatalog<'_> {
             .flatten()
     }
 
-    fn default_database(&self) -> &str {
+    fn active_database(&self) -> &str {
         &self.database
+    }
+
+    fn active_compute_instance(&self) -> &str {
+        &self.compute_instance
     }
 
     fn resolve_database(
@@ -2681,6 +2661,19 @@ impl SessionCatalog for ConnCatalog<'_> {
             Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
+    }
+
+    fn resolve_compute_instance(
+        &self,
+        compute_instance_name: Option<&str>,
+    ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
+        self.catalog
+            .resolve_compute_instance(
+                compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
+            )
+            .map(|compute_instance| {
+                compute_instance as &dyn mz_sql::catalog::CatalogComputeInstance
+            })
     }
 
     fn resolve_item(
@@ -2767,6 +2760,20 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 }
 
+impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> ComputeInstanceId {
+        self.id
+    }
+
+    fn indexes(&self) -> &HashSet<GlobalId> {
+        &self.indexes
+    }
+}
+
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &FullName {
         self.name()
@@ -2800,6 +2807,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
         }
     }
@@ -2816,7 +2824,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+    fn table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

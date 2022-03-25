@@ -1,0 +1,76 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE a (b int);
+
+# Normal table
+query TIIIIBTTIBBBBTBB
+SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
+    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
+FROM pg_catalog.pg_class
+WHERE relname = 'a';
+----
+a 0 0 0 0 false p r 0 false false false false d false false
+
+statement ok
+CREATE DEFAULT INDEX ON a
+
+# Default index on a
+query IIIIBTTIBBBBTBB
+SELECT reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
+    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
+FROM pg_catalog.pg_class
+WHERE relname = (SELECT name FROM mz_indexes WHERE on_id = (SELECT id FROM mz_objects WHERE name = 'a'));
+----
+0 0 0 0 false p i 0 false false false false d false false
+
+# Tables outside of the current database don't show up
+
+statement ok
+CREATE DATABASE kant;
+
+statement ok
+SET database = kant;
+
+statement ok
+CREATE TABLE c (b int);
+
+query TIIIIBTTIBBBBTBB
+SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
+    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
+FROM pg_catalog.pg_class
+WHERE relname = 'c';
+----
+c 0 0 0 0 false p r 0 false false false false d false false
+
+
+statement ok
+SET database = test;
+
+query TIIIIBTTIBBBBTBB
+SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
+    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
+FROM pg_catalog.pg_class
+WHERE relname = 'c';
+----
+
+
+# statement ok
+# SET database = kant;
+
+# query TIIIIBTTIBBBBTBB
+# SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
+#     relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
+# FROM pg_catalog.pg_class
+# WHERE relname = 'c';
+# ----
+# c 0 0 0 0 false p r 0 false false false false d false false

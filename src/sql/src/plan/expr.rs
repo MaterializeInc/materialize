@@ -18,6 +18,8 @@ use std::mem;
 
 use anyhow::bail;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+
 use mz_expr::DummyHumanizer;
 
 use mz_ore::collections::CollectionExt;
@@ -32,11 +34,13 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use mz_expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
+pub use mz_expr::{
+    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
 
 use super::Explanation;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Just like MirRelationExpr, except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
@@ -122,7 +126,7 @@ pub enum HirRelationExpr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
@@ -131,7 +135,7 @@ pub enum HirScalarExpr {
     Column(ColumnRef),
     Parameter(usize),
     Literal(Row, ColumnType),
-    CallNullary(NullaryFunc),
+    CallUnmaterializable(UnmaterializableFunc),
     CallUnary {
         func: UnaryFunc,
         expr: Box<HirScalarExpr>,
@@ -165,7 +169,7 @@ pub enum HirScalarExpr {
     Windowing(WindowExpr),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Represents the invocation of a window function over a partition with an optional
 /// order.
 pub struct WindowExpr {
@@ -204,7 +208,7 @@ impl WindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// A window function with its parameters.
 ///
 /// There are two types of window functions: scalar window functions, that
@@ -249,7 +253,7 @@ impl WindowExprType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
     pub order_by: Vec<ColumnOrder>,
@@ -294,7 +298,7 @@ impl ScalarWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
@@ -450,7 +454,7 @@ impl From<HirScalarExpr> for CoercibleScalarExpr {
 /// from the reference, using `column` as a unique identifier in that subquery level.
 /// A `level` of zero corresponds to the current scope, and levels increase to
 /// indicate subqueries further "outwards".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ColumnRef {
     // scope level, where 0 is the current scope and 1+ are outer scopes.
     pub level: usize,
@@ -458,7 +462,7 @@ pub struct ColumnRef {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -490,7 +494,7 @@ impl JoinKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<HirScalarExpr>,
@@ -504,7 +508,7 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -1417,7 +1421,7 @@ impl HirScalarExpr {
     {
         use HirScalarExpr::*;
         match self {
-            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -1465,7 +1469,7 @@ impl HirScalarExpr {
     {
         use HirScalarExpr::*;
         match self {
-            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);
@@ -1556,7 +1560,7 @@ impl HirScalarExpr {
         match self {
             HirScalarExpr::Literal(_, _)
             | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::CallUnmaterializable(_)
             | HirScalarExpr::Column(_) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -1593,7 +1597,7 @@ impl HirScalarExpr {
         match self {
             HirScalarExpr::Literal(_, _)
             | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::CallUnmaterializable(_)
             | HirScalarExpr::Column(_) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively_mut(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -1689,7 +1693,7 @@ impl AbstractExpr for HirScalarExpr {
             }
             HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
             HirScalarExpr::Literal(_, typ) => typ.clone(),
-            HirScalarExpr::CallNullary(func) => func.output_type(),
+            HirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             HirScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outers, inner, params))
             }

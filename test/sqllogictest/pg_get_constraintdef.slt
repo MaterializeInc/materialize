@@ -18,12 +18,16 @@ query T
 SELECT pg_get_constraintdef(pg_constraint.oid) FROM pg_constraint
 ----
 
-query error pg_get_constraintdef not yet supported
-SELECT pg_get_constraintdef(885)
+query B
+SELECT pg_get_constraintdef(885) IS NULL
+----
+true
 
 query T
 SELECT pg_get_constraintdef(pg_constraint.oid, true) FROM pg_constraint
 ----
 
-query error pg_get_constraintdef not yet supported
-SELECT pg_get_constraintdef(885, true)
+query B
+SELECT pg_get_constraintdef(885, true) IS NULL
+----
+true

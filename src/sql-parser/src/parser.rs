@@ -1565,6 +1565,8 @@ impl<'a> Parser<'a> {
             self.parse_create_type()
         } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
             self.parse_create_role()
+        } else if self.peek_keyword(CLUSTER) {
+            self.parse_create_cluster()
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
@@ -1574,6 +1576,8 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[TEMPORARY, TABLE])
         {
             self.parse_create_table()
+        } else if self.peek_keyword(SECRET) {
+            self.parse_create_secret()
         } else {
             let index = self.index;
 
@@ -1591,7 +1595,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
                     self.peek_token(),
                 )
             }
@@ -1962,8 +1966,9 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
-        let from = self.parse_object_name()?;
+        let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connector = self.parse_create_sink_connector()?;
         let mut with_options = vec![];
@@ -1998,6 +2003,7 @@ impl<'a> Parser<'a> {
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
+            in_cluster,
             from,
             connector,
             with_options,
@@ -2032,11 +2038,17 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                let details = if self.parse_keyword(DETAILS) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
 
                 Ok(CreateSourceConnector::Postgres {
                     conn,
                     publication,
                     slot,
+                    details,
                 })
             }
             FILE => {
@@ -2259,7 +2271,7 @@ impl<'a> Parser<'a> {
         }
 
         let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
-            let name = self.parse_object_name()?;
+            let name = self.parse_raw_name()?;
             let targets = if self.consume_token(&Token::LParen) {
                 let targets = self.parse_comma_separated(|parser| {
                     let name = parser.parse_object_name()?;
@@ -2300,18 +2312,22 @@ impl<'a> Parser<'a> {
         self.expect_keyword(INDEX)?;
 
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = if self.parse_keyword(ON) {
+        let name = if self.peek_keyword(IN) || self.peek_keyword(ON) {
             if if_not_exists && !default_index {
-                self.prev_token();
                 return self.expected(self.peek_pos(), "index name", self.peek_token());
             }
             None
         } else {
-            let name = self.parse_identifier()?;
-            self.expect_keyword(ON)?;
-            Some(name)
+            Some(self.parse_identifier()?)
         };
-        let on_name = self.parse_object_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+        self.expect_keyword(ON)?;
+        let on_name = self.parse_raw_name()?;
+
+        // Arrangements are the only index type we support, so we can just ignore this
+        if self.parse_keyword(USING) {
+            self.expect_keyword(ARRANGEMENT)?;
+        }
 
         let key_parts = if default_index {
             None
@@ -2334,11 +2350,30 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
+            in_cluster,
             on_name,
             key_parts,
             with_options,
             if_not_exists,
         }))
+    }
+
+    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawIdent>, ParserError> {
+        if self.parse_keywords(&[IN, CLUSTER]) {
+            if self.consume_token(&Token::LBracket) {
+                let id = match self.next_token() {
+                    Some(Token::Ident(id)) => id,
+                    Some(Token::Number(n)) => n,
+                    _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+                };
+                self.expect_token(&Token::RBracket)?;
+                Ok(Some(RawIdent::Resolved(id)))
+            } else {
+                Ok(Some(RawIdent::Unresolved(self.parse_identifier()?)))
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_create_role(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2364,6 +2399,19 @@ impl<'a> Parser<'a> {
             is_user,
             name,
             options,
+        }))
+    }
+
+    fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SECRET)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+        self.expect_keyword(AS)?;
+        let value = self.parse_expr()?;
+        Ok(Statement::CreateSecret(CreateSecretStatement {
+            name,
+            if_not_exists,
+            value,
         }))
     }
 
@@ -2404,6 +2452,55 @@ impl<'a> Parser<'a> {
             name,
             data_type: self.parse_data_type()?,
         })
+    }
+
+    fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_identifier()?;
+        let _ = self.parse_keyword(WITH);
+        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
+            vec![]
+        } else {
+            self.parse_comma_separated(Parser::parse_cluster_option)?
+        };
+        Ok(Statement::CreateCluster(CreateClusterStatement {
+            name,
+            if_not_exists,
+            options,
+        }))
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
+        match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE, INTROSPECTION])? {
+            VIRTUAL => Ok(ClusterOption::Virtual),
+            REMOTE => {
+                self.expect_token(&Token::LParen)?;
+                let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(ClusterOption::Remote(hosts))
+            }
+            SIZE => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::Size(self.parse_with_option_value()?))
+            }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+                DEBUGGING => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionDebugging(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                GRANULARITY => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionGranularity(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
     }
 
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
@@ -2463,7 +2560,7 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2480,16 +2577,18 @@ impl<'a> Parser<'a> {
             }
             Some(INDEX) => ObjectType::Index,
             Some(ROLE) | Some(USER) => ObjectType::Role,
+            Some(CLUSTER) => ObjectType::Cluster,
             Some(SCHEMA) => ObjectType::Schema,
             Some(SINK) => ObjectType::Sink,
             Some(SOURCE) => ObjectType::Source,
             Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
+            Some(SECRET) => ObjectType::Secret,
             _ => {
                 return self.expected(
                     self.peek_pos(),
-                    "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, \
+                    "DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, \
                      TABLE, TYPE, USER, VIEW after DROP",
                     self.peek_token(),
                 );
@@ -2661,7 +2760,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(KEY)?;
                 let columns = self.parse_parenthesized_column_list(Mandatory)?;
                 self.expect_keyword(REFERENCES)?;
-                let foreign_table = self.parse_object_name()?;
+                let foreign_table = self.parse_raw_name()?;
                 let referred_columns = self.parse_parenthesized_column_list(Mandatory)?;
                 Ok(Some(TableConstraint::ForeignKey {
                     name,
@@ -2753,63 +2852,47 @@ impl<'a> Parser<'a> {
             return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
         }
         let value = if has_value {
-            if let Some(value) = self.maybe_parse(Parser::parse_value) {
-                Some(WithOptionValue::Value(value))
-            } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
-                Some(WithOptionValue::ObjectName(object_name))
-            } else {
-                return self.expected(self.peek_pos(), "option value", self.peek_token());
-            }
+            Some(self.parse_with_option_value()?)
         } else {
             None
         };
         Ok(WithOption { key, value })
     }
 
-    fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[INDEX, SINK, SOURCE, VIEW, TABLE])? {
-            INDEX => ObjectType::Index,
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            VIEW => ObjectType::View,
-            TABLE => ObjectType::Table,
-            _ => unreachable!(),
-        };
+    fn parse_with_option_value(&mut self) -> Result<WithOptionValue, ParserError> {
+        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(WithOptionValue::Value(value))
+        } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
+            Ok(WithOptionValue::ObjectName(object_name))
+        } else {
+            return self.expected(self.peek_pos(), "option value", self.peek_token());
+        }
+    }
 
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+    fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let object_type =
+            match self.expect_one_of_keywords(&[INDEX, SINK, SOURCE, VIEW, TABLE, SECRET])? {
+                INDEX => ObjectType::Index,
+                SINK => ObjectType::Sink,
+                SOURCE => ObjectType::Source,
+                VIEW => ObjectType::View,
+                TABLE => ObjectType::Table,
+                SECRET => ObjectType::Secret,
+                _ => unreachable!(),
+            };
 
         // We support `ALTER INDEX ... {RESET, SET} and `ALTER <object type> RENAME
         if object_type == ObjectType::Index {
-            let action = match self.parse_one_of_keywords(&[RESET, SET]) {
-                Some(RESET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
-                    self.expect_token(&Token::RParen)?;
-
-                    Some(AlterIndexAction::ResetOptions(reset_options))
-                }
-                Some(SET) => {
-                    if self.parse_keyword(ENABLED) {
-                        Some(AlterIndexAction::Enable)
-                    } else {
-                        let set_options = self.parse_with_options(true)?;
-
-                        Some(AlterIndexAction::SetOptions(set_options))
-                    }
-                }
-                Some(_) => unreachable!(),
-                None => None,
-            };
-
-            if let Some(action) = action {
-                return Ok(Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action,
-                }));
-            }
+            return self.parse_alter_index();
         }
+
+        // We support `ALTER SECRET ... AS and `ALTER <object type> RENAME
+        if object_type == ObjectType::Secret {
+            return self.parse_alter_secret();
+        }
+
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_raw_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -2820,6 +2903,81 @@ impl<'a> Parser<'a> {
             name,
             to_item_name,
         }))
+    }
+
+    fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_raw_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
+                self.expect_token(&Token::RParen)?;
+
+                Statement::AlterIndex(AlterIndexStatement {
+                    index_name: name,
+                    if_exists,
+                    action: AlterIndexAction::ResetOptions(reset_options),
+                })
+            }
+            SET => {
+                if self.parse_keyword(ENABLED) {
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::Enable,
+                    })
+                } else {
+                    let set_options = self.parse_with_options(true)?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::SetOptions(set_options),
+                    })
+                }
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Index,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_raw_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
+            AS => {
+                let value = self.parse_expr()?;
+                Statement::AlterSecret(AlterSecretStatement {
+                    secret_name: name,
+                    if_exists,
+                    value,
+                })
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Secret,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
     }
 
     /// Parse a copy statement
@@ -2833,7 +2991,7 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
             }
         } else {
-            let name = self.parse_object_name()?;
+            let name = self.parse_raw_name()?;
             let columns = self.parse_parenthesized_column_list(Optional)?;
             CopyRelation::Table { name, columns }
         };
@@ -3783,40 +3941,70 @@ impl<'a> Parser<'a> {
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+            OBJECTS, ROLES, CLUSTERS, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
         ]) {
+            let object_type = match object_type {
+                OBJECTS => ObjectType::Object,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTERS => ObjectType::Cluster,
+                SCHEMAS => ObjectType::Schema,
+                SINKS => ObjectType::Sink,
+                SOURCES => ObjectType::Source,
+                TABLES => ObjectType::Table,
+                TYPES => ObjectType::Type,
+                VIEWS => ObjectType::View,
+                SECRETS => ObjectType::Secret,
+                _ => unreachable!(),
+            };
+
+            let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
+                Some(kw) => {
+                    if kw == IN && self.peek_keyword(CLUSTER) {
+                        if matches!(object_type, ObjectType::Sink) {
+                            // put `IN` back
+                            self.prev_token();
+                            (None, self.parse_optional_in_cluster()?)
+                        } else {
+                            return parser_err!(
+                                self,
+                                self.peek_pos(),
+                                "expected object name, found 'cluster'"
+                            );
+                        }
+                    } else {
+                        let from = self.parse_object_name()?;
+                        let in_cluster = self.parse_optional_in_cluster()?;
+                        (Some(from), in_cluster)
+                    }
+                }
+                None => (None, None),
+            };
+
             Ok(Statement::ShowObjects(ShowObjectsStatement {
-                object_type: match object_type {
-                    OBJECTS => ObjectType::Object,
-                    ROLES | USERS => ObjectType::Role,
-                    SCHEMAS => ObjectType::Schema,
-                    SINKS => ObjectType::Sink,
-                    SOURCES => ObjectType::Source,
-                    TABLES => ObjectType::Table,
-                    TYPES => ObjectType::Type,
-                    VIEWS => ObjectType::View,
-                    val => panic!(
-                        "`parse_one_of_keywords` returned an impossible value: {}",
-                        val
-                    ),
-                },
+                object_type,
                 extended,
                 full,
                 materialized,
-                from: if self.parse_one_of_keywords(&[FROM, IN]).is_some() {
-                    Some(self.parse_object_name()?)
-                } else {
-                    None
-                },
+                from,
+                in_cluster,
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self
             .parse_one_of_keywords(&[INDEX, INDEXES, KEYS])
             .is_some()
         {
-            match self.parse_one_of_keywords(&[FROM, IN]) {
-                Some(_) => {
-                    let table_name = self.parse_object_name()?;
+            match self.parse_one_of_keywords(&[FROM, IN, ON]) {
+                Some(kw) => {
+                    let (table_name, in_cluster) = if kw == IN && self.peek_keyword(CLUSTER) {
+                        // put `IN` back
+                        self.prev_token();
+                        (None, self.parse_optional_in_cluster()?)
+                    } else {
+                        let table_name = self.parse_raw_name()?;
+                        let in_cluster = self.parse_optional_in_cluster()?;
+                        (Some(table_name), in_cluster)
+                    };
+
                     let filter = if self.parse_keyword(WHERE) {
                         Some(ShowStatementFilter::Where(self.parse_expr()?))
                     } else {
@@ -3824,6 +4012,7 @@ impl<'a> Parser<'a> {
                     };
                     Ok(Statement::ShowIndexes(ShowIndexesStatement {
                         table_name,
+                        in_cluster,
                         extended,
                         filter,
                     }))
@@ -3836,23 +4025,23 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
-                view_name: self.parse_object_name()?,
+                view_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
-                source_name: self.parse_object_name()?,
+                source_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
             Ok(Statement::ShowCreateTable(ShowCreateTableStatement {
-                table_name: self.parse_object_name()?,
+                table_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
             Ok(Statement::ShowCreateSink(ShowCreateSinkStatement {
-                sink_name: self.parse_object_name()?,
+                sink_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
-                index_name: self.parse_object_name()?,
+                index_name: self.parse_raw_name()?,
             }))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
@@ -3872,7 +4061,7 @@ impl<'a> Parser<'a> {
         full: bool,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_one_of_keywords(&[FROM, IN])?;
-        let table_name = self.parse_object_name()?;
+        let table_name = self.parse_raw_name()?;
         // MySQL also supports FROM <database> here. In other words, MySQL
         // allows both FROM <table> FROM <database> and FROM <database>.<table>,
         // while we only support the latter for now.
@@ -4121,7 +4310,7 @@ impl<'a> Parser<'a> {
     /// Parse an INSERT statement
     fn parse_insert(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(INTO)?;
-        let table_name = self.parse_object_name()?;
+        let table_name = self.parse_raw_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let source = if self.parse_keywords(&[DEFAULT, VALUES]) {
             InsertSource::DefaultValues
@@ -4314,7 +4503,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             TailRelation::Query(query)
         } else {
-            TailRelation::Name(self.parse_object_name()?)
+            TailRelation::Name(self.parse_raw_name()?)
         };
         let options = self.parse_opt_with_options()?;
         let as_of = self.parse_optional_as_of()?;
@@ -4360,6 +4549,7 @@ impl<'a> Parser<'a> {
             PHYSICAL,
             PLAN,
             QUERY,
+            TIMESTAMP,
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
@@ -4390,13 +4580,17 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[PLAN, FOR])?;
                 ExplainStage::PhysicalPlan
             }
+            Some(TIMESTAMP) => {
+                self.expect_keywords(&[FOR])?;
+                ExplainStage::Timestamp
+            }
             None => ExplainStage::OptimizedPlan,
             _ => unreachable!(),
         };
 
         // VIEW view_name | query
         let explainee = if self.parse_keyword(VIEW) {
-            Explainee::View(self.parse_object_name()?)
+            Explainee::View(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };

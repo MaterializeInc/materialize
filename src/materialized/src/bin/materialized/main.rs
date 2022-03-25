@@ -22,7 +22,6 @@ use std::env;
 use std::ffi::CStr;
 use std::fmt;
 use std::fs;
-use std::io;
 use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
@@ -34,26 +33,24 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use ::tracing::info;
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
-use clap::{AppSettings, Parser};
+use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
-use mz_dataflow_types::sources::AwsExternalId;
-use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::metric;
-use mz_ore::metrics::ThirdPartyMetric;
-use mz_ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
-use self::tracing::MetricsRecorderLayer;
-use materialized::TlsMode;
+use materialized::{OrchestratorConfig, RemoteStorageConfig, StorageConfig, TlsConfig, TlsMode};
+use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
+use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
+use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 
 mod sys;
 mod tracing;
@@ -68,9 +65,9 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 }
 
 /// The streaming SQL materialized view engine.
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
-struct Args {
+pub struct Args {
     // === Special modes. ===
     /// Print version information and exit.
     ///
@@ -126,7 +123,7 @@ struct Args {
     /// variety of deployments, but setting this flag to true to opt out of the
     /// test is always safe.
     #[clap(long)]
-    disable_persistent_system_tables_test: bool,
+    disable_persistent_system_tables_test: Option<bool>,
 
     /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
     ///
@@ -163,10 +160,51 @@ struct Args {
     #[structopt(long, hide = true)]
     persist_cache_size_limit: Option<usize>,
 
+    // === Platform options. ===
+    /// The service orchestrator implementation to use, if any.
+    #[structopt(long, hide = true, arg_enum)]
+    orchestrator: Option<Orchestrator>,
+    /// The Kubernetes context to use with the Kubernetes orchestrator.
+    ///
+    /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
+    /// production cluster that happens to be the active Kubernetes context.)
+    #[structopt(long, hide = true, default_value = "minikube")]
+    kubernetes_context: String,
+    /// The dataflowd image reference to use.
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
+    dataflowd_image: Option<String>,
+
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
     #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
     workers: WorkerCount,
+    /// Number of storage worker threads.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_WORKERS",
+        value_name = "N",
+        requires_all = &["storage-compute-addr", "storage-controller-addr"],
+        hide = true
+    )]
+    storage_workers: Option<usize>,
+    /// Address of a storage process that compute instances should connect to.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_COMPUTE_ADDR",
+        value_name = "N",
+        requires_all = &["storage-workers", "storage-controller-addr"],
+        hide = true
+    )]
+    storage_compute_addr: Option<String>,
+    /// Address of a storage process that the controller should connect to.
+    #[clap(
+        long,
+        env = "MZ_STORAGE_CONTROLLER_ADDR",
+        value_name = "N",
+        requires_all = &["storage-workers", "storage-compute-addr"],
+        hide = true
+    )]
+    storage_controller_addr: Option<String>,
     /// Log Timely logging itself.
     #[clap(long, hide = true)]
     debug_introspection: bool,
@@ -255,7 +293,7 @@ struct Args {
         long,
         env = "MZ_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "0.0.0.0:6875"
+        default_value = "127.0.0.1:6875"
     )]
     listen_addr: SocketAddr,
     /// How stringently to demand TLS authentication and encryption.
@@ -377,15 +415,41 @@ struct Args {
     #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 
+    /// The endpoint to send opentelemetry traces to.
+    /// If not provided, tracing is not sent.
+    ///
+    /// You most likely also need to provide
+    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// depending on the collector you are talking to.
+    #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
+    opentelemetry_endpoint: Option<String>,
+
+    /// Comma separated headers of the form `KEY=VALUE`
+    /// to pass through to the opentelemetry
+    /// collector
+    #[clap(
+        long,
+        env = "MZ_OPENTELEMETRY_HEADERS",
+        requires = "opentelemetry-endpoint",
+        hide = true
+    )]
+    opentelemetry_headers: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
     tokio_console: bool,
 }
 
+#[derive(ArgEnum, Debug, Clone)]
+enum Orchestrator {
+    Kubernetes,
+}
+
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
 /// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
+#[derive(Debug)]
 struct WorkerCount(usize);
 
 impl Default for WorkerCount {
@@ -424,14 +488,40 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
-    panic::set_hook(Box::new(handle_panic));
-
+    // Configure signal handling as soon as possible. We want signals to be
+    // handled to our liking ASAP.
     if !args.no_sigbus_sigsegv_backtraces {
         sys::enable_sigbus_sigsegv_backtraces()?;
     }
-
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Start Tokio runtime.
+
+    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(ncpus_useful)
+            // The default thread name exceeds the Linux limit on thread name
+            // length, so pick something shorter.
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("tokio:work-{}", id)
+            })
+            .enable_all()
+            .build()?,
+    );
+
+    // Install a custom panic handler that instructs users to file a bug report.
+    // This requires that we configure tracing, so that the panic can be
+    // reported as a trace event.
+    //
+    // Avoid adding code above this point, because panics in that code won't get
+    // handled by the custom panic handler.
+    let metrics_registry = MetricsRegistry::new();
+    let mut tracing_stream = runtime.block_on(tracing::configure(&args, &metrics_registry))?;
+    panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -504,23 +594,52 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         };
         let cert = args.tls_cert.unwrap();
         let key = args.tls_key.unwrap();
-        Some(materialized::TlsConfig { mode, cert, key })
+        Some(TlsConfig { mode, cert, key })
     };
     let frontegg = args
         .frontegg_tenant
         .map(|tenant_id| {
-            FronteggAuthentication::new(
-                args.frontegg_api_token_url.unwrap(),
-                args.frontegg_jwk.unwrap().as_bytes(),
+            FronteggAuthentication::new(FronteggConfig {
+                admin_api_token_url: args.frontegg_api_token_url.unwrap(),
+                jwk_rsa_pem: args.frontegg_jwk.unwrap().as_bytes(),
                 tenant_id,
-            )
+                now: mz_ore::now::SYSTEM_TIME.clone(),
+                refresh_before_secs: 60,
+            })
         })
         .transpose()?;
+
+    // Configure orchestrator.
+    let orchestrator = match args.orchestrator {
+        None => None,
+        Some(Orchestrator::Kubernetes) => Some(OrchestratorConfig::Kubernetes {
+            config: KubernetesOrchestratorConfig {
+                context: args.kubernetes_context,
+            },
+            dataflowd_image: args.dataflowd_image.expect("clap enforced"),
+        }),
+    };
 
     // Configure storage.
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
+
+    let storage = match (
+        args.storage_workers,
+        args.storage_compute_addr,
+        args.storage_controller_addr,
+    ) {
+        (None, None, None) => StorageConfig::Local,
+        (Some(workers), Some(compute_addr), Some(controller_addr)) => {
+            StorageConfig::Remote(RemoteStorageConfig {
+                workers,
+                compute_addr,
+                controller_addr,
+            })
+        }
+        _ => unreachable!("clap enforced"),
+    };
 
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // custom telemetry domain or interval is provided, enable telemetry as
@@ -545,102 +664,11 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
-    let metrics_registry = MetricsRegistry::new();
-    // Configure tracing.
-    {
-        use tracing_subscriber::filter::{LevelFilter, Targets};
-        use tracing_subscriber::fmt;
-        use tracing_subscriber::layer::{Layer, SubscriberExt};
-        use tracing_subscriber::util::SubscriberInitExt;
-
-        let filter = Targets::from_str(&args.log_filter)
-            .context("parsing --log-filter option")?
-            // Ensure panics are logged, even if the user has specified
-            // otherwise.
-            .with_target("panic", LevelFilter::ERROR);
-
-        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
-            .register_third_party_visible(metric!(
-                name: "mz_log_message_total",
-                help: "The number of log messages produced by this materialized instance",
-                var_labels: ["severity"],
-            ));
-
-        match args.log_file.as_deref() {
-            Some("stderr") => {
-                // The user explicitly directed logs to stderr. Log only to
-                // stderr with the user-specified `filter`.
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-            log_file => {
-                // Logging to a file. If the user did not explicitly specify
-                // a file, bubble up warnings and errors to stderr.
-                let stderr_level = match log_file {
-                    Some(_) => LevelFilter::OFF,
-                    None => LevelFilter::WARN,
-                };
-                let stack = tracing_subscriber::registry()
-                    .with(
-                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
-                    )
-                    .with({
-                        let path = match log_file {
-                            Some(log_file) => PathBuf::from(log_file),
-                            None => data_directory.join("materialized.log"),
-                        };
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent).with_context(|| {
-                                format!("creating log file directory: {}", parent.display())
-                            })?;
-                        }
-                        let file = fs::OpenOptions::new()
-                            .append(true)
-                            .create(true)
-                            .open(&path)
-                            .with_context(|| format!("creating log file: {}", path.display()))?;
-                        fmt::layer()
-                            .with_ansi(false)
-                            .with_writer(move || {
-                                file.try_clone().expect("failed to clone log file")
-                            })
-                            .with_filter(filter.clone())
-                    })
-                    .with(
-                        fmt::layer()
-                            .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(stderr_level)
-                            .with_filter(filter),
-                    );
-
-                #[cfg(feature = "tokio-console")]
-                let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
-
-                stack.init()
-            }
-        }
-    }
-
     // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector(&metrics_registry);
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
-    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
         max: None,
         swap_max: None,
@@ -659,7 +687,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // we get is the log file.
     let mut system = sysinfo::System::new();
     system.refresh_system();
-    info!(
+
+    writeln!(
+        tracing_stream,
         "booting server
 materialized {mz_version}
 {dep_versions}
@@ -669,7 +699,8 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-dataflow workers: {workers}",
+dataflow workers: {workers}
+max log level: {max_log_level}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
@@ -703,7 +734,8 @@ dataflow workers: {workers}",
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
         workers = args.workers.0,
-    );
+        max_log_level = ::tracing::level_filters::LevelFilter::current(),
+    )?;
 
     sys::adjust_rlimits();
 
@@ -717,21 +749,6 @@ dataflow workers: {workers}",
         },
     );
 
-    // Start Tokio runtime.
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(ncpus_useful)
-            // The default thread name exceeds the Linux limit on thread name
-            // length, so pick something shorter.
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("tokio:work-{}", id)
-            })
-            .enable_all()
-            .build()?,
-    );
-
     // Configure persistence core.
     let persist_config = {
         let user_table_enabled = if args.experimental && args.persistent_user_tables {
@@ -741,7 +758,8 @@ dataflow workers: {workers}",
         } else {
             false
         };
-        let mut system_table_enabled = !args.disable_persistent_system_tables_test;
+        let system_table_disabled = args.disable_persistent_system_tables_test.unwrap_or(true);
+        let mut system_table_enabled = !system_table_disabled;
         if system_table_enabled && args.logical_compaction_window.is_none() {
             ::tracing::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
             system_table_enabled = false;
@@ -816,6 +834,8 @@ dataflow workers: {workers}",
         tls,
         frontegg,
         data_directory,
+        orchestrator,
+        storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
@@ -829,6 +849,7 @@ dataflow workers: {workers}",
             .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
         persist: persist_config,
+        now: SYSTEM_TIME.clone(),
     }))?;
 
     eprintln!(

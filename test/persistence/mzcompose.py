@@ -9,17 +9,20 @@
 
 import os
 import time
+from argparse import Namespace
+from typing import List, Union
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
+    Redpanda,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
 )
 
-mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-persistent-system-tables-test"
+mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-persistent-system-tables-test=true"
 
 mz_default = Materialized(options=mz_options)
 
@@ -34,12 +37,11 @@ mz_logical_compaction_window_off = Materialized(
 # See: https://github.com/MaterializeInc/materialize/issues/10488
 mz_configurations = [mz_default]
 
-prerequisites = ["zookeeper", "kafka", "schema-registry"]
-
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Redpanda(),
     mz_default,
     Testdrive(no_reset=True),
 ]
@@ -47,20 +49,51 @@ SERVICES = [
 td_test = os.environ.pop("TD_TEST", "*")
 
 
-def workflow_default(c: Composition) -> None:
+def start_deps(
+    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+) -> None:
+
+    if isinstance(args_or_parser, Namespace):
+        args = args_or_parser
+    else:
+        args_or_parser.add_argument(
+            "--redpanda",
+            action="store_true",
+            help="run against Redpanda instead of the Confluent Platform",
+        )
+        args = args_or_parser.parse_args()
+
+    if args.redpanda:
+        dependencies = ["redpanda"]
+    else:
+        dependencies = ["zookeeper", "kafka", "schema-registry"]
+
+    c.start_and_wait_for_tcp(services=dependencies)
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+    args = parser.parse_args()
+
     for mz in mz_configurations:
         with c.override(mz):
-            workflow_kafka_sources(c)
+            workflow_kafka_sources(c, args)
             workflow_user_tables(c)
 
-    workflow_disable_user_indexes(c)
+    workflow_disable_user_indexes(c, args)
     workflow_compaction(c)
 
 
-def workflow_kafka_sources(c: Composition) -> None:
-    seed = round(time.time())
+def workflow_kafka_sources(
+    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+) -> None:
+    start_deps(c, args_or_parser)
 
-    c.start_and_wait_for_tcp(services=prerequisites)
+    seed = round(time.time())
 
     c.up("materialized")
     c.wait_for_materialized("materialized")
@@ -114,8 +147,8 @@ def workflow_user_tables(c: Composition) -> None:
     c.rm_volumes("mzdata")
 
 
-def workflow_failpoints(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=prerequisites)
+def workflow_failpoints(c: Composition, parser: WorkflowArgumentParser) -> None:
+    start_deps(c, parser)
 
     for mz in mz_configurations:
         with c.override(mz):
@@ -159,10 +192,11 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     c.rm_volumes("mzdata")
 
 
-def workflow_disable_user_indexes(c: Composition) -> None:
+def workflow_disable_user_indexes(
+    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+) -> None:
+    start_deps(c, args_or_parser)
     seed = round(time.time())
-
-    c.start_and_wait_for_tcp(services=prerequisites)
 
     c.up("materialized")
     c.wait_for_materialized()

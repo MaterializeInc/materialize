@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-{{< version-added v0.5.0 >}}
+{{< version-added v0.5.0 />}}
 
 `CREATE TABLE` creates an in-memory table.
 
@@ -85,17 +85,19 @@ tables may not depend on temporary objects.
 
 ### Memory usage
 
-Every table is backed by an [index](/overview/api-components/#indexes) that
-materializes all of the data in the table. Unlike sources, tables cannot be
-"unmaterialized". Therefore you must ensure that the data you store in tables
-fits in the amount of memory you have available on your system. Remember that
-any additional indexes or derived materialized views will count against your
-memory budget.
+Tables presently store their data in memory. Therefore you must ensure that the
+data you store in tables fits in the amount of memory you have available on your
+system. Remember that any additional indexes or derived materialized views will
+count against your memory budget.
 
 If your dataset is too large to fit in memory, consider using an unmaterialized
 [source](/sql/create-source) instead. This lets you defer materialization to
 views derived from this source, which can aggregate or filter the data down to a
 manageable size.
+
+{{< version-changed v0.23.0 >}}
+Tables no longer have a mandatory default [index](/overview/api-components/#indexes).
+{{< /version-changed >}}
 
 ## Examples
 

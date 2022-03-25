@@ -22,13 +22,20 @@ INSERT INTO t2 values (null, null)
 query T multiline
 EXPLAIN SELECT row(a,b) as record from t1 union select row(a,b) as record from t2
 ----
+Source materialize.public.t1 (u1):
+| Project (#0, #1)
+
+Source materialize.public.t2 (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | Map record_create(#0, #1)
 | Project (#2)
 
 %1 =
-| Get materialize.public.t2 (u3)
+| Get materialize.public.t2 (u2)
 | Map record_create(#0, #1)
 | Project (#2)
 

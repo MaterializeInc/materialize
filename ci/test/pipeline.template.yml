@@ -142,19 +142,13 @@ steps:
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
+    timeout_in_minutes: 5
+    # https://github.com/MaterializeInc/materialize/issues/11390
+    soft_fail: true
     inputs: [test/cluster]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-
-  - id: cluster-storage-compute-smoke
-    label: Cluster with segregated storaged smoke test
-    depends_on: build-x86_64
-    inputs: [test/cluster]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          run: compute-storage-smoke
 
   - id: kafka-ssl
     label: Kafka SSL smoke test
@@ -356,6 +350,14 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
+
+  - id: metrics
+    label: mz_metrics tests
+    depends_on: build-x86_64
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: metrics
 
   - id: lang-csharp
     label: ":csharp: tests"

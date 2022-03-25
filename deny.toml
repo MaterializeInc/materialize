@@ -33,6 +33,9 @@ skip = [
 
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },
+
+    # https://github.com/tokio-rs/tokio/pull/4521
+    { name = "tokio-util", version = "0.6.9" }
 ]
 
 # Use `tracing` instead.
@@ -70,8 +73,12 @@ wrappers = [
     "aws-sig-auth",
     "flatbuffers",
     "junit-report",
+    "kube-client",
+    "kube-core",
     "mysql_async",
     "mysql_common",
+    "opentelemetry",
+    "opentelemetry-otlp",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -84,38 +91,40 @@ wrappers = [
     "simple_asn1",
     "sysctl",
     "tiberius",
+    "tungstenite",
     "zip",
 ]
 
 [[bans.deny]]
 name = "log"
 wrappers = [
-    "wasm-bindgen-backend",
-    "want",
-    "tracing-log",
-    "tracing",
-    "tokio-util",
-    "tokio-postgres",
-    "reqwest",
+    "env_logger",
+    "fail",
+    "globset",
+    "jsonpath_lib",
+    "mio",
+    # TODO(guswynn): switch to `tracing:enabled!` when its released
+    "mz-coord",
+    "mz-dataflow",
+    "native-tls",
+    "opentls",
+    "os_info",
+    "postgres",
+    "pprof",
+    "prost-build",
+    "pubnub-core",
+    "pubnub-hyper",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
-    "pubnub-hyper",
-    "pubnub-core",
-    "prost-build",
-    "pprof",
-    "postgres",
-    "os_info",
-    "opentls",
-    "native-tls",
-    "mio",
-    "globset",
-    "fail",
-    "env_logger",
-
-
-    # TODO(guswynn): switch to `tracing:enabled!` when its released
-    "mz-dataflow",
-    "mz-coord",
+    "reqwest",
+    "tokio-postgres",
+    "tokio-tungstenite",
+    "tokio-util",
+    "tracing-log",
+    "tracing",
+    "tungstenite",
+    "want",
+    "wasm-bindgen-backend",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
@@ -155,13 +164,6 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
-    # a release.
-    "https://github.com/lu-zero/autotools-rs.git",
-
-    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55
-    "https://github.com/blackbeam/rust_mysql_common.git",
-
     # Waiting on several PRs to a mostly-abandoned upstream library.
     "https://github.com/MaterializeInc/pubnub-rust.git",
 

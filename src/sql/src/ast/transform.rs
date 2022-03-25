@@ -80,10 +80,10 @@ pub fn create_stmt_rename_refs(
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
-            maybe_update_object_name(on_name);
+            maybe_update_object_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
-            maybe_update_object_name(from);
+            maybe_update_object_name(from.name_mut());
         }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },

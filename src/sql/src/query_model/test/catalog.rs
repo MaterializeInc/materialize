@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::ast::{Expr, Raw};
+use crate::ast::Expr;
 use crate::catalog::{
-    CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, CatalogTypeDetails, SessionCatalog,
+    CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
 use crate::plan::StatementDesc;
 use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
@@ -131,7 +131,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+    fn table_details(&self) -> Option<&[Expr<Aug>]> {
         unimplemented!()
     }
 
@@ -176,7 +176,7 @@ impl Default for TestCatalog {
 }
 
 impl SessionCatalog for TestCatalog {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
         "dummy"
     }
 
@@ -184,7 +184,11 @@ impl SessionCatalog for TestCatalog {
         None
     }
 
-    fn default_database(&self) -> &str {
+    fn active_database(&self) -> &str {
+        "dummy"
+    }
+
+    fn active_compute_instance(&self) -> &str {
         "dummy"
     }
 
@@ -219,6 +223,17 @@ impl SessionCatalog for TestCatalog {
             return Ok(result);
         }
         Err(CatalogError::UnknownFunction(partial_name.item.clone()))
+    }
+
+    fn resolve_compute_instance(
+        &self,
+        compute_instance_name: Option<&str>,
+    ) -> Result<&dyn CatalogComputeInstance, CatalogError> {
+        Err(CatalogError::UnknownComputeInstance(
+            compute_instance_name
+                .unwrap_or_else(|| self.active_compute_instance())
+                .into(),
+        ))
     }
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
@@ -300,9 +315,9 @@ impl TestCatalog {
                             TestCatalogItem::BaseTable {
                                 name: FullName {
                                     database: DatabaseSpecifier::from(Some(
-                                        self.default_database().to_string(),
+                                        self.active_database().to_string(),
                                     )),
-                                    schema: self.user().to_string(),
+                                    schema: self.active_user().to_string(),
                                     item: source_name,
                                 },
                                 id,

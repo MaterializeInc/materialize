@@ -756,13 +756,13 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    ScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    ScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
             AggregateFunc::StringAgg { .. } => ScalarType::String,
             AggregateFunc::RowNumber { .. } => match input_type.scalar_type {
-                ScalarType::Record { fields, .. } => ScalarType::List {
+                ScalarType::Record { ref fields, .. } => ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (
@@ -787,12 +787,22 @@ impl AggregateFunc {
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
-            _ => input_type.scalar_type,
+            _ => input_type.scalar_type.clone(),
         };
         // Count never produces null, and other aggregations only produce
         // null in the presence of null inputs.
         let nullable = match self {
             AggregateFunc::Count => false,
+            // Use the nullability of the underlying column being aggregated, not the Records wrapping it
+            AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
+                // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
+                ScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
+                    // The inner Record is a (value, separator) tuple
+                    ScalarType::Record { fields, .. } => fields[0].1.nullable,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
             _ => input_type.nullable,
         };
         scalar_type.nullable(nullable)
@@ -1242,45 +1252,105 @@ impl TableFunc {
     }
 
     pub fn output_type(&self) -> RelationType {
-        RelationType::new(match self {
-            TableFunc::JsonbEach { stringify: true } => vec![
-                ScalarType::String.nullable(false),
-                ScalarType::String.nullable(true),
-            ],
-            TableFunc::JsonbEach { stringify: false } => vec![
-                ScalarType::String.nullable(false),
-                ScalarType::Jsonb.nullable(false),
-            ],
-            TableFunc::JsonbObjectKeys => vec![ScalarType::String.nullable(false)],
+        let (column_types, keys) = match self {
+            TableFunc::JsonbEach { stringify: true } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(true),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::JsonbEach { stringify: false } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::Jsonb.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::JsonbObjectKeys => {
+                let column_types = vec![ScalarType::String.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::JsonbArrayElements { stringify: true } => {
-                vec![ScalarType::String.nullable(true)]
+                let column_types = vec![ScalarType::String.nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
             }
             TableFunc::JsonbArrayElements { stringify: false } => {
-                vec![ScalarType::Jsonb.nullable(false)]
+                let column_types = vec![ScalarType::Jsonb.nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
             }
-            TableFunc::RegexpExtract(a) => a
-                .capture_groups_iter()
-                .map(|cg| ScalarType::String.nullable(cg.nullable))
-                .collect(),
-            TableFunc::CsvExtract(n_cols) => iter::repeat(ScalarType::String.nullable(false))
-                .take(*n_cols)
-                .collect(),
+            TableFunc::RegexpExtract(a) => {
+                let column_types = a
+                    .capture_groups_iter()
+                    .map(|cg| ScalarType::String.nullable(cg.nullable))
+                    .collect();
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::CsvExtract(n_cols) => {
+                let column_types = iter::repeat(ScalarType::String.nullable(false))
+                    .take(*n_cols)
+                    .collect();
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::GenerateSeriesInt32 => {
-                vec![ScalarType::Int32.nullable(false)]
+                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let keys = vec![vec![0]];
+                (column_types, keys)
             }
             TableFunc::GenerateSeriesInt64 => {
-                vec![ScalarType::Int64.nullable(false)]
+                let column_types = vec![ScalarType::Int64.nullable(false)];
+                let keys = vec![vec![0]];
+                (column_types, keys)
             }
-            TableFunc::GenerateSeriesTimestamp => vec![ScalarType::Timestamp.nullable(false)],
-            TableFunc::GenerateSeriesTimestampTz => vec![ScalarType::TimestampTz.nullable(false)],
+            TableFunc::GenerateSeriesTimestamp => {
+                let column_types = vec![ScalarType::Timestamp.nullable(false)];
+                let keys = vec![vec![0]];
+                (column_types, keys)
+            }
+            TableFunc::GenerateSeriesTimestampTz => {
+                let column_types = vec![ScalarType::TimestampTz.nullable(false)];
+                let keys = vec![vec![0]];
+                (column_types, keys)
+            }
             TableFunc::GenerateSubscriptsArray => {
-                vec![ScalarType::Int32.nullable(false)]
+                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let keys = vec![vec![0]];
+                (column_types, keys)
             }
-            TableFunc::Repeat => vec![],
-            TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
-            TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
-            TableFunc::Wrap { types, .. } => types.clone(),
-        })
+            TableFunc::Repeat => {
+                let column_types = vec![];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::UnnestArray { el_typ } => {
+                let column_types = vec![el_typ.clone().nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::UnnestList { el_typ } => {
+                let column_types = vec![el_typ.clone().nullable(true)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::Wrap { types, .. } => {
+                let column_types = types.clone();
+                let keys = vec![];
+                (column_types, keys)
+            }
+        };
+
+        if !keys.is_empty() {
+            RelationType::new(column_types).with_keys(keys)
+        } else {
+            RelationType::new(column_types)
+        }
     }
 
     pub fn output_arity(&self) -> usize {

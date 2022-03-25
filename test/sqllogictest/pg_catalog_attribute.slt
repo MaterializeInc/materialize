@@ -73,11 +73,11 @@ SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_
 701  c_float8
 1000  c__bool
 1001  c__bytea
+1002  c__char
 1005  c__int2
 1007  c__int4
 1008  c__regproc
 1009  c__text
-1014  c__char
 1014  c__bpchar
 1015  c__varchar
 1016  c__int8
@@ -103,3 +103,9 @@ SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_
 2951  c__uuid
 3802  c_jsonb
 3807  c__jsonb
+
+# Generated queries are unsupported
+query B
+SELECT DISTINCT(attgenerated = '') FROM pg_attribute
+----
+true

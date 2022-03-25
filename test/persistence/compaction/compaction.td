@@ -10,6 +10,9 @@
 #
 # Smoke tests that verify compaction occurs as expected.
 #
+# Right now this test only verifies that user tables are hooked up together properly
+# and will compact stored data. There's more detailed tests that check exactly
+# how the persist codebase does compaction in src/persist.
 
 $ set-sql-timeout duration=30s
 
@@ -21,144 +24,28 @@ $ set-sql-timeout duration=30s
     WHERE metric = grp.metric
     ORDER BY time DESC LIMIT 1)
 
-# At the beginning there are no trace batches.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
+> CREATE TABLE compaction (f1 TEXT);
+
+# At the beginning there's fewer than 200 bytes in the stored arrangement.
+> SELECT value < 200 AS result FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_bytes'
+result
 -----
-0
+true
 
-> CREATE TABLE compaction (f1 INTEGER);
+# Insert over 1 MiB of data.
+> INSERT INTO compaction VALUES (repeat('this is a compaction test. ', 50000));
 
-> INSERT INTO compaction VALUES (1);
-
-# The insert should make it into trace, and form 1 trace batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
+# There's at least 1 MiB in the stored arrangement.
+> SELECT value > 1 << 20 AS result FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_bytes'
+result
 -----
-1
+true
 
-# Read after write to coerce different writes to happen at different timestamps.
-> SELECT * FROM compaction
-f1
-----
-1
+# Delete all the values from the table.
+> DELETE FROM compaction;
 
-> INSERT INTO compaction VALUES (2);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-
-# The previous insert should get compacted into one batch with the one before it.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
+# After deletion and compaction there's fewer than 200 bytes in the stored arrangement.
+> SELECT value < 200 AS result FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_bytes'
+result
 -----
-1
-
-> INSERT INTO compaction VALUES (3);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-
-# The most recent insert forms a new batch because it is at a lower compaction level.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-2
-
-> INSERT INTO compaction VALUES (4);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-4
-
-# The previous insert should compact together with the previous batch, which then compacts recursively
-# up, leaving just one batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-1
-
-> INSERT INTO compaction VALUES (5);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-4
-5
-
-# The previous insert forms a new batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-2
-
-> INSERT INTO compaction VALUES (6);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-4
-5
-6
-
-# The previous insert gets merged together with the one just before it.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-2
-
-> INSERT INTO compaction VALUES (7);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-4
-5
-6
-7
-
-# The previous insert forms a new batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-3
-
-> INSERT INTO compaction VALUES (8);
-
-> SELECT * FROM compaction
-f1
-----
-1
-2
-3
-4
-5
-6
-7
-8
-
-# All of the previously inserted batches get compacted together into one batch.
-> SELECT value FROM most_recent_mz_metrics where metric = 'mz_persist_trace_blob_count'
-value
------
-1
+true

@@ -164,7 +164,7 @@ extra_lints=(
     # suggest better alternatives
     # See `clippy.toml` for more info
     # TODO(guswynn): renamed this to `disallowed_methods` when we upgrade
-    clippy::disallowed_method
+    clippy::disallowed_methods
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

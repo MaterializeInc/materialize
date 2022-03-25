@@ -37,6 +37,7 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
@@ -44,6 +45,7 @@ use md5::{Digest, Md5};
 use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use postgres_protocol::types;
 use regex::Regex;
@@ -305,6 +307,9 @@ impl<'a> FromSql<'a> for Slt {
         Ok(match *ty {
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
+            PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
+                types::char_from_sql(raw)?.to_be_bytes(),
+            ))),
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
             PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
@@ -380,6 +385,7 @@ impl<'a> FromSql<'a> for Slt {
             *ty,
             PgType::BOOL
                 | PgType::BYTEA
+                | PgType::CHAR
                 | PgType::DATE
                 | PgType::FLOAT4
                 | PgType::FLOAT8
@@ -502,9 +508,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
-            let mut buf: String = "".into();
+            let mut buf = BytesMut::new();
             d.encode_text(&mut buf);
-            buf
+            String::from_utf8_lossy(&buf).into_owned()
         }
 
         (Type::Oid, Value::Oid(o)) => o.to_string(),
@@ -551,6 +557,8 @@ impl Runner {
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
+            storage: materialized::StorageConfig::Local,
+            orchestrator: None,
             aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
@@ -563,6 +571,7 @@ impl Runner {
             metrics_registry: MetricsRegistry::new(),
             persist: PersistConfig::disabled(),
             third_party_metrics_listen_addr: None,
+            now: SYSTEM_TIME.clone(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

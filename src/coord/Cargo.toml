@@ -3,7 +3,7 @@ name = "mz-coord"
 description = "Coordinates client requests with the dataflow layer."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
@@ -13,12 +13,13 @@ bincode = { version = "1.3.3", optional = true }
 byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 const_format = "0.2.22"
-crossbeam-channel = "0.5.2"
+crossbeam-channel = "0.5.3"
 dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
+hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 log = "0.4.13"
@@ -39,6 +40,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-transform = { path = "../transform" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+prost = "0.9.0"
 protobuf-native = "0.2.1"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
@@ -52,7 +54,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.17.0", features = ["rt"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = "0.1.8"
-tracing = "0.1.31"
+tracing = "0.1.32"
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["v4"] }

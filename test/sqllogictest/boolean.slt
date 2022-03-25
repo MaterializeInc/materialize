@@ -234,8 +234,12 @@ EXPLAIN PLAN FOR SELECT
   NOT(j @> '{}'::JSONB)
 FROM x
 ----
+Source materialize.public.x (u2):
+| Project (#0..=#3)
+
+Query:
 %0 =
-| Get materialize.public.x (u3)
+| Get materialize.public.x (u2)
 | Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), !((#2 @> {}))
 | Project (#4..=#9, #3, #10)
 
@@ -250,8 +254,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN a ELSE a END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Project (#0)
 
 EOF
@@ -262,8 +270,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN NULL ELSE true END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#1)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Map (null || (!(#1) || isnull(#1)))
 | Project (#2)
 
@@ -276,8 +288,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN NULL ELSE false END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#1)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Map (null && (#1 && !(isnull(#1))))
 | Project (#2)
 
@@ -289,8 +305,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN true ELSE NULL END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#1)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Map (null || (#1 && !(isnull(#1))))
 | Project (#2)
 
@@ -302,8 +322,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN false ELSE NULL END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#1)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Map (null && (!(#1) || isnull(#1)))
 | Project (#2)
 
@@ -314,8 +338,12 @@ EXPLAIN PLAN FOR SELECT
   CASE WHEN b THEN false ELSE TRUE END
 FROM y
 ----
+Source materialize.public.y (u3):
+| Project (#1)
+
+Query:
 %0 =
-| Get materialize.public.y (u5)
+| Get materialize.public.y (u3)
 | Map (!(#1) || isnull(#1))
 | Project (#2)
 
@@ -332,8 +360,13 @@ EXPLAIN PLAN FOR SELECT *
 FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END
 ----
+Source materialize.public.z (u4):
+| Filter ((isnull(#0) || isnull(#1)) || (#0 <= #1))
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.z (u7)
+| Get materialize.public.z (u4)
 | Filter ((isnull(#0) || isnull(#1)) || (#0 <= #1))
 
 EOF

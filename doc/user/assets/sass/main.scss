@@ -38,6 +38,13 @@ $secondary-gradient-v2: linear-gradient(277.43deg, #4512C7 -97.28%, #59C3FF 15.8
 $purple-gradient-v2: linear-gradient(102.5deg, #5A34CB 17.99%, #9B34CB 59.07%);
 $transparent-v2: #FFFFFF00;
 
+$border-radius: 4px;
+
+$success: #13D461;
+$progress: #D1FA77;
+$warning: #EE8660;
+$danger: #e5375e;
+
 @import "reset";
 @import "content";
 @import "layout";

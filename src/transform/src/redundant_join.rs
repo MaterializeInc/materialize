@@ -433,7 +433,9 @@ impl ProvInfo {
                     None
                 }
             }
-            MirScalarExpr::Literal(..) | MirScalarExpr::CallNullary(..) => Some(expr.clone()),
+            MirScalarExpr::Literal(..) | MirScalarExpr::CallUnmaterializable(..) => {
+                Some(expr.clone())
+            }
             MirScalarExpr::If { cond, then, els } => self.dereference(cond).and_then(|cond| {
                 self.dereference(then).and_then(|then| {
                     self.dereference(els).and_then(|els| {
@@ -658,7 +660,9 @@ fn try_build_expression_using_other(
                 None
             }
         }
-        MirScalarExpr::Literal(..) | MirScalarExpr::CallNullary(..) => Some(root_expr.clone()),
+        MirScalarExpr::Literal(..) | MirScalarExpr::CallUnmaterializable(..) => {
+            Some(root_expr.clone())
+        }
         MirScalarExpr::If { cond, then, els } => {
             try_build_expression_using_other(cond, other, other_prov, input_mapper).and_then(
                 |cond| {

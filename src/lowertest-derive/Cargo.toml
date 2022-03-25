@@ -3,7 +3,7 @@ name = "mz-lowertest-derive"
 description = "Macros to support unit testing of lower parts of the stack"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [lib]
@@ -12,4 +12,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0.36"
 quote = "1.0.14"
-syn = { version = "1.0.86", features = ["extra-traits", "printing"] }
+syn = { version = "1.0.89", features = ["extra-traits", "printing"] }

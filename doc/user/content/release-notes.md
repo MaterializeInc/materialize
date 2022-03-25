@@ -19,6 +19,176 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
+{{% version-header v0.24.0 %}}
+
+- Restore the documented behavior of the
+  [`--differential-idle-merge-effort`](/cli/#dataflow-tuning)
+  and [`--timely-progress-mode`](/cli/#dataflow-tuning)
+  command line flags {{% gh 11256 %}}.
+
+  Due to a bug, these parameters were silently ignored between v0.9.13
+  and v0.23.0.
+
+- Fix a bug where a statement descriptor could change before execution,
+  resulting in an error or a crash {{% gh 11214 11258 %}}.
+
+- Limit the views in the [`pg_catalog`](/sql/system-catalog#pg_catalog) schema
+  to reflect the state of only the current database {{% gh 11292 %}}. The new
+  behavior matches PostgreSQL.
+
+{{% version-header v0.23.0 %}}
+
+- **Breaking change.** Change the default [listen address](/cli/#listen-address)
+  to `127.0.0.1:6875`.
+
+  Previously, Materialize would accept HTTP and SQL connections from any machine
+  on the network by default; now it accepts HTTP and SQL connections from only
+  the local machine by default. To return to the old behavior, specify the
+  command line flag `--listen-addr=0.0.0.0:6875`.
+
+  The `materialized` [Docker image](/install/#docker) continues to use a
+  listen address of `0.0.0.0:6875` by default.
+
+- Improve PostgreSQL compatibility:
+
+  - Add the `pg_collation`, `pg_inherits`, and `pg_policy` relations to the
+    [`pg_catalog`](/sql/system-catalog#pg_catalog) schema.
+
+  - Add several columns to the existing `pg_attribute`, `pg_class`, `pg_index`,
+    and `pg_type` relations in the
+    [`pg_catalog`](/sql/system-catalog#pg_catalog) schema.
+
+  - Add the [`pg_get_indexdef`](/sql/functions/#pg_get_indexdef) function.
+
+  - Change the [`pg_get_constraintdef`](/sql/functions/#pg_get_constraintdef)
+    function to always return `NULL` instead of raising an error.
+
+  - Add a `USING <method>` clause to [`CREATE INDEX`], with
+    [`arrangement`](/overview/arrangements) as the only valid method.
+
+  Together these changes enable support for [Apache Superset] and the
+  `\d <object>` command in the  [psql terminal](/connect/cli).
+
+- Support calling [`date_trunc`](/sql/functions/#date_trunc) with
+  [`interval`](/sql/types/interval) values {{% gh 9871 %}}.
+
+- Remove the mandatory default index on [tables](/sql/create-table/#memory-usage).
+
+- Fix a crash when calling [`array_to_string`](/sql/functions/#array_to_string)
+  with an empty array {{% gh 11073 %}}.
+
+- Fix an error when calling [`string_agg`](/sql/functions/#string_agg) with
+  all `NULL` inputs {{% gh 11139 %}}.
+
+- Include information about the experimental
+  [cluster feature](/overview/api-components/#clusters) in
+  [`SHOW INDEX`](/sql/show-index) and [`SHOW SINKS`](/sql/show-sinks).
+
+- Improve recovery of [Postgres sources](/sql/create-source/postgres) when
+  errors occur during initial data loading {{% gh 10938 %}}.
+
+- Make [`CREATE VIEWS`](/sql/create-views) on a [Postgres
+  source](/sql/create-source/postgres) resilient to changes to the upstream
+  publication that are made after the the source is created. {{% gh 11083 %}}
+
+{{% version-header v0.22.0 %}}
+
+- **Breaking change.** Standardize handling of the following [unmaterializable
+  functions](/sql/functions/#unmaterializable-functions) {{% gh 10445 %}}:
+
+  - `current_database`
+  - `current_timestamp`
+  - `current_role`
+  - `current_schema`
+  - `current_schemas`
+  - `current_user`
+  - `mz_cluster_id`
+  - `mz_logical_timestamp`
+  - `mz_uptime`
+  - `mz_version`
+  - `session_user`
+  - `pg_backend_pid`
+  - `pg_postmaster_start_time`
+  - `version`
+
+  Materialize now allows use of unmaterializable functions in views, but will
+  refuse to create an index that directly or indirectly depends on a
+  unmaterializable function. The one exception is [`mz_logical_timestamp`],
+  which can be used in limited contexts in a materialized view as a [temporal
+  filter](/guides/temporal-filters).
+
+  Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
+  incorrectly disallowed in unmaterialized views, while the remaining
+  unmaterializable functions were incorrectly allowed in materialized views.
+
+- **Breaking change.** Store days separately in [`interval`]. Unlike in previous
+  versions, hours are not automatically converted to days. This means that: an
+  interval of 24 hours will not be equal to an interval of 1 day, you cannot
+  subtract hours from days, and when ordering intervals `d days > h hours` for
+  all `d` and `h` {{% gh 10708 %}}.
+
+  To force a conversion from hours to days, use the new
+  [`justify_hours`](/sql/functions/justify-hours) function.
+
+- **Breaking change.** Print all negative [`interval`] units as plural (e.g.,
+  `-1 days` will be printed instead of `-1 day`). This matches the behavior of
+  PostgreSQL.
+
+- **Breaking change.** Round microsecond field of [`interval`] to 6 places
+  before applying the given precision. For example `INTERVAL '1.2345649'
+  SECOND(5)` will be rounded to `00:00:01.23457`, not `00:00:01.23456`. This
+  matches the behavior of PostgreSQL.
+
+- Add several new time units to [`interval`](/sql/types/interval) parsing:
+  `yr`, `yrs`, `hr`, `hrs`, `min`, `mins`, `sec`, and `secs`.
+
+  Thanks to external contributor [@sunisdown](https://github.com/sunisdown).
+
+- Add the [`justify_days`](/sql/functions/justify-days),
+  [`justify_hours`](/sql/functions/justify-hours),
+  and [`justify_interval`](/sql/functions/justify-interval) functions.
+
+- Add support for [named composite types](/sql/create-type/#custom-row-type).
+  Unimplemented features are listed in the original issue {{% gh 10734 %}}.
+
+- Change the range of the [`oid`] type from [-2<sup>31</sup>, 2<sup>31</sup> - 1]
+  to [0, 2<sup>32</sup> - 1] to match PostgreSQL.
+
+- Change the claimed PostgreSQL version returned by the
+  [`version()`](/sql/functions#system-information-func) function to 9.5 to
+  match the values of the `server_version` and `server_version_num` session
+  parameters.
+
+- In Kafka sources that use `INCLUDE KEY`, allow the key schema to be directly
+  provided by the Confluent Schema Registry using the bare `FORMAT` syntax:
+
+  ```sql
+  CREATE SOURCE src
+  FROM KAFKA BROKER '...' TOPIC '...'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '...'
+  INCLUDE KEY AS named;
+  ```
+
+  Previously, this required explicitly using the `KEY FORMAT ... VALUE FORMAT`
+  syntax when _also_ using the Confluent Schema Registry.
+
+- Allow specifying the same [command line flag](/cli/) multiple times. The last
+  specification takes precedence. This matches the behavior of many standard
+  Unix tools and is particularly useful for folks using `materialized` via
+  Docker, as it allows overwriting the default `--log-file` option.
+
+- Fix a panic that could occur if you rematerialized a source that had
+  previously been materialized under a different name, e.g. via the following
+  sequence of operations {{% gh 10904 %}}:
+
+  - `CREATE SOURCE src ...;`
+  - `CREATE INDEX src_idx ON src ...;`
+  - `ALTER src RENAME TO new_src;`
+  - `DROP INDEX src_idx;`
+  - `CREATE INDEX new_src_idx ON new_src ...;`
+
+- Fix a data loss bug in [Postgres sources] introduced in v0.20.0 {{% gh 10981 %}}.
+
 {{% version-header v0.21.0 %}}
 
 - **Breaking change.** Return an empty list for slice operations that yield no
@@ -431,7 +601,7 @@ Improve PostgreSQL compatibility:
   function.
 
 - Avoid crashing when executing certain queries involving the
-  [`mz_logical_timestamp`](/sql/functions/#date-and-time-func) function
+  [`mz_logical_timestamp`] function
   {{% gh 9504 %}}.
 
 {{% version-header v0.11.0 %}}
@@ -479,7 +649,7 @@ Improve PostgreSQL compatibility:
   of our intermediate representations. These queries now report an internal
   error of the form "exceeded recursion limit of {X}".
 
-- Correctly autogenerate views from Postgres sources during [`CREATE
+- Correctly autogenerate views from [Postgres sources] during [`CREATE
   VIEWS`](/sql/create-source/postgres/#creating-replication-views) when the upstream table
   contains numeric columns with no specified scale and precision {{% gh 9268
   %}}.
@@ -786,11 +956,11 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 {{% version-header v0.8.2 %}}
 
-- Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
+- Stabilized [Postgres sources] (no longer require
   `--experimental`)
 
 - **Breaking change.** `HOST` keyword when creating
-  [postgres sources](/sql/create-source/postgres/#syntax) has been renamed to
+  [Postgres sources] has been renamed to
   `CONNECTION`.
 
 - Record the initial high watermark offset on the broker for Kafka sources. This
@@ -1947,6 +2117,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
+[`mz_logical_timestamp`]: /sql/functions/#date-and-time-func
 [`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid/
 [`real`]: /sql/types/float4
@@ -1958,6 +2129,8 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`time`]: /sql/types/time
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamptz
+[Apache Superset]: https://superset.apache.org
+[Postgres sources]: /sql/create-source/postgres
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY

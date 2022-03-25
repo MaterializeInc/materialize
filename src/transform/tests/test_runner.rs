@@ -28,7 +28,7 @@ mod tests {
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::str::separated;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use mz_transform::{Optimizer, Transform, TransformArgs};
+    use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
 
     // Global options
@@ -123,13 +123,12 @@ mod tests {
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
         let mut id_gen = Default::default();
-        let indexes = HashMap::new();
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(
                 &mut rel,
                 TransformArgs {
                     id_gen: &mut id_gen,
-                    indexes: &indexes,
+                    indexes: &EmptyIndexOracle,
                 },
             )?;
         }
@@ -143,7 +142,7 @@ mod tests {
                         &mut rel,
                         TransformArgs {
                             id_gen: &mut id_gen,
-                            indexes: &indexes,
+                            indexes: &EmptyIndexOracle,
                         },
                     )?;
                 }
@@ -167,7 +166,7 @@ mod tests {
                             &mut rel,
                             TransformArgs {
                                 id_gen: &mut id_gen,
-                                indexes: &indexes,
+                                indexes: &EmptyIndexOracle,
                             },
                         )?;
 
@@ -236,6 +235,7 @@ mod tests {
             "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
                 limit: None,
             })),
+            "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::map_lifting::LiteralLifting::default(),

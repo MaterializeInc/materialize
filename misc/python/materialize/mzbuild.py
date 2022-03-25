@@ -724,9 +724,19 @@ class Repository:
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
+            if path == str(root / "misc"):
+                dirs.remove("python")
             # Filter out some particularly massive ignored directories to keep
             # things snappy. Not required for correctness.
-            dirs[:] = set(dirs) - {".git", "target", "mzdata", "node_modules"}
+            dirs[:] = set(dirs) - {
+                ".git",
+                "target",
+                "target-ra",
+                "target-xcompile",
+                "mzdata",
+                "node_modules",
+                "venv",
+            }
             if "mzbuild.yml" in files:
                 image = Image(self.rd, Path(path))
                 if not image.name:

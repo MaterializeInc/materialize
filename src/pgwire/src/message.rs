@@ -270,9 +270,9 @@ pub enum TransactionStatus {
     Failed,
 }
 
-impl From<&CoordTransactionStatus> for TransactionStatus {
+impl<T> From<&CoordTransactionStatus<T>> for TransactionStatus {
     /// Convert from the Session's version
-    fn from(status: &CoordTransactionStatus) -> TransactionStatus {
+    fn from(status: &CoordTransactionStatus<T>) -> TransactionStatus {
         match status {
             CoordTransactionStatus::Default => TransactionStatus::Idle,
             CoordTransactionStatus::Started(_) => TransactionStatus::InTransaction,
@@ -381,7 +381,6 @@ impl ErrorResponse {
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
-            CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
             CoordError::Internal(_) => SqlState::INTERNAL_ERROR,
             CoordError::InvalidRematerialization { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,

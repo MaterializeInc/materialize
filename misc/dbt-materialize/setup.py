@@ -26,7 +26,7 @@ setup(
     # dbt-postgres version, change version_suffix to ".post1", ".post2", etc.
     #
     # If you bump this version, bump it in __version__.py too.
-    version="1.0.1.post3",
+    version="1.0.3.post1",
     description="The Materialize adapter plugin for dbt (data build tool).",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
@@ -41,7 +41,7 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres==1.0.1"],
+    install_requires=["dbt-postgres==1.0.3"],
     extras_require={
         "dev": ["pytest-dbt-adapter==0.6.0"],
     },

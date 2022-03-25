@@ -16,6 +16,13 @@ CreatedTable {
 }
 
 sql
+CREATE DEFAULT INDEX t_primary_idx ON t
+----
+CreatedIndex {
+    existed: false,
+}
+
+sql
 ALTER INDEX t_primary_idx SET (logical_compaction_window = '1ms')
 ----
 AlteredObject(

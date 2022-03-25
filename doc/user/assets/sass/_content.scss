@@ -166,6 +166,7 @@ a {
     text-align: left;
     padding: 8px;
     font-size: 0.8125rem;
+    vertical-align: bottom;
   }
 
   td {
@@ -615,6 +616,122 @@ pre {
             left: 0;
             right: 0;
             position: absolute;
+        }
+    }
+}
+
+.default_button {
+    padding: 7px 5px 6px 5px;
+    border: none;
+    color: $dark-black-v2;
+    background-color: $grey-light;
+    height: 28px;
+    padding: 0 12px;
+    cursor: pointer;
+    border-radius: $border-radius;
+    white-space: nowrap;
+
+    &:hover {
+        background: $grey;
+    }
+
+    &.success {
+        background-color: $light-purple-v2;
+    }
+}
+td > .default_button {
+    margin-top: 6px;
+}
+
+#subscribe_dialog {
+    display: none;
+    z-index: 10;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background-color: $purple-v2;
+    padding: 6px;
+    border-radius: $border-radius;
+    box-shadow: 0 1px 1px #00000011, 0 2px 2px #00000011, 0 4px 4px #00000011, 0 8px 8px #00000011, 0 16px 16px #00000011;
+
+    form {
+        display: flex;
+
+        input[type="email"] {
+            padding: 7px 5px 6px 5px;
+            border-radius: $border-radius;
+            border: none;
+            margin-right: 4px;
+        }
+
+        input[type="submit"] {
+            background-color: $white-v2;
+            padding: 7px 18px 6px 18px;
+        }
+    }
+
+    .disclaimer {
+        width: 100%;
+        color: #FFF;
+        padding: 4px 8px;
+        font-size: 12px;
+        border-bottom-left-radius: $border-radius;
+        border-bottom-right-radius: $border-radius;
+    }
+}
+
+.subscribe_dialog_active {
+    position: relative;
+
+    #subscribe_dialog {
+        display: block;
+    }
+}
+
+.level-of-support {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    position: relative;
+    top: 5px;
+
+    &.level-production {
+        color: $success;
+    }
+
+     &.level-alpha, &.level-beta {
+        color: $progress;
+    }
+
+    &.level-in-development {
+        color: $warning;
+    }
+
+    &.level-researching, &.level-not-supported {
+        color: $danger;
+    }
+}
+
+.copy_button {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-family: 'Encode Sans Expanded';
+    font-size: 0.8rem;
+    line-height: 2;
+    &.success {
+        opacity:0.8;
+        background: #70F2A3;
+    }
+}
+
+pre {
+    position: relative;
+
+    &:hover {
+        .copy_button {
+            display: inline-block;
         }
     }
 }

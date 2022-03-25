@@ -186,6 +186,23 @@ change data capture (CDC) producers for the given source or view.
 Currently, Materialize only supports sending sink data to Kafka or Avro OCFs,
 encoded in Avro with the [Debezium diff envelope](/sql/create-sink#debezium-envelope-details).
 
+## Clusters
+
+{{< experimental >}}
+The concept of a cluster
+{{< /experimental >}}
+
+A cluster is a set of compute resources that have been allocated to maintain
+indexes and sinks. The `materialized` process provides one virtual cluster named
+`default` that represents the compute resources of the local machine. In
+a forthcoming version of [Materialize Cloud](/cloud), you will be able to
+dynamically create and drop clusters to allocate and deallocate compute
+resources on demand.
+
+Clusters are still under active development and are not yet meant for general
+use. They are described here because some non-experimental features (e.g.,
+[`SHOW INDEX`](/sql/show-indexes)) already make reference to clusters.
+
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)

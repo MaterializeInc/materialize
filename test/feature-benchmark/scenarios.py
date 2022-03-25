@@ -7,13 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+from math import ceil
 from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 
-from materialize.feature_benchmark.action import Action, Kgen, Lambda, TdAction
-from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
-from materialize.feature_benchmark.scenario import Scenario, ScenarioBig
+from materialize.feature_benchmark.action import Action, Kgen, LambdaAction, TdAction
+from materialize.feature_benchmark.measurement_source import (
+    Lambda,
+    MeasurementSource,
+    Td,
+)
+from materialize.feature_benchmark.scenario import (
+    BenchmarkingSequence,
+    Scenario,
+    ScenarioBig,
+)
 
 
 class FastPath(Scenario):
@@ -72,7 +82,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 100)
+            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
@@ -157,6 +167,8 @@ class Update(DML):
                 f"""
 > CREATE TABLE t1 (f1 BIGINT);
 
+> CREATE DEFAULT INDEX ON t1;
+
 > INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
 """
             ),
@@ -171,6 +183,38 @@ class Update(DML):
 
 > UPDATE t1 SET f1 = f1 + {self.n()}
   /* B */
+"""
+        )
+
+
+class UpdateMultiNoIndex(DML):
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+
+    def before(self) -> Action:
+        # Due to exterme variability in the results, we have no option but to drop and re-create
+        # the table prior to each measurement
+        return TdAction(
+            f"""
+> DROP TABLE IF EXISTS t1;
+
+> CREATE TABLE t1 (f1 BIGINT);
+
+> INSERT INTO t1 SELECT * FROM generate_series(0, {self.n()})
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> SELECT 1
+  /* A */
+1
+
+> UPDATE t1 SET f1 = f1 + {self.n()}
+
+> SELECT COUNT(*) FROM t1 WHERE f1 > {self.n()}
+  /* B */
+{self.n()}
 """
         )
 
@@ -551,12 +595,13 @@ true
 
 class KafkaEnvelopeNoneBytes(Kafka):
     def shared(self) -> Action:
+        data = "a" * 512
         return TdAction(
             f"""
 $ kafka-create-topic topic=kafka-envelope-none-bytes
 
 $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
-12345678901234567890123456789012345678901234567890
+{data}
 """
         )
 
@@ -564,12 +609,12 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
         return Td(
             f"""
 > DROP SOURCE IF EXISTS s1;
-  /* A */
 
 > CREATE MATERIALIZED SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
+  /* A */
 
 > SELECT COUNT(*) = {self.n()} FROM s1
   /* B */
@@ -678,7 +723,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
         )
 
     def before(self) -> Action:
-        return Lambda(lambda e: e.RestartMz())
+        return LambdaAction(lambda e: e.RestartMz())
 
     def benchmark(self) -> MeasurementSource:
         return Td(
@@ -752,7 +797,7 @@ true
         )
 
     def before(self) -> Action:
-        return Lambda(lambda e: e.RestartMz())
+        return LambdaAction(lambda e: e.RestartMz())
 
     def benchmark(self) -> MeasurementSource:
         return Td(
@@ -1041,3 +1086,110 @@ class ConnectionLatency(Coordinator):
 1
 """
         )
+
+
+class Startup(Scenario):
+    pass
+
+
+class StartupEmpty(Startup):
+    """Measure the time it takes to restart an empty Mz instance."""
+
+    def benchmark(self) -> BenchmarkingSequence:
+        return [
+            Lambda(lambda e: e.RestartMz()),
+            Td(
+                f"""
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
+
+
+class StartupLoaded(Startup):
+    """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
+
+    # Create 10^1.2 ~ 15 objects of each kind
+    # The usable SCALE value is limited by https://github.com/MaterializeInc/materialize/issues/11332
+    SCALE = 1.2
+
+    def shared(self) -> Action:
+        return TdAction(
+            self.schema()
+            + f"""
+$ kafka-create-topic topic=startup-time
+
+$ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true repeat=1
+{{"f2": 1}}
+"""
+        )
+
+    def init(self) -> Action:
+        create_tables = "\n".join(
+            f"> CREATE TABLE t{i} (f1 INTEGER);\n> INSERT INTO t{i} DEFAULT VALUES;"
+            for i in range(0, self.n())
+        )
+        create_sources = "\n".join(
+            f"""
+> CREATE MATERIALIZED SOURCE source{i}
+  FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-startup-time-${{testdrive.seed}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  ENVELOPE NONE
+"""
+            for i in range(0, self.n())
+        )
+        join = " ".join(
+            f"LEFT JOIN source{i} USING (f2)" for i in range(1, (ceil(self.scale())))
+        )
+
+        create_views = "\n".join(
+            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            for i in range(0, self.n())
+        )
+
+        create_sinks = "\n".join(
+            f"""
+> CREATE SINK sink{i} FROM source{i}
+  INTO KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-sink-output-${{testdrive.seed}}'
+  KEY (f2)
+  WITH (reuse_topic=true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+"""
+            for i in range(0, self.n())
+        )
+
+        return TdAction(
+            f"""
+{create_tables}
+{create_sources}
+{create_views}
+{create_sinks}
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        check_tables = "\n".join(
+            f"> SELECT COUNT(*) >= 0 FROM t{i}\ntrue" for i in range(0, self.n())
+        )
+        check_sources = "\n".join(
+            f"> SELECT COUNT(*) > 0 FROM source{i}\ntrue" for i in range(0, self.n())
+        )
+        check_views = "\n".join(
+            f"> SELECT COUNT(*) > 0 FROM v{i}\ntrue" for i in range(0, self.n())
+        )
+
+        return [
+            Lambda(lambda e: e.RestartMz()),
+            Td(
+                f"""
+{check_views}
+{check_sources}
+{check_tables}
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]

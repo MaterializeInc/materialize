@@ -21,7 +21,7 @@ use mz_ore::result::ResultExt;
 use mz_repr::adt::char::{format_str_trim, Char, CharLength};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::system::Oid;
+use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
@@ -32,6 +32,14 @@ sqlfunc!(
     #[sqlname = "strtobool"]
     fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
         strconv::parse_bool(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtopglegacychar"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
+        PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
     }
 );
 

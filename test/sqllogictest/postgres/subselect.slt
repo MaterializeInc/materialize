@@ -18,6 +18,10 @@
 # license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+# RT File sources don't work with SLT, as we cannot guarantee that they have been
+# fully ingested at any time other than Timestamp::MAX.
+halt
+
 mode cockroach
 
 statement ok

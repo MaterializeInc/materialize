@@ -22,11 +22,15 @@ First, launch the server:
     $ bin/pyactivate -m materialize.cli.mock_telemetry_server
 
 This generates a self-signed SSL certificate named "localhost.crt" in the
-current directory.
+current directory. You'll need to tell your system to trust this certificate.
+On macOS, add the certificate to the "login" keychain and mark the certificate
+as always trusted. On Linux, set the `SSL_CERT_FILE` environment variable:
+
+    $ export SSL_CERT_FILE=localhost.crt
 
 In another terminal, launch Materialize:
 
-    $ SSL_CERT_FILE=localhost.crt cargo run -- --dev --telemetry-domain localhost:4000 --telemetry-interval 5s
+    $ cargo run -- --dev --telemetry-domain localhost:4000 --telemetry-interval 5s
 
 Notice how we configure Materialize to target the mock telemetry server. The
 SSL_CERT_FILE environment variable instructs OpenSSL to trust the self-signed
@@ -85,7 +89,7 @@ if __name__ == "__main__":
     else:
         print("Generating self-signed cert for localhost...")
         os.system(
-            "openssl req -nodes -x509 -keyout localhost.crt -out localhost.crt -subj '/CN=localhost'"
+            "openssl req -nodes -x509 -newkey rsa:4096 -keyout localhost.crt -out localhost.crt -subj '/CN=localhost'"
         )
 
     cargo_workspace = Workspace(ROOT)

@@ -52,6 +52,10 @@ EXPLAIN PLAN FOR SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 3)
 ----
+Source materialize.public.cities (u1):
+| Project (#0..=#2)
+
+Query:
 %0 =
 | Get materialize.public.cities (u1)
 | TopK group=(#1) order=(#2 desc) limit=3 offset=0
@@ -64,6 +68,10 @@ EXPLAIN PLAN FOR SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp
     LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
 ----
+Source materialize.public.cities (u1):
+| Project (#0..=#2)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.cities (u1)
 | TopK group=(#1) order=(#2 desc) limit=3 offset=0
@@ -117,6 +125,10 @@ EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
     )
     GROUP BY state
 ----
+Source materialize.public.cities (u1):
+| Project (#1, #2)
+
+Query:
 %0 =
 | Get materialize.public.cities (u1)
 | Project (#1, #2)

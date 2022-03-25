@@ -3,14 +3,14 @@ name = "mz-prof"
 description = "CPU and memory profiling tools."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.55"
 backtrace = "0.3.64"
 lazy_static = "1.4.0"
-pprof = "0.6.2"
+pprof = "0.7.0"
 serde = { version = "1.0.136", features = ["derive"] }
 tempfile = "3.2.0"
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }

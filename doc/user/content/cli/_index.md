@@ -102,12 +102,15 @@ recommended worker setting on this VM is `7`.
 
 ### Listen address
 
-By default, `materialized` binds to `0.0.0.0:6875`. This means that Materialize
-will accept any incoming SQL connection to port 6875 from anywhere. It is the
-responsibility of the network firewall to limit incoming connections. If you
-wish to configure `materialized` to only listen to, e.g. localhost connections,
-you can set `--listen-addr` to `localhost:6875`. You can also use this to change
-the port that Materialize listens on from the default `6875`.
+By default, `materialized` binds to `127.0.0.1:6875`. This means that
+Materialize will accept any incoming SQL connection to port 6875 from only the
+local machine. If you wish to configure `materialized` to accept connections
+from anywhere, you can set `--listen-addr` to `0.0.0.0:6875`. You can
+also use this to change the port that Materialize listens on from the default
+`6875`.
+
+The `materialized` [Docker image](/install/#docker) instead uses a listen
+address of `0.0.0.0:6875` by default, in accordance with Docker conventions.
 
 ### Compaction window
 
@@ -258,7 +261,7 @@ The following example demonstrates how to configure a server in `verify-full`
 mode:
 
 ```shell
-$ materialized -w1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
+$ materialized --workers 1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
 ```
 
 Materialize statically links against a vendored copy of [OpenSSL]. It does *not*
@@ -345,6 +348,8 @@ We record the following data:
 * Number of worker threads
 * Uptime
 * Count of sinks, sources, and views by type
+* System architecture (ARM or x86_64)
+* Operating system type (Linux or macOS)
 
 We use this data to guide our product roadmap. Unless you are using [Materialize
 Cloud](/cloud/), we do not and cannot correlate this

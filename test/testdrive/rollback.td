@@ -13,6 +13,7 @@
 # (incorrectly) available.
 
 > CREATE TABLE t1 (f1 INTEGER);
+> CREATE DEFAULT INDEX ON t1
 
 > BEGIN
 

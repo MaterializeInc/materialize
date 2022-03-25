@@ -22,6 +22,7 @@ use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -132,6 +133,16 @@ const MIGRATIONS: &[&str] = &[
     //
     // Introduced in v0.12.0.
     "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
+    // Adds table to track users' compute instances.
+    //
+    // Introduced in v0.22.0.
+    "CREATE TABLE compute_instances (
+        id   integer PRIMARY KEY,
+        name text NOT NULL UNIQUE
+    );
+    INSERT INTO compute_instances VALUES (1, 'default');",
+    // Introduced in v0.24.0.
+    "ALTER TABLE compute_instances ADD COLUMN config text",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -359,6 +370,25 @@ impl Connection {
             .collect()
     }
 
+    pub fn load_compute_instances(
+        &self,
+    ) -> Result<Vec<(i64, String, ComputeInstanceConfig)>, Error> {
+        self.inner
+            .prepare("SELECT id, name, config FROM compute_instances")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                let config: Option<String> = row.get(2)?;
+                let config: ComputeInstanceConfig = match config {
+                    None => ComputeInstanceConfig::Virtual,
+                    Some(config) => serde_json::from_str(&config)
+                        .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
+                };
+                Ok((id, name, config))
+            })?
+            .collect()
+    }
+
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
@@ -543,6 +573,26 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn insert_compute_instance(
+        &mut self,
+        cluster_name: &str,
+        config: &ComputeInstanceConfig,
+    ) -> Result<i64, Error> {
+        let config = serde_json::to_string(config)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        match self
+            .inner
+            .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
+            .execute(params![cluster_name, config])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
+            )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn insert_item(
         &self,
         id: GlobalId,
@@ -667,6 +717,19 @@ impl Transaction<'_> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownRole(name.to_owned()).into())
+        }
+    }
+
+    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
+            .execute(params![name])?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         }
     }
 

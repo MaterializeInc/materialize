@@ -163,6 +163,65 @@ INSERT INTO date_trunc_fields VALUES ('bad')
 query error unit 'bad' not recognized
 SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc_fields
 
+# date_trunc with interval
+query T
+SELECT date_trunc('microseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:59:12.123457
+
+query T
+SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:59:12.123
+
+query T
+SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:59:12.123
+
+query T
+SELECT date_trunc('seconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:59:12
+
+query T
+SELECT date_trunc('minutes',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:59:00
+
+query T
+SELECT date_trunc('hours',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days 23:00:00
+
+query T
+SELECT date_trunc('days',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months 23 days
+
+query error unit 'weeks' not recognized
+SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+
+query T
+SELECT date_trunc('months',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years 11 months
+
+query T
+SELECT date_trunc('years',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1234 years
+
+query T
+SELECT date_trunc('decade',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1230 years
+
+query T
+SELECT date_trunc('millennium',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
+----
+1000 years
+
 mode standard
 
 statement ok
@@ -173,8 +232,12 @@ CREATE TABLE date_trunc_timestamps (
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
+Source materialize.public.date_trunc_timestamps (u2):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.date_trunc_timestamps (u3)
+| Get materialize.public.date_trunc_timestamps (u2)
 | Map date_trunc_day_ts(#0)
 | Project (#1)
 
@@ -183,12 +246,19 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
+Source materialize.public.date_trunc_fields (u1):
+| Project (#0)
+
+Source materialize.public.date_trunc_timestamps (u2):
+| Project (#0)
+
+Query:
 %0 =
 | Get materialize.public.date_trunc_fields (u1)
 | ArrangeBy ()
 
 %1 =
-| Get materialize.public.date_trunc_timestamps (u3)
+| Get materialize.public.date_trunc_timestamps (u2)
 
 %2 =
 | Join %0 %1
@@ -522,8 +592,12 @@ CREATE TABLE t (
 query T multiline
 EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 ----
+Source materialize.public.t (u6):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.t (u9)
+| Get materialize.public.t (u6)
 | Map isnull(#0)
 | Project (#2)
 
@@ -532,8 +606,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
+Source materialize.public.t (u6):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.t (u9)
+| Get materialize.public.t (u6)
 | Map isnull(#0)
 | Project (#2)
 
@@ -542,8 +620,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 ----
+Source materialize.public.t (u6):
+| Project (#0)
+
+Query:
 %0 =
-| Get materialize.public.t (u9)
+| Get materialize.public.t (u6)
 | Map isnull(#0)
 | Project (#2)
 
@@ -556,8 +638,12 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
+Source materialize.public.t (u6):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.t (u9)
+| Get materialize.public.t (u6)
 | Map isnull((i32tobool(#0) && i32tobool(#1)))
 | Project (#2)
 

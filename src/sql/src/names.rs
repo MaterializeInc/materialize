@@ -14,6 +14,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::{GlobalId, Id, LocalId};
 use mz_ore::str::StrExt;
 
@@ -21,7 +22,7 @@ use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawName, Statement, UnresolvedDataType,
+    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawName, Statement, UnresolvedDataType,
     UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
@@ -213,6 +214,15 @@ impl ResolvedObjectName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ResolvedClusterName(pub ComputeInstanceId);
+
+impl AstDisplay for ResolvedClusterName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{}]", self.0))
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ResolvedDataType {
     AnonymousList(Box<ResolvedDataType>),
     AnonymousMap {
@@ -281,8 +291,31 @@ impl fmt::Display for ResolvedDataType {
     }
 }
 
+impl ResolvedDataType {
+    pub(crate) fn get_ids(&self) -> Vec<GlobalId> {
+        let mut ids = Vec::new();
+        match self {
+            ResolvedDataType::AnonymousList(typ) => {
+                ids.extend(typ.get_ids());
+            }
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                ids.extend(key_type.get_ids());
+                ids.extend(value_type.get_ids());
+            }
+            ResolvedDataType::Named { id, .. } => {
+                ids.push(id.clone());
+            }
+        };
+        ids
+    }
+}
+
 impl AstInfo for Aug {
     type ObjectName = ResolvedObjectName;
+    type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
     type Id = Id;
 }
@@ -356,12 +389,12 @@ impl<'a> NameResolver<'a> {
             UnresolvedDataType::Other { name, typ_mod } => {
                 let (name, item) = match name {
                     RawName::Name(name) => {
-                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let name = normalize::unresolved_object_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
                         (item.name().clone().into(), item)
                     }
                     RawName::Id(id, name) => {
-                        let name = normalize::unresolved_object_name(name).unwrap();
+                        let name = normalize::unresolved_object_name(name)?;
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item_by_id(&gid);
                         (name, item)
@@ -442,22 +475,41 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         object_name: <Raw as AstInfo>::ObjectName,
     ) -> <Aug as AstInfo>::ObjectName {
+        let error_response = ResolvedObjectName {
+            id: Id::Global(GlobalId::System(0)),
+            raw_name: PartialName {
+                database: None,
+                schema: None,
+                item: "".to_string(),
+            },
+            print_id: false,
+        };
+
         match object_name {
             RawName::Name(raw_name) => {
+                let raw_name = match normalize::unresolved_object_name(raw_name) {
+                    Ok(raw_name) => raw_name,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e);
+                        }
+                        return error_response;
+                    }
+                };
+
                 // Check if unqualified name refers to a CTE.
-                if raw_name.0.len() == 1 {
-                    let norm_name = normalize::ident(raw_name.0[0].clone());
+                if raw_name.database.is_none() && raw_name.schema.is_none() {
+                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
                     if let Some(id) = self.ctes.get(&norm_name) {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
-                            raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                            raw_name,
                             print_id: false,
                         };
                     }
                 }
 
-                let name = normalize::unresolved_object_name(raw_name).unwrap();
-                match self.catalog.resolve_item(&name) {
+                match self.catalog.resolve_item(&raw_name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
                         let print_id = !matches!(
@@ -474,11 +526,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        ResolvedObjectName {
-                            id: Id::Local(LocalId::new(0)),
-                            raw_name: name,
-                            print_id: false,
-                        }
+                        error_response
                     }
                 }
             }
@@ -486,12 +534,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
-                        self.status = Err(e.into());
-                        GlobalId::User(0)
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        return error_response;
                     }
                 };
-                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
-                    self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                if self.catalog.try_get_item_by_id(&gid).is_none() {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                    }
+                    return error_response;
                 }
                 self.ids.insert(gid.clone());
                 ResolvedObjectName {
@@ -526,13 +579,47 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+
+    fn fold_cluster_name(
+        &mut self,
+        cluster_name: <Raw as AstInfo>::ClusterName,
+    ) -> <Aug as AstInfo>::ClusterName {
+        match cluster_name {
+            RawIdent::Unresolved(ident) => {
+                match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
+                    Ok(cluster) => ResolvedClusterName(cluster.id()),
+                    Err(e) => {
+                        self.status = Err(e.into());
+                        ResolvedClusterName(0)
+                    }
+                }
+            }
+            RawIdent::Resolved(ident) => match ident.parse() {
+                Ok(id) => ResolvedClusterName(id),
+                Err(e) => {
+                    self.status = Err(e.into());
+                    ResolvedClusterName(0)
+                }
+            },
+        }
+    }
 }
 
 pub fn resolve_names_stmt(
-    catalog: &dyn SessionCatalog,
+    scx: &mut StatementContext,
+    stmt: Statement<Raw>,
+) -> Result<(Statement<Aug>, HashSet<GlobalId>), PlanError> {
+    let mut n = NameResolver::new(scx.catalog);
+    let result = n.fold_statement(stmt);
+    n.status?;
+    Ok((result, n.ids))
+}
+
+pub fn resolve_names_stmt_show(
+    scx: &StatementContext,
     stmt: Statement<Raw>,
 ) -> Result<Statement<Aug>, PlanError> {
-    let mut n = NameResolver::new(catalog);
+    let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_statement(stmt);
     n.status?;
     Ok(result)
@@ -545,7 +632,6 @@ pub fn resolve_names(qcx: &mut QueryContext, query: Query<Raw>) -> Result<Query<
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_query(query);
     n.status?;
-    qcx.ids.extend(n.ids.iter());
     Ok(result)
 }
 
@@ -553,7 +639,6 @@ pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Exp
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_expr(expr);
     n.status?;
-    qcx.ids.extend(n.ids.iter());
     Ok(result)
 }
 
@@ -565,6 +650,26 @@ pub fn resolve_names_data_type(
     let result = n.fold_data_type(data_type);
     n.status?;
     Ok((result, n.ids))
+}
+
+pub fn resolve_names_cluster(
+    scx: &StatementContext,
+    cluster_name: RawIdent,
+) -> Result<ResolvedClusterName, PlanError> {
+    let mut n = NameResolver::new(scx.catalog);
+    let result = n.fold_cluster_name(cluster_name);
+    n.status?;
+    Ok(result)
+}
+
+pub fn resolve_object_name(
+    scx: &StatementContext,
+    object_name: <Raw as AstInfo>::ObjectName,
+) -> Result<<Aug as AstInfo>::ObjectName, PlanError> {
+    let mut n = NameResolver::new(scx.catalog);
+    let result = n.fold_object_name(object_name);
+    n.status?;
+    Ok(result)
 }
 
 /// A general implementation for name resolution on AST elements.
@@ -580,7 +685,6 @@ where
     let mut n = NameResolver::new(qcx.scx.catalog);
     let result = f(&mut n);
     n.status?;
-    qcx.ids.extend(n.ids.iter());
     Ok(result)
 }
 

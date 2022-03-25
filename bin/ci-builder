@@ -105,7 +105,8 @@ files=$(cat \
     | LC_ALL=C sort -z \
     | xargs -0 sha1sum)
 files+="
-date:$rust_date
+rust-version:$rust_version
+rust-date:$rust_date
 arch:$arch_gcc
 "
 tag=$(echo "$files" | python3 -c '
@@ -164,7 +165,17 @@ case "$cmd" in
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
                 --network host
+                --env DOCKER_TLS_VERIFY="${DOCKER_TLS_VERIFY-}"
+                --env DOCKER_HOST="${DOCKER_HOST-}"
             )
+
+            # Forward Docker daemon certificates, if requested.
+            if [[ "${DOCKER_CERT_PATH:-}" ]]; then
+                args+=(
+                    --volume "$DOCKER_CERT_PATH:/docker-certs"
+                    --env DOCKER_CERT_PATH=/docker-certs
+                )
+            fi
 
             # Forward Docker configuration too, if available.
             docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
@@ -174,6 +185,12 @@ case "$cmd" in
                     --env "DOCKER_CONFIG=/docker"
                 )
             fi
+
+            # Override the Docker daemon we use to run the builder itself, if
+            # requested.
+            export DOCKER_HOST=${MZ_DEV_CI_BUILDER_DOCKER_HOST-${DOCKER_HOST-}}
+            export DOCKER_TLS_VERIFY=${MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY-${DOCKER_TLS_VERIFY-}}
+            export DOCKER_CERT_PATH=${MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH-${DOCKER_CERT_PATH-}}
 
             # Forward the host's SSH agent, if available.
             if [[ "${SSH_AUTH_SOCK:-}" ]]; then

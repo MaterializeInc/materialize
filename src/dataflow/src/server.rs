@@ -28,6 +28,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
@@ -46,6 +47,8 @@ use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
+
+use crate::server::boundary::BoundaryHook;
 
 pub mod boundary;
 mod compute_state;
@@ -88,13 +91,36 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// It uses the default [EventLinkBoundary] to host both compute and storage dataflows.
-pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
-    serve_boundary(config, |_| {
-        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new()));
+pub fn serve(config: Config) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (requests_tx, requests_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (server, client) = serve_boundary(config, move |_| {
+        let boundary = Rc::new(RefCell::new(EventLinkBoundary::new(requests_tx.clone())));
         (Rc::clone(&boundary), boundary)
-    })
+    })?;
+
+    Ok((server, BoundaryHook::new(client, requests_rx, workers)))
 }
 
+/// Initiates a timely dataflow computation, processing materialized commands.
+///
+/// * `create_boundary`: A function to obtain the worker-local boundary components.
+pub fn serve_boundary_requests<
+    SC: StorageCapture,
+    CR: ComputeReplay,
+    B: Fn(usize) -> (SC, CR) + Send + Sync + 'static,
+>(
+    config: Config,
+    requests: tokio::sync::mpsc::UnboundedReceiver<mz_dataflow_types::SourceInstanceRequest>,
+    create_boundary: B,
+) -> Result<(Server, BoundaryHook<LocalClient>), anyhow::Error> {
+    let workers = config.workers as u64;
+    let (server, client) = serve_boundary(config, create_boundary)?;
+    Ok((
+        server,
+        crate::server::boundary::BoundaryHook::new(client, requests, workers),
+    ))
+}
 /// Initiates a timely dataflow computation, processing materialized commands.
 ///
 /// * `create_boundary`: A function to obtain the worker-local boundary components.
@@ -163,7 +189,7 @@ pub fn serve_boundary<
             timely_worker,
             compute_state: BTreeMap::default(),
             storage_state: StorageState {
-                local_inputs: HashMap::new(),
+                table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
@@ -290,27 +316,39 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                if let Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) =
-                    &cmd
-                {
-                    let compute_instance = ComputeState {
-                        traces: TraceManager::new(
-                            (self.metrics_bundle.1).3.clone(),
-                            self.timely_worker.index(),
-                        ),
-                        dataflow_tokens: HashMap::new(),
-                        tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-                        sink_write_frontiers: HashMap::new(),
-                        pending_peeks: Vec::new(),
-                        reported_frontiers: HashMap::new(),
-                        sink_metrics: (self.metrics_bundle.1).1.clone(),
-                        materialized_logger: None,
-                    };
-                    self.compute_state.insert(*instance_id, compute_instance);
-                    compute_instances.push(*instance_id);
+                let mut should_drop = None;
+                match &cmd {
+                    Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) => {
+                        let compute_instance = ComputeState {
+                            traces: TraceManager::new(
+                                (self.metrics_bundle.1).3.clone(),
+                                self.timely_worker.index(),
+                            ),
+                            dataflow_tokens: HashMap::new(),
+                            tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(
+                                Vec::new(),
+                            )),
+                            sink_write_frontiers: HashMap::new(),
+                            pending_peeks: Vec::new(),
+                            reported_frontiers: HashMap::new(),
+                            sink_metrics: (self.metrics_bundle.1).1.clone(),
+                            materialized_logger: None,
+                        };
+                        self.compute_state.insert(*instance_id, compute_instance);
+                        compute_instances.push(*instance_id);
+                    }
+                    Command::Compute(ComputeCommand::DropInstance, instance_id) => {
+                        should_drop = Some(*instance_id);
+                    }
+                    _ => (),
                 }
 
                 self.handle_command(cmd);
+
+                if let Some(instance_id) = should_drop {
+                    self.compute_state.remove(&instance_id);
+                    compute_instances.retain(|id| *id != instance_id);
+                }
             }
 
             self.metrics_bundle.0.observe_command_finish();
@@ -362,7 +400,8 @@ where
 
 pub struct LocalInput {
     pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    pub capability: ActivateCapability<Timestamp>,
+    /// A weak reference to the capability, in case all uses are dropped.
+    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }
 
 /// An in-progress peek, and data to eventually fulfill it.
@@ -374,8 +413,8 @@ pub(crate) struct PendingPeek {
     id: GlobalId,
     /// An optional key to use for the arrangement.
     key: Option<Row>,
-    /// The ID of the connection that submitted the peek. For logging only.
-    conn_id: u32,
+    /// The ID of the peek.
+    uuid: Uuid,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -390,7 +429,7 @@ pub(crate) struct PendingPeek {
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.conn_id)
+        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.uuid)
     }
 
     /// Attempts to fulfill the peek and reports success.

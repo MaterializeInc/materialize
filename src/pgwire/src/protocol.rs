@@ -15,19 +15,18 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
 use mz_expr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
 
 use mz_coord::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
-    TransactionStatus,
+    row_future_to_stream, EndTransactionAction, InProgressRows, Portal, PortalState,
+    RowBatchStream, Session, TransactionStatus,
 };
 use mz_coord::ExecuteResponse;
 use mz_dataflow_types::PeekResponseUnary;
@@ -159,28 +158,12 @@ where
         }
     }
 
-    if let Some(frontegg) = frontegg {
+    let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
-        match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => {
-                let res = frontegg
-                    .exchange_password_for_token(&password)
-                    .await
-                    .and_then(|res| frontegg.validate_access_token(&res.access_token));
-                match res {
-                    Ok(claims) if claims.email == user => {}
-                    _ => {
-                        return conn
-                            .send(ErrorResponse::fatal(
-                                SqlState::INVALID_PASSWORD,
-                                "invalid password",
-                            ))
-                            .await;
-                    }
-                }
-            }
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => password,
             _ => {
                 return conn
                     .send(ErrorResponse::fatal(
@@ -189,8 +172,26 @@ where
                     ))
                     .await
             }
+        };
+        match frontegg
+            .exchange_password_for_token(&password)
+            .await
+            .and_then(|token| frontegg.check_expiry(token, user.clone()))
+        {
+            Ok(check) => check.left_future(),
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
         }
-    }
+    } else {
+        // No frontegg check, so is_expired never resolves.
+        pending().right_future()
+    };
 
     // Construct session.
     let mut session = Session::new(conn.id(), user);
@@ -212,6 +213,7 @@ where
 
     // From this point forward we must not fail without calling `coord_client.terminate`!
 
+    let mut allow_no_session = false;
     let res = async {
         let session = coord_client.session();
         let mut buf = vec![BackendMessage::AuthenticationOk];
@@ -234,10 +236,24 @@ where
             conn,
             coord_client: &mut coord_client,
         };
-        machine.run().await
+
+        tokio::select! {
+            r = machine.run() => r,
+            _ = is_expired => {
+                // If the login has expired, we immediately stop running the state machine,
+                // meaning the session could still be owned by the coordinator, so we allow no
+                // session to be present.
+                allow_no_session = true;
+                Err(io::ErrorKind::ConnectionAborted.into())
+            }
+        }
     }
     .await;
-    coord_client.terminate().await;
+    if allow_no_session {
+        coord_client.terminate_allow_no_session().await;
+    } else {
+        coord_client.terminate().await;
+    }
     res
 }
 
@@ -381,7 +397,7 @@ where
         let stmt_desc = self
             .coord_client
             .session()
-            .get_portal(EMPTY_PORTAL)
+            .get_portal_unverified(EMPTY_PORTAL)
             .map(|portal| portal.desc.clone())
             .expect("unnamed portal should be present");
         if !stmt_desc.param_types.is_empty() {
@@ -502,7 +518,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Some(ty) => match ScalarType::try_from(&ty) {
+                Ok(ty) => match ScalarType::try_from(&ty) {
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
@@ -513,12 +529,12 @@ where
                             .await
                     }
                 },
-                None if oid == 0 => param_types.push(None),
-                None => {
+                Err(_) if oid == 0 => param_types.push(None),
+                Err(e) => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
-                            format!("unable to decode parameter whose type OID is {}", oid),
+                            e.to_string(),
                         ))
                         .await;
                 }
@@ -691,12 +707,16 @@ where
         }
 
         let desc = stmt.desc().clone();
+        let revision = stmt.catalog_revision;
         let stmt = stmt.sql().cloned();
-        if let Err(err) =
-            self.coord_client
-                .session()
-                .set_portal(portal_name, desc, stmt, params, result_formats)
-        {
+        if let Err(err) = self.coord_client.session().set_portal(
+            portal_name,
+            desc,
+            stmt,
+            params,
+            result_formats,
+            revision,
+        ) {
             return self
                 .error(ErrorResponse::from_coord(Severity::Error, err))
                 .await;
@@ -718,8 +738,11 @@ where
             let aborted_txn = self.is_aborted_txn();
 
             // Check if the portal has been started and can be continued.
-            let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
-                //  let portal = match session.get_portal_mut(&portal_name) {
+            let portal = match self
+                .coord_client
+                .session()
+                .get_portal_unverified_mut(&portal_name)
+            {
                 Some(portal) => portal,
                 None => {
                     return self
@@ -840,7 +863,7 @@ where
 
         let session = self.coord_client.session();
         let row_desc = session
-            .get_portal(name)
+            .get_portal_unverified(name)
             .map(|portal| describe_rows(&portal.desc, &portal.result_formats));
         match row_desc {
             Some(row_desc) => {
@@ -873,7 +896,7 @@ where
         let portal = self
             .coord_client
             .session()
-            .get_portal_mut(name)
+            .get_portal_unverified_mut(name)
             .expect("portal should exist");
         portal.state = PortalState::Completed(None);
     }
@@ -1050,11 +1073,17 @@ where
                 let existed = false;
                 created!(existed, SqlState::DUPLICATE_OBJECT, "role")
             }
+            ExecuteResponse::CreatedComputeInstance { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
             ExecuteResponse::CreatedIndex { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "index")
+            }
+            ExecuteResponse::CreatedSecret { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "secret")
             }
             ExecuteResponse::CreatedSource { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "source")
@@ -1077,6 +1106,7 @@ where
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
             ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
+            ExecuteResponse::DroppedComputeInstance => command_complete!("DROP CLUSTER"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
@@ -1114,31 +1144,16 @@ where
             ExecuteResponse::SendingRows(rx) => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
-                match rx.await {
-                    PeekResponseUnary::Canceled => {
-                        self.error(ErrorResponse::error(
-                            SqlState::QUERY_CANCELED,
-                            "canceling statement due to user request",
-                        ))
-                        .await
-                    }
-                    PeekResponseUnary::Error(text) => {
-                        self.error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
-                            .await
-                    }
-                    PeekResponseUnary::Rows(rows) => {
-                        self.send_rows(
-                            row_desc,
-                            portal_name,
-                            InProgressRows::single_batch(rows),
-                            max_rows,
-                            get_response,
-                            fetch_portal_name,
-                            timeout,
-                        )
-                        .await
-                    }
-                }
+                self.send_rows(
+                    row_desc,
+                    portal_name,
+                    InProgressRows::new(row_future_to_stream(rx).await),
+                    max_rows,
+                    get_response,
+                    fetch_portal_name,
+                    timeout,
+                )
+                .await
             }
             ExecuteResponse::SetVariable { name } => {
                 // This code is somewhat awkwardly structured because we
@@ -1214,27 +1229,7 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
                     ExecuteResponse::Tailing { rx } => rx,
-                    ExecuteResponse::SendingRows(rx) => match rx.await {
-                        // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
-                        PeekResponseUnary::Canceled => {
-                            return self
-                                .error(ErrorResponse::error(
-                                    SqlState::QUERY_CANCELED,
-                                    "canceling statement due to user request",
-                                ))
-                                .await;
-                        }
-                        PeekResponseUnary::Error(text) => {
-                            return self
-                                .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
-                                .await;
-                        }
-                        PeekResponseUnary::Rows(rows) => {
-                            let (tx, rx) = unbounded_channel();
-                            tx.send(rows).expect("send must succeed");
-                            rx
-                        }
-                    },
+                    ExecuteResponse::SendingRows(rows_rx) => row_future_to_stream(rows_rx).await,
                     _ => {
                         return self
                             .error(ErrorResponse::error(
@@ -1307,7 +1302,7 @@ where
         let result_formats = self
             .coord_client
             .session()
-            .get_portal(result_format_portal_name)
+            .get_portal_unverified(result_format_portal_name)
             .expect("valid fetch portal name for send rows")
             .result_formats
             .clone();
@@ -1345,11 +1340,18 @@ where
                 FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
+            } else if want_rows == 0 {
+                FetchResult::Rows(None)
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     _ = self.coord_client.canceled() => FetchResult::Canceled,
-                    batch = rows.remaining.recv() => FetchResult::Rows(batch),
+                    batch = rows.remaining.recv() => match batch {
+                        None=>FetchResult::Rows(None),
+                        Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
+                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
+                    },
                 }
             };
 
@@ -1416,6 +1418,11 @@ where
                     }
                     self.conn.flush().await?;
                 }
+                FetchResult::Error(text) => {
+                    return self
+                        .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                        .await;
+                }
                 FetchResult::Canceled => {
                     return self
                         .error(ErrorResponse::error(
@@ -1434,7 +1441,7 @@ where
         let portal = self
             .coord_client
             .session()
-            .get_portal_mut(&portal_name)
+            .get_portal_unverified_mut(&portal_name)
             .expect("valid portal name for send rows");
 
         // Always return rows back, even if it's empty. This prevents an unclosed
@@ -1444,7 +1451,7 @@ where
         let fetch_portal = fetch_portal_name.map(|name| {
             self.coord_client
                 .session()
-                .get_portal_mut(&name)
+                .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
@@ -1534,7 +1541,19 @@ where
                 },
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(rows) => {
+                    Some(PeekResponseUnary::Error(text)) => {
+                        return self
+                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                            .await;
+                    }
+                    Some(PeekResponseUnary::Canceled) => {
+                        return self.error(ErrorResponse::error(
+                                SqlState::QUERY_CANCELED,
+                                "canceling statement due to user request",
+                            ))
+                            .await;
+                    }
+                    Some(PeekResponseUnary::Rows(rows)) => {
                         count += rows.len();
                         for row in rows {
                             encode_fn(row, typ, &mut out)?;
@@ -1809,4 +1828,5 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Vec<Row>>),
     Canceled,
+    Error(String),
 }

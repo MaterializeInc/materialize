@@ -28,9 +28,10 @@ use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
 use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
 {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
@@ -38,10 +39,10 @@ where
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, Row, G::Timestamp>>,
+        inputs: Vec<CollectionBundle<G, Row>>,
         join_plan: DeltaJoinPlan,
         scope: &mut G,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
 
@@ -319,7 +320,8 @@ fn build_halfjoin<G, Tr, CF>(
     Collection<G, DataflowError, Diff>,
 )
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
@@ -347,6 +349,7 @@ where
         }
     });
 
+    use crate::render::RenderTimestamp;
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::OkErr;
 
@@ -356,7 +359,7 @@ where
     let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,
-        |time| time.saturating_sub(1),
+        |time| time.step_back(),
         comparison,
         // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
         // in that we seem to yield too much and do too little work when we do.
@@ -393,12 +396,13 @@ where
 /// updates happening at the same time on different relations.
 fn build_update_stream<G, Tr>(
     trace: Arranged<G, Tr>,
-    as_of: Antichain<G::Timestamp>,
+    as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
@@ -406,6 +410,12 @@ where
     use crate::operator::StreamExt;
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
+
+    use timely::progress::timestamp::Refines;
+    let mut inner_as_of = Antichain::new();
+    for event_time in as_of.elements().iter() {
+        inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
+    }
 
     let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
@@ -425,7 +435,8 @@ where
                                     cursor.map_times(batch, |time, diff| {
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time
-                                        if source_relation == 0 || !as_of.elements().contains(&time)
+                                        if source_relation == 0
+                                            || !inner_as_of.elements().contains(&time)
                                         {
                                             let temp_storage = RowArena::new();
                                             let mut datums_local =

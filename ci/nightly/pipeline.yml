@@ -47,7 +47,7 @@ steps:
 
   - id: feature-benchmark
     label: "Feature benchmark against latest release"
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -57,7 +57,7 @@ steps:
 
   - id: feature-benchmark-persistence
     label: "Feature benchmark against latest release with persistence"
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -122,14 +122,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
           run: nightly
-    timeout_in_minutes: 30
-
-  - id: cluster-compute-storage-testdrive
-    label: "Full testdrive against Cluster with segragated compute/storage"
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          run: nightly-compute-storage
     timeout_in_minutes: 30
 
   - id: proxy

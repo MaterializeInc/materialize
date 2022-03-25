@@ -203,9 +203,14 @@ c from x where x.b is not null) z on y.a = z.b
 | | types = (Int32, Int64?, Int32?)
 | | keys = ((#0))
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+| | types = (Int32, Int64?, Int32?)
+| | keys = ()
+
+%3 =
+| Get %2 (l1)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
 | Filter (#0 = 0)
@@ -218,14 +223,8 @@ c from x where x.b is not null) z on y.a = z.b
 | | types = (Int32, Int32?)
 | | keys = ()
 
-%3 =
-| Get ? (u0)
-| | types = (Int32, Int64?, Int32?)
-| | keys = ((#0))
-
 %4 =
-| Join %0 %3
-| | implementation = Unimplemented
+| Get %2 (l1)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
 | Filter !(isnull(#1))
@@ -239,7 +238,7 @@ c from x where x.b is not null) z on y.a = z.b
 | | keys = ()
 
 %5 =
-| Join %2 %4
+| Join %3 %4
 | | implementation = Unimplemented
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
@@ -827,5 +826,75 @@ select * from x full outer join y on x.a = y.b
 | Union %8 %11
 | Project (#0..=#4)
 | Project (#0..=#4)
+----
+----
+
+lower
+WITH w(f1, f2, f3, f4, f5) as (select * from x full outer join y on x.a = y.a)
+select * from w w1 inner join w w2 on w1.f1 = w1.f5
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+
+%3 =
+| Get ? (u1)
+
+%4 = Let l2 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 = Let l3 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0..=#4)
+| Filter (#0 = #3)
+
+%6 = Let l4 =
+| Get %5 (l3)
+| Project (#0)
+| Distinct group=(#0)
+
+%7 =
+| Join %4 %6 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Negate
+
+%8 =
+| Union %7 %4
+| Map null, null, null
+| Project (#2..=#4, #0, #1)
+
+%9 =
+| Join %2 %6 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#0..=#2)
+| Negate
+
+%10 =
+| Union %9 %2
+| Map null, null
+
+%11 =
+| Union %10 %5
+
+%12 = Let l5 =
+| Union %8 %11
+| Project (#0..=#4)
+
+%13 =
+| Join %12 %12
+| | implementation = Unimplemented
+| Project (#0..=#9)
+| Filter (#0 = #4)
+| Project (#0..=#9)
 ----
 ----

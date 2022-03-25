@@ -511,8 +511,10 @@ impl Default for ColumnarRecordsVecBuilder {
 }
 
 impl ColumnarRecordsVecBuilder {
-    #[cfg(test)]
-    fn new_with_len(key_val_data_max_len: usize) -> Self {
+    /// Create a new ColumnarRecordsVecBuilder with a specified max size.
+    ///
+    /// Only used for testing.
+    pub(crate) fn new_with_len(key_val_data_max_len: usize) -> Self {
         assert!(key_val_data_max_len <= KEY_VAL_DATA_MAX_LEN);
         ColumnarRecordsVecBuilder {
             current: ColumnarRecordsBuilder::default(),
@@ -572,6 +574,15 @@ impl ColumnarRecordsVecBuilder {
             ret.push(self.current.finish());
         }
         ret
+    }
+
+    /// Returns the list of filled [ColumnarRecords].
+    pub fn take_filled(&mut self) -> Option<Vec<ColumnarRecords>> {
+        if self.filled.len() > 0 {
+            Some(std::mem::take(&mut self.filled))
+        } else {
+            None
+        }
     }
 }
 

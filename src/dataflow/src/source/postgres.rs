@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
+use mz_postgres_util::TableInfo;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -24,9 +26,10 @@ use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
+use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
 use mz_repr::{Datum, Row};
@@ -48,10 +51,17 @@ pub struct PostgresSourceReader {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
+    source_tables: HashMap<u32, PostgresTable>,
 }
 
 trait ErrorExt {
     fn is_recoverable(&self) -> bool;
+}
+
+impl ErrorExt for tokio::time::error::Elapsed {
+    fn is_recoverable(&self) -> bool {
+        true
+    }
 }
 
 impl ErrorExt for tokio_postgres::Error {
@@ -130,10 +140,47 @@ impl PostgresSourceReader {
     ) -> Self {
         Self {
             source_id,
+            source_tables: HashMap::from_iter(
+                connector
+                    .details
+                    .tables
+                    .iter()
+                    .map(|t| (t.relation_id, t.clone())),
+            ),
             connector,
             lsn: 0.into(),
             metrics: PgSourceMetrics::new(metrics, source_id),
         }
+    }
+
+    /// Validates that all expected tables exist in the publication tables and they have the same schema
+    fn validate_tables(&self, tables: Vec<TableInfo>) -> Result<(), anyhow::Error> {
+        let pub_tables: HashMap<u32, PostgresTable> = tables
+            .into_iter()
+            .map(|t| (t.rel_id, PostgresTable::from(t)))
+            .collect();
+        for (id, schema) in self.source_tables.iter() {
+            match pub_tables.get(id) {
+                Some(pub_schema) => {
+                    if pub_schema != schema {
+                        error!(
+                            "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                            schema, pub_schema
+                        );
+                        bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
+                    }
+                }
+                None => {
+                    error!("publication missing table: {} with id {}", schema.name, id);
+                    bail!(
+                        "Publication missing expected table {} with oid {}",
+                        schema.name,
+                        id
+                    )
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Creates the replication slot and produces the initial snapshot of the data
@@ -162,6 +209,8 @@ impl PostgresSourceReader {
             mz_postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
                 .await
         );
+        // Validate publication tables against the state snapshot
+        try_fatal!(self.validate_tables(publication_tables));
 
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -196,8 +245,8 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-        for info in publication_tables {
-            let relation_id: Datum = (info.rel_id as i32).into();
+        for info in self.source_tables.values() {
+            let relation_id: Datum = (i32::try_from(info.relation_id).unwrap()).into();
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -210,14 +259,19 @@ impl PostgresSourceReader {
 
             pin_mut!(reader);
             let mut mz_row = Row::default();
-            while let Some(Ok(b)) = reader.next().await {
+            // TODO: once tokio-stream is released with https://github.com/tokio-rs/tokio/pull/4502
+            //    we can convert this into a single `timeout(...)` call on the reader CopyOutStream
+            while let Some(b) = tokio::time::timeout(Duration::from_secs(30), reader.next())
+                .await?
+                .transpose()?
+            {
                 let mut packer = mz_row.packer();
                 packer.push(relation_id);
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.schema.len() as i32);
+                let mut raw_values = parser.iter_raw(info.columns.len() as i32);
                 try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
                         match raw_value? {
@@ -358,6 +412,9 @@ impl PostgresSourceReader {
                         Insert(insert) => {
                             self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
+                            if !self.source_tables.contains_key(&rel_id) {
+                                continue;
+                            }
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
@@ -365,6 +422,9 @@ impl PostgresSourceReader {
                         Update(update) => {
                             self.metrics.updates.inc();
                             let rel_id = update.rel_id();
+                            if !self.source_tables.contains_key(&rel_id) {
+                                continue;
+                            }
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
@@ -390,6 +450,9 @@ impl PostgresSourceReader {
                         Delete(delete) => {
                             self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
+                            if !self.source_tables.contains_key(&rel_id) {
+                                continue;
+                            }
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
@@ -412,10 +475,78 @@ impl PostgresSourceReader {
                             }
                             self.metrics.lsn.set(self.lsn.into());
                         }
-                        Origin(_) | Relation(_) | Type(_) => {
+                        Relation(relation) => {
+                            let rel_id = relation.rel_id();
+                            match self.source_tables.get(&rel_id) {
+                                Some(source_table) => {
+                                    // Start with the cheapest check first, this will catch the majority of alters
+                                    if source_table.columns.len() != relation.columns().len() {
+                                        error!(
+                                            "alter table detected on {} with id {}",
+                                            source_table.name, source_table.relation_id
+                                        );
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
+                                    if source_table.name.ne(relation.name().unwrap())
+                                        || source_table.namespace.ne(relation.namespace().unwrap())
+                                    {
+                                        error!(
+                                            "table name changed on {}.{} with id {} to {}.{}",
+                                            source_table.namespace,
+                                            source_table.name,
+                                            source_table.relation_id,
+                                            relation.namespace().unwrap(),
+                                            relation.name().unwrap()
+                                        );
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
+                                    // Relation messages do not include nullability/primary_key data
+                                    // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
+                                    if !source_table.columns.iter().zip(relation.columns()).all(
+                                        |(src, rel)| {
+                                            src.name == rel.name().unwrap()
+                                                && src.type_oid == rel.type_id()
+                                                && src.type_mod == rel.type_modifier()
+                                        },
+                                    ) {
+                                        error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
+                                        return Err(Fatal(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            source_table.name,
+                                            source_table.relation_id
+                                        )));
+                                    }
+                                }
+                                // Ignore messages for tables we do not know about
+                                None => continue,
+                            }
+                        }
+                        Origin(_) | Type(_) => {
                             self.metrics.ignored.inc();
                         }
-                        Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
+                        Truncate(truncate) => {
+                            let tables = truncate
+                                .rel_ids()
+                                .iter()
+                                // Filter here makes option handling in map "safe"
+                                .filter_map(|id| self.source_tables.get(&id))
+                                .map(|table| {
+                                    format!("name: {} id: {}", table.name, table.relation_id)
+                                })
+                                .collect::<Vec<String>>();
+                            return Err(Fatal(anyhow!(
+                                "source table(s) {} got truncated",
+                                tables.join(", ")
+                            )));
+                        }
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
                         _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),

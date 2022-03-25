@@ -38,4 +38,4 @@ CREATE PUBLICATION mz_source FOR TABLE t1;
 1
 
 ! CREATE VIEWS FROM SOURCE mz_source (t2);
-contains:table t2 does not exist in upstream database
+contains:table t2 not found

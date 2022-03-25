@@ -114,6 +114,10 @@ struct Args {
         value_name = "URL"
     )]
     materialized_url: tokio_postgres::Config,
+    /// Arbitrary session parameters for testdrive to set after connecting to
+    /// materialized.
+    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    materialized_param: Vec<(String, String)>,
     /// Validate the on-disk state of the specified materialized catalog.
     ///
     /// If present, testdrive will periodically verify that the on-disk catalog
@@ -263,6 +267,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialized_pgconfig: args.materialized_url,
+        materialized_params: args.materialized_param,
         materialized_catalog_path: args.validate_catalog,
 
         // === Confluent options. ===

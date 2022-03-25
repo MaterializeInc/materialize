@@ -110,6 +110,11 @@ SELECT l1.la, l2.lb, l3.lb
 FROM l as l1, l as l2, l as l3
 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
+Source materialize.public.l (u1):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
@@ -148,6 +153,10 @@ WHERE l1.la IN (
     )
 )
 ----
+Source materialize.public.l (u1):
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
 | Get materialize.public.l (u1)
 | Project (#0)
@@ -313,13 +322,21 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 ----
+Source materialize.public.l (u1):
+| Project (#0, #1)
+
+Source materialize.public.r (u2):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
@@ -362,13 +379,21 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 ----
+Source materialize.public.l (u1):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Source materialize.public.r (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
@@ -377,7 +402,7 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 | Project (#0, #1, #3)
 
 %3 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 
 %4 =
 | Get %2 (l0)
@@ -392,7 +417,7 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 | Negate
 
 %6 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 
 %7 =
 | Union %5 %6
@@ -412,13 +437,20 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT * FROM l FULL JOIN r ON l.la = r.ra
 ----
+Source materialize.public.l (u1):
+| Project (#0, #1)
+
+Source materialize.public.r (u2):
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
@@ -433,7 +465,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 | ArrangeBy (#0)
 
 %4 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 
 %5 =
 | Join %4 %3 (= #0 #2)
@@ -442,7 +474,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 | Negate
 
 %6 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 
 %7 =
 | Union %5 %6
@@ -488,13 +520,22 @@ SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
+Source materialize.public.l (u1):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Source materialize.public.r (u2):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
 %0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 | ArrangeBy ((#0 % 2))
 
 %1 =
-| Get materialize.public.r (u3)
+| Get materialize.public.r (u2)
 | Filter !(isnull(#0))
 
 %2 =
@@ -541,12 +582,16 @@ mode standard
 query T multiline
 EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
+Source materialize.public.t4362 (u6):
+| Project (#0, #1)
+
+Query:
 %0 = Let l0 =
-| Get materialize.public.t4362 (u10)
+| Get materialize.public.t4362 (u6)
 | Filter (#1 = 1)
 
 %1 =
-| Get materialize.public.t4362 (u10)
+| Get materialize.public.t4362 (u6)
 | ArrangeBy (#0)
 
 %2 =
@@ -594,7 +639,7 @@ EXPLAIN RAW PLAN FOR SELECT la, l.lb, big_l.lb FROM l JOIN big_l USING (la)
 | Get materialize.public.l (u1)
 
 %1 =
-| Get materialize.public.big_l (u13)
+| Get materialize.public.big_l (u8)
 
 %2 =
 | InnerJoin %0 %1 on (true && (i32toi64(#0) = #2))
@@ -624,13 +669,22 @@ INSERT INTO r3 VALUES (1, 'r1'), (3, 'r3'), (4, 'r4'), (NULL, 'r5')
 query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
 ----
+Source materialize.public.l3 (u10):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Source materialize.public.r3 (u11):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.l3 (u17)
+| Get materialize.public.l3 (u10)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r3 (u19)
+| Get materialize.public.r3 (u11)
 | Filter !(isnull(#0))
 
 %2 =
@@ -649,12 +703,19 @@ l3  r3
 query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS NULL)
 ----
+Source materialize.public.l3 (u10):
+| Project (#0, #1)
+
+Source materialize.public.r3 (u11):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.l3 (u17)
+| Get materialize.public.l3 (u10)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r3 (u19)
+| Get materialize.public.r3 (u11)
 
 %2 =
 | Join %0 %1 (= #0 #2)
@@ -673,12 +734,19 @@ l4  r5
 query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
 ----
+Source materialize.public.l3 (u10):
+| Project (#0, #1)
+
+Source materialize.public.r3 (u11):
+| Project (#0, #1)
+
+Query:
 %0 =
-| Get materialize.public.l3 (u17)
+| Get materialize.public.l3 (u10)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.r3 (u19)
+| Get materialize.public.r3 (u11)
 
 %2 =
 | Join %0 %1 (= #0 #2)

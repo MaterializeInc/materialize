@@ -20,6 +20,7 @@
 use super::super::attribute::core::Attributes;
 use super::scalar::*;
 use itertools::Itertools;
+use mz_expr::TableFunc;
 use mz_ore::id_gen::Gen;
 use mz_sql_parser::ast::Ident;
 use std::cell::{Ref, RefCell, RefMut};
@@ -69,7 +70,7 @@ pub(crate) type QuantifierSet = BTreeSet<QuantifierId>;
 /// Each non-leaf box has a set of quantifiers, which are the inputs of the
 /// operation it represents. The quantifier adds information about how the
 /// relation represented by its input box is consumed by the parent box.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Model {
     /// The ID of the box representing the entry-point of the query.
     pub(crate) top_box: BoxId,
@@ -139,7 +140,6 @@ pub(crate) struct QueryBox {
     /// rows from its input boxes. See [DistinctOperation].
     pub distinct: DistinctOperation,
     /// Derived attributes
-    #[allow(dead_code)]
     pub attributes: Attributes,
 }
 
@@ -201,7 +201,13 @@ pub(crate) const ARBITRARY_QUANTIFIER: usize = 0b00000000
     | (QuantifierType::PreservedForeach as usize)
     | (QuantifierType::Scalar as usize);
 
-#[derive(Debug)]
+/// A bitmask that matches the discriminant of a subquery [`QuantifierType`].
+pub(crate) const SUBQUERY_QUANTIFIER: usize = 0b00000000
+    | (QuantifierType::All as usize)
+    | (QuantifierType::Existential as usize)
+    | (QuantifierType::Scalar as usize);
+
+#[derive(Debug, Clone)]
 pub(crate) enum BoxType {
     /// A table from the catalog.
     Get(Get),
@@ -221,16 +227,15 @@ pub(crate) enum BoxType {
     /// that order.
     Select(Select),
     /// The invocation of table function from the catalog.
-    TableFunction(TableFunction),
+    CallTable(CallTable),
     /// SQL's union operator
-    #[allow(dead_code)]
     Union,
     /// Operator that produces a set of rows, with potentially
     /// correlated values.
     Values(Values),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Get {
     pub id: mz_expr::GlobalId,
     pub unique_keys: Vec<Vec<usize>>,
@@ -243,7 +248,7 @@ impl From<Get> for BoxType {
 }
 
 /// The content of a Grouping box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Grouping {
     pub key: Vec<BoxScalarExpr>,
 }
@@ -255,7 +260,7 @@ impl From<Grouping> for BoxType {
 }
 
 /// The content of a OuterJoin box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
@@ -268,7 +273,7 @@ impl From<OuterJoin> for BoxType {
 }
 
 /// The content of a Select box.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Select {
     /// The list of predicates applied by the box.
     pub predicates: Vec<BoxScalarExpr>,
@@ -297,19 +302,25 @@ impl Select {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct TableFunction {
-    pub parameters: Vec<BoxScalarExpr>,
-    // @todo function metadata from the catalog
+#[derive(Debug, Clone)]
+pub(crate) struct CallTable {
+    pub func: TableFunc,
+    pub exprs: Vec<BoxScalarExpr>,
 }
 
-impl From<TableFunction> for BoxType {
-    fn from(table_function: TableFunction) -> Self {
-        BoxType::TableFunction(table_function)
+impl CallTable {
+    pub fn new(func: TableFunc, exprs: Vec<BoxScalarExpr>) -> CallTable {
+        CallTable { func, exprs }
     }
 }
 
-#[derive(Debug, Default)]
+impl From<CallTable> for BoxType {
+    fn from(table_funct: CallTable) -> Self {
+        BoxType::CallTable(table_funct)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
 }
@@ -321,16 +332,6 @@ impl From<Values> for BoxType {
 }
 
 impl Model {
-    pub(crate) fn new() -> Self {
-        Self {
-            top_box: BoxId(0),
-            boxes: HashMap::new(),
-            box_id_gen: Default::default(),
-            quantifiers: HashMap::new(),
-            quantifier_id_gen: Default::default(),
-        }
-    }
-
     pub(crate) fn make_box(&mut self, box_type: BoxType) -> BoxId {
         let id = self.box_id_gen.allocate_id();
         let b = Box::new(RefCell::new(QueryBox {
@@ -413,7 +414,10 @@ impl Model {
     }
 
     /// Get an immutable reference to the box identified by `box_id` bound to this [`Model`].
-    pub(crate) fn get_quantifier(&self, quantifier_id: QuantifierId) -> BoundRef<'_, Quantifier> {
+    pub(crate) fn get_quantifier<'a>(
+        &'a self,
+        quantifier_id: QuantifierId,
+    ) -> BoundRef<'a, Quantifier> {
         BoundRef {
             model: self,
             r#ref: self
@@ -692,8 +696,8 @@ impl QueryBox {
                     }
                 }
             }
-            BoxType::TableFunction(table_function) => {
-                for p in table_function.parameters.iter() {
+            BoxType::CallTable(table_function) => {
+                for p in table_function.exprs.iter() {
                     f(p)?;
                 }
             }
@@ -744,8 +748,8 @@ impl QueryBox {
                     }
                 }
             }
-            BoxType::TableFunction(table_function) => {
-                for p in table_function.parameters.iter_mut() {
+            BoxType::CallTable(table_function) => {
+                for p in table_function.exprs.iter_mut() {
                     f(p)?;
                 }
             }
@@ -822,7 +826,7 @@ impl QueryBox {
     fn input_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -833,7 +837,7 @@ impl QueryBox {
     fn ranging_quantifiers<'a>(
         &'a self,
         model: &'a Model,
-    ) -> impl Iterator<Item = BoundRef<'a, Quantifier>> {
+    ) -> impl DoubleEndedIterator<Item = BoundRef<'a, Quantifier>> {
         self.ranging_quantifiers
             .iter()
             .map(|q_id| model.get_quantifier(*q_id))
@@ -843,12 +847,12 @@ impl QueryBox {
 /// Immutable [`QueryBox`] methods that depend on their enclosing [`Model`].
 impl<'a> BoundRef<'a, QueryBox> {
     /// Delegate to `QueryBox::input_quantifiers` with the enclosing model.
-    pub fn input_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn input_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().input_quantifiers(self.model)
     }
 
     /// Delegate to `QueryBox::ranging_quantifiers` with the enclosing model.
-    pub fn ranging_quantifiers(&self) -> impl Iterator<Item = BoundRef<'_, Quantifier>> {
+    pub fn ranging_quantifiers(&self) -> impl DoubleEndedIterator<Item = BoundRef<'_, Quantifier>> {
         self.deref().ranging_quantifiers(self.model)
     }
 
@@ -895,6 +899,58 @@ impl<'a> BoundRefMut<'a, QueryBox> {
     }
 }
 
+/// Immutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRef<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&'a self) -> BoundRef<'a, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+
+    /// The arity of the quantifier from the perspective of the parent box.
+    ///
+    /// Note that this is distinct from the arity of the input box of the
+    /// quantifier. For example, an existential subquery may have any number of
+    /// input columns, but its output is always a single boolean not null
+    /// column.
+    pub fn output_arity(&self) -> usize {
+        if self.quantifier_type.is_subquery() {
+            return 1;
+        } else {
+            self.model.get_box(self.input_box).columns.len()
+        }
+    }
+}
+
+/// Mutable [`Quantifier`] methods that depend on their enclosing [`Model`].
+#[allow(dead_code)]
+impl<'a> BoundRefMut<'a, Quantifier> {
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the input box of this quantifier.
+    pub fn input_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.input_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box(&self) -> BoundRef<'_, QueryBox> {
+        self.model.get_box(self.parent_box)
+    }
+
+    /// Resolve a bound reference to the parent box of this quantifier.
+    pub fn parent_box_mut(&mut self) -> BoundRefMut<'_, QueryBox> {
+        self.model.get_mut_box(self.parent_box)
+    }
+}
+
 impl BoxType {
     pub fn get_box_type_str(&self) -> &'static str {
         match self {
@@ -904,7 +960,7 @@ impl BoxType {
             BoxType::Intersect => "Intersect",
             BoxType::OuterJoin(..) => "OuterJoin",
             BoxType::Select(..) => "Select",
-            BoxType::TableFunction(..) => "TableFunction",
+            BoxType::CallTable(..) => "CallTable",
             BoxType::Union => "Union",
             BoxType::Values(..) => "Values",
         }

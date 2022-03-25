@@ -10,7 +10,6 @@ members = [
     "src/build-info",
     "src/ccsr",
     "src/coord",
-    "src/coordtest",
     "src/dataflow-bin",
     "src/dataflow-types",
     "src/dataflow",
@@ -28,6 +27,9 @@ members = [
     "src/process-collector",
     "src/mzcloud-cli",
     "src/ore",
+    "src/orchestrator",
+    "src/orchestrator-kubernetes",
+    "src/persist-client",
     "src/persist-types",
     "src/persist",
     "src/pgcopy",
@@ -80,10 +82,6 @@ rustc-demangle = { opt-level = 3 }
 debug = 1
 
 [patch.crates-io]
-# Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into a release.
-autotools = { git = "https://github.com/lu-zero/autotools-rs.git" }
-# Waiting on https://github.com/blackbeam/rust_mysql_common/pull/55 to be released
-mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
 parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }
 # Waiting on https://github.com/tokio-rs/prost/pull/576.

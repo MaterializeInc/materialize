@@ -256,7 +256,7 @@ impl<'a> Parser<'a> {
                 split_at(&mut output_str, &LINE_REGEX)?
                     .split(' ')
                     .filter(|s| !s.is_empty())
-                    .map(|s| ColumnName::from(s.replace("␠", " ")))
+                    .map(|s| ColumnName::from(s.replace('␠', " ")))
                     .collect(),
             )
         } else {
@@ -290,7 +290,7 @@ impl<'a> Parser<'a> {
                                     types.len()
                                 );
                             }
-                            rows.push(cols.into_iter().map(|col| col.replace("␠", " ")).collect());
+                            rows.push(cols.into_iter().map(|col| col.replace('␠', " ")).collect());
                         }
                         if sort == Sort::Row {
                             rows.sort();

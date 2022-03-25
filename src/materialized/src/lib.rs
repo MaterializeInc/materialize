@@ -17,14 +17,18 @@ use std::env;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_coord::PersistConfig;
+use mz_dataflow_types::client::{RemoteClient, StorageWrapperClient};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator::{Orchestrator, ServiceConfig};
+use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -32,8 +36,9 @@ use tokio_stream::wrappers::TcpListenerStream;
 
 use mz_build_info::BuildInfo;
 use mz_coord::LoggingConfig;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_pid_file::PidFile;
@@ -123,6 +128,12 @@ pub struct Config {
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
+    /// The configuration of the storage layer.
+    pub storage: StorageConfig,
+
+    // === Platform options. ===
+    /// Optional configuration for a service orchestrator.
+    pub orchestrator: Option<OrchestratorConfig>,
 
     // === AWS options. ===
     /// An [external ID] to be supplied to all AWS AssumeRole operations.
@@ -143,6 +154,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Configuration of the persistence runtime and features.
     pub persist: PersistConfig,
+    /// Now generation function.
+    pub now: NowFn,
 }
 
 /// Configures TLS encryption for connections.
@@ -186,8 +199,40 @@ pub struct TelemetryConfig {
     pub interval: Duration,
 }
 
+/// Configuration for the service orchestrator.
+#[derive(Debug, Clone)]
+pub enum OrchestratorConfig {
+    /// Create a Kubernetes orchestrator.
+    Kubernetes {
+        /// The configuration for the orchestrator itself.
+        config: KubernetesOrchestratorConfig,
+        /// The dataflowd image reference to use.
+        dataflowd_image: String,
+    },
+}
+
+/// Configuration of the storage layer.
+#[derive(Debug, Clone)]
+pub enum StorageConfig {
+    /// Run a local storage instance.
+    Local,
+    /// Use a remote storage instance.
+    Remote(RemoteStorageConfig),
+}
+
+/// Configuration of a remote storage instance.
+#[derive(Debug, Clone)]
+pub struct RemoteStorageConfig {
+    /// The address that compute instances should connect to.
+    pub compute_addr: String,
+    /// The address that the controller should connect to.
+    pub controller_addr: String,
+    /// The number of workers in the remote process.
+    pub workers: usize,
+}
+
 /// Start a `materialized` server.
-pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let workers = config.workers;
 
     // Validate TLS configuration, if present.
@@ -206,7 +251,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                     builder.set_ca_file(ca)?;
                     builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
                 }
-                builder.set_certificate_file(&tls_config.cert, SslFiletype::PEM)?;
+                builder.set_certificate_chain_file(&tls_config.cert)?;
                 builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
                 builder.build().into_context()
             };
@@ -265,23 +310,121 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         )
         .await?;
 
+    // Initialize orchestrator.
+    let orchestrator = match config.orchestrator {
+        None => None,
+        Some(OrchestratorConfig::Kubernetes {
+            config: kubernetes_config,
+            dataflowd_image,
+        }) => {
+            let orchestrator = KubernetesOrchestrator::new(kubernetes_config)
+                .await
+                .context("connecting to kubernetes")?;
+
+            if let StorageConfig::Local = &config.storage {
+                let storage_workers = 1;
+                let service = orchestrator
+                    .namespace("storage")
+                    .ensure_service(
+                        &format!("dataflow"),
+                        ServiceConfig {
+                            image: dataflowd_image.clone(),
+                            args: vec![
+                                format!("--workers={storage_workers}"),
+                                "--runtime=storage".into(),
+                                format!("--storage-addr=0.0.0.0:2102"),
+                            ],
+                            ports: vec![2102, 6876],
+                            // TODO: limits?
+                            cpu_limit: None,
+                            memory_limit: None,
+                            processes: 1,
+                        },
+                    )
+                    .await?;
+                let storage_host = service.hosts().into_element();
+                config.storage = StorageConfig::Remote(RemoteStorageConfig {
+                    compute_addr: format!("{storage_host}:2102"),
+                    controller_addr: format!("{storage_host}:6876"),
+                    workers: storage_workers,
+                });
+            }
+
+            let remote_storage_config = match &config.storage {
+                StorageConfig::Local => unreachable!("storage config forced to be remote above"),
+                StorageConfig::Remote(c) => c,
+            };
+
+            Some(mz_dataflow_types::client::controller::OrchestratorConfig {
+                orchestrator: Box::new(orchestrator),
+                dataflowd_image,
+                storage_addr: remote_storage_config.compute_addr.clone(),
+                storage_workers: remote_storage_config.workers,
+            })
+        }
+    };
+
     // Initialize dataflow server.
-    let (dataflow_server, dataflow_client) = mz_dataflow::serve(mz_dataflow::Config {
+    let dataflow_config = mz_dataflow::Config {
         workers,
         timely_config: timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
-            worker: timely::WorkerConfig::default(),
+            worker: config.timely_worker,
         },
         experimental_mode: config.experimental_mode,
-        now: SYSTEM_TIME.clone(),
+        now: config.now.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister: persister.runtime.clone(),
         aws_external_id: config.aws_external_id.clone(),
-    })?;
+    };
+    let (dataflow_server, dataflow_controller) = match &config.storage {
+        StorageConfig::Local => {
+            let (dataflow_server, dataflow_client) = mz_dataflow::serve(dataflow_config)?;
+            let (storage_client, virtual_compute_host) =
+                mz_dataflow_types::client::split_client(dataflow_client);
+            let dataflow_controller = mz_dataflow_types::client::Controller::new(
+                orchestrator,
+                storage_client,
+                virtual_compute_host,
+            );
+            (dataflow_server, dataflow_controller)
+        }
+        StorageConfig::Remote(RemoteStorageConfig {
+            compute_addr,
+            controller_addr,
+            workers,
+        }) => {
+            let (storage_compute_client, _thread) =
+                mz_dataflow::tcp_boundary::client::connect(compute_addr, config.workers, *workers)
+                    .await?;
+            let boundary = (0..config.workers)
+                .into_iter()
+                .map(|_| Some((mz_dataflow::DummyBoundary, storage_compute_client.clone())))
+                .collect::<Vec<_>>();
+            let boundary = Arc::new(Mutex::new(boundary));
+            let workers = config.workers;
+            let (compute_server, compute_client) =
+                mz_dataflow::serve_boundary(dataflow_config, move |index| {
+                    boundary.lock().unwrap()[index % workers].take().unwrap()
+                })?;
+            let (_, virtual_compute_host) = mz_dataflow_types::client::split_client(compute_client);
+            let storage_client = Box::new(StorageWrapperClient::new({
+                let mut client = RemoteClient::new(&[controller_addr]);
+                client.connect().await;
+                client
+            }));
+            let dataflow_controller = mz_dataflow_types::client::Controller::new(
+                orchestrator,
+                storage_client,
+                virtual_compute_host,
+            );
+            (compute_server, dataflow_controller)
+        }
+    };
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
-        dataflow_client: Box::new(dataflow_client),
+        dataflow_client: dataflow_controller,
         logging: config.logging,
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
@@ -293,7 +436,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         persister,
-        now: SYSTEM_TIME.clone(),
+        now: config.now,
     })
     .await?;
 

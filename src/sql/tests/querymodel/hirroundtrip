@@ -1,0 +1,331 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+## Basic MFP over a constant or a get
+
+round_trip
+select;
+----
+%0 =
+| Constant ()
+
+round_trip
+select 1;
+----
+%0 =
+| Constant ()
+| Map 1
+
+round_trip
+select a, a from (select 1 as a);
+----
+%0 =
+| Constant ()
+| Map 1
+| Project (#0, #0)
+
+round_trip
+select a, b, a from (select 1 as a, 2 as b);
+----
+%0 =
+| Constant ()
+| Map 1, 2
+| Project (#0, #1, #0)
+
+round_trip
+select a from (select 1 as a, true as b) where b;
+----
+%0 =
+| Constant ()
+| Map 1, true
+| Filter #1
+| Project (#0)
+
+round_trip
+select case when not x.a then ltrim('e', x.b) else substr(x.c, 3, 4) end, mz_logical_timestamp()
+from (select false as a, null as b, null as c) x
+----
+%0 =
+| Constant ()
+| Map false, null
+| Project (#0, #1, #1)
+| Map if !(#0) then {ltrim("e", #1)} els {substr(#2, i32toi64(3), i32toi64(4))}, mz_logical_timestamp()
+| Project (#3, #4)
+
+round_trip
+select c from (select b, a + 1 as c from (select 1 as a, true as b));
+----
+%0 =
+| Constant ()
+| Map 1, true, (#0 + 1)
+| Project (#1, #2)
+| Project (#1)
+
+## Different variations of joins
+
+round_trip
+select x.a from (select true as a) x join (select false as b) y on x.a;
+----
+----
+%0 =
+| Constant ()
+| Map true
+
+%1 =
+| Constant ()
+| Map false
+
+%2 =
+| InnerJoin %0 %1 on true
+| Filter #0
+| Project (#0)
+----
+----
+
+round_trip
+select x.a from (select true as a) x left join (select false as b) y on x.a;
+----
+----
+%0 =
+| Constant ()
+| Map true
+
+%1 =
+| Constant ()
+| Map false
+
+%2 =
+| LeftOuterJoin %0 %1 on #0
+| Project (#0)
+----
+----
+
+cat
+(defsource x [int32 int64 int32] [a b c])
+(defsource y [int32 int64 int32] [a b c])
+----
+ok
+
+round_trip
+select x.b + 1 as d from x right join y on x.a = y.a;
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u1)
+
+%2 =
+| RightOuterJoin %0 %1 on (#0 = #3)
+| Map (#1 + i32toi64(1))
+| Project (#6)
+----
+----
+
+round_trip
+select coalesce(x.b, 0) from x full join y on x.a = y.a and x.c is not null;
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u1)
+
+%2 =
+| FullOuterJoin %0 %1 on ((#0 = #3) && !(isnull(#2)))
+| Map coalesce(#1, i32toi64(0))
+| Project (#6)
+----
+----
+
+round_trip
+select * from x inner join y on x.a = y.a;
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u1)
+
+%2 =
+| InnerJoin %0 %1 on true
+| Filter (#0 = #3)
+----
+----
+
+round_trip
+select * from x inner join y using(a);
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u1)
+
+%2 =
+| InnerJoin %0 %1 on true
+| Filter (true && (#0 = #3))
+| Project (#0..=#2, #4, #5)
+----
+----
+
+round_trip
+select * from x, y where x.a = y.a;
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u1)
+
+%2 =
+| InnerJoin %0 %1 on true
+| Filter (#0 = #3)
+----
+----
+
+round_trip
+with a(a, b) as (select 1, 2) select case when x.c > 5 then 1 else 0 end from a
+cross join x
+----
+----
+%0 =
+| Constant ()
+| Map 1, 2
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| InnerJoin %0 %1 on true
+| Map if (#4 > 5) then {1} els {0}
+| Project (#5)
+----
+----
+
+## CSE tests
+
+round_trip
+with a(a, b) as (select 1, 2) select a.a from a cross join a as b
+----
+----
+%0 = Let  (l0) =
+| Constant ()
+| Map 1, 2
+
+%1 =
+| InnerJoin %0 %0 on true
+| Project (#0)
+----
+----
+
+round_trip
+select * from x, x as y;
+----
+----
+%0 =
+| Get ? (u0)
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| InnerJoin %0 %1 on true
+----
+----
+
+## Distinct test
+
+round_trip
+select distinct a from x
+----
+%0 =
+| Get ? (u0)
+| Project (#0)
+| Distinct
+
+## Subqueries
+
+round_trip
+select (select true from x), true
+----
+----
+%0 =
+| Constant ()
+| Map select(%1), true
+| |
+| | %1 =
+| | | Get ? (u0)
+| | | Map true
+| | | Project (#3)
+| |
+----
+----
+
+round_trip
+select y.b, y.c + 1 from y where (select a from x) = y.a
+----
+%0 =
+| Get ? (u1)
+| Map select(%1)
+| |
+| | %1 =
+| | | Get ? (u0)
+| | | Project (#0)
+| |
+| Filter (#3 = #0)
+| Project (#0..=#2)
+| Map (#2 + 1)
+| Project (#1, #3)
+
+round_trip
+select y.a - 1, y.b, (select a from x), y.c + 1 from y
+----
+%0 =
+| Get ? (u1)
+| Map select(%1), (#0 - 1), (#2 + 1)
+| |
+| | %1 =
+| | | Get ? (u0)
+| | | Project (#0)
+| |
+| Project (#0..=#2, #4, #3, #5)
+| Project (#3, #1, #4, #5)
+
+round_trip
+select
+  *
+from
+  x
+where
+  exists(select z.a, z.b from x as z where z.a != 5) and
+  exists(select z.a, z.b from x as z where z.a != 5);
+----
+%0 =
+| Get ? (u0)
+| Map exists(%1), exists(%2)
+| |
+| | %1 =
+| | | Get ? (u0)
+| | | Filter (#0 != 5)
+| | | Project (#0, #1)
+| |
+| |
+| | %2 =
+| | | Get ? (u0)
+| | | Filter (#0 != 5)
+| | | Project (#0, #1)
+| |
+| Filter (#3 && #4)
+| Project (#0..=#2)

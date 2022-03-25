@@ -19,6 +19,7 @@ use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -27,7 +28,7 @@ use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-use materialized::TlsMode;
+use materialized::{StorageConfig, TlsMode};
 
 lazy_static! {
     pub static ref KAFKA_ADDRS: mz_kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
@@ -47,6 +48,7 @@ pub struct Config {
     safe_mode: bool,
     workers: usize,
     logical_compaction_window: Option<Duration>,
+    now: NowFn,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             safe_mode: false,
             workers: 1,
             logical_compaction_window: None,
+            now: SYSTEM_TIME.clone(),
         }
     }
 }
@@ -114,6 +117,11 @@ impl Config {
         self.frontegg = Some(frontegg.clone());
         self
     }
+
+    pub fn with_now(mut self, now: NowFn) -> Self {
+        self.now = now;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -144,6 +152,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
         data_directory,
+        orchestrator: None,
+        storage: StorageConfig::Local,
         aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
@@ -156,6 +166,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
         third_party_metrics_listen_addr: None,
+        now: config.now,
     }))?;
     let server = Server {
         inner,

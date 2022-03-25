@@ -219,7 +219,7 @@ mod test {
     #[tokio::test]
     async fn async_operator() {
         // Run timely in a separate thread
-        #[allow(clippy::disallowed_method)]
+        #[allow(clippy::disallowed_methods)]
         let extracted = tokio::task::spawn_blocking(|| {
             let capture = timely::example(|scope| {
                 let input = (0..10).to_stream(scope);

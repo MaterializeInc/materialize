@@ -30,7 +30,17 @@ CREATE TABLE t1 (f1 INTEGER);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES (1);
 
+! CREATE VIEWS FROM SOURCE mz_source (t1);
+contains:table t1 not found
+
+> DROP SOURCE mz_source;
+
+> CREATE MATERIALIZED SOURCE mz_source
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  PUBLICATION 'mz_source';
+
 > CREATE VIEWS FROM SOURCE mz_source (t1);
 
+# To keep this test passing we expect no result here, since that is now what we get
 > SELECT * FROM t1;
 1

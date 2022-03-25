@@ -223,7 +223,7 @@ db error: ERROR: transaction in read-only mode
 # Using an AS OF in the SELECT or TAIL allows lifting that restriction.
 
 simple
-DECLARE c CURSOR FOR TAIL t AS OF 1;
+DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
 FETCH 0 c;
 DECLARE d CURSOR FOR TAIL t;
 FETCH 0 d;
@@ -234,7 +234,7 @@ COMPLETE 0
 COMPLETE 0
 
 simple
-DECLARE c CURSOR FOR TAIL t AS OF 1;
+DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
 FETCH 0 c;
 SELECT * FROM t LIMIT 0;
 ----
@@ -244,24 +244,26 @@ COMPLETE 0
 
 simple
 SELECT * FROM t LIMIT 0;
-DECLARE c CURSOR FOR TAIL t AS OF 1;
+DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
 FETCH 0 c;
 ----
 COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
+# Use AS OF now()+'1s' because now() has problems with tables (#11188), so
+# adding a second will probably always work.
 simple
 DECLARE c CURSOR FOR TAIL t;
 FETCH 0 c;
-SELECT * FROM t LIMIT 0 AS OF 1;
+SELECT * FROM t LIMIT 0 AS OF now()+'1s';
 ----
 COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
 simple
-SELECT * FROM t LIMIT 0 AS OF 1;
+SELECT * FROM t LIMIT 0 AS OF now()+'1s';
 DECLARE c CURSOR FOR TAIL t;
 FETCH 0 c;
 ----
@@ -291,12 +293,9 @@ SELECT * FROM other.t;
 db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
 DETAIL: The following relations in the query are outside the transaction's time domain:
 "materialize.other.t"
-"materialize.other.t_primary_idx"
 Only the following relations are available:
 "materialize.public.t"
 "materialize.public.t5727"
-"materialize.public.t5727_primary_idx"
-"materialize.public.t_primary_idx"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -340,7 +339,7 @@ COMPLETE 1
 COMPLETE 1
 COMPLETE 0
 
-# Verify that replacing a non-materialized view in a different transaction isn't seen.
+# Test replacing a non-materialized view in a different transaction.
 
 statement ok
 CREATE VIEW v1 AS SELECT 1
@@ -364,22 +363,16 @@ SELECT * FROM v1;
 2
 COMPLETE 1
 
-# Here we expect an error because, since our catalog doesn't respect
-# SQL transactions, the original v1 doesn't exist.
+# Our catalog doesn't respect SQL transactions, so we see the new v1.
+# Unmaterialized views with no dependencies exist outside of any particular
+# timedomain.
 simple conn=t1
 SELECT * FROM v1;
 COMMIT;
 ----
-db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
-DETAIL: The following relations in the query are outside the transaction's time domain:
-"materialize.public.v1"
-Only the following relations are available:
-"materialize.public.t"
-"materialize.public.t5727"
-"materialize.public.t5727_primary_idx"
-"materialize.public.t_primary_idx"
-"materialize.public.v"
-"materialize.public.v_primary_idx"
+2
+COMPLETE 1
+COMPLETE 0
 
 simple conn=t1
 ROLLBACK;
@@ -409,7 +402,7 @@ COMPLETE 0
 simple conn=t1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u21'
+db error: ERROR: unknown catalog item 'u17'
 
 # Test transaction syntax that we don't support.
 

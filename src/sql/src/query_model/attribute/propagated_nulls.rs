@@ -64,7 +64,7 @@ pub(crate) fn propagated_nulls(expr: &BoxScalarExpr) -> HashSet<ColumnReference>
                     result.insert(col.clone());
                     None
                 }
-                BaseColumn(..) | Literal(..) | CallNullary(_) => None,
+                BaseColumn(..) | Literal(..) | CallUnmaterializable(_) => None,
                 CallUnary { func, .. } => {
                     if func.propagates_nulls() {
                         None
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_derivation() {
-        let mut model = Model::new();
+        let mut model = Model::default();
         let g_id = model.make_box(qgm::get(0).into());
         {
             let mut b = model.get_mut_box(g_id);

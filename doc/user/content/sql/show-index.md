@@ -26,13 +26,14 @@ _on&lowbar;name_ | The name of the object whose indexes you want to show. This c
 `SHOW INDEX`'s output is a table, with this structure:
 
 ```nofmt
- on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
----------+----------+--------------+-------------+------------+----------+--------
- ...     | ...      | ...          | ...         | ...        | ...      | ...
+cluster | on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
+--------+---------+----------+--------------+-------------+------------+----------+--------
+ ...    | ...     | ...      | ...          | ...         | ...        | ...      | ...
 ```
 
 Field | Meaning
 ------|--------
+**cluster** | The name of the [cluster](/overview/api-components/#clusters) containing the index.
 **on_name** | The name of the table, source, or view the index belongs to.
 **key_name** | The name of the index.
 **seq_in_index** | The column's position in the index.
@@ -46,6 +47,10 @@ The output columns are renamed from `On_name`, `Key_name`, `Column_name`,
 `Expression`, `Null`, and `Seq_in_index` to `on_name`, `key_name`,
 `column_name`, `expression`, `nullable`, and `seq_in_index`, respectively.
 {{< /version-changed >}}
+
+{{< version-added v0.23.0 >}}
+The `cluster` column.
+{{< /version-added >}}
 
 ### Determine which views have indexes
 

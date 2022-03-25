@@ -10,6 +10,7 @@
 //! Logic related to the creation of dataflow sources.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -17,21 +18,22 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
+use timely::dataflow::operators::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::ActivateCapability;
 use timely::dataflow::operators::{Concat, Map, OkErr, Probe, UnorderedInput};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
+use timely::progress::Antichain;
 use tracing::debug;
 
+use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
+use mz_dataflow_types::*;
+use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
 use mz_persist::client::{MultiWriteHandle, StreamWriteHandle};
 use mz_persist::operators::source::PersistedSource;
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_persist_types::Codec;
-
-use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
-use mz_dataflow_types::*;
-use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
 use mz_repr::{Diff, Row, RowPacker, Timestamp};
-use timely::progress::Antichain;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -60,25 +62,34 @@ enum SourceType<Delimited, ByteStream> {
     ByteStream(ByteStream),
 }
 
+/// A description of a table imported by [`import_table`].
+struct ImportedTable<G>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    /// The collection containing the records from the table.
+    ok_collection: Collection<G, Row, Diff>,
+    /// The collection containing errors from the etable.
+    err_collection: Collection<G, DataflowError, Diff>,
+    /// A handle for inserting records into the table.
+    handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
+    /// The initial capability associated with the insert handle.
+    capability: ActivateCapability<Timestamp>,
+}
+
 /// Imports a table (non-durable, local source of input).
-pub(crate) fn import_table<G>(
+fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
     id: SourceInstanceId,
     persisted_name: Option<String>,
-) -> (
-    LocalInput,
-    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-)
+) -> ImportedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let ((handle, capability), ok_stream, err_collection) = {
-        let ((handle, capability), ok_stream) = scope.new_unordered_input();
-        let err_collection = Collection::empty(scope);
-        ((handle, capability), ok_stream, err_collection)
-    };
+    let ((handle, capability), ok_stream) = scope.new_unordered_input();
+    let err_collection = Collection::empty(scope);
 
     // A local "source" is either fed by a local input handle, or by reading from a
     // `persisted_source()`.
@@ -115,7 +126,6 @@ where
         _ => (ok_stream, err_collection),
     };
 
-    let local_input = LocalInput { handle, capability };
     let as_of_frontier = as_of_frontier.clone();
     let ok_collection = ok_stream
         .map_in_place(move |(_, time, _)| {
@@ -123,7 +133,12 @@ where
         })
         .as_collection();
 
-    (local_input, (ok_collection, err_collection))
+    ImportedTable {
+        ok_collection,
+        err_collection,
+        handle,
+        capability,
+    }
 }
 
 /// Constructs a `CollectionBundle` and tokens from source arguments.
@@ -136,8 +151,11 @@ pub(crate) fn import_source<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     SourceInstanceDesc {
         description: src,
-        operators: mut linear_operators,
-        persist,
+        arguments:
+            SourceInstanceArguments {
+                operators: mut linear_operators,
+                persist,
+            },
     }: SourceInstanceDesc,
     storage_state: &mut crate::server::StorageState,
     scope: &mut G,
@@ -177,12 +195,38 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let (local_input, (ok, err)) =
-                import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
-            storage_state.local_inputs.insert(src_id, local_input);
+            let mut table = import_table(as_of_frontier, storage_state, scope, uid, persisted_name);
 
-            // TODO(mcsherry): Local tables are a special non-source we should relocate.
-            ((ok, err), Rc::new(()))
+            let table_state = match storage_state.table_state.get_mut(&src_id) {
+                Some(table_state) => table_state,
+                None => panic!(
+                    "table state {} missing for source creation at worker {}",
+                    src_id,
+                    scope.index()
+                ),
+            };
+
+            // Make the new local input reflect the latest table state, then add the
+            // local input to the table state.
+            {
+                let mut session = table.handle.session(table.capability.clone());
+                for (row, time, diff) in &table_state.data {
+                    let mut time = *time;
+                    time.advance_by(table_state.since.borrow());
+                    assert!(time >= *table.capability.time());
+                    session.give((row.clone(), time, *diff));
+                }
+            }
+            table.capability.downgrade(&table_state.upper);
+
+            // Convert to reference counted, so that users can drop it.
+            let capability = Rc::new(RefCell::new(table.capability));
+            table_state.inputs.push(LocalInput {
+                handle: table.handle,
+                capability: Rc::downgrade(&capability),
+            });
+
+            ((table.ok_collection, table.err_collection), capability)
         }
 
         SourceConnector::External {
@@ -1053,7 +1097,7 @@ fn flatten_results_prepend_keys<G>(
     results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
 {
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),

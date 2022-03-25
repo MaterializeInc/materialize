@@ -59,7 +59,7 @@ mod impls;
 pub use impls::*;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub enum NullaryFunc {
+pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchemasWithSystem,
     CurrentSchemasWithoutSystem,
@@ -75,50 +75,52 @@ pub enum NullaryFunc {
     Version,
 }
 
-impl NullaryFunc {
+impl UnmaterializableFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::CurrentDatabase => ScalarType::String.nullable(false),
+            UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
             // TODO: The `CurrentSchemas` functions should should return name[].
-            NullaryFunc::CurrentSchemasWithSystem => {
+            UnmaterializableFunc::CurrentSchemasWithSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentSchemasWithoutSystem => {
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            NullaryFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::CurrentUser => ScalarType::String.nullable(false),
-            NullaryFunc::MzClusterId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzLogicalTimestamp => ScalarType::Numeric {
+            UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
             .nullable(false),
-            NullaryFunc::MzSessionId => ScalarType::Uuid.nullable(false),
-            NullaryFunc::MzUptime => ScalarType::Interval.nullable(true),
-            NullaryFunc::MzVersion => ScalarType::String.nullable(false),
-            NullaryFunc::PgBackendPid => ScalarType::Int32.nullable(false),
-            NullaryFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
-            NullaryFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
+            UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
+            UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
+            UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::Version => ScalarType::String.nullable(false),
         }
     }
 }
 
-impl fmt::Display for NullaryFunc {
+impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NullaryFunc::CurrentDatabase => f.write_str("current_database"),
-            NullaryFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
-            NullaryFunc::CurrentSchemasWithoutSystem => f.write_str("current_schemas(false)"),
-            NullaryFunc::CurrentTimestamp => f.write_str("current_timestamp"),
-            NullaryFunc::CurrentUser => f.write_str("current_user"),
-            NullaryFunc::MzClusterId => f.write_str("mz_cluster_id"),
-            NullaryFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
-            NullaryFunc::MzSessionId => f.write_str("mz_session_id"),
-            NullaryFunc::MzUptime => f.write_str("mz_uptime"),
-            NullaryFunc::MzVersion => f.write_str("mz_version"),
-            NullaryFunc::PgBackendPid => f.write_str("pg_backend_pid"),
-            NullaryFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
-            NullaryFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::CurrentDatabase => f.write_str("current_database"),
+            UnmaterializableFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
+            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+                f.write_str("current_schemas(false)")
+            }
+            UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
+            UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
+            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
+            UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
+            UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
+            UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
+            UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
+            UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
+            UnmaterializableFunc::Version => f.write_str("version"),
         }
     }
 }
@@ -468,7 +470,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     // Supporting other encodings is tracked by #2282.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
@@ -537,7 +539,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -2071,6 +2073,19 @@ where
     }
 }
 
+fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let mut interval = b.unwrap_interval();
+    let units = a.unwrap_str();
+    let dtf = units
+        .parse()
+        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
+
+    interval
+        .truncate_low_fields(dtf, Some(0))
+        .expect("truncate_low_fields should not fail with max_precision 0");
+    Ok(interval.into())
+}
+
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
 pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
     tz.parse()
@@ -2302,6 +2317,7 @@ pub enum BinaryFunc {
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
+    DateTruncInterval,
     TimezoneTimestamp,
     TimezoneTimestampTz,
     TimezoneTime { wall_time: NaiveDateTime },
@@ -2351,7 +2367,6 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
-    PgGetConstraintdef,
 }
 
 impl BinaryFunc {
@@ -2521,6 +2536,9 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
             }
+            BinaryFunc::DateTruncInterval => {
+                eager!(date_trunc_interval)
+            }
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
@@ -2593,10 +2611,6 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::PgGetConstraintdef => Err(EvalError::Unsupported {
-                feature: "pg_get_constraintdef".to_string(),
-                issue_no: Some(9483),
-            }),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2660,6 +2674,8 @@ impl BinaryFunc {
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
+
+            DateTruncInterval => ScalarType::Interval.nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -2731,8 +2747,6 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
-
-            PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2828,7 +2842,6 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
-                | PgGetConstraintdef
         )
     }
 
@@ -2943,6 +2956,7 @@ impl BinaryFunc {
             | DatePartTime
             | DatePartTimestamp
             | DatePartTimestampTz
+            | DateTruncInterval
             | DateTruncTimestamp
             | DateTruncTimestampTz
             | TimezoneTimestamp
@@ -2970,7 +2984,6 @@ impl BinaryFunc {
             | Power
             | PowerNumeric
             | RepeatString
-            | PgGetConstraintdef
             | ArrayRemove
             | ListRemove
             | LikeEscape => false,
@@ -3091,6 +3104,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DatePartTimestamp => f.write_str("date_partts"),
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
             BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
+            BinaryFunc::DateTruncInterval => f.write_str("date_trunciv"),
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
             BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
@@ -3141,7 +3155,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
-            BinaryFunc::PgGetConstraintdef => f.write_str("pg_get_constraintdef"),
         }
     }
 }
@@ -3269,6 +3282,7 @@ pub enum UnaryFunc {
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
     CastInt32ToOid(CastInt32ToOid),
+    CastInt32ToPgLegacyChar(CastInt32ToPgLegacyChar),
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
@@ -3310,6 +3324,7 @@ pub enum UnaryFunc {
     CastNumericToInt64(CastNumericToInt64),
     CastNumericToString(CastNumericToString),
     CastStringToBool(CastStringToBool),
+    CastStringToPgLegacyChar(CastStringToPgLegacyChar),
     CastStringToBytes(CastStringToBytes),
     CastStringToInt16(CastStringToInt16),
     CastStringToInt32(CastStringToInt32),
@@ -3348,6 +3363,8 @@ pub enum UnaryFunc {
     CastTimestampTzToTimestamp(CastTimestampTzToTimestamp),
     CastTimestampTzToString(CastTimestampTzToString),
     CastTimestampTzToTime(CastTimestampTzToTime),
+    CastPgLegacyCharToString(CastPgLegacyCharToString),
+    CastPgLegacyCharToInt32(CastPgLegacyCharToInt32),
     CastBytesToString(CastBytesToString),
     CastStringToJsonb,
     CastJsonbToString,
@@ -3462,7 +3479,6 @@ pub enum UnaryFunc {
     Sleep(Sleep),
     RescaleNumeric(NumericMaxScale),
     PgColumnSize(PgColumnSize),
-    PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
     MzTypeName(MzTypeName),
 }
@@ -3513,6 +3529,7 @@ derive_unary!(
     CastInt32ToInt64,
     CastInt32ToString,
     CastInt32ToOid,
+    CastInt32ToPgLegacyChar,
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt64ToBool,
@@ -3534,7 +3551,6 @@ derive_unary!(
     CastOidToRegType,
     CastRegTypeToOid,
     PgColumnSize,
-    PgGetConstraintdef,
     MzRowSize,
     MzTypeName,
     IsNull,
@@ -3565,6 +3581,7 @@ derive_unary!(
     CastNumericToInt64,
     CastNumericToString,
     CastStringToBool,
+    CastStringToPgLegacyChar,
     CastStringToBytes,
     CastStringToInt16,
     CastStringToInt32,
@@ -3623,6 +3640,8 @@ derive_unary!(
     CastTimestampTzToTime,
     CastDateToTimestamp,
     CastDateToTimestampTz,
+    CastPgLegacyCharToString,
+    CastPgLegacyCharToInt32,
     CastBytesToString,
     CastVarCharToString,
     Chr
@@ -3670,7 +3689,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -3714,6 +3732,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -3753,6 +3772,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -3797,6 +3817,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -3813,12 +3835,10 @@ impl UnaryFunc {
             CastRecordToString { ty }
             | CastArrayToString { ty }
             | CastListToString { ty }
-            | CastMapToString { ty } => Ok(cast_collection_to_string(a, ty, temp_storage)),
-            CastInt2VectorToString => Ok(cast_collection_to_string(
-                a,
-                &ScalarType::Int2Vector,
-                temp_storage,
-            )),
+            | CastMapToString { ty } => cast_collection_to_string(a, ty, temp_storage),
+            CastInt2VectorToString => {
+                cast_collection_to_string(a, &ScalarType::Int2Vector, temp_storage)
+            }
             CastList1ToList2 { cast_expr, .. } => cast_list1_to_list2(a, &*cast_expr, temp_storage),
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
@@ -3908,7 +3928,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -3952,6 +3971,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -3991,6 +4011,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4035,6 +4056,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -4168,7 +4191,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4212,6 +4234,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -4251,6 +4274,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4295,6 +4319,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -4375,7 +4401,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4449,7 +4474,6 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
-            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | MzTypeName(_)
             | IsNull(_)
@@ -4493,6 +4517,7 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToPgLegacyChar(_)
             | CastOidToInt32(_)
             | CastOidToInt64(_)
             | CastOidToString(_)
@@ -4532,6 +4557,7 @@ impl UnaryFunc {
             | CastNumericToInt64(_)
             | CastNumericToString(_)
             | CastStringToBool(_)
+            | CastStringToPgLegacyChar(_)
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
@@ -4576,6 +4602,8 @@ impl UnaryFunc {
             | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
+            | CastPgLegacyCharToString(_)
+            | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
             | Chr(_) => unreachable!(),
@@ -5137,11 +5165,14 @@ fn array_to_string<'a>(
                 out.push_str(delimiter);
             }
         } else {
-            stringify_datum(&mut out, elem, elem_type);
+            stringify_datum(&mut out, elem, elem_type)?;
             out.push_str(delimiter);
         }
     }
-    out.truncate(out.len() - delimiter.len()); // lop off last delimiter
+    if out.len() > 0 {
+        // Lop off last delimiter only if string is not empty
+        out.truncate(out.len() - delimiter.len());
+    }
     Ok(Datum::String(temp_storage.push_string(out)))
 }
 
@@ -5153,45 +5184,53 @@ fn cast_collection_to_string<'a>(
     a: Datum,
     ty: &ScalarType,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> Result<Datum<'a>, EvalError> {
     let mut buf = String::new();
-    stringify_datum(&mut buf, a, ty);
-    Datum::String(temp_storage.push_string(buf))
+    stringify_datum(&mut buf, a, ty)?;
+    Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
-fn stringify_datum<'a, B>(buf: &mut B, d: Datum<'a>, ty: &ScalarType) -> strconv::Nestable
+fn stringify_datum<'a, B>(
+    buf: &mut B,
+    d: Datum<'a>,
+    ty: &ScalarType,
+) -> Result<strconv::Nestable, EvalError>
 where
     B: FormatBuffer,
 {
     use ScalarType::*;
     match &ty {
-        Bool => strconv::format_bool(buf, d.unwrap_bool()),
-        Int16 => strconv::format_int16(buf, d.unwrap_int16()),
-        Int32 => strconv::format_int32(buf, d.unwrap_int32()),
-        Int64 => strconv::format_int64(buf, d.unwrap_int64()),
-        Oid | RegClass | RegProc | RegType => strconv::format_oid(buf, d.unwrap_uint32()),
-        Float32 => strconv::format_float32(buf, d.unwrap_float32()),
-        Float64 => strconv::format_float64(buf, d.unwrap_float64()),
-        Numeric { .. } => strconv::format_numeric(buf, &d.unwrap_numeric()),
-        Date => strconv::format_date(buf, d.unwrap_date()),
-        Time => strconv::format_time(buf, d.unwrap_time()),
-        Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),
-        TimestampTz => strconv::format_timestamptz(buf, d.unwrap_timestamptz()),
-        Interval => strconv::format_interval(buf, d.unwrap_interval()),
-        Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
-        String | VarChar { .. } => strconv::format_string(buf, d.unwrap_str()),
-        Char { length } => strconv::format_string(
+        Bool => Ok(strconv::format_bool(buf, d.unwrap_bool())),
+        Int16 => Ok(strconv::format_int16(buf, d.unwrap_int16())),
+        Int32 => Ok(strconv::format_int32(buf, d.unwrap_int32())),
+        Int64 => Ok(strconv::format_int64(buf, d.unwrap_int64())),
+        Oid | RegClass | RegProc | RegType => Ok(strconv::format_oid(buf, d.unwrap_uint32())),
+        Float32 => Ok(strconv::format_float32(buf, d.unwrap_float32())),
+        Float64 => Ok(strconv::format_float64(buf, d.unwrap_float64())),
+        Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
+        Date => Ok(strconv::format_date(buf, d.unwrap_date())),
+        Time => Ok(strconv::format_time(buf, d.unwrap_time())),
+        Timestamp => Ok(strconv::format_timestamp(buf, d.unwrap_timestamp())),
+        TimestampTz => Ok(strconv::format_timestamptz(buf, d.unwrap_timestamptz())),
+        Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
+        Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
+        String | VarChar { .. } => Ok(strconv::format_string(buf, d.unwrap_str())),
+        Char { length } => Ok(strconv::format_string(
             buf,
             &mz_repr::adt::char::format_str_pad(d.unwrap_str(), *length),
-        ),
-        Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
-        Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
+        )),
+        PgLegacyChar => {
+            format_pg_legacy_char(buf, d.unwrap_uint8())?;
+            Ok(strconv::Nestable::MayNeedEscaping)
+        }
+        Jsonb => Ok(strconv::format_jsonb(buf, JsonbRef::from_datum(d))),
+        Uuid => Ok(strconv::format_uuid(buf, d.unwrap_uuid())),
         Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
                 if d.is_null() {
-                    buf.write_null()
+                    Ok(buf.write_null())
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, &ty.scalar_type)
                 }
@@ -5203,7 +5242,7 @@ where
             &d.unwrap_array().elements(),
             |buf, d| {
                 if d.is_null() {
-                    buf.write_null()
+                    Ok(buf.write_null())
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, elem_type)
                 }
@@ -5211,14 +5250,14 @@ where
         ),
         List { element_type, .. } => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
             if d.is_null() {
-                buf.write_null()
+                Ok(buf.write_null())
             } else {
                 stringify_datum(buf.nonnull_buffer(), d, element_type)
             }
         }),
         Map { value_type, .. } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
             if d.is_null() {
-                buf.write_null()
+                Ok(buf.write_null())
             } else {
                 stringify_datum(buf.nonnull_buffer(), d, value_type)
             }
@@ -5425,7 +5464,7 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
                 EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
             })?;
             // nth from the back
-            byte_indices.nth(n).unwrap_or_else(|| string.len())
+            byte_indices.nth(n).unwrap_or(string.len())
         }
         Ordering::Less => {
             let n = usize::try_from(n.abs() - 1).map_err(|_| {
@@ -5460,7 +5499,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let n = usize::try_from(n).map_err(|_| {
             EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
         })?;
-        byte_indices.nth(n).unwrap_or_else(|| string.len())
+        byte_indices.nth(n).unwrap_or(string.len())
     };
 
     Ok(Datum::String(&string[start_in_bytes..]))
@@ -5801,11 +5840,14 @@ fn mz_render_typmod<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let oid = oid.unwrap_uint32();
     let typmod = typmod.unwrap_int32();
-    let typ = Type::from_oid_and_typmod(oid, typmod);
-    let constraint = typ.as_ref().and_then(|typ| typ.constraint());
-    Ok(Datum::String(
-        temp_storage.push_string(constraint.display_or("").to_string()),
-    ))
+    let s = match Type::from_oid_and_typmod(oid, typmod) {
+        Ok(typ) => typ.constraint().display_or("").to_string(),
+        // Match dubious PostgreSQL behavior of outputting the unmodified
+        // `typmod` when positive if the type OID/typmod is invalid.
+        Err(_) if typmod >= 0 => format!("({typmod})"),
+        Err(_) => "".into(),
+    };
+    Ok(Datum::String(temp_storage.push_string(s)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -5914,6 +5956,7 @@ impl VariadicFunc {
 
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
+        let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
             Coalesce | Greatest | Least => {
                 assert!(input_types.len() > 0);
@@ -5924,7 +5967,8 @@ impl VariadicFunc {
                     "coalesce/greatest/least inputs did not have uniform type: {:?}",
                     input_types
                 );
-                input_types.into_first().nullable(true)
+                let nullable = input_types.iter().all(|ty| ty.nullable);
+                input_types.into_first().nullable(nullable)
             }
             Concat => ScalarType::String.nullable(true),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
@@ -5977,7 +6021,7 @@ impl VariadicFunc {
                 custom_name: None,
             }
             .nullable(false),
-            SplitPart => ScalarType::String.nullable(true),
+            SplitPart => ScalarType::String.nullable(in_nullable),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),

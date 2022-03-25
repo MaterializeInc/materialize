@@ -9,6 +9,10 @@
 
 //! System data types.
 
+/// A Rust type representing a PostgreSQL "char".
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct PgLegacyChar(pub u8);
+
 /// A Rust type representing a PostgreSQL object identifier (OID).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Oid(pub u32);

@@ -28,6 +28,7 @@ Alter
 And
 Any
 Arn
+Arrangement
 Array
 As
 Asc
@@ -53,6 +54,8 @@ Character
 Characteristics
 Check
 Close
+Cluster
+Clusters
 Coalesce
 Collate
 Columns
@@ -77,6 +80,7 @@ Days
 Deallocate
 Debezium
 Debug
+Debugging
 Dec
 Decimal
 Declare
@@ -85,6 +89,7 @@ Default
 Delete
 Delimited
 Desc
+Details
 Discard
 Discover
 Distinct
@@ -116,6 +121,7 @@ Format
 Forward
 From
 Full
+Granularity
 Graph
 Greatest
 Group
@@ -141,6 +147,7 @@ Integer
 Intersect
 Interval
 Into
+Introspection
 Is
 Isnull
 Isolation
@@ -218,6 +225,7 @@ Real
 References
 Regex
 Registry
+Remote
 Rename
 Repeatable
 Replace
@@ -235,6 +243,8 @@ Schema
 Schemas
 Second
 Seconds
+Secret
+Secrets
 Seed
 Select
 Sequences
@@ -244,6 +254,7 @@ Set
 Show
 Sink
 Sinks
+Size
 Slot
 Smallint
 Snapshot
@@ -294,6 +305,7 @@ Varchar
 Varying
 View
 Views
+Virtual
 Warning
 When
 Where

@@ -16,22 +16,33 @@ use crate::query_model::model::{
 };
 use crate::query_model::Model;
 use itertools::Itertools;
+use mz_expr::ExprHumanizer;
 use mz_ore::str::separated;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Write};
 
+use super::attribute::core::{Attribute, RequiredAttributes};
+use super::attribute::relation_type::RelationType;
+
 impl Model {
-    pub fn as_dot(&self, label: &str) -> Result<String, anyhow::Error> {
-        DotGenerator::new().generate(self, label)
+    pub fn as_dot<'a>(
+        &mut self,
+        label: &str,
+        expr_humanizer: &'a dyn ExprHumanizer,
+        with_types: bool,
+    ) -> Result<String, anyhow::Error> {
+        DotGenerator::new(expr_humanizer, with_types).generate(self, label)
     }
 }
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
 #[derive(Debug)]
-struct DotGenerator {
+struct DotGenerator<'a> {
     output: String,
     indent: u32,
+    expr_humanizer: &'a dyn ExprHumanizer,
+    with_types: bool,
 }
 
 /// Generates a label for a graphviz graph.
@@ -48,26 +59,41 @@ enum DotLabel<'a> {
 /// The set of escaped characters is "|{}.
 struct DotLabelEscapedString<'a>(&'a str);
 
-impl DotGenerator {
-    fn new() -> Self {
+impl<'a> DotGenerator<'a> {
+    fn new(expr_humanizer: &'a dyn ExprHumanizer, with_types: bool) -> Self {
         Self {
             output: String::new(),
             indent: 0,
+            expr_humanizer,
+            with_types,
         }
     }
 
+    /// Derive attributes required for rendering the given [`Model`].
+    fn derive_required_attributes(&self, model: &mut Model, start_box: BoxId) {
+        // collect a set of required attributes for rendering
+        let mut attributes = HashSet::new();
+        if self.with_types {
+            attributes.insert(Box::new(RelationType) as Box<dyn Attribute>);
+        }
+        // derive the required derived attributes
+        RequiredAttributes::from(attributes).derive(model, start_box);
+    }
+
     /// Generates a graphviz graph for the given model, labeled with `label`.
-    fn generate(self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
+    fn generate(self, model: &mut Model, label: &str) -> Result<String, anyhow::Error> {
         self.generate_subgraph(model, model.top_box, label)
     }
 
     /// Generates a graphviz graph for the given subgraph of the model, labeled with `label`.
     fn generate_subgraph(
         mut self,
-        model: &Model,
+        model: &mut Model,
         start_box: BoxId,
         label: &str,
     ) -> Result<String, anyhow::Error> {
+        self.derive_required_attributes(model, start_box);
+
         self.new_line("digraph G {");
         self.inc();
         self.new_line("compound = true");
@@ -92,7 +118,7 @@ impl DotGenerator {
                     self.new_line(&format!(
                         "boxhead{} [ shape = record, {} ]",
                         box_id,
-                        Self::get_box_head(&b)
+                        self.get_box_head(&b)
                     ));
 
                     self.new_line("{");
@@ -153,17 +179,30 @@ impl DotGenerator {
         b.box_type.get_box_type_str()
     }
 
-    fn get_box_head(b: &QueryBox) -> String {
+    fn get_box_head(&self, b: &QueryBox) -> String {
         let mut rows = Vec::new();
 
         rows.push(format!("Distinct: {:?}", b.distinct));
 
         // The projection of the box
-        for (i, c) in b.columns.iter().enumerate() {
-            if let Some(alias) = &c.alias {
-                rows.push(format!("{}: {} as {}", i, c.expr, alias.as_str()));
-            } else {
-                rows.push(format!("{}: {}", i, c.expr));
+        if self.with_types {
+            let relation_type = b.attributes.get::<RelationType>();
+            for (i, c) in b.columns.iter().enumerate() {
+                let typ = self.expr_humanizer.humanize_column_type(&relation_type[i]);
+                if let Some(alias) = &c.alias {
+                    rows.push(format!("{}: {} ({}) as {}", i, c.expr, typ, alias.as_str()));
+                } else {
+                    rows.push(format!("{}: {} ({})", i, c.expr, typ));
+                }
+            }
+        } else {
+            // The projection of the box
+            for (i, c) in b.columns.iter().enumerate() {
+                if let Some(alias) = &c.alias {
+                    rows.push(format!("{}: {} as {}", i, c.expr, alias.as_str()));
+                } else {
+                    rows.push(format!("{}: {}", i, c.expr));
+                }
             }
         }
 
@@ -187,6 +226,12 @@ impl DotGenerator {
                     rows.push(format!("ROW: {}", separated(", ", row.iter())))
                 }
             }
+            BoxType::CallTable(call_table) => {
+                // display function call
+                let func = &call_table.func;
+                let args = &call_table.exprs;
+                rows.push(format!("CALL: {}({})", func, separated(", ", args)));
+            }
             _ => {}
         }
 
@@ -199,19 +244,10 @@ impl DotGenerator {
             rows.extend(predicates.iter().map(|p| p.to_string()));
         }
 
-        // TODO: print UNIQUE KEY for all nodes if the derived attribute is present
-        if let BoxType::Get(get) = &b.box_type {
-            if !get.unique_keys.is_empty() {
-                rows.push(format!(
-                    "UNIQUE KEY {}",
-                    separated(
-                        " ",
-                        get.unique_keys.iter().map(|key_set| format!(
-                            "[{}]",
-                            separated(", ", key_set.iter().map(|k| k.to_string()))
-                        ))
-                    )
-                ));
+        if let Some(unique_keys) = get_unique_keys(b) {
+            for key in unique_keys {
+                let key = key.iter().map(|column| format!("C{}", column));
+                rows.push(format!("UNIQUE KEY: {}", separated(", ", key)));
             }
         }
 
@@ -276,6 +312,17 @@ impl DotGenerator {
 
     fn end_line(&mut self) {
         self.output.push('\n');
+    }
+}
+
+fn get_unique_keys(b: &QueryBox) -> Option<Vec<Vec<usize>>> {
+    // TODO: return value of UniqueKeys attribute if present and
+    // fallback to the Get and CallTable base cases otherwise
+    // (TBD once the attribute has been added to the codebase)
+    match &b.box_type {
+        BoxType::CallTable(call_table) => Some(call_table.func.output_type().keys),
+        BoxType::Get(get) => Some(get.unique_keys.clone()),
+        _ => None,
     }
 }
 

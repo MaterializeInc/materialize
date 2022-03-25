@@ -23,8 +23,8 @@ struct Args {
 fn main() {
     let args: Args = mz_ore::cli::parse_args();
     mz_pgtest::walk(
-        &args.addr,
-        &args.user,
+        args.addr,
+        args.user,
         std::time::Duration::from_secs(5),
         &args.directory,
     );

@@ -18,10 +18,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{named_params, params, Connection, Transaction};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use mz_persist_types::Codec;
-use mz_timely_util::antichain_ext::Max1Antichain;
+use timely::progress::frontier::AntichainRef;
 
 const APPLICATION_ID: i32 = 0x0872_e898; // chosen randomly
 
@@ -192,9 +193,9 @@ where
     pub fn iter(&self) -> Result<impl Iterator<Item = ((K, V), i64, i64)>, StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let since = match self.since_tx(&tx)? {
-            Max1Antichain::Singular(since) => since,
-            Max1Antichain::Empty => {
+        let since = match self.since_tx(&tx)?.into_option() {
+            Some(since) => since,
+            None => {
                 return Err(StashError::from(
                     "cannot iterate collection with empty since frontier",
                 ));
@@ -239,9 +240,9 @@ where
         key.encode(&mut key_buf);
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let since = match self.since_tx(&tx)? {
-            Max1Antichain::Singular(since) => since,
-            Max1Antichain::Empty => {
+        let since = match self.since_tx(&tx)?.into_option() {
+            Some(since) => since,
+            None => {
                 return Err(StashError::from(
                     "cannot iterate collection with empty since frontier",
                 ));
@@ -305,8 +306,9 @@ where
         for ((key, value), time, diff) in entries {
             if !upper.less_equal(&time) {
                 return Err(StashError::from(format!(
-                    "entry time {:?} is less than the current upper frontier {:?}",
-                    time, upper
+                    "entry time {} is less than the current upper frontier {}",
+                    time,
+                    AntichainFormatter(&upper)
                 )));
             }
             key_buf.clear();
@@ -340,18 +342,15 @@ where
     ///
     /// Intuitively, this method declares that all times less than `upper` are
     /// definite.
-    pub fn seal<A>(&self, new_upper: A) -> Result<(), StashError>
-    where
-        A: Into<Max1Antichain<i64>>,
-    {
+    pub fn seal(&self, new_upper: AntichainRef<i64>) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
         let upper = self.upper_tx(&tx)?;
-        let new_upper = new_upper.into();
-        if PartialOrder::less_than(&new_upper, &upper) {
+        if PartialOrder::less_than(&new_upper, &upper.borrow()) {
             return Err(StashError::from(format!(
-                "seal request {:?} is less than the current upper frontier {:?}",
-                new_upper, upper
+                "seal request {} is less than the current upper frontier {}",
+                AntichainFormatter(&new_upper),
+                AntichainFormatter(&upper),
             )));
         }
         tx.execute(
@@ -369,25 +368,23 @@ where
     ///
     /// Intuitively, this method performs logical compaction. Existing entries
     /// whose time is less than `since` are fast-forwarded to `since`.
-    pub fn compact<A>(&self, new_since: A) -> Result<(), StashError>
-    where
-        A: Into<Max1Antichain<i64>>,
-    {
+    pub fn compact(&self, new_since: AntichainRef<i64>) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
         let since = self.since_tx(&tx)?;
         let upper = self.upper_tx(&tx)?;
-        let new_since = new_since.into();
-        if PartialOrder::less_than(&upper, &new_since) {
+        if PartialOrder::less_than(&upper.borrow(), &new_since) {
             return Err(StashError::from(format!(
-                "compact request {:?} is greater than the current upper frontier {:?}",
-                new_since, upper
+                "compact request {} is greater than the current upper frontier {}",
+                AntichainFormatter(&new_since),
+                AntichainFormatter(&upper)
             )));
         }
-        if PartialOrder::less_than(&new_since, &since) {
+        if PartialOrder::less_than(&new_since, &since.borrow()) {
             return Err(StashError::from(format!(
-                "compact request {:?} is less than the current since frontier {:?}",
-                new_since, upper
+                "compact request {} is less than the current since frontier {}",
+                AntichainFormatter(&new_since),
+                AntichainFormatter(&since)
             )));
         }
         tx.execute(
@@ -406,9 +403,9 @@ where
     pub fn consolidate(&mut self) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let since = self.since_tx(&tx)?;
+        let since = self.since_tx(&tx)?.into_option();
         match since {
-            Max1Antichain::Singular(since) => {
+            Some(since) => {
                 tx.execute(
                     "INSERT INTO data (collection_id, key, value, time, diff)
                      SELECT collection_id, key, value, $since, sum(diff) FROM data
@@ -428,7 +425,7 @@ where
                     },
                 )?;
             }
-            Max1Antichain::Empty => {
+            None => {
                 tx.execute(
                     "DELETE FROM data WHERE collection_id = $collection_id",
                     named_params! {
@@ -442,7 +439,7 @@ where
     }
 
     /// Reports the current since frontier.
-    pub fn since(&self) -> Result<Max1Antichain<i64>, StashError> {
+    pub fn since(&self) -> Result<Antichain<i64>, StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
         let since = self.since_tx(&tx)?;
@@ -451,7 +448,7 @@ where
     }
 
     /// Reports the current upper frontier.
-    pub fn upper(&self) -> Result<Max1Antichain<i64>, StashError> {
+    pub fn upper(&self) -> Result<Antichain<i64>, StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
         let upper = self.upper_tx(&tx)?;
@@ -459,22 +456,46 @@ where
         Ok(upper)
     }
 
-    fn since_tx(&self, tx: &Transaction) -> Result<Max1Antichain<i64>, StashError> {
+    fn since_tx(&self, tx: &Transaction) -> Result<Antichain<i64>, StashError> {
         let since: Option<i64> = tx.query_row(
             "SELECT since FROM sinces WHERE collection_id = $collection_id",
             named_params! {"$collection_id": self.collection_id},
             |row| row.get("since"),
         )?;
-        Ok(since.into())
+        Ok(Antichain::from_iter(since))
     }
 
-    fn upper_tx(&self, tx: &Transaction) -> Result<Max1Antichain<i64>, StashError> {
+    fn upper_tx(&self, tx: &Transaction) -> Result<Antichain<i64>, StashError> {
         let upper: Option<i64> = tx.query_row(
             "SELECT upper FROM uppers WHERE collection_id = $collection_id",
             named_params! {"$collection_id": self.collection_id},
             |row| row.get("upper"),
         )?;
-        Ok(upper.into())
+        Ok(Antichain::from_iter(upper))
+    }
+}
+
+struct AntichainFormatter<'a, T>(&'a [T]);
+
+impl<T> fmt::Display for AntichainFormatter<'_, T>
+where
+    T: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("{")?;
+        for (i, element) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            element.fmt(f)?;
+        }
+        f.write_str("}")
+    }
+}
+
+impl<'a, T> From<&'a Antichain<T>> for AntichainFormatter<'a, T> {
+    fn from(antichain: &Antichain<T>) -> AntichainFormatter<T> {
+        AntichainFormatter(antichain.elements())
     }
 }
 

@@ -10,23 +10,15 @@ by the Apache License, Version 2.0.  */}}
 <html>
 
 <head>
-    <meta charset="utf-8">
-
-    <title>
-    {{ block "title" . }}
-        {{ if isset .Params "htmltitle" }}
-            {{ .Params.htmltitle }}
-        {{ else }}
-            {{ .Page.Title }}
-        {{ end }}
-        &mdash; {{ .Site.Title }}
-    {{ end }}
-    </title>
-
     {{ partial "head.html" . }}
 </head>
 
 <body>
+    <!-- If a page uses supportlevel svg icons, embed them inline
+         so they can be referenced via <use> tags. -->
+    {{ if in .Page.RawContent "supportLevel" }}
+      {{ partial "inline-svgs.html"}}
+    {{ end }}
     {{ partial "header.html" . }}
     {{ block "body" .}}
         <div class="content-wrapper">
@@ -59,6 +51,25 @@ by the Apache License, Version 2.0.  */}}
           if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
           e.preventDefault();
           document.getElementById("search-input").focus();
+        });
+
+        /* Add "Click to Copy" button to code blocks */
+        $(document).ready(function() {
+          $('pre.chroma').append('<span class="default_button copy_button" title="Copy code to clipboard">Copy</span>');
+
+          $('pre.chroma span.copy_button').click(function(e) {
+            var _this = $(this),
+                copyHex = document.createElement('textarea');
+            copyHex.value = _this.parent().find('code').text().trim();
+            document.body.appendChild(copyHex);
+            copyHex.select();
+            document.execCommand('copy');
+            document.body.removeChild(copyHex);
+            _this.addClass("success").text('Copied');
+            setTimeout(function() {
+              _this.removeClass("success").text('Copy');
+            }, 1000);
+          });
         });
     </script>
 </body>

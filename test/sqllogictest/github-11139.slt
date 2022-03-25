@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/11139
+
+mode cockroach
+
+statement ok
+CREATE TABLE repro(f1 int, f2 string);
+
+statement ok
+INSERT INTO repro VALUES (1, null);
+
+statement ok
+CREATE VIEW repro_v AS SELECT f1, string_agg(f2, 'a') nullable_string_agg FROM repro GROUP BY f1;
+
+# Check that the query now works
+query IT
+SELECT * FROM repro_v
+----
+1 NULL
+
+# Check that the column is now marked as nullable if the input is null
+query T
+SELECT attnotnull FROM pg_catalog.pg_attribute WHERE attname = 'nullable_string_agg'
+----
+false
+
+# Check that string_agg can be made non-nullable if the input is not null
+statement ok
+CREATE TABLE repro2(f1 int, f2 string NOT NULL);
+
+statement ok
+INSERT INTO repro2 VALUES (1, 'a');
+
+statement ok
+CREATE VIEW repro2_v AS SELECT f1, string_agg(f2, 'a') nonnull_string_agg FROM repro2 GROUP BY f1;
+
+query T
+SELECT attnotnull FROM pg_catalog.pg_attribute WHERE attname = 'nonnull_string_agg'
+----
+true

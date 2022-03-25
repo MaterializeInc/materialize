@@ -1,4 +1,32 @@
+{{ $title := delimit (slice (cond (isset .Params "htmltitle") .Params.htmltitle .Page.Title) .Site.Title) " | " }}
+{{ $description := cond (isset .Params "description") .Params.description .Page.Description }}
 <meta name="viewport" content="width=1024">
+<meta charset=utf-8>
+<meta http-equiv=X-UA-Compatible content="IE=edge">
+<meta name=description content="{{ $description }}">
+<title>{{ $title }}</title>
+<meta name=referrer content=origin>
+<meta name=HandheldFriendly content=True>
+<meta name=msapplication-TileColor content="#7F4EFF">
+<meta name=theme-color content="#ffffff">
+<meta property="og:locale" content=en_US>
+<meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}">
+<meta property="og:type" content=article>
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:image" content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif">
+<meta property="og:description" content="{{ $description }}">
+<meta property="og:site_name" content=Materialize>
+<meta name="twitter:card" content=summary_large_image>
+<meta name="twitter:site" content="@MaterializeInc">
+<meta name="twitter:creator" content="@MaterializeInc">
+<meta name="twitter:title" content="{{ $title }}">
+<meta name="twitter:image" content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif">
+<meta name="twitter:description" content="{{ $description }}">
+<link rel="shortcut icon" type="image/x-icon" href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
+<link rel=apple-touch-icon sizes=180x180 href="{{ .Site.BaseURL }}/images/materialize_logo_180.png">
+<link rel=icon type="image/png" sizes=32x32 href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
+<link rel=mask-icon href="{{ .Site.BaseURL }}/images/materialize_logo.svg" color="#4d7cfe">
+<link rel=canonical href="{{ .Permalink }}">
 
 {{/*  Include all JavaScript files here  */}}
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
@@ -64,3 +92,35 @@ addEventListener("DOMContentLoaded", () => {
   }}();
 </script>
 {{end}}
+
+{{/* Tabs */}}
+<script>
+  $(document).ready(function () {
+
+    // make nav-tab lists from tab-panes
+    $('.tab-content').find('.tab-pane').each(function (idx, item) {
+      var navTabs = $(this).closest('.code-tabs').find('.nav-tabs'),
+        title = $(this).attr('title');
+      navTabs.append('<li><a href="#">' + title + '</a></li');
+    });
+
+    // activate first tab and tab-pane
+    $('.nav-tabs li:first-child').addClass('active').click()
+    $('.tab-content div:first-child').addClass('active').click()
+
+    // click
+    $('.nav-tabs a').click(function (e) {
+
+      e.preventDefault();
+
+      var tab = $(this).parent(),
+        tabIndex = tab.index(),
+        tabPanel = $(this).closest('.code-tabs'),
+        tabPane = tabPanel.find('.tab-pane').eq(tabIndex);
+      tabPanel.find('.active').removeClass('active');
+      tab.addClass('active');
+      tabPane.addClass('active');
+
+    });
+  });
+</script>

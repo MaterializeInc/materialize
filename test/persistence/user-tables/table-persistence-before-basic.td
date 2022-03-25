@@ -35,6 +35,10 @@
 
 > INSERT INTO exotic_types VALUES ('{1,2}'::int4_list, '{{1,2}}'::int4_list_list, '{a=>1}'::int4_map, '{a=>{a=>1}}'::int4_map_map);
 
+> CREATE TABLE char_type_quoted (f1 "char");
+
+> INSERT INTO char_type_quoted VALUES ('a');
+
 #
 # Make sure dropping a table does not break persistence of other tables
 #

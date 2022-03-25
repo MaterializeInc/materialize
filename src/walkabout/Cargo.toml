@@ -3,7 +3,7 @@ name = "mz-walkabout"
 description = "AST visitor generation."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
@@ -12,7 +12,7 @@ fstrings = "0.2.3"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false }
 quote = "1.0.14"
-syn = { version = "1.0.86", features = ["extra-traits", "full", "parsing"] }
+syn = { version = "1.0.89", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"

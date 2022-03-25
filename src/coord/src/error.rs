@@ -14,7 +14,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_expr::{EvalError, NullaryFunc};
+use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
@@ -28,9 +28,10 @@ use crate::session::Var;
 #[derive(Debug)]
 pub enum CoordError {
     /// Query needs AS OF <time> or indexes to succeed.
-    // Embeded object is meant to be of structure Vec<(Objectname, Vec<Index names w/ enabled stats>)>.
     AutomaticTimestampFailure {
+        /// The names of any unmaterialized sources.
         unmaterialized: Vec<String>,
+        /// Vec<(Objectname, Vec<Index names w/ enabled stats>)>.
         disabled_indexes: Vec<(String, Vec<String>)>,
     },
     /// An error occurred in a catalog operation.
@@ -53,8 +54,6 @@ pub enum CoordError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
-    /// At least one input has no complete timestamps yet
-    IncompleteTimestamp(Vec<mz_expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
     /// Attempted to build a materialization on a source that does not allow multiple materializations
@@ -119,7 +118,7 @@ pub enum CoordError {
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
-    UnmaterializableFunction(NullaryFunc),
+    UnmaterializableFunction(UnmaterializableFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
 }
@@ -307,11 +306,6 @@ impl fmt::Display for CoordError {
                 p.value().quoted()
             ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
-            CoordError::IncompleteTimestamp(unstarted) => write!(
-                f,
-                "At least one input has no complete timestamps yet: {:?}",
-                unstarted
-            ),
             CoordError::Internal(e) => write!(f, "internal error: {}", e),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())

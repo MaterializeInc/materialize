@@ -21,9 +21,9 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::iter;
 
 use mz_expr::GlobalId;
 use mz_expr::MirRelationExpr;
@@ -63,7 +63,7 @@ pub struct TransformArgs<'a> {
     /// A shared instance of IdGen to allow constructing new Let expressions.
     pub id_gen: &'a mut IdGen,
     /// The indexes accessible.
-    pub indexes: &'a HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    pub indexes: &'a dyn IndexOracle,
 }
 
 /// Types capable of transforming relation expressions.
@@ -103,6 +103,32 @@ impl Error for TransformError {}
 impl From<RecursionLimitError> for TransformError {
     fn from(error: RecursionLimitError) -> Self {
         TransformError::Internal(error.to_string())
+    }
+}
+
+/// A trait for a type that can answer questions about what indexes exist.
+pub trait IndexOracle: fmt::Debug {
+    /// Returns an iterator over the indexes that exist on the identified
+    /// collection.
+    ///
+    /// Each index is described by the list of key expressions. If no indexes
+    /// exist for the identified collection, or if the identified collection
+    /// is unknown, the returned iterator will be empty.
+    ///
+    // NOTE(benesch): The allocation here is unfortunate, but on the other hand
+    // you need only allocate when you actually look for an index. Can we do
+    // better somehow? Making the entire optimizer generic over this iterator
+    // type doesn't presently seem worthwhile.
+    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_>;
+}
+
+/// An [`IndexOracle`] that knows about no indexes.
+#[derive(Debug)]
+pub struct EmptyIndexOracle;
+
+impl IndexOracle for EmptyIndexOracle {
+    fn indexes_on(&self, _: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
+        Box::new(iter::empty())
     }
 }
 
@@ -189,6 +215,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::map::Map),
                 Box::new(crate::fusion::negate::Negate),
                 Box::new(crate::fusion::filter::Filter),
+                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),
@@ -374,7 +401,7 @@ impl Optimizer {
         &mut self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        self.transform(&mut relation, &HashMap::new())?;
+        self.transform(&mut relation, &EmptyIndexOracle)?;
         Ok(mz_expr::OptimizedMirRelationExpr(relation))
     }
 
@@ -385,7 +412,7 @@ impl Optimizer {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+        indexes: &dyn IndexOracle,
     ) -> Result<(), TransformError> {
         let mut id_gen = Default::default();
         for transform in self.transforms.iter() {

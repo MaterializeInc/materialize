@@ -33,9 +33,9 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::{
-    sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector,
-};
+use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
@@ -45,7 +45,7 @@ use crate::ast::{
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
-use crate::names::{DatabaseSpecifier, FullName, SchemaName};
+use crate::names::{Aug, DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -73,7 +73,9 @@ pub enum Plan {
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
+    CreateComputeInstance(CreateComputeInstancePlan),
     CreateSource(CreateSourcePlan),
+    CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
@@ -85,6 +87,7 @@ pub enum Plan {
     DropDatabase(DropDatabasePlan),
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
+    DropComputeInstances(DropComputeInstancesPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -139,11 +142,47 @@ pub struct CreateRolePlan {
 }
 
 #[derive(Debug)]
+pub struct CreateComputeInstancePlan {
+    pub name: String,
+    pub if_not_exists: bool,
+    pub config: ComputeInstanceConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ComputeInstanceConfig {
+    Virtual,
+    Remote {
+        hosts: Vec<String>,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+    Managed {
+        size: String,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+}
+
+/// Configuration of introspection for a compute instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComputeInstanceIntrospectionConfig {
+    /// Whether to introspect the introspection.
+    pub debugging: bool,
+    /// The interval at which to introspect.
+    pub granularity: Duration,
+}
+
+#[derive(Debug)]
 pub struct CreateSourcePlan {
     pub name: FullName,
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateSecretPlan {
+    pub name: FullName,
+    pub secret: Secret,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
@@ -209,6 +248,11 @@ pub struct DropRolesPlan {
 }
 
 #[derive(Debug)]
+pub struct DropComputeInstancesPlan {
+    pub names: Vec<String>,
+}
+
+#[derive(Debug)]
 pub struct DropItemsPlan {
     pub items: Vec<GlobalId>,
     pub ty: ObjectType,
@@ -229,7 +273,7 @@ pub struct SetVariablePlan {
 #[derive(Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
-    pub when: PeekWhen,
+    pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
 }
@@ -238,7 +282,7 @@ pub struct PeekPlan {
 pub struct TailPlan {
     pub from: TailFrom,
     pub with_snapshot: bool,
-    pub ts: Option<MirScalarExpr>,
+    pub when: QueryWhen,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
 }
@@ -370,7 +414,7 @@ pub struct RaisePlan {
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    pub defaults: Vec<Expr<Raw>>,
+    pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
     pub depends_on: Vec<GlobalId>,
 }
@@ -384,12 +428,18 @@ pub struct Source {
 }
 
 #[derive(Clone, Debug)]
+pub struct Secret {
+    pub create_sql: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -407,6 +457,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
@@ -416,9 +467,9 @@ pub struct Type {
     pub depends_on: Vec<GlobalId>,
 }
 
-/// Specifies when a `Peek` should occur.
+/// Specifies when a `Peek` or `Tail` should occur.
 #[derive(Debug, PartialEq)]
-pub enum PeekWhen {
+pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,

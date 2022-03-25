@@ -37,238 +37,259 @@ SHOW ROLES
 ----
 SHOW ROLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Role, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
+SHOW CLUSTERS
+----
+SHOW CLUSTERS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW USERS
 ----
 SHOW ROLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Role, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SCHEMAS
 ----
 SHOW SCHEMAS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Schema, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Schema, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SCHEMAS FROM foo.bar
 ----
 SHOW SCHEMAS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Schema, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Schema, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SOURCES FROM foo.bar
 ----
 SHOW SOURCES FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW VIEWS
 ----
 SHOW VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW VIEWS FROM foo.bar
 ----
 SHOW VIEWS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW TABLES
 ----
 SHOW TABLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW TABLES FROM foo.bar
 ----
 SHOW TABLES FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SINKS
 ----
 SHOW SINKS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SINKS FROM foo.bar
 ----
 SHOW SINKS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
+SHOW SINKS FROM foo.bar IN CLUSTER baz
+----
+SHOW SINKS FROM foo.bar
+=>
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedObjectName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
+SHOW SINKS IN CLUSTER baz
+----
+SHOW SINKS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: None, extended: false, full: false, materialized: false, filter: Some(Like("%foo%")) })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: Some(Like("%foo%")) })
 
 parse-statement
 SHOW FULL VIEWS
 ----
 SHOW FULL VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: None, extended: false, full: true, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: true, materialized: false, filter: None })
 
 parse-statement
 SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW MATERIALIZED SOURCES FROM foo
 ----
 SHOW MATERIALIZED SOURCES FROM foo
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedObjectName([Ident("foo")])), extended: false, full: false, materialized: true, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedObjectName([Ident("foo")])), in_cluster: None, extended: false, full: false, materialized: true, filter: None })
 
 parse-statement
 SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'
 ----
 SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedObjectName([Ident("foo")])), extended: false, full: false, materialized: true, filter: Some(Like("%foo%")) })
+ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedObjectName([Ident("foo")])), in_cluster: None, extended: false, full: false, materialized: true, filter: Some(Like("%foo%")) })
 
 parse-statement
 SHOW INDEXES FROM foo
 ----
 SHOW INDEXES FROM foo
 =>
-ShowIndexes(ShowIndexesStatement { table_name: UnresolvedObjectName([Ident("foo")]), extended: false, filter: None })
+ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, extended: false, filter: None })
 
 parse-statement
 SHOW INDEXES IN foo
 ----
 SHOW INDEXES FROM foo
 =>
-ShowIndexes(ShowIndexesStatement { table_name: UnresolvedObjectName([Ident("foo")]), extended: false, filter: None })
+ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, extended: false, filter: None })
 
 parse-statement
 SHOW EXTENDED INDEXES FROM foo
 ----
 SHOW EXTENDED INDEXES FROM foo
 =>
-ShowIndexes(ShowIndexesStatement { table_name: UnresolvedObjectName([Ident("foo")]), extended: true, filter: None })
+ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, extended: true, filter: None })
 
 parse-statement
 SHOW EXTENDED INDEXES FROM foo WHERE index_name = 'bar'
 ----
 SHOW EXTENDED INDEXES FROM foo WHERE index_name = 'bar'
 =>
-ShowIndexes(ShowIndexesStatement { table_name: UnresolvedObjectName([Ident("foo")]), extended: true, filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("index_name")]), expr2: Some(Value(String("bar"))) })) })
+ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, extended: true, filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("index_name")]), expr2: Some(Value(String("bar"))) })) })
 
 parse-statement
 SHOW CREATE VIEW foo
 ----
 SHOW CREATE VIEW foo
 =>
-ShowCreateView(ShowCreateViewStatement { view_name: UnresolvedObjectName([Ident("foo")]) })
+ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
 SHOW CREATE SINK foo
 ----
 SHOW CREATE SINK foo
 =>
-ShowCreateSink(ShowCreateSinkStatement { sink_name: UnresolvedObjectName([Ident("foo")]) })
+ShowCreateSink(ShowCreateSinkStatement { sink_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
 SHOW CREATE INDEX foo
 ----
 SHOW CREATE INDEX foo
 =>
-ShowCreateIndex(ShowCreateIndexStatement { index_name: UnresolvedObjectName([Ident("foo")]) })
+ShowCreateIndex(ShowCreateIndexStatement { index_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
 SHOW COLUMNS FROM mytable
 ----
 SHOW COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW COLUMNS FROM mydb.mytable
 ----
 SHOW COLUMNS FROM mydb.mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mydb"), Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mydb"), Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW EXTENDED COLUMNS FROM mytable
 ----
 SHOW EXTENDED COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: true, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: true, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW FULL COLUMNS FROM mytable
 ----
 SHOW FULL COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: true, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: true, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW EXTENDED FULL COLUMNS FROM mytable
 ----
 SHOW EXTENDED FULL COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: true, full: true, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: true, full: true, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW COLUMNS FROM mytable LIKE 'pattern'
 ----
 SHOW COLUMNS FROM mytable LIKE 'pattern'
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: Some(Like("pattern")) })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: Some(Like("pattern")) })
 
 parse-statement
 SHOW COLUMNS FROM mytable WHERE 1 = 2
 ----
 SHOW COLUMNS FROM mytable WHERE 1 = 2
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) })) })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) })) })
 
 parse-statement
 SHOW FIELDS FROM mytable
 ----
 SHOW COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW COLUMNS IN mytable
 ----
 SHOW COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW FIELDS IN mytable
 ----
 SHOW COLUMNS FROM mytable
 =>
-ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: UnresolvedObjectName([Ident("mytable")]), filter: None })
+ShowColumns(ShowColumnsStatement { extended: false, full: false, table_name: Name(UnresolvedObjectName([Ident("mytable")])), filter: None })
 
 parse-statement
 SHOW a
@@ -276,6 +297,13 @@ SHOW a
 SHOW a
 =>
 ShowVariable(ShowVariableStatement { variable: Ident("a") })
+
+parse-statement
+SHOW CLUSTERS
+----
+SHOW CLUSTERS
+=>
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 # TODO(justin): "all" here should be its own token so that it doesn't get
 # downcased.

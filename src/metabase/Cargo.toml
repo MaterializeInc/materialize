@@ -3,10 +3,10 @@ name = "mz-metabase"
 description = "An API client for Metabase."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
-reqwest = "0.11.9"
+reqwest = "0.11.10"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"

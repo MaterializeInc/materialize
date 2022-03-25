@@ -3,7 +3,7 @@ name = "mz-persist"
 description = "Abstraction for Materialize dataplane persistence."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 # Since we intentionally will only ever have one bench target, auto discovery of
 # benches is unnecessary. Turning it off allows us to have helper code in
@@ -33,7 +33,7 @@ aws-types = "0.8.0"
 base64 = "0.13.0"
 bincode = "1.3.3"
 bytes = "1.1.0"
-crossbeam-channel = "0.5.0"
+crossbeam-channel = "0.5.3"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures-executor = "0.3.21"
@@ -50,7 +50,7 @@ semver = "1.0.6"
 serde = { version = "1.0.136", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
-tracing = "0.1.31"
+tracing = "0.1.32"
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]

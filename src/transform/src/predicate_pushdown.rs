@@ -60,7 +60,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   id_gen: &mut Default::default(),
-//!   indexes: &std::collections::HashMap::new(),
+//!   indexes: &mz_transform::EmptyIndexOracle,
 //! });
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);

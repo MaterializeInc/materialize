@@ -1,0 +1,2348 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE int_table (col_null INTEGER, col_not_null INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE bool_table (col_null BOOLEAN, col_not_null BOOLEAN NOT NULL);
+
+statement ok
+CREATE TABLE str_table (col_null STRING, col_not_null STRING NOT NULL);
+
+statement ok
+CREATE TABLE ts_table (col_null TIMESTAMP, col_not_null TIMESTAMP NOT NULL);
+
+
+#
+# Constants are NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1;
+----
+%0 =
+| Constant (1)
+| | types = (integer)
+| | keys = (())
+
+EOF
+
+# NULL literal is NULL-able
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT NULL;
+----
+%0 =
+| Constant (null)
+| | types = (text?)
+| | keys = (())
+
+EOF
+
+#
+# VALUES
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT * FROM (VALUES(1), (2));
+----
+%0 =
+| Constant (1) (2)
+| | types = (integer)
+| | keys = ((#0))
+
+EOF
+
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT * FROM (VALUES(1), (NULL));
+----
+%0 =
+| Constant (null) (1)
+| | types = (integer?)
+| | keys = ((#0))
+
+EOF
+
+
+#
+# CAST propagates NOT NULL property
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map i32toi64(#0), i32toi64(#1)
+| | types = (integer?, integer, bigint?, bigint)
+| | keys = ()
+| Project (#2, #3)
+| | types = (bigint?, bigint)
+| | keys = ()
+
+EOF
+
+#
+# IS NULL and friends
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map isnull(#0), !(#2)
+| | types = (integer?, integer, boolean, boolean)
+| | keys = ()
+| Project (#2, #3)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
+----
+Source materialize.public.bool_table (u2):
+| Project (#0)
+
+Query:
+%0 =
+| Get materialize.public.bool_table (u2)
+| | types = (boolean?, boolean)
+| | keys = ()
+| Map istrue(#0), !(#2)
+| | types = (boolean?, boolean, boolean, boolean)
+| | keys = ()
+| Project (#2, #3)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
+----
+Source materialize.public.bool_table (u2):
+| Project (#0)
+
+Query:
+%0 =
+| Get materialize.public.bool_table (u2)
+| | types = (boolean?, boolean)
+| | keys = ()
+| Map isnull(#0), !(#2)
+| | types = (boolean?, boolean, boolean, boolean)
+| | keys = ()
+| Project (#2, #3)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+#
+# Try some other operators
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map (#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)
+| | types = (integer?, integer, integer, integer, integer, integer)
+| | keys = ()
+| Project (#2..=#5)
+| | types = (integer, integer, integer, integer)
+| | keys = ()
+
+EOF
+
+
+#
+# GREATEST / LEAST / COALESCE are NOT NULL if at leat one of their arguments is NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)
+| | types = (integer?, integer, integer, integer, integer, integer?)
+| | keys = ()
+| Project (#2..=#5)
+| | types = (integer, integer, integer, integer?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map least(#1), least(#1, #1), least(#1, #0), least(#0, #0)
+| | types = (integer?, integer, integer, integer, integer, integer?)
+| | keys = ()
+| Project (#2..=#5)
+| | types = (integer, integer, integer, integer?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1, #1, #1, #0)
+| | types = (integer, integer, integer, integer?)
+| | keys = ()
+
+EOF
+
+#
+# NULLIF is NOT NULL if first argument is NOT NULL, second argument is NULL, NULL-able otherwise
+#
+
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map if (#0 = #1) then {null} else {#0}
+| | types = (integer?, integer, integer?)
+| | keys = ()
+| Map (err: invalid input syntax for type integer: invalid digit found in string: "a")
+| | types = (integer?, integer, integer?, integer?)
+| | keys = ()
+| Project (#3, #1, #0, #2)
+| | types = (integer?, integer, integer?, integer?)
+| | keys = ()
+
+EOF
+
+#
+# Equality, logical operators
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null = 1 FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map (#1 = 1)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| Project (#2)
+| | types = (boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
+----
+Source materialize.public.bool_table (u2):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.bool_table (u2)
+| | types = (boolean?, boolean)
+| | keys = ()
+| Project (#1, #1)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
+----
+Source materialize.public.bool_table (u2):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.bool_table (u2)
+| | types = (boolean?, boolean)
+| | keys = ()
+| Map (#0 && #1), (#0 || #1)
+| | types = (boolean?, boolean, boolean?, boolean?)
+| | keys = ()
+| Project (#2, #3)
+| | types = (boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
+----
+Source materialize.public.bool_table (u2):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.bool_table (u2)
+| | types = (boolean?, boolean)
+| | keys = ()
+| Map !(#0), !(#1)
+| | types = (boolean?, boolean, boolean?, boolean)
+| | keys = ()
+| Project (#2, #3)
+| | types = (boolean?, boolean)
+| | keys = ()
+
+EOF
+
+#
+# Meth, that is, math
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map abs(#1), i32tof64(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)
+| | types = (integer?, integer, integer, double precision, double precision, double precision, double precision, integer)
+| | keys = ()
+| Project (#2, #4..=#7)
+| | types = (integer, double precision, double precision, double precision, integer)
+| | keys = ()
+
+EOF
+
+#
+# MIN/MAX/AVG/.. can be NULL even on a NOT NULL column
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+| Reduce group=()
+| | agg min(#0)
+| | agg max(#0)
+| | agg sum(#0)
+| | agg count(true)
+| | agg sum((i32tonumeric(#0) * i32tonumeric(#0)))
+| | agg sum(i32tonumeric(#0))
+| | agg count(i32tonumeric(#0))
+| | agg list_agg(record_create(list_create(#0)))
+| | types = (integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)
+| | keys = (())
+
+%1 =
+| Get %0 (l0)
+| | types = (integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)
+| | keys = (())
+| Project ()
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%2 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%3 =
+| Union %1 %2
+| | types = ()
+| | keys = ()
+| Map null, null, null, 0, null, null, 0, null
+| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)
+| | keys = ()
+
+%4 =
+| Union %0 %3
+| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)
+| | keys = ()
+| Map (i64tof64(#2) / i64tof64(if (#3 = 0) then {null} else {#3})), sqrtnumeric(((#4 - ((#5 * #5) / i64tonumeric(if (#6 = 0) then {null} else {#6}))) / i64tonumeric(if (0 = (#6 - 1)) then {null} else {(#6 - 1)})))
+| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)
+| | keys = ()
+| Project (#0, #1, #8, #9, #7)
+| | types = (integer?, integer?, double precision?, numeric?, integer list?)
+| | keys = ()
+
+EOF
+
+#
+# COUNT preserves NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+| Reduce group=()
+| | agg count(true)
+| | agg count(distinct #0)
+| | types = (bigint, bigint)
+| | keys = (())
+
+%1 =
+| Get %0 (l0)
+| | types = (bigint, bigint)
+| | keys = (())
+| Project ()
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%2 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%3 =
+| Union %1 %2
+| | types = ()
+| | keys = ()
+| Map 0, 0
+| | types = (bigint, bigint)
+| | keys = ()
+
+%4 =
+| Union %0 %3
+| | types = (bigint, bigint)
+| | keys = ()
+
+EOF
+
+#
+# LIKE
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
+----
+Source materialize.public.str_table (u3):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.str_table (u3)
+| | types = (text?, text)
+| | keys = ()
+| Map (#1 like #1), (#0 like #1), (#1 like #0)
+| | types = (text?, text, boolean?, boolean?, boolean?)
+| | keys = ()
+| Project (#2..=#4)
+| | types = (boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+#
+# REGEXP returns NULL on no match, so can not be NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
+----
+Source materialize.public.str_table (u3):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.str_table (u3)
+| | types = (text?, text)
+| | keys = ()
+| Map regexp_match[aaa](#1), regexp_match("aaa", #1)
+| | types = (text?, text, text[]?, text[]?)
+| | keys = ()
+| Project (#2, #3)
+| | types = (text[]?, text[]?)
+| | keys = ()
+
+EOF
+
+#
+# SPLIT_PART on the other hand returns an empty string, so can be NOT NULL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
+----
+Source materialize.public.str_table (u3):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.str_table (u3)
+| | types = (text?, text)
+| | keys = ()
+| Map split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", i32toi64(strtoi32(#1)))
+| | types = (text?, text, text, text, text)
+| | keys = ()
+| Project (#2..=#4)
+| | types = (text, text, text)
+| | keys = ()
+
+EOF
+
+#
+# IN , NOT IN
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map (#1 = 1), true, null, null, null
+| | types = (integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)
+| | keys = ()
+| Project (#2, #2..=#6)
+| | types = (boolean, boolean, boolean, boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map (#1 != 1), false, null, null, null
+| | types = (integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)
+| | keys = ()
+| Project (#2, #2..=#6)
+| | types = (boolean, boolean, boolean, boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+#
+# SOME, ANY, ALL
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer?)
+| | keys = ((#0))
+
+%1 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Map (#0 = 1)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
+
+%2 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%3 =
+| Union %2 %0
+| | types = (integer?)
+| | keys = ()
+| Map false
+| | types = (integer?, boolean)
+| | keys = ()
+
+%4 = Let l1 =
+| Union %1 %3
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%5 = Let l2 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#0 = #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%7 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%8 =
+| Union %7 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%9 = Let l3 =
+| Union %6 %8
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%10 = Let l4 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
+| | types = (integer?, integer)
+| | keys = ((#0))
+
+%11 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer?, integer)
+| | keys = ()
+
+%12 =
+| Get %4 (l1)
+| | types = (integer?, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%13 =
+| Union %12 %0
+| | types = (integer?)
+| | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%14 =
+| Union %4 %13
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%15 =
+| Get %10 (l4)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Map 1, true
+| | types = (integer?, integer, integer, boolean)
+| | keys = ((#0))
+| Project (#0, #2, #3)
+| | types = (integer?, integer, boolean)
+| | keys = ((#0))
+
+%16 =
+| Get %10 (l4)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+| Map 1
+| | types = (integer?, integer)
+| | keys = ()
+
+%17 =
+| Union %16 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%18 =
+| Union %15 %17
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%19 =
+| Get %9 (l3)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%20 =
+| Union %19 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%21 =
+| Union %9 %20
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%22 =
+| Join %11 %14 %18 %21 (= #0 #2 #4 #7) (= #1 #5 #8)
+| | implementation = Differential %14 %11.(#0) %18.(#0, #1) %21.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)
+| | keys = ()
+| Map null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, boolean?, boolean?)
+| | keys = ()
+| Project (#3, #6, #10, #11, #9, #9)
+| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer?)
+| | keys = ((#0))
+
+%1 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Map (1 > #0)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
+
+%2 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%3 =
+| Union %2 %0
+| | types = (integer?)
+| | keys = ()
+| Map false
+| | types = (integer?, boolean)
+| | keys = ()
+
+%4 = Let l1 =
+| Union %1 %3
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%5 = Let l2 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 = Let l3 =
+| Union %6 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%8 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#0 > #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%9 = Let l4 =
+| Union %8 %7
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%10 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#1 > #0)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%11 = Let l5 =
+| Union %10 %7
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%12 = Let l6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 > #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%13 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer?, integer)
+| | keys = ()
+
+%14 =
+| Get %4 (l1)
+| | types = (integer?, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%15 =
+| Union %14 %0
+| | types = (integer?)
+| | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%16 =
+| Union %4 %15
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%17 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map true
+| | types = (integer?, integer, boolean)
+| | keys = ((#0, #1))
+
+%18 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%19 =
+| Union %18 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%20 =
+| Union %17 %19
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%21 =
+| Get %9 (l4)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%22 =
+| Union %21 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%23 =
+| Union %9 %22
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%24 =
+| Get %11 (l5)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%25 =
+| Union %24 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%26 =
+| Union %11 %25
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%27 =
+| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
+| | keys = ()
+| Map null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean?, boolean?)
+| | keys = ()
+| Project (#3, #6, #13, #14, #9, #12)
+| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer?)
+| | keys = ((#0))
+
+%1 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Map (1 < #0)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
+
+%2 =
+| Get %0 (l0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%3 =
+| Union %2 %0
+| | types = (integer?)
+| | keys = ()
+| Map true
+| | types = (integer?, boolean)
+| | keys = ()
+
+%4 = Let l1 =
+| Union %1 %3
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%5 = Let l2 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 = Let l3 =
+| Union %6 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map true
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%8 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#0 < #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%9 = Let l4 =
+| Union %8 %7
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%10 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map (#1 < #0)
+| | types = (integer?, integer, boolean?)
+| | keys = ((#0, #1))
+
+%11 = Let l5 =
+| Union %10 %7
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%12 = Let l6 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 >= #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%13 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer?, integer)
+| | keys = ()
+
+%14 =
+| Get %4 (l1)
+| | types = (integer?, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%15 =
+| Union %14 %0
+| | types = (integer?)
+| | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%16 =
+| Union %4 %15
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%17 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Map true
+| | types = (integer?, integer, boolean)
+| | keys = ((#0, #1))
+
+%18 =
+| Get %12 (l6)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%19 =
+| Union %18 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%20 =
+| Union %17 %19
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%21 =
+| Get %9 (l4)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%22 =
+| Union %21 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%23 =
+| Union %9 %22
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%24 =
+| Get %11 (l5)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%25 =
+| Union %24 %5
+| | types = (integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%26 =
+| Union %11 %25
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean?)
+| | keys = ()
+
+%27 =
+| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
+| | keys = ()
+| Map !(#6), null, null
+| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean, boolean?, boolean?)
+| | keys = ()
+| Project (#3, #13..=#15, #9, #12)
+| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
+----
+%0 =
+| Constant (true, null, true)
+| | types = (boolean, boolean?, boolean)
+| | keys = (())
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
+----
+%0 =
+| Constant (true, null, true)
+| | types = (boolean, boolean?, boolean)
+| | keys = (())
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%1 = Let l1 =
+| Get %0 (l0)
+| | types = (integer)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer)
+| | keys = ((#0))
+
+%2 = Let l2 =
+| Get %1 (l1)
+| | types = (integer)
+| | keys = ((#0))
+| FlatMap wrap1(#0, null)
+| | types = (integer, integer?)
+| | keys = ()
+
+%3 = Let l3 =
+| Get %2 (l2)
+| | types = (integer, integer?)
+| | keys = ()
+| Reduce group=(#0)
+| | agg any((#1 = 1))
+| | types = (integer, boolean?)
+| | keys = ((#0))
+
+%4 =
+| Get %3 (l3)
+| | types = (integer, boolean?)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer)
+| | keys = ((#0))
+| Negate
+| | types = (integer)
+| | keys = ()
+
+%5 =
+| Union %4 %1
+| | types = (integer)
+| | keys = ()
+| Map false
+| | types = (integer, boolean)
+| | keys = ()
+
+%6 = Let l4 =
+| Union %3 %5
+| | types = (integer, boolean?)
+| | keys = ()
+
+%7 = Let l5 =
+| Get %2 (l2)
+| | types = (integer, integer?)
+| | keys = ()
+| Reduce group=(#0)
+| | agg all((#1 = 1))
+| | types = (integer, boolean?)
+| | keys = ((#0))
+
+%8 =
+| Get %7 (l5)
+| | types = (integer, boolean?)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer)
+| | keys = ((#0))
+| Negate
+| | types = (integer)
+| | keys = ()
+
+%9 =
+| Union %8 %1
+| | types = (integer)
+| | keys = ()
+| Map true
+| | types = (integer, boolean)
+| | keys = ()
+
+%10 = Let l6 =
+| Union %7 %9
+| | types = (integer, boolean?)
+| | keys = ()
+
+%11 =
+| Get %0 (l0)
+| | types = (integer)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer)
+| | keys = ()
+
+%12 =
+| Get %6 (l4)
+| | types = (integer, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer)
+| | keys = ()
+| Negate
+| | types = (integer)
+| | keys = ()
+
+%13 =
+| Union %12 %1
+| | types = (integer)
+| | keys = ()
+| Map null
+| | types = (integer, boolean?)
+| | keys = ()
+
+%14 =
+| Union %6 %13
+| | types = (integer, boolean?)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer, boolean?)
+| | keys = ()
+
+%15 =
+| Get %10 (l6)
+| | types = (integer, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer)
+| | keys = ()
+| Negate
+| | types = (integer)
+| | keys = ()
+
+%16 =
+| Union %15 %1
+| | types = (integer)
+| | keys = ()
+| Map null
+| | types = (integer, boolean?)
+| | keys = ()
+
+%17 =
+| Union %10 %16
+| | types = (integer, boolean?)
+| | keys = ()
+
+%18 =
+| Join %11 %14 %17 (= #0 #1 #3)
+| | implementation = Differential %17 %11.(#0) %14.(#0)
+| | types = (integer, integer, boolean?, integer, boolean?)
+| | keys = ()
+| Project (#2, #4, #2)
+| | types = (boolean?, boolean?, boolean?)
+| | keys = ()
+
+EOF
+
+#
+# Scalar subqueries can return NULL on no rows returned by the subquery
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+
+%1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%2 =
+| Get %0 (l0)
+| | types = ()
+| | keys = ()
+| Reduce group=()
+| | agg count(true)
+| | types = (bigint)
+| | keys = (())
+| Filter (#0 > 1)
+| | types = (bigint)
+| | keys = (())
+| Project ()
+| | types = ()
+| | keys = (())
+| Map (err: more than one record produced in subquery)
+| | types = (integer)
+| | keys = (())
+
+%3 = Let l1 =
+| Union %1 %2
+| | types = (integer)
+| | keys = ()
+
+%4 =
+| Get %0 (l0)
+| | types = ()
+| | keys = ()
+| ArrangeBy ()
+| | types = ()
+| | keys = ()
+
+%5 =
+| Get %3 (l1)
+| | types = (integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+| Distinct group=()
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%6 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%7 =
+| Union %5 %6
+| | types = ()
+| | keys = ()
+| Map null
+| | types = (integer?)
+| | keys = ()
+
+%8 =
+| Union %3 %7
+| | types = (integer?)
+| | keys = ()
+
+%9 =
+| Join %4 %8
+| | implementation = Differential %8 %4.()
+| | types = (integer?)
+| | keys = ()
+
+EOF
+
+#
+# IN/EXISTS
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Filter (#1 = 1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+| Distinct group=()
+| | types = ()
+| | keys = (())
+
+%1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+| ArrangeBy ()
+| | types = ()
+| | keys = ()
+
+%2 =
+| Get %0 (l0)
+| | types = ()
+| | keys = (())
+| Map true
+| | types = (boolean)
+| | keys = (())
+
+%3 =
+| Get %0 (l0)
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%4 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%5 =
+| Union %3 %4
+| | types = ()
+| | keys = ()
+| Map false
+| | types = (boolean)
+| | keys = ()
+
+%6 =
+| Union %2 %5
+| | types = (boolean)
+| | keys = ()
+
+%7 =
+| Join %1 %6
+| | implementation = Differential %6 %1.()
+| | types = (boolean)
+| | keys = ()
+| Map !(#0)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project ()
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+
+%1 = Let l1 =
+| Get %0 (l0)
+| | types = ()
+| | keys = ()
+| Distinct group=()
+| | types = ()
+| | keys = (())
+
+%2 =
+| Get %0 (l0)
+| | types = ()
+| | keys = ()
+| ArrangeBy ()
+| | types = ()
+| | keys = ()
+
+%3 =
+| Get %1 (l1)
+| | types = ()
+| | keys = (())
+| Map true
+| | types = (boolean)
+| | keys = (())
+
+%4 =
+| Get %1 (l1)
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%5 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%6 =
+| Union %4 %5
+| | types = ()
+| | keys = ()
+| Map false
+| | types = (boolean)
+| | keys = ()
+
+%7 =
+| Union %3 %6
+| | types = (boolean)
+| | keys = ()
+
+%8 =
+| Join %2 %7
+| | implementation = Differential %7 %2.()
+| | types = (boolean)
+| | keys = ()
+| Map !(#0)
+| | types = (boolean, boolean)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Filter (#1 = 1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+| Distinct group=()
+| | types = ()
+| | keys = (())
+
+%1 = Let l1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%2 = Let l2 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer?)
+| | keys = ((#0))
+
+%3 =
+| Get %2 (l2)
+| | types = (integer?)
+| | keys = ((#0))
+| ArrangeBy ()
+| | types = (integer?)
+| | keys = ((#0))
+
+%4 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%5 = Let l3 =
+| Join %3 %4
+| | implementation = Differential %4 %3.()
+| | types = (integer?, integer)
+| | keys = ()
+| Reduce group=(#0)
+| | agg any((#0 = #1))
+| | types = (integer?, boolean?)
+| | keys = ((#0))
+
+%6 =
+| Get %5 (l3)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%7 =
+| Union %6 %2
+| | types = (integer?)
+| | keys = ()
+| Map false
+| | types = (integer?, boolean)
+| | keys = ()
+
+%8 = Let l4 =
+| Union %5 %7
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%9 = Let l5 =
+| Get %1 (l1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
+| | types = (integer?, integer)
+| | keys = ((#0))
+
+%10 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy ()
+| | types = (integer?, integer)
+| | keys = ()
+
+%11 =
+| Get %0 (l0)
+| | types = ()
+| | keys = (())
+| Map true
+| | types = (boolean)
+| | keys = (())
+
+%12 =
+| Get %0 (l0)
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%13 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%14 =
+| Union %12 %13
+| | types = ()
+| | keys = ()
+| Map false
+| | types = (boolean)
+| | keys = ()
+
+%15 =
+| Union %11 %14
+| | types = (boolean)
+| | keys = ()
+
+%16 =
+| Get %9 (l5)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Map 1, true
+| | types = (integer?, integer, integer, boolean)
+| | keys = ((#0))
+| Project (#0, #2, #3)
+| | types = (integer?, integer, boolean)
+| | keys = ((#0))
+
+%17 =
+| Get %9 (l5)
+| | types = (integer?, integer)
+| | keys = ((#0))
+| Project (#0)
+| | types = (integer?)
+| | keys = ((#0))
+| Negate
+| | types = (integer?)
+| | keys = ()
+| Map 1
+| | types = (integer?, integer)
+| | keys = ()
+
+%18 =
+| Union %17 %1
+| | types = (integer?, integer)
+| | keys = ()
+| Map false
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%19 =
+| Union %16 %18
+| | types = (integer?, integer, boolean)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer, boolean)
+| | keys = ()
+
+%20 =
+| Get %8 (l4)
+| | types = (integer?, boolean?)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| Negate
+| | types = (integer?)
+| | keys = ()
+
+%21 =
+| Union %20 %2
+| | types = (integer?)
+| | keys = ()
+| Map null
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%22 =
+| Union %8 %21
+| | types = (integer?, boolean?)
+| | keys = ()
+| ArrangeBy (#0)
+| | types = (integer?, boolean?)
+| | keys = ()
+
+%23 =
+| Join %10 %15 %19 %22 (= #0 #3 #6) (= #1 #4)
+| | implementation = Differential %15 %10.() %19.(#0, #1) %22.(#0)
+| | types = (integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)
+| | keys = ()
+| Project (#2, #5, #7)
+| | types = (boolean, boolean, boolean?)
+| | keys = ()
+
+EOF
+
+#
+# DATE / TIME functions
+#
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
+----
+Source materialize.public.ts_table (u4):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.ts_table (u4)
+| | types = (timestamp?, timestamp)
+| | keys = ()
+| Map (#0 - 00:00:01), (#1 - 00:00:01)
+| | types = (timestamp?, timestamp, timestamp?, timestamp)
+| | keys = ()
+| Project (#2, #3)
+| | types = (timestamp?, timestamp)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
+----
+Source materialize.public.ts_table (u4):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.ts_table (u4)
+| | types = (timestamp?, timestamp)
+| | keys = ()
+| Map (#0 - #1), (#1 - #0)
+| | types = (timestamp?, timestamp, interval?, interval?)
+| | keys = ()
+| Project (#2, #3)
+| | types = (interval?, interval?)
+| | keys = ()
+
+EOF
+
+
+#
+# INNER JOIN preserves
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%1 =
+| Get %0 (l0)
+| | types = (integer)
+| | keys = ()
+| ArrangeBy ()
+| | types = (integer)
+| | keys = ()
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
+| | types = (integer, integer)
+| | keys = ()
+
+EOF
+
+#
+# OUTER JOIN does not for columns coming from the right side
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy ()
+| | types = (integer?, integer)
+| | keys = ()
+
+%1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | types = (integer?, integer, integer)
+| | keys = ()
+
+%3 =
+| Get %2 (l0)
+| | types = (integer?, integer, integer)
+| | keys = ()
+| Project (#1, #2)
+| | types = (integer, integer)
+| | keys = ()
+
+%4 =
+| Get %2 (l0)
+| | types = (integer?, integer, integer)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%5 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%6 =
+| Union %4 %5
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %7 %6.(#0, #1)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, integer?, integer, integer?)
+| | keys = ()
+| Project (#1, #4)
+| | types = (integer, integer?)
+| | keys = ()
+
+%9 =
+| Union %3 %8
+| | types = (integer, integer?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy ()
+| | types = (integer?, integer)
+| | keys = ()
+
+%1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+
+%3 = Let l1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+
+%4 =
+| Get %2 (l0)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Project (#1, #3)
+| | types = (integer, integer)
+| | keys = ()
+
+%5 =
+| Get %2 (l0)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Project (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%6 =
+| Union %5 %3
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%7 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %7 %6.(#0, #1)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, integer?, integer, integer?)
+| | keys = ()
+| Project (#1, #4)
+| | types = (integer, integer?)
+| | keys = ()
+
+%9 =
+| Get %2 (l0)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Project (#2, #3)
+| | types = (integer?, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Negate
+| | types = (integer?, integer)
+| | keys = ()
+
+%10 =
+| Union %9 %3
+| | types = (integer?, integer)
+| | keys = ()
+| ArrangeBy (#0, #1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%11 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%12 =
+| Join %10 %11 (= #0 #2) (= #1 #3)
+| | implementation = Differential %11 %10.(#0, #1)
+| | types = (integer?, integer, integer?, integer)
+| | keys = ()
+| Map null
+| | types = (integer?, integer, integer?, integer, integer?)
+| | keys = ()
+| Project (#4, #1)
+| | types = (integer?, integer)
+| | keys = ()
+
+%13 =
+| Union %4 %8 %12
+| | types = (integer?, integer?)
+| | keys = ()
+
+EOF
+
+#
+# UNION
+#
+
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%1 =
+| Union %0 %0
+| | types = (integer)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
+----
+Source materialize.public.int_table (u1):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#1)
+| | types = (integer)
+| | keys = ()
+
+%1 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+
+%2 =
+| Union %0 %1
+| | types = (integer?)
+| | keys = ()
+
+EOF
+
+#
+# DERIVED TABLES
+#
+
+query T multiline
+EXPLAIN TYPED PLAN FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
+----
+Source materialize.public.int_table (u1):
+| Project (#1)
+
+Query:
+%0 =
+| Get materialize.public.int_table (u1)
+| | types = (integer?, integer)
+| | keys = ()
+| Map ((#1 + 1) + 1)
+| | types = (integer?, integer, integer)
+| | keys = ()
+| Project (#2)
+| | types = (integer)
+| | keys = ()
+
+EOF

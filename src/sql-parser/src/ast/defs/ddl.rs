@@ -487,6 +487,8 @@ pub enum CreateSourceConnector {
         publication: String,
         /// The replication slot name that will be created upstream
         slot: Option<String>,
+        /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
+        details: Option<String>,
     },
     PubNub {
         /// PubNub's subscribe key
@@ -549,6 +551,7 @@ impl AstDisplay for CreateSourceConnector {
                 conn,
                 publication,
                 slot,
+                details,
             } => {
                 f.write_str("POSTGRES CONNECTION '");
                 f.write_str(&display::escape_single_quote_string(conn));
@@ -557,6 +560,10 @@ impl AstDisplay for CreateSourceConnector {
                 if let Some(slot) = slot {
                     f.write_str("' SLOT '");
                     f.write_str(&display::escape_single_quote_string(slot));
+                }
+                if let Some(details) = details {
+                    f.write_str("' DETAILS '");
+                    f.write_str(&display::escape_single_quote_string(details));
                 }
                 f.write_str("'");
             }
@@ -735,7 +742,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: UnresolvedObjectName,
+        foreign_table: T::ObjectName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`

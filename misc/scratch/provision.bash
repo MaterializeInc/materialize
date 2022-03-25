@@ -41,4 +41,8 @@ aws/install
 rm -r aws awscliv2.zip
 touch /opt/provision/awscli-installed
 
+# Step 5. Install the psql CLI
+apt-get install -y postgresql-client
+touch /opt/provision/psql-installed
+
 touch /opt/provision/done

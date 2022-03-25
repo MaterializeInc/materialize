@@ -20,14 +20,15 @@ use lazy_static::lazy_static;
 use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, Raw};
+use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
 use crate::func::Func;
-use crate::names::{FullName, PartialName, SchemaName};
+use crate::names::{Aug, FullName, PartialName, SchemaName};
 use crate::plan::statement::StatementDesc;
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -57,14 +58,17 @@ use crate::plan::statement::StatementDesc;
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Returns the name of the user who is issuing the query.
-    fn user(&self) -> &str;
+    fn active_user(&self) -> &str;
+
+    /// Returns the database to use if one is not explicitly specified.
+    fn active_database(&self) -> &str;
+
+    /// Returns the compute instance to use if one is not explicitly specified.
+    fn active_compute_instance(&self) -> &str;
 
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
-
-    /// Returns the database to use if one is not explicitly specified.
-    fn default_database(&self) -> &str;
 
     /// Resolves the named database.
     ///
@@ -76,7 +80,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// If `database_name` is provided, it searches the named database for a
     /// schema named `schema_name`. If `database_name` is not provided, it
-    /// searches the default database instead. It returns the ID of the schema
+    /// searches the active database instead. It returns the ID of the schema
     /// if found; otherwise it returns an error if the database does not exist,
     /// or if the database exists but the schema does not.
     fn resolve_schema(
@@ -88,10 +92,19 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
+    /// Resolves the named compute instance.
+    ///
+    /// If the provided name is `None`, resolves the currently-active compute
+    /// instance.
+    fn resolve_compute_instance(
+        &self,
+        compute_instance_name: Option<&str>,
+    ) -> Result<&dyn CatalogComputeInstance, CatalogError>;
+
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the
-    /// specified database; otherwise, it searches the default database. If the
+    /// specified database; otherwise, it searches the active database. If the
     /// partial name has a schema component, it searches only the specified
     /// schema; otherwise, it searches a default set of schemas within the
     /// selected database. It returns an error if none of the searched schemas
@@ -210,6 +223,18 @@ pub trait CatalogRole {
     fn id(&self) -> i64;
 }
 
+/// A compute instance in a [`SessionCatalog`].
+pub trait CatalogComputeInstance {
+    /// Returns a fully-specified name of the compute instance.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the compute instance.
+    fn id(&self) -> ComputeInstanceId;
+
+    /// Returns the set of non-transient indexes on this cluster.
+    fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
+}
+
 /// An item in a [`SessionCatalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
@@ -262,7 +287,7 @@ pub trait CatalogItem {
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr<Raw>]>;
+    fn table_details(&self) -> Option<&[Expr<Aug>]>;
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
@@ -286,6 +311,8 @@ pub enum CatalogItemType {
     Type,
     /// A func.
     Func,
+    /// A Secret.
+    Secret,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -298,6 +325,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
+            CatalogItemType::Secret => f.write_str("secret"),
         }
     }
 }
@@ -325,7 +353,6 @@ pub enum CatalogType {
     Bool,
     Bytes,
     Char,
-    Char1,
     Date,
     Float32,
     Float64,
@@ -343,6 +370,7 @@ pub enum CatalogType {
     },
     Numeric,
     Oid,
+    PgLegacyChar,
     Pseudo,
     Record {
         fields: Vec<(ColumnName, GlobalId)>,
@@ -368,6 +396,8 @@ pub enum CatalogError {
     UnknownSchema(String),
     /// Unknown role.
     UnknownRole(String),
+    /// Unknown compute instance.
+    UnknownComputeInstance(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -391,6 +421,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
+            Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -434,16 +465,20 @@ lazy_static! {
 }
 
 impl SessionCatalog for DummyCatalog {
-    fn user(&self) -> &str {
+    fn active_user(&self) -> &str {
+        "dummy"
+    }
+
+    fn active_database(&self) -> &str {
+        "dummy"
+    }
+
+    fn active_compute_instance(&self) -> &str {
         "dummy"
     }
 
     fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
         None
-    }
-
-    fn default_database(&self) -> &str {
-        "dummy"
     }
 
     fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
@@ -467,6 +502,13 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_compute_instance(
+        &self,
+        _: Option<&str>,
+    ) -> Result<&dyn CatalogComputeInstance, CatalogError> {
         unimplemented!();
     }
 

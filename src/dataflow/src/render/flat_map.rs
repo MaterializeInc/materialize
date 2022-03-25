@@ -17,25 +17,26 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 use mz_repr::DatumVec;
 
-impl<G> Context<G, Row, mz_repr::Timestamp>
+impl<G> Context<G, Row>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
 {
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionBundle<G, Row, G::Timestamp>,
+        input: CollectionBundle<G, Row>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row> {
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
             let mut row_builder = Row::default();
-            move |(input_row, time, diff)| {
+            move |(input_row, mut time, diff)| {
                 let temp_storage = RowArena::new();
                 // Unpack datums and capture its length (to rewind MFP eval).
                 let mut datums_local = datums.borrow_with(&input_row);
@@ -52,6 +53,10 @@ where
                     Ok(exprs) => exprs,
                     Err(e) => return vec![(Err((e.into(), time, diff)))],
                 };
+
+                use crate::render::RenderTimestamp;
+                let event_time = time.event_time().clone();
+
                 // Declare borrows outside the closure so that appropriately lifetimed
                 // borrows are moved in and used by `mfp.evaluate`.
                 let temp_storage = &temp_storage;
@@ -69,11 +74,25 @@ where
                             .evaluate(
                                 &mut datums_local,
                                 temp_storage,
-                                time,
+                                event_time,
                                 diff * *r,
                                 row_builder,
                             )
                             .collect::<Vec<_>>()
+                    })
+                    .map(|x| match x {
+                        Ok((row, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time = time.clone();
+                            *time.event_time() = event_time;
+                            Ok((row, time, diff))
+                        }
+                        Err((e, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time = time.clone();
+                            *time.event_time() = event_time;
+                            Err((e, time, diff))
+                        }
                     })
                     .collect::<Vec<_>>()
             }

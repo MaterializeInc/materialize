@@ -107,6 +107,14 @@ mod constants {
         select_parent: false,
     };
 
+    pub(crate) const ZERO_NOT_SUBQUERY: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(0),
+        allowed_types: ARBITRARY_QUANTIFIER & !(SUBQUERY_QUANTIFIER as usize),
+        select_input: false,
+        select_parent: false,
+    };
+
     pub(crate) const ZERO_NOT_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
@@ -189,8 +197,9 @@ mod constants {
 }
 
 /// A [`Validator`] that checks the following quantifier constraints:
-/// - `Get`, `TableFunction` and `Values` boxes cannot have input
+/// - `Get` and `Values` boxes cannot have input
 ///    quantifiers.
+/// - `TableFunction` boxes can only have subquery input quantifiers.
 /// - `Union`, `Except` and `Intersect` boxes can only have input
 ///    quantifiers of type `Foreach`.
 /// - A `Grouping` box must have a single input quantifier of type
@@ -216,8 +225,14 @@ impl Validator for QuantifierConstraintValidator {
             use constants::*;
             use BoxType::*;
             match b.box_type {
-                Get(..) | TableFunction(..) | Values(..) => {
+                Get(..) | Values(..) => {
                     let constraints = [ZERO_ARBITRARY];
+                    check_constraints(&constraints, b.input_quantifiers(), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
+                    })
+                }
+                CallTable(..) => {
+                    let constraints = [ZERO_NOT_SUBQUERY];
                     check_constraints(&constraints, b.input_quantifiers(), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     })
@@ -268,43 +283,41 @@ impl Validator for QuantifierConstraintValidator {
 
 #[cfg(test)]
 mod tests {
+    use mz_expr::TableFunc;
+
     use super::constants::*;
     use super::*;
     use crate::query_model::test::util::*;
     use std::collections::HashSet;
 
-    /// Tests constraints for quantifiers incident with [`BoxType::Get`],
-    /// [`BoxType::TableFunction`], and [`BoxType::Values`] boxes (happy case).
+    /// Tests constraints for quantifiers incident with [`BoxType::Get`]
+    /// and [`BoxType::Values`] boxes (happy case).
     #[test]
-    fn test_invalid_get_table_fn_values_ok() {
-        let mut model = Model::new();
+    fn test_invalid_get_values_ok() {
+        let mut model = Model::default();
 
         let box_get = model.make_box(qgm::get(1).into());
-        let box_table_fn = model.make_box(TableFunction::default().into());
         let box_values = model.make_box(Values::default().into());
         let box_tgt = model.make_box(Select::default().into());
 
         model.make_quantifier(QuantifierType::Foreach, box_get, box_tgt);
-        model.make_quantifier(QuantifierType::Foreach, box_table_fn, box_tgt);
         model.make_quantifier(QuantifierType::Foreach, box_values, box_tgt);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
     }
 
-    /// Tests constraints for quantifiers incident with [`BoxType::Get`],
-    /// [`BoxType::TableFunction`], and [`BoxType::Values`] boxes (bad case).
+    /// Tests constraints for quantifiers incident with [`BoxType::Get`]
+    /// and [`BoxType::Values`] boxes (bad case).
     #[test]
-    fn test_invalid_get_table_fn_values_not_ok() {
-        let mut model = Model::new();
+    fn test_invalid_get_values_not_ok() {
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_get = model.make_box(qgm::get(1).into());
-        let box_table_fn = model.make_box(TableFunction::default().into());
         let box_values = model.make_box(Values::default().into());
 
         model.make_quantifier(QuantifierType::Foreach, box_src, box_get);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_table_fn);
         model.make_quantifier(QuantifierType::Foreach, box_src, box_values);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
@@ -313,9 +326,54 @@ mod tests {
         let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
         let errors_exp = HashSet::from([
             ValidationError::InvalidInputQuantifiers(box_get, ZERO_ARBITRARY),
-            ValidationError::InvalidInputQuantifiers(box_table_fn, ZERO_ARBITRARY),
             ValidationError::InvalidInputQuantifiers(box_values, ZERO_ARBITRARY),
         ]);
+        assert_eq!(errors_act, errors_exp);
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::CallTable`]
+    /// boxes (happy case).
+    #[test]
+    fn test_invalid_call_table_ok() {
+        use TableFunc::GenerateSeriesInt32;
+
+        let mut model = Model::default();
+
+        let box_src = model.make_box(qgm::get(0).into());
+        let call_table = CallTable::new(GenerateSeriesInt32, vec![]);
+        let box_table_fn = model.make_box(call_table.into());
+        let box_tgt = model.make_box(Select::default().into());
+
+        model.make_quantifier(QuantifierType::Scalar, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::Foreach, box_table_fn, box_tgt);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_ok());
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::CallTable`]
+    /// boxes (bad case).
+    #[test]
+    fn test_invalid_call_table_not_ok() {
+        use TableFunc::GenerateSeriesInt32;
+
+        let mut model = Model::default();
+
+        let box_src = model.make_box(qgm::get(0).into());
+        let call_table = CallTable::new(GenerateSeriesInt32, vec![]);
+        let box_table_fn = model.make_box(call_table.into());
+
+        model.make_quantifier(QuantifierType::Scalar, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_table_fn);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([ValidationError::InvalidInputQuantifiers(
+            box_table_fn,
+            ZERO_NOT_SUBQUERY,
+        )]);
         assert_eq!(errors_act, errors_exp);
     }
 
@@ -323,7 +381,7 @@ mod tests {
     /// [`BoxType::Except`], and [`BoxType::Intersect`] boxes (happy case).
     #[test]
     fn test_invalid_union_except_intersect_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
@@ -345,7 +403,7 @@ mod tests {
     /// [`BoxType::Except`], and [`BoxType::Intersect`] boxes (bad case).
     #[test]
     fn test_invalid_union_except_intersect_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_union = model.make_box(BoxType::Union);
@@ -374,7 +432,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (happy case).
     #[test]
     fn test_invalid_grouping_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -392,7 +450,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (bad case).
     #[test]
     fn test_invalid_grouping_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_grouping = model.make_box(Grouping::default().into());
@@ -418,7 +476,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (happy case).
     #[test]
     fn test_invalid_select_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -434,7 +492,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (bad case).
     #[test]
     fn test_invalid_select_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
@@ -455,7 +513,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (happy case).
     #[test]
     fn test_outer_join_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_lhs = model.make_box(qgm::get(0).into());
         let box_rhs = model.make_box(qgm::get(1).into());
@@ -474,7 +532,7 @@ mod tests {
     /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (bad case).
     #[test]
     fn test_outer_join_not_ok() {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         let box_lhs = model.make_box(qgm::get(0).into());
         let box_rhs = model.make_box(qgm::get(1).into());

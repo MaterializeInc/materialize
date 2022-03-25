@@ -457,7 +457,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(5);
 
-        mz_pgtest::run_test(tf, &addr, user, timeout);
+        mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });
 
     Ok(())
@@ -478,15 +478,4 @@ fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
 
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
     pg_test_inner(dir)
-}
-
-#[tokio::test]
-async fn test_coordtest() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let dir: PathBuf = ["..", "..", "test", "coordtest"].iter().collect();
-
-    mz_coordtest::walk(dir.to_str().unwrap()).await;
-
-    Ok(())
 }

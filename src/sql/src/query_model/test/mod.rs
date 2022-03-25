@@ -11,13 +11,14 @@ pub(crate) mod catalog;
 pub(crate) mod util;
 
 use crate::plan::query::QueryLifetime;
-use crate::plan::StatementContext;
+use crate::plan::{HirRelationExpr, StatementContext};
 use mz_expr_test_util::generate_explanation;
 use mz_lowertest::*;
 
-use crate::query_model::{Model, QGMError};
+use crate::query_model::Model;
 use catalog::TestCatalog;
 
+use crate::names::resolve_names_stmt;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,6 +35,8 @@ enum Directive {
     Opt,
     /// Optimize and decorrelate the model. Then convert it to a `MirRelationExpr`.
     EndToEnd,
+    /// Ensure that the HIR ⇒ QGM ⇒ HIR round trip reaches a fixpoint after one iteration.
+    RoundTrip,
 }
 
 lazy_static! {
@@ -62,7 +65,11 @@ fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, S
         Ok(mut stmts) => {
             assert!(stmts.len() == 1);
             let stmt = stmts.pop().unwrap();
-            let scx = &StatementContext::new(None, catalog);
+            let scx = &mut StatementContext::new(None, catalog);
+            let stmt = match resolve_names_stmt(scx, stmt) {
+                Ok((stmt, _)) => stmt,
+                Err(e) => return Err(format!("unable to resolve statement {}", e)),
+            };
             if let mz_sql_parser::ast::Statement::Select(query) = stmt {
                 let planned_query = match crate::plan::query::plan_root_query(
                     scx,
@@ -72,7 +79,7 @@ fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, S
                     Ok(planned_query) => planned_query,
                     Err(e) => return Err(format!("unable to plan query: {}: {}", input, e)),
                 };
-                Result::<Model, QGMError>::from(planned_query.expr).map_err(|e| e.into())
+                Model::try_from(planned_query.expr).map_err(|e| e.into())
             } else {
                 Err(format!("invalid query: {}", input))
             }
@@ -106,13 +113,25 @@ fn run_command(
 
     // TODO: allow printing multiple stages of the transformation of the query.
     if matches!(directive, Directive::Lower | Directive::EndToEnd) {
-        Ok(generate_explanation(
-            catalog,
-            &model.into(),
-            args.get("format"),
-        ))
+        match model.try_into() {
+            Ok(mir) => Ok(generate_explanation(catalog, &mir, args.get("format"))),
+            Err(err) => Err(err.to_string()),
+        }
+    } else if matches!(directive, Directive::RoundTrip) {
+        let hir = HirRelationExpr::try_from(model)?;
+        let model2 = Model::try_from(hir.clone())?;
+        let hir2 = HirRelationExpr::try_from(model2)?;
+        if !hir.eq(&hir2) {
+            Err(format!(
+                "HirRelationExpr is not same after round-trip.\nOld:\n{}\nNew:\n{}\n",
+                hir.pretty(),
+                hir2.pretty()
+            ))
+        } else {
+            Ok(hir2.pretty())
+        }
     } else {
-        match model.as_dot(input) {
+        match model.as_dot(input, catalog, false) {
             Ok(graph) => Ok(graph),
             Err(e) => return Err(format!("graph generation error: {}", e)),
         }

@@ -121,3 +121,66 @@ ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"a"}]}
 CommandComplete {"tag":"SELECT 0"}
 ReadyForQuery {"status":"I"}
+
+# Check portals.
+
+send
+Bind {"statement": "q", "portal": "p"}
+Describe {"variant": "P", "name": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+----
+BindComplete
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (c INT, b INT)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# Can't bind because the statement changed.
+send
+Bind {"statement": "q", "portal": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+# Changing it back fixes it.
+send
+Query {"query": "DROP TABLE t"}
+Query {"query": "CREATE TABLE t (a INT)"}
+Bind {"statement": "q", "portal": "p"}
+Describe {"variant": "P", "name": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+BindComplete
+RowDescription {"fields":[{"name":"a"}]}
+ReadyForQuery {"status":"I"}

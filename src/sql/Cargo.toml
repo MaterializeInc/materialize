@@ -3,18 +3,20 @@ name = "mz-sql"
 description = "SQL–dataflow translation."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.55"
 aws-arn = "0.2.0"
+bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
 dec = "0.4.8"
 enum-kinds = "0.5.1"
 futures = "0.3.21"
 globset = "0.4.8"
+hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -33,14 +35,15 @@ mz-sql-parser = { path = "../sql-parser" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 protobuf-native = "0.2.1"
+prost = "0.9.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.5.4"
-reqwest = "0.11.9"
+reqwest = "0.11.10"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 tokio = { version = "1.17.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.31"
+tracing = "0.1.32"
 typemap_rev = "0.1.5"
 uncased = "0.9.6"
 url = "2.2.2"

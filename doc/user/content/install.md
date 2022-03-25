@@ -1,6 +1,6 @@
 ---
 title: "Install"
-description: "Get started with Materialize"
+description: "Install the Materialize binary"
 menu: "main"
 weight: 2
 ---
@@ -54,8 +54,11 @@ curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m
 
 ### apt (Ubuntu, Debian, or variants)
 
-**Note!** These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
+{{< note >}}
+These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
 previously, you may need to do so again to continue receiving updates.
+{{</ note >}}
+
 
 ```shell
 # Add the signing key for the Materialize apt repository
@@ -77,8 +80,7 @@ curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m
 ## Build from source
 
 Materialize is written primarily in Rust, but incorporates several components
-written in C. To build Materialize, you will need to acquire the following
-tools:
+written in C. To build Materialize, you will need the following tools:
 
   * A recent version of Git
 
@@ -118,10 +120,10 @@ cargo build --release
 You can start the `materialized` process by simply running the binary, e.g.
 
 ```nofmt
-./materialized -w 1
+./materialized --workers 1
 ```
 
-`-w 1` specifies that the process will use 1 worker. You can also find more detail
+`--workers 1` specifies that the process will use 1 worker. You can also find more detail
 about our [command line flags](/cli/#command-line-flags).
 
 By default `materialized` uses:
@@ -131,7 +133,21 @@ Detail | Info
 **Database** | `materialize`
 **Port** | `6875`
 
-### CLI Connections
+### `systemd` service
+
+If you've installed Materialize via [`apt`](#apt-ubuntu-debian-or-variants), you can start it as a service by running:
+
+```shell
+systemctl start materialized.service
+```
+
+To enable the service to start up at boot, run:
+
+```shell
+systemctl enable materialized.service
+```
+
+## CLI Connections
 
 To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
 like `psql` or `mzcli`. To install the `psql` client:

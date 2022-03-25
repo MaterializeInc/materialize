@@ -1,11 +1,19 @@
 # dbt-materialize Changelog
 
-## 1.0.1.post3 - 2021-02-17
+## 1.0.3.post1 - 2022-03-16
+
+* Produce a proper error message when attempting to use an incremental materialization.
+
+## 1.0.3 - 2022-02-27
+
+* Upgrade to `dbt-postgres` v1.0.3.
+
+## 1.0.1.post3 - 2022-02-17
 
 * Fix a bug introduced in v1.0.1.post1 that prevented use of the custom
   materialization types (`sink`, `source`, `index`, and `materializedview`).
 
-## 1.0.1.post2 - 2021-02-14
+## 1.0.1.post2 - 2022-02-14
 
 * Execute hooks that specify `transaction: true` ([#7675]). In particular, this
   includes hooks that are configured as a simple string.
@@ -17,7 +25,7 @@
 
 [#7675]: https://github.com/MaterializeInc/materialize/issues/7675
 
-## 1.0.1.post1 - 2021-02-14
+## 1.0.1.post1 - 2022-02-14
 
 * Disable transactions. This avoids errors of the form "CREATE ... must be
   executed outside of a transaction block" ([materialize-dbt-utils#11]).
@@ -33,7 +41,7 @@
 
 [materialize-dbt-utils#11]: https://github.com/MaterializeInc/materialize-dbt-utils/issues/11
 
-## 1.0.1 - 2021-01-03
+## 1.0.1 - 2022-01-03
 
 * Upgrade to `dbt-postgres` v1.0.1.
 

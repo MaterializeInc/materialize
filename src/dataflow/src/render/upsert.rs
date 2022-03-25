@@ -390,54 +390,79 @@ where
                             // later retraction of the key (it will never decode correctly, but
                             // we could produce and then remove the error from the output).
                             match key {
-                                Some(Ok(decoded_key)) => {
-                                    let decoded_value = match data.value {
-                                        None => Ok(None),
-                                        Some(value) => match value {
-                                            Ok(row) => {
-                                                let envelope_value = match upsert_envelope.style {
-                                                    UpsertStyle::Debezium { after_idx } => {
-                                                        match row.iter().nth(after_idx).unwrap() {
-                                                            Datum::List(after) => {
+                                Some(decoded_key) => {
+                                    let (decoded_key, decoded_value): (
+                                        _,
+                                        Result<_, DataflowError>,
+                                    ) = match decoded_key {
+                                        Err(key_decode_error) => {
+                                            (
+                                                Err(key_decode_error.clone()),
+                                                // `DecodeError` converted to a `DataflowError`
+                                                // that we will eventually emit later below
+                                                Err(key_decode_error.into()),
+                                            )
+                                        }
+                                        Ok(decoded_key) => match data.value {
+                                            None => (Ok(decoded_key), Ok(None)),
+                                            Some(value) => {
+                                                let decoded_value = match value {
+                                                    Ok(row) => {
+                                                        let envelope_value = match upsert_envelope
+                                                            .style
+                                                        {
+                                                            UpsertStyle::Debezium { after_idx } => {
+                                                                match row
+                                                                    .iter()
+                                                                    .nth(after_idx)
+                                                                    .unwrap()
+                                                                {
+                                                                    Datum::List(after) => {
+                                                                        let mut datums =
+                                                                            Vec::with_capacity(
+                                                                                source_arity,
+                                                                            );
+                                                                        datums.extend(after.iter());
+                                                                        Some(datums)
+                                                                    }
+                                                                    Datum::Null => None,
+                                                                    d => panic!(
+                                                                    "type error: expected record, \
+                                                                        found {:?}",
+                                                                    d
+                                                                ),
+                                                                }
+                                                            }
+                                                            UpsertStyle::Default(_) => {
                                                                 let mut datums = Vec::with_capacity(
                                                                     source_arity,
                                                                 );
-                                                                datums.extend(after.iter());
+                                                                datums.extend(decoded_key.iter());
+                                                                datums.extend(row.iter());
                                                                 Some(datums)
                                                             }
-                                                            Datum::Null => None,
-                                                            d => panic!(
-                                                                "type error: expected record, \
-                                                                        found {:?}",
-                                                                d
-                                                            ),
+                                                        };
+
+                                                        if let Some(mut datums) = envelope_value {
+                                                            datums.extend(data.metadata.iter());
+                                                            evaluate(
+                                                                &datums,
+                                                                &predicates,
+                                                                &position_or,
+                                                                &mut row_packer,
+                                                            )
+                                                            .map_err(DataflowError::from)
+                                                        } else {
+                                                            Ok(None)
                                                         }
                                                     }
-                                                    UpsertStyle::Default(_) => {
-                                                        let mut datums =
-                                                            Vec::with_capacity(source_arity);
-                                                        datums.extend(decoded_key.iter());
-                                                        datums.extend(row.iter());
-                                                        Some(datums)
-                                                    }
+                                                    Err(err) => Err(err),
                                                 };
-
-                                                if let Some(mut datums) = envelope_value {
-                                                    datums.extend(data.metadata.iter());
-                                                    evaluate(
-                                                        &datums,
-                                                        &predicates,
-                                                        &position_or,
-                                                        &mut row_packer,
-                                                    )
-                                                    .map_err(DataflowError::from)
-                                                } else {
-                                                    Ok(None)
-                                                }
+                                                (Ok(decoded_key), decoded_value)
                                             }
-                                            Err(err) => Err(err),
                                         },
                                     };
+
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
                                     // retracted if new rows show up for the same key.
@@ -462,7 +487,9 @@ where
                                                 res.map(|v| {
                                                     rehydrate(
                                                         &upsert_envelope.key_indices,
-                                                        &decoded_key,
+                                                        // The value is never `Ok`
+                                                        // unless the key is also
+                                                        decoded_key.as_ref().unwrap(),
                                                         &v,
                                                         &mut row_packer,
                                                     )
@@ -473,7 +500,9 @@ where
                                             res.map(|v| {
                                                 rehydrate(
                                                     &upsert_envelope.key_indices,
-                                                    &decoded_key,
+                                                    // The value is never `Ok`
+                                                    // unless the key is also
+                                                    decoded_key.as_ref().unwrap(),
                                                     &v,
                                                     &mut row_packer,
                                                 )
@@ -482,8 +511,17 @@ where
                                     };
 
                                     if let Some(old_value) = old_value {
-                                        // retract old value
-                                        session.give((old_value, cap.time().clone(), -1));
+                                        // Ensure we put the source in a permanently error'd state
+                                        // than to keep on trucking with wrong results.
+                                        //
+                                        // TODO(guswynn): consider changing the key-type of
+                                        // the `current_values` map to allow us to retract
+                                        // errors. Currently, the `DecodeError` key type would
+                                        // retract unrelated errors with the same message.
+                                        if !decoded_key.is_err() {
+                                            // retract old value
+                                            session.give((old_value, cap.time().clone(), -1));
+                                        }
                                     }
                                     if let Some(new_value) = new_value {
                                         // give new value
@@ -491,11 +529,6 @@ where
                                     }
                                 }
                                 None => {}
-                                Some(Err(err)) => {
-                                    // This can never be retracted! But at least it's better to put the source in a
-                                    // permanently errored state than to keep on trucking with wrong results.
-                                    session.give((Err(err.into()), cap.time().clone(), 1));
-                                }
                             }
                         }
                     } else {

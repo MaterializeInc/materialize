@@ -39,10 +39,12 @@ use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedDataType, Unres
 // that it gets resolved to.
 //
 // Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
-// sql/src/plan/query.rs:resolve_names.
+// sql/src/names.rs:resolve_names.
 pub trait AstInfo: Clone {
     // The type used for table references.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
+    /// The type used for cluster names.
+    type ClusterName: AstDisplay + Clone + Hash + Debug + Eq;
     // The type used for data types.
     type DataType: AstDisplay + Clone + Hash + Debug + Eq;
     // The type stored next to CTEs for their assigned ID.
@@ -65,6 +67,13 @@ impl RawName {
             RawName::Id(_, name) => name,
         }
     }
+
+    pub fn name_mut(&mut self) -> &mut UnresolvedObjectName {
+        match self {
+            RawName::Name(name) => name,
+            RawName::Id(_, name) => name,
+        }
+    }
 }
 
 impl AstDisplay for RawName {
@@ -81,8 +90,27 @@ impl AstDisplay for RawName {
 }
 impl_display!(RawName);
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum RawIdent {
+    Unresolved(Ident),
+    Resolved(String),
+}
+
+impl AstDisplay for RawIdent {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RawIdent::Unresolved(id) => f.write_node(id),
+            RawIdent::Resolved(id) => {
+                f.write_str(format!("[{}]", id));
+            }
+        }
+    }
+}
+impl_display!(RawIdent);
+
 impl AstInfo for Raw {
     type ObjectName = RawName;
+    type ClusterName = RawIdent;
     type DataType = UnresolvedDataType;
     type Id = ();
 }

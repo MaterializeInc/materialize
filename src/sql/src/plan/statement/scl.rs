@@ -23,6 +23,7 @@ use crate::ast::{
     ExecuteStatement, FetchStatement, PrepareStatement, Raw, SetVariableStatement,
     SetVariableValue, ShowVariableStatement, Value,
 };
+use crate::names::Aug;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
@@ -202,7 +203,7 @@ pub fn plan_prepare(
 
 pub fn describe_execute(
     scx: &StatementContext,
-    stmt: ExecuteStatement<Raw>,
+    stmt: ExecuteStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     // The evaluation of the statement doesn't happen until it gets to coord. That
     // means if the statement is now invalid due to an object having been dropped,
@@ -214,14 +215,14 @@ pub fn describe_execute(
 
 pub fn plan_execute(
     scx: &StatementContext,
-    stmt: ExecuteStatement<Raw>,
+    stmt: ExecuteStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     Ok(plan_execute_desc(scx, stmt)?.1)
 }
 
 fn plan_execute_desc<'a>(
     scx: &'a StatementContext,
-    ExecuteStatement { name, params }: ExecuteStatement<Raw>,
+    ExecuteStatement { name, params }: ExecuteStatement<Aug>,
 ) -> Result<(&'a StatementDesc, Plan), anyhow::Error> {
     let name = name.to_string();
     let desc = match scx.catalog.get_prepared_statement_desc(&name) {

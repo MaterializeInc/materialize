@@ -91,7 +91,7 @@ where
             .source_imports
             .iter()
             .filter_map(|(id, source)| {
-                if let Some(operator) = &source.operators {
+                if let Some(operator) = &source.arguments.operators {
                     Some((*id, operator))
                 } else {
                     None
@@ -101,7 +101,7 @@ where
         let views = dataflow
             .objects_to_build
             .iter()
-            .map(|build_desc| (build_desc.id, &build_desc.view))
+            .map(|build_desc| (build_desc.id, &build_desc.plan))
             .collect::<Vec<_>>();
         Self {
             formatter,
@@ -229,5 +229,46 @@ impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> 
             explain.explain_types();
         }
         fmt::Display::fmt(&explain, f)
+    }
+}
+
+/// Information used when determining the timestamp for a query.
+pub struct TimestampExplanation<T> {
+    /// The chosen timestamp from `determine_timestamp`.
+    pub timestamp: T,
+    /// Whether the query contains a table.
+    pub has_table: bool,
+    /// If the query contains a table, the global table read timestamp.
+    pub table_read_ts: Option<T>,
+    /// The read frontier of all involved sources.
+    pub since: Vec<T>,
+    /// The write frontier of all involved sources.
+    pub upper: Vec<T>,
+    /// Details about each source.
+    pub sources: Vec<TimestampSource<T>>,
+}
+
+pub struct TimestampSource<T> {
+    pub name: String,
+    pub read_frontier: Vec<T>,
+    pub write_frontier: Vec<T>,
+}
+
+impl<T: fmt::Display + fmt::Debug> fmt::Display for TimestampExplanation<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "     timestamp: {:13}", self.timestamp)?;
+        writeln!(f, "         since:{:13?}", self.since)?;
+        writeln!(f, "         upper:{:13?}", self.upper)?;
+        writeln!(f, "     has table: {}", self.has_table)?;
+        if let Some(ts) = &self.table_read_ts {
+            writeln!(f, " table read ts: {:13}", ts)?;
+        }
+        for source in &self.sources {
+            writeln!(f, "")?;
+            writeln!(f, "source {}:", source.name)?;
+            writeln!(f, " read frontier:{:13?}", source.read_frontier)?;
+            writeln!(f, "write frontier:{:13?}", source.write_frontier)?;
+        }
+        Ok(())
     }
 }

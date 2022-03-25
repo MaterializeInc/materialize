@@ -40,6 +40,7 @@ Field | Use
 **DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
+_method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
 _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.
 _val_ | The value for the option.
@@ -48,6 +49,10 @@ _val_ | The value for the option.
 The `WITH (field = val, ...)` clause was added to allow setting index options
 when creating the index.
 {{</ version-changed >}}
+
+{{< version-added v0.23.0 >}}
+The `USING` clause.
+{{</ version-added >}}
 
 ### `WITH` options
 

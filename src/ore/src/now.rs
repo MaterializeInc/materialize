@@ -36,6 +36,13 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
 #[derive(Clone)]
 pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
 
+impl NowFn {
+    /// Returns now in seconds.
+    pub fn as_secs(&self) -> i64 {
+        ((self)() / 1_000) as i64
+    }
+}
+
 impl fmt::Debug for NowFn {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("<now_fn>")

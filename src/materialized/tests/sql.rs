@@ -20,12 +20,18 @@ use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use mz_ore::now::NowFn;
+use mz_ore::now::NOW_ZERO;
+use mz_ore::now::SYSTEM_TIME;
 use postgres::Row;
+use regex::Regex;
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -229,12 +235,24 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let config = util::Config::default().workers(2);
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
+    let now = {
+        let nowfn = Arc::clone(&nowfn);
+        NowFn::from(move || (nowfn.lock().unwrap())())
+    };
+    let config = util::Config::default().workers(2).with_now(now);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
+    // Now that the index (and its since) are initialized to 0, we can resume using
+    // system time. Do a read to bump the oracle's state so it will read from the
+    // system clock during inserts below.
+    *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
+    client_writes.batch_execute("SELECT * FROM t")?;
     client_reads.batch_execute(
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
@@ -809,7 +827,14 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     let mut client_interactive = server.connect(postgres::NoTls)?;
     let mut client_tail = server.connect(postgres::NoTls)?;
 
-    let verify_rw_pair = move |rows: &[Row], expected_data: &str| -> bool {
+    let verify_rw_pair = move |mut rows: &[Row], expected_data: &str| -> bool {
+        // Clear progress rows that may appear after row 2.
+        for i in (2..rows.len()).rev() {
+            if rows[i].get::<_, bool>("mz_progressed") {
+                rows = &rows[..i];
+            }
+        }
+
         for (i, row) in rows.iter().enumerate() {
             match row.get::<_, Option<String>>("data") {
                 // Only verify if all rows have expected data
@@ -1020,6 +1045,41 @@ fn test_linearizable() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    Ok(())
+}
+
+// Test EXPLAIN TIMESTAMP with tables. Mock time to verify initial table since
+// is now(), not 0.
+#[test]
+fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    let timestamp = Arc::new(Mutex::new(1_000));
+    let now = {
+        let timestamp = Arc::clone(&timestamp);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now);
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+    let timestamp_re = Regex::new(r"\d{13}").unwrap();
+
+    client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
+    let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
+    let explain: String = row.get(0);
+    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    assert_eq!(
+        explain,
+        "     timestamp:          1000
+         since:[         1000]
+         upper:[            0]
+     has table: true
+ table read ts:          1000
+
+source materialize.public.t1 (u1, storage):
+ read frontier:[         1000]
+write frontier:[            0]\n",
+    );
 
     Ok(())
 }

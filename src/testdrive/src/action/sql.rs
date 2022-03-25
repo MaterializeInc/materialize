@@ -28,8 +28,8 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Raw, Statement, ViewDefinition,
+    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement,
+    CreateTableStatement, CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
@@ -95,6 +95,13 @@ impl Action for SqlAction {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP TABLE IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
+            Statement::CreateCluster(CreateClusterStatement { name, .. }) => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
@@ -517,6 +524,7 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                 String::from_utf8(s).unwrap()
             }),
+            Type::CHAR => row.get::<_, Option<i8>>(i).map(|x| x.to_string()),
             Type::INT2 => row.get::<_, Option<i16>>(i).map(|x| x.to_string()),
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),

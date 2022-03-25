@@ -44,10 +44,10 @@ CREATE VIEW v AS VALUES ('a', 'b'), ('c', 'd'), ('e', 'f'), ('g', 'h')
 query IITT
 TAIL v
 ----
-0  1  a  b
-0  1  c  d
-0  1  e  f
-0  1  g  h
+18446744073709551615  1  a  b
+18446744073709551615  1  c  d
+18446744073709551615  1  e  f
+18446744073709551615  1  g  h
 
 statement ok
 BEGIN
@@ -58,18 +58,18 @@ DECLARE c CURSOR FOR TAIL v
 query IITT
 FETCH c
 ----
-0  1  a  b
+18446744073709551615  1  a  b
 
 query IITT
 FETCH 2 c WITH (TIMEOUT = '10s')
 ----
-0  1  c  d
-0  1  e  f
+18446744073709551615  1  c  d
+18446744073709551615  1  e  f
 
 query IITT
 FETCH 2 c WITH (TIMEOUT = '1s')
 ----
-0  1  g  h
+18446744073709551615  1  g  h
 
 query IITT
 FETCH c WITH (TIMEOUT = '1s')

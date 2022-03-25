@@ -14,7 +14,7 @@ categories = [
 license = "Apache-2.0"
 repository = "https://github.com/MaterializeInc/materialize/tree/main/src/http-proxy"
 edition = "2021"
-rust-version = "1.58.0"
+rust-version = "1.59.0"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -22,13 +22,11 @@ rustdoc-args = ["--cfg", "nightly_doc_features"]
 
 [dependencies]
 http = "0.2.6"
-hyper-dep = { version = "0.14.11", package = "hyper", optional = true }
 hyper-proxy = { version = "0.9.1", optional = true }
-hyper-tls = { version = "0.5.0", optional = true }
-ipnet = "2.3.1"
+ipnet = "2.4.0"
 lazy_static = "1.1.1"
-reqwest = { version = "0.11.9", optional = true }
-tracing = "0.1.31"
+reqwest = { version = "0.11.10", optional = true }
+tracing = "0.1.32"
 
 [features]
-hyper = ["hyper-dep", "hyper-proxy", "hyper-tls"]
+hyper = ["hyper-proxy"]

@@ -24,7 +24,10 @@
   </tr>
   {{ range .functions }}
   <tr>
-    <td>
+    {{/*  Extract the function's name from its signature and use it as the ID
+          to facilitate deeplinking. The `docsearch_l4` class is a special
+          class that is scraped by our Algolia DocSearch configuration.  */}}
+    <td class="docsearch_l4" id="{{ index (split .signature "(") 0 | urlize }}">
       {{/*  We use clojure highlighting simply because it looks best with the
       components we want to highlight. In the future, this should be customized
       in some way.  */}}
@@ -36,8 +39,8 @@
 
       {{ if .url }}(<a href="{{ .url }}">docs</a>){{ end }}
 
-      {{ if .nonpure }}
-        <br><br><b>Note:</b> This function is <a href="#pure-and-nonpure-functions">nonpure</a>.
+      {{ if .unmaterializable }}
+        <br><br><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.
       {{ end }}
     </td>
   </tr>
@@ -47,3 +50,10 @@
 {{end}}
 
 {{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}
+
+{{/*  When someone is deeplinked to a td on the page, highlight the tr  */}}
+<script type="text/javascript">
+  $(function() {
+    $(location.hash).parents('tr').css('background-color', '#FFFF5522');
+  });
+</script>

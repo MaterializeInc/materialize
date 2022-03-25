@@ -446,7 +446,8 @@ impl SessionClient {
             self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await?;
             let desc = self
                 .session()
-                .get_portal(EMPTY_PORTAL)
+                // We do not need to verify here because `self.execute` verifies below.
+                .get_portal_unverified(EMPTY_PORTAL)
                 .map(|portal| portal.desc.clone())
                 .expect("unnamed portal should be present");
             if !desc.param_types.is_empty() {
@@ -497,6 +498,15 @@ impl SessionClient {
             .cmd_tx
             .send(Command::Terminate { session })
             .expect("coordinator unexpectedly gone");
+    }
+
+    // Like `terminate`, but permits the session to not be present, assuming it was
+    // terminated by the coordinator.
+    pub async fn terminate_allow_no_session(self) {
+        if self.session.is_none() {
+            return;
+        }
+        self.terminate().await
     }
 
     /// Returns a mutable reference to the session bound to this client.

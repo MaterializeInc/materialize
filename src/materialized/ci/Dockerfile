@@ -14,4 +14,4 @@ RUN apt-get update && apt-get -qy install ca-certificates curl sqlite3 tini
 
 COPY kdestroy kinit materialized /usr/local/bin/
 
-ENTRYPOINT ["tini", "--", "materialized", "--log-file=stderr"]
+ENTRYPOINT ["tini", "--", "materialized", "--log-file=stderr", "--listen-addr=0.0.0.0:6875"]

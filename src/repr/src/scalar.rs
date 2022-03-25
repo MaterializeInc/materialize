@@ -26,7 +26,7 @@ use crate::adt::array::Array;
 use crate::adt::char::{Char, CharLength};
 use crate::adt::interval::Interval;
 use crate::adt::numeric::{Numeric, NumericMaxScale};
-use crate::adt::system::{Oid, RegClass, RegProc, RegType};
+use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -47,6 +47,8 @@ pub enum Datum<'a> {
     Int32(i32),
     /// A 64-bit signed integer.
     Int64(i64),
+    /// An 8-bit unsigned integer.
+    UInt8(u8),
     /// A 32-bit unsigned integer.
     UInt32(u32),
     /// A 32-bit floating point number.
@@ -317,11 +319,24 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the 8-bit integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::UInt8`].
+    #[track_caller]
+    pub fn unwrap_uint8(&self) -> u8 {
+        match self {
+            Datum::UInt8(u) => *u,
+            _ => panic!("Datum::unwrap_uint8 called on {:?}", self),
+        }
+    }
+
     /// Unwraps the 64-bit integer value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int64`].
+    /// Panics if the datum is not [`Datum::UInt32`].
     #[track_caller]
     pub fn unwrap_uint32(&self) -> u32 {
         match self {
@@ -562,6 +577,8 @@ impl<'a> Datum<'a> {
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
+                    (Datum::UInt8(_), ScalarType::PgLegacyChar) => true,
+                    (Datum::UInt8(_), _) => false,
                     (Datum::UInt32(_), ScalarType::Oid) => true,
                     (Datum::UInt32(_), ScalarType::RegClass) => true,
                     (Datum::UInt32(_), ScalarType::RegProc) => true,
@@ -791,6 +808,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Int16(num) => write!(f, "{}", num),
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
+            Datum::UInt8(num) => write!(f, "{}", num),
             Datum::UInt32(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
@@ -881,6 +899,11 @@ pub enum ScalarType {
     TimestampTz,
     /// The type of [`Datum::Interval`].
     Interval,
+    /// A single byte character type backed by a [`Datum::UInt8`].
+    ///
+    /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
+    /// it from the type `ScalarType::Char`.
+    PgLegacyChar,
     /// The type of [`Datum::Bytes`].
     Bytes,
     /// The type of [`Datum::String`].
@@ -1207,6 +1230,29 @@ impl<'a, E> DatumType<'a, E> for Numeric {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::from(self))
+    }
+}
+
+impl AsColumnType for PgLegacyChar {
+    fn as_column_type() -> ColumnType {
+        ScalarType::PgLegacyChar.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for PgLegacyChar {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::UInt8(a)) => Ok(PgLegacyChar(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::UInt8(self.0))
     }
 }
 
@@ -1637,6 +1683,16 @@ impl<'a> ScalarType {
     /// contrast, two `Numeric` values with different scales are never `Eq` to
     /// one another.
     pub fn base_eq(&self, other: &ScalarType) -> bool {
+        self.eq_inner(other, false)
+    }
+
+    // Determines equality among scalar types that ignores any custom OIDs or
+    // embedded values.
+    pub fn structural_eq(&self, other: &ScalarType) -> bool {
+        self.eq_inner(other, true)
+    }
+
+    pub fn eq_inner(&self, other: &ScalarType, structure_only: bool) -> bool {
         use ScalarType::*;
         match (self, other) {
             (
@@ -1658,8 +1714,8 @@ impl<'a> ScalarType {
                     value_type: r,
                     custom_oid: oid_r,
                 },
-            ) => l.base_eq(r) && oid_l == oid_r,
-            (Array(a), Array(b)) => a.base_eq(b),
+            ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
+            (Array(a), Array(b)) => a.eq_inner(b, structure_only),
             (
                 Record {
                     fields: fields_a,
@@ -1672,23 +1728,20 @@ impl<'a> ScalarType {
                     custom_name: name_b,
                 },
             ) => {
-                oid_a == oid_b
-                    && name_a == name_b
+                (oid_a == oid_b || structure_only)
+                    && (name_a == name_b || structure_only)
                     && fields_a.len() == fields_b.len()
                     && fields_a
                         .iter()
                         .zip(fields_b)
-                        // Compare field names and scalar types, but ignore nullability.
-                        .all(|(a, b)| a.0 == b.0 && a.1.scalar_type.base_eq(&b.1.scalar_type))
+                        // Ignore nullability.
+                        .all(|(a, b)| {
+                            (a.0 == b.0 || structure_only)
+                                && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
+                        })
             }
+            (s, o) if structure_only => s == o,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
-        }
-    }
-
-    pub fn is_string_like(&self) -> bool {
-        match self {
-            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,
-            _ => false,
         }
     }
 }

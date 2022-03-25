@@ -12,6 +12,7 @@ use std::time::Duration;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
+use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 
 use crate::catalog::storage;
 use crate::persistcfg::PersisterWithConfig;
@@ -25,8 +26,8 @@ pub struct Config<'a> {
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.
     pub safe_mode: bool,
-    /// Whether to enable logging sources and the views that depend upon them.
-    pub enable_logging: bool,
+    /// Whether to enable introspection for the virtual compute host.
+    pub virtual_compute_host_introspection: Option<ComputeInstanceIntrospectionConfig>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An [External ID][] to use for all AWS AssumeRole operations.

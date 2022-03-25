@@ -36,6 +36,11 @@ contains:unable to automatically determine a query timestamp
 ! SELECT * FROM v_unindexed
 contains:unable to automatically determine a query timestamp
 
+# Since sources aren't linearizable (see #11048), we need to wait out a
+# timestamp frequency interval to ensure the read timestamp for the timestamp
+# is not picked to a timestamp when the source is empty.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1s
+
 > BEGIN
 
 # A SELECT from the materialized source in a transaction should succeed
@@ -45,10 +50,10 @@ contains:unable to automatically determine a query timestamp
 2
 4
 
-! SELECT c FROM unindexed ORDER BY c
-contains:Transactions can only reference objects in the same timedomain
+! SELECT c FROM unindexed
+contains:unable to automatically determine a query timestamp
 
-> ROLLBACK
+> COMMIT
 
 # The unindexed view should be the same.
 > BEGIN
@@ -59,9 +64,9 @@ contains:Transactions can only reference objects in the same timedomain
 4
 
 ! SELECT * FROM v_unindexed
-contains:Transactions can only reference objects in the same timedomain
+contains:unable to automatically determine a query timestamp
 
-> ROLLBACK
+> COMMIT
 
 # Ensure that other optionally indexed things (views) are correctly
 # included in the timedomain.
@@ -118,6 +123,10 @@ contains:Transactions can only reference objects in the same timedomain
 # it returns a 0 timestamp error.
 > SELECT * FROM v_materialized
 3
+# Since sources aren't linearizable (see #11048), we need to wait out a
+# timestamp frequency interval to ensure the read timestamp for the timestamp
+# is not picked to a timestamp when the source is empty.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1s
 > BEGIN
 > SELECT * FROM v_materialized
 3

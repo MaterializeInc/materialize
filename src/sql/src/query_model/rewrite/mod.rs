@@ -15,9 +15,7 @@ mod rule;
 
 use std::collections::HashSet;
 
-use super::attribute::core::{
-    dependency_order, derive_dft_attributes, transitive_closure, Attribute,
-};
+use super::attribute::core::{Attribute, RequiredAttributes};
 use super::model::{BoxId, Model};
 
 impl Model {
@@ -141,16 +139,13 @@ pub fn rewrite_model(model: &mut Model) {
 /// Transform the model by applying a list of rewrite rules.
 fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
     // collect a set of attributes required by the given rules
-    let mut attributes = rules
+    let attributes = rules
         .iter()
         .flat_map(|r| r.required_attributes())
         .collect::<HashSet<_>>();
-    // add missing dependencies required to derive this set of attributes
-    transitive_closure(&mut attributes);
-    // order transitive closure topologically based on dependency order
-    let attributes = dependency_order(attributes);
-    // compute initial values of the required derived attributes
-    derive_dft_attributes(model, &attributes, model.top_box);
+    let attributes = RequiredAttributes::from(attributes);
+    // derived initial values of the required attributes
+    attributes.derive(model, model.top_box);
 
     let (top_box, other): (Vec<Box<dyn ApplyRule>>, Vec<Box<dyn ApplyRule>>) = rules
         .into_iter()
@@ -168,7 +163,7 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
         for rule in &top_box {
             if rule.apply(model, model.top_box) {
                 rewritten_in_top |= true;
-                derive_dft_attributes(model, &attributes, model.top_box);
+                attributes.derive(model, model.top_box);
             }
         }
 
@@ -177,7 +172,7 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
                 for rule in pre.iter() {
                     if rule.apply(model, *box_id) {
                         rewritten_in_pre |= true;
-                        derive_dft_attributes(model, &attributes, model.top_box);
+                        attributes.derive(model, model.top_box);
                     }
                 }
                 Ok(())
@@ -186,7 +181,7 @@ fn apply_rules_to_model(model: &mut Model, rules: Vec<Box<dyn ApplyRule>>) {
                 for rule in post.iter() {
                     if rule.apply(model, *box_id) {
                         rewritten_in_post |= true;
-                        derive_dft_attributes(model, &attributes, *box_id);
+                        attributes.derive(model, model.top_box);
                     }
                 }
                 Ok(())
@@ -243,7 +238,7 @@ mod tests {
     ///
     ///             --------------
     fn test_model() -> Model {
-        let mut model = Model::new();
+        let mut model = Model::default();
 
         // vertices
         let b0 = model.make_box(Select::default().into());

@@ -18,12 +18,26 @@ nspacl   true      text[]
 > SHOW COLUMNS FROM pg_class
 name         nullable  type
 ---------------------------
-oid          false     oid
-relname      false     text
-relnamespace false     oid
-relowner     true      oid
-relam        false     oid
-relkind      true      text
+oid                 false       oid
+relname             false       text
+relnamespace        false       oid
+reloftype           false       oid
+relowner            true        oid
+relam               false       oid
+reltablespace       false       oid
+reltoastrelid       false       oid
+relhasindex         false       boolean
+relpersistence      false       char
+relkind             true        text
+relchecks           false       smallint
+relhasrules         false       boolean
+relhastriggers      false       boolean
+relrowsecurity      false       boolean
+relforcerowsecurity false       boolean
+relreplident        false       char
+relispartition      false       boolean
+relhasoids          false       boolean
+reloptions          true        text[]
 
 > SHOW COLUMNS FROM pg_database
 name         nullable  type
@@ -39,10 +53,17 @@ name         nullable  type
 > SHOW COLUMNS FROM pg_index
 name         nullable  type
 --------------------------
-indexrelid   false     oid
-indrelid     false     oid
-indisprimary false     boolean
-indkey       false     bigint[]
+indexrelid      false       oid
+indrelid        false       oid
+indisprimary    false       boolean
+indisunique     false       boolean
+indisclustered  false       boolean
+indisvalid      false       boolean
+indisreplident  false       boolean
+indkey          false       int2vector
+indoption       false       int2vector
+indexprs        true        text
+indpred         true        text
 
 > SHOW COLUMNS FROM pg_description
 name         nullable  type
@@ -57,14 +78,50 @@ name         nullable  type
 ---------------------------
 attrelid     false     oid
 attname      false     text
+atttypid     false     oid
+attlen       true      smallint
 attnum       false     bigint
 atttypmod    false     integer
 attnotnull   false     boolean
-attisdropped false     boolean
-atttypid     false     oid
-attlen       true      smallint
 atthasdef    false     boolean
-attidentity  false     character
+attidentity  false     char
+attgenerated false     char
+attisdropped false     boolean
+attcollation false     oid
+
+> SHOW COLUMNS FROM pg_collation
+name         nullable  type
+---------------------------
+oid                 false   oid
+collname            false   text
+collnamespace       false   oid
+collowner           false   oid
+collprovider        false   char
+collisdeterministic false   boolean
+collencoding        false   integer
+collcollate         false   text
+collctype           false   text
+collversion         false   text
+
+> SHOW COLUMNS FROM pg_policy
+name         nullable  type
+---------------------------
+oid             false   oid
+polname         false   text
+polrelid        false   oid
+polcmd          false   char
+polpermissive   false   boolean
+polroles        false   oid[]
+polqual         false   text
+polwithcheck    false   text
+
+> SHOW COLUMNS FROM pg_inherits
+name         nullable  type
+---------------------------
+inhrelid            false   oid
+inhparent           false   oid
+inhseqno            false   integer
+inhdetachpending    false   boolean
 
 ! SELECT current_schemas()
 contains:Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
