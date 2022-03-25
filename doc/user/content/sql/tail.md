@@ -333,10 +333,10 @@ while (true)
   }
 ```
 
-| Additional guides                  |
+| Additional guides |
 | ---------------------- |
-| [Node.js](/guides/node-js/#stream)          |
-| [PHP](/guides/php-pdo/#stream)          |
+| [Node.js](/guides/node-js/#stream)|
+| [PHP](/guides/php-pdo/#stream)|
 | [GO](/guides/golang/#stream) |
 ### Using `AS OF`
 
