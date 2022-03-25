@@ -513,7 +513,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
 
         // Reconstitute the commands as a compact history.
-        self.commands.push(create_command.unwrap());
+        if let Some(create_command) = create_command {
+            self.commands.push(create_command);
+        }
         self.commands
             .push(ComputeCommand::CreateDataflows(live_dataflows));
         self.commands.push(ComputeCommand::AllowCompaction(

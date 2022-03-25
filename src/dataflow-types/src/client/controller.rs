@@ -87,8 +87,9 @@ where
             InstanceConfig::Remote { hosts, logging } => {
                 let client = RemoteClient::new(&hosts);
                 let client = ComputeWrapperClient::new(client, instance);
-                let client = crate::client::replicated::ActiveReplication::new(vec![client]);
-                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
+                let mut replicas = crate::client::replicated::ActiveReplication::default();
+                let _replica_id = replicas.add_replica(client).await;
+                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
             }
             InstanceConfig::Managed { size: _, logging } => {
                 let OrchestratorConfig {
@@ -131,8 +132,9 @@ where
                     .collect();
                 let client = RemoteClient::new(&addrs);
                 let client = ComputeWrapperClient::new(client, instance);
-                let client = crate::client::replicated::ActiveReplication::new(vec![client]);
-                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
+                let mut replicas = crate::client::replicated::ActiveReplication::default();
+                let _replica_id = replicas.add_replica(client).await;
+                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
             }
         };
         client
