@@ -35,7 +35,7 @@ use tracing::{error, trace};
 use crate::client::MultiWriteHandle;
 use crate::client::StreamWriteHandle;
 use crate::error::Error;
-use crate::storage::SeqNo;
+use crate::location::SeqNo;
 
 /// Extension trait for [`Stream`].
 pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {

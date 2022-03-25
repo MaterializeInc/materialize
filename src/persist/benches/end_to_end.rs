@@ -29,9 +29,9 @@ use tokio::runtime::Runtime as AsyncRuntime;
 use mz_persist::client::RuntimeClient;
 use mz_persist::error::{Error, ErrorLog};
 use mz_persist::file::FileBlob;
+use mz_persist::location::{Blob, LockInfo};
 use mz_persist::operators::source::PersistedSource;
 use mz_persist::runtime::{self, RuntimeConfig};
-use mz_persist::storage::{Blob, LockInfo};
 use mz_persist::workload::{self, DataGenerator};
 
 pub fn bench_load(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {

@@ -26,8 +26,8 @@ use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
+use crate::location::{Atomicity, Blob, BlobRead, Consensus, LockInfo, Log, SeqNo, VersionedData};
 use crate::runtime::{self, RuntimeConfig};
-use crate::storage::{Atomicity, Blob, BlobRead, Consensus, LockInfo, Log, SeqNo, VersionedData};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -631,8 +631,8 @@ impl Consensus for MemConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, consensus_impl_test, log_impl_test};
-    use crate::storage::Atomicity::RequireAtomic;
+    use crate::location::tests::{blob_impl_test, consensus_impl_test, log_impl_test};
+    use crate::location::Atomicity::RequireAtomic;
 
     use super::*;
 

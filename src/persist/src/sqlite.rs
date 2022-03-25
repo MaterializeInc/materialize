@@ -18,7 +18,7 @@ use rusqlite::{named_params, params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use crate::error::Error;
-use crate::storage::{Consensus, SeqNo, VersionedData};
+use crate::location::{Consensus, SeqNo, VersionedData};
 
 const APPLICATION_ID: i32 = 0x0678_ef32; // chosen randomly
 
@@ -182,7 +182,7 @@ impl Consensus for SqliteConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::consensus_impl_test;
+    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 

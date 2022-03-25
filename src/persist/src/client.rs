@@ -26,9 +26,9 @@ use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::snapshot::{ArrangementSnapshot, ArrangementSnapshotIter, Snapshot};
 use crate::indexed::{Cmd, CmdRead, ListenEvent, StreamDesc};
+use crate::location::SeqNo;
 use crate::pfuture::PFuture;
 use crate::runtime::{RuntimeCmd, RuntimeHandle, RuntimeId};
-use crate::storage::SeqNo;
 
 /// A clone-able handle to the persistence runtime.
 ///

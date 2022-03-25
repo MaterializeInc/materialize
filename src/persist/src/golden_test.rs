@@ -18,12 +18,12 @@ use tracing::{debug, error, info};
 
 use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
+use crate::location::{Atomicity, Blob, BlobRead};
 use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::{Input, Runtime, RuntimeWorker};
 use crate::runtime::{self, RuntimeConfig};
-use crate::storage::{Atomicity, Blob, BlobRead};
 use crate::unreliable::UnreliableBlob;
 
 /// A test to catch changes in any part of the end-to-end persist encoding.

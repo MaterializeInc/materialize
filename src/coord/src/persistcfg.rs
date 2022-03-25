@@ -25,8 +25,8 @@ use mz_dataflow_types::sources::{
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::error::{Error, ErrorLog};
 use mz_persist::indexed::encoding::Id as PersistId;
+use mz_persist::location::{Blob, LockInfo};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
-use mz_persist::storage::{Blob, LockInfo};
 use mz_repr::Row;
 use serde::Serialize;
 use tokio::runtime::Runtime as TokioRuntime;
@@ -175,7 +175,7 @@ impl PersistConfig {
             let runtime = match &self.storage {
                 PersistStorage::File(s) => {
                     let mut blob = FileBlob::open_exclusive((&s.blob_path).into(), lock_info)?;
-                    mz_persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
+                    mz_persist::location::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
@@ -190,7 +190,7 @@ impl PersistConfig {
                         S3BlobConfig::new(s.bucket.clone(), s.prefix.clone(), s.role_arn.clone())
                             .await?;
                     let mut blob = S3Blob::open_exclusive(config, lock_info)?;
-                    mz_persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
+                    mz_persist::location::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::new(self.min_step_interval, self.cache_size_limit),
                         log,
