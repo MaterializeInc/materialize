@@ -831,7 +831,6 @@ where
 pub mod partitioned {
 
     use std::collections::HashMap;
-    use std::iter::Fuse;
 
     use async_trait::async_trait;
     use futures::StreamExt;
@@ -890,9 +889,6 @@ pub mod partitioned {
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            if let Some(stashed) = self.state.stashed_responses.next() {
-                return Ok(Some(stashed));
-            }
             let mut stream: StreamMap<_, _> = self
                 .shards
                 .iter_mut()
@@ -900,10 +896,7 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response?).fuse();
-                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
-                self.state.stashed_responses = messages;
-                if let Some(message) = self.state.stashed_responses.next() {
+                if let Some(message) = self.state.absorb_response(index, response?) {
                     return Ok(Some(message));
                 }
             }
@@ -934,8 +927,6 @@ pub mod partitioned {
             (GlobalId, Option<ComputeInstanceId>),
             Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
         >,
-        /// The next responses to return immediately, if any
-        stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -956,14 +947,11 @@ pub mod partitioned {
     {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
-            let stashed_responses: Box<dyn Iterator<Item = Response<T>> + Send> =
-                Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
-                stashed_responses: stashed_responses.fuse(),
             }
         }
 
@@ -1000,7 +988,7 @@ pub mod partitioned {
             &mut self,
             shard_id: usize,
             message: Response<T>,
-        ) -> Box<dyn Iterator<Item = Response<T>> + Send> {
+        ) -> Option<Response<T>> {
             match message {
                 Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     for (id, changes) in list.iter_mut() {
@@ -1025,15 +1013,12 @@ pub mod partitioned {
                     }
 
                     if list.is_empty() {
-                        Box::new(None.into_iter())
+                        None
                     } else {
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::FrontierUppers(list),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Response::Compute(
+                            ComputeResponse::FrontierUppers(list),
+                            instance,
+                        ))
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
@@ -1058,12 +1043,9 @@ pub mod partitioned {
                         }
                     }
 
-                    Box::new(
-                        Some(Response::Storage(StorageResponse::TimestampBindings(
-                            feedback,
-                        )))
-                        .into_iter(),
-                    )
+                    Some(Response::Storage(StorageResponse::TimestampBindings(
+                        feedback,
+                    )))
                 }
                 Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
@@ -1089,15 +1071,12 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&uuid);
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::PeekResponse(uuid, response),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Response::Compute(
+                            ComputeResponse::PeekResponse(uuid, response),
+                            instance,
+                        ))
                     } else {
-                        Box::new(None.into_iter())
+                        None
                     }
                 }
                 Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
@@ -1116,14 +1095,14 @@ pub mod partitioned {
                             // This tail has been dropped;
                             // we should permanently block
                             // any messages from it
-                            return Box::new(None.into_iter());
+                            return None;
                         }
                         Some(entry) => entry,
                     };
 
                     use crate::TailBatch;
                     use differential_dataflow::consolidation::consolidate_updates;
-                    let responses: Box<dyn Iterator<Item = Response<T>> + Send> = match response {
+                    match response {
                         TailResponse::Batch(TailBatch {
                             lower,
                             upper,
@@ -1146,36 +1125,29 @@ pub mod partitioned {
                                     }
                                 }
                                 entry.1 = keep;
-                                Box::new(
-                                    Some(Response::Compute(
-                                        ComputeResponse::TailResponse(
-                                            id,
-                                            TailResponse::Batch(TailBatch {
-                                                lower: old_frontier,
-                                                upper: new_frontier,
-                                                updates: ship,
-                                            }),
-                                        ),
-                                        instance,
-                                    ))
-                                    .into_iter(),
-                                )
+                                Some(Response::Compute(
+                                    ComputeResponse::TailResponse(
+                                        id,
+                                        TailResponse::Batch(TailBatch {
+                                            lower: old_frontier,
+                                            upper: new_frontier,
+                                            updates: ship,
+                                        }),
+                                    ),
+                                    instance,
+                                ))
                             } else {
-                                Box::new(None.into_iter())
+                                None
                             }
                         }
                         TailResponse::Dropped => {
                             *maybe_entry = None;
-                            Box::new(
-                                Some(Response::Compute(
-                                    ComputeResponse::TailResponse(id, TailResponse::Dropped),
-                                    instance,
-                                ))
-                                .into_iter(),
-                            )
+                            Some(Response::Compute(
+                                ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                instance,
+                            ))
                         }
-                    };
-                    responses
+                    }
                 }
             }
         }
