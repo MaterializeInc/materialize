@@ -14,13 +14,14 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::location::ExternalError;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::error::{InvalidUsage, LocationError};
+use crate::error::InvalidUsage;
 use crate::r#impl::shard::Shard;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -105,7 +106,7 @@ where
         timeout: Duration,
         updates: I,
         new_upper: Antichain<T>,
-    ) -> Result<Result<(), InvalidUsage>, LocationError> {
+    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
         trace!(
             "WriteHandle::write_batch timeout={:?} new_upper={:?}",
             timeout,
@@ -128,7 +129,7 @@ where
         &mut self,
         updates: &[((K, V), T, D)],
         new_upper: T,
-    ) -> Result<Result<(), InvalidUsage>, LocationError> {
+    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
         use crate::NO_TIMEOUT;
 
         self.write_batch(
@@ -168,7 +169,7 @@ where
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, LocationError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
         trace!(
             "WriteHandle::compare_and_append timeout={:?} new_upper={:?}",
             timeout,
@@ -195,7 +196,7 @@ where
         updates: &[((K, V), T, D)],
         expected_upper: T,
         new_upper: T,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, LocationError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
         use crate::NO_TIMEOUT;
 
         self.compare_and_append(

@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::location::ExternalError;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -30,7 +31,6 @@ use tokio::sync::Mutex;
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::error::LocationError;
 use crate::r#impl::shard::{Shard, State};
 use crate::read::ReadHandle;
 use crate::write::WriteHandle;
@@ -99,7 +99,7 @@ impl Client {
         timeout: Duration,
         location: Location,
         role_arn: Option<String>,
-    ) -> Result<Self, LocationError> {
+    ) -> Result<Self, ExternalError> {
         trace!(
             "Client::new timeout={:?} location={:?} role_arn={:?}",
             timeout,
@@ -128,7 +128,7 @@ impl Client {
         &self,
         timeout: Duration,
         id: Id,
-    ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), LocationError>
+    ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), ExternalError>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -158,7 +158,7 @@ mod tests {
 
     use super::*;
 
-    async fn new_test_client() -> Result<Client, LocationError> {
+    async fn new_test_client() -> Result<Client, ExternalError> {
         let location = Location {
             bucket: "unused".into(),
             prefix: "unused".into(),

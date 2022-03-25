@@ -391,7 +391,7 @@ impl AppliedState {
     }
 
     fn assign_seqno(&mut self) -> SeqNo {
-        let seqno = self.highest_assigned_seqno + 1;
+        let seqno = self.highest_assigned_seqno.next();
         self.highest_assigned_seqno = seqno;
         seqno
     }

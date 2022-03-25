@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::Read;
-use std::ops::{Add, Range};
+use std::ops::Range;
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -77,7 +77,7 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
 
 impl timely::PartialOrder for SeqNo {
@@ -86,11 +86,59 @@ impl timely::PartialOrder for SeqNo {
     }
 }
 
-impl Add<u64> for SeqNo {
-    type Output = SeqNo;
+impl SeqNo {
+    /// Returns the next SeqNo in the sequence.
+    pub fn next(self) -> SeqNo {
+        SeqNo(self.0 + 1)
+    }
+}
 
-    fn add(self, rhs: u64) -> SeqNo {
-        SeqNo(self.0 + rhs)
+/// An error coming from an underlying durability system (e.g. s3) or from
+/// invalid data received from one.
+///
+/// TODO: Split this into an enum with variants for failures which mean the
+/// operation _definitely didn't occur_ (e.g. permission denied) vs ones that
+/// _might have occurred_ (e.g. timeout).
+#[derive(Debug)]
+pub struct ExternalError {
+    inner: anyhow::Error,
+}
+
+impl std::fmt::Display for ExternalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "storage: {}", self.inner)
+    }
+}
+
+impl std::error::Error for ExternalError {}
+
+#[cfg(test)]
+impl PartialEq for ExternalError {
+    fn eq(&self, other: &Self) -> bool {
+        // TODO: What are the right semantics here?
+        self.to_string() == other.to_string()
+    }
+}
+
+impl From<anyhow::Error> for ExternalError {
+    fn from(inner: anyhow::Error) -> Self {
+        ExternalError { inner }
+    }
+}
+
+impl From<Error> for ExternalError {
+    fn from(x: Error) -> Self {
+        ExternalError {
+            inner: anyhow::Error::new(x),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for ExternalError {
+    fn from(x: rusqlite::Error) -> Self {
+        ExternalError {
+            inner: anyhow::Error::new(x),
+        }
     }
 }
 
@@ -234,7 +282,7 @@ pub struct VersionedData {
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
-    async fn head(&self, deadline: Instant) -> Result<Option<VersionedData>, Error>;
+    async fn head(&self, deadline: Instant) -> Result<Option<VersionedData>, ExternalError>;
 
     /// Update the [VersionedData] stored at this location to `new`, iff the current
     /// sequence number is exactly `expected` and `new`'s sequence number > the current
@@ -252,7 +300,7 @@ pub trait Consensus: std::fmt::Debug {
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, Error>;
+    ) -> Result<Result<(), Option<VersionedData>>, ExternalError>;
 }
 
 /// The partially structured information stored in an exclusive-writer lock.
@@ -374,11 +422,52 @@ impl From<(&str, &str)> for LockInfo {
     }
 }
 
+/// An abstraction over read-write access to a `bytes key`->`bytes value` store.
+///
+/// Implementations are required to be _linearizable_.
+///
+/// TODO: Consider whether this can be relaxed. Since our usage is write-once
+/// modify-never, it certainly seems like we could by adding retries around
+/// `get` to wait for a non-linearizable `set` to show up. However, the tricky
+/// bit comes once we stop handing out seqno capabilities to readers and have to
+/// start reasoning about "this set hasn't show up yet" vs "the blob has already
+/// been deleted". Another tricky problem is the same but for a deletion when
+/// the first attempt timed out.
+///
+/// TODO: Rename this to Blob when we delete Blob.
+#[async_trait]
+pub trait BlobMulti: std::fmt::Debug {
+    /// Returns a reference to the value corresponding to the key.
+    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
+
+    /// List all of the keys in the map.
+    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError>;
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(
+        &self,
+        deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), ExternalError>;
+
+    /// Remove a key from the map.
+    ///
+    /// Succeeds if the key does not exist.
+    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError>;
+}
+
 #[cfg(test)]
 pub mod tests {
+    use std::future::Future;
     use std::ops::RangeInclusive;
     use std::time::Duration;
 
+    use anyhow::anyhow;
     use mz_persist_types::Codec;
 
     use crate::error::Error;
@@ -667,6 +756,120 @@ pub mod tests {
         Ok(())
     }
 
+    pub async fn blob_multi_impl_test<
+        B: BlobMulti,
+        C: Future<Output = Result<B, ExternalError>>,
+        F: Fn(&'static str) -> C,
+    >(
+        new_fn: F,
+    ) -> Result<(), ExternalError> {
+        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
+        let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
+
+        let blob0 = new_fn("path0").await?;
+
+        // We can create a second blob writing to a different place.
+        let _ = new_fn("path1").await?;
+
+        // We can open two blobs to the same place, even.
+        let blob1 = new_fn("path0").await?;
+
+        // Empty key is empty.
+        assert_eq!(blob0.get(no_timeout, "k0").await?, None);
+        assert_eq!(blob1.get(no_timeout, "k0").await?, None);
+
+        // Empty list keys is empty.
+        let empty_keys = blob0.list_keys(no_timeout).await?;
+        assert_eq!(empty_keys, Vec::<String>::new());
+        let empty_keys = blob1.list_keys(no_timeout).await?;
+        assert_eq!(empty_keys, Vec::<String>::new());
+
+        // Set a key with AllowNonAtomic and get it back.
+        blob0
+            .set(no_timeout, "k0", values[0].clone(), AllowNonAtomic)
+            .await?;
+        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[0].clone()));
+        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[0].clone()));
+
+        // Set a key with RequireAtomic and get it back.
+        blob0
+            .set(no_timeout, "k0a", values[0].clone(), RequireAtomic)
+            .await?;
+        assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[0].clone()));
+        assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[0].clone()));
+
+        // Blob contains the key we just inserted.
+        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
+        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
+
+        // Can overwrite a key with AllowNonAtomic.
+        blob0
+            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .await?;
+        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        // Can overwrite a key with RequireAtomic.
+        blob0
+            .set(no_timeout, "k0a", values[1].clone(), RequireAtomic)
+            .await?;
+        assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[1].clone()));
+        assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[1].clone()));
+
+        // Can delete a key.
+        blob0.delete(no_timeout, "k0").await?;
+        // Can no longer get a deleted key.
+        assert_eq!(blob0.get(no_timeout, "k0").await?, None);
+        assert_eq!(blob1.get(no_timeout, "k0").await?, None);
+        // Double deleting a key succeeds.
+        assert_eq!(blob0.delete(no_timeout, "k0").await, Ok(()));
+        // Deleting a key that does not exist succeeds.
+        assert_eq!(blob0.delete(no_timeout, "nope").await, Ok(()));
+
+        // Empty blob contains no keys.
+        blob0.delete(no_timeout, "k0a").await?;
+        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
+        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
+        // Can reset a deleted key to some other value.
+        blob0
+            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .await?;
+        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
+
+        // Insert multiple keys back to back and validate that we can list
+        // them all out.
+        let mut expected_keys = empty_keys;
+        for i in 1..=5 {
+            let key = format!("k{}", i);
+            blob0
+                .set(no_timeout, &key, values[0].clone(), AllowNonAtomic)
+                .await?;
+            expected_keys.push(key);
+        }
+
+        // Blob contains the key we just inserted.
+        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
+        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
+
+        // We can open a new blob to the same path and use it.
+        let blob3 = new_fn("path0").await?;
+        assert_eq!(blob3.get(no_timeout, "k0").await?, Some(values[1].clone()));
+
+        Ok(())
+    }
+
     pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
@@ -734,7 +937,7 @@ pub mod tests {
             consensus
                 .compare_and_set(deadline, Some(state.seqno), invalid_constant_seqno)
                 .await,
-            Err(Error::from("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)"))
+            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
         );
 
         let invalid_regressing_seqno = VersionedData {
@@ -748,7 +951,7 @@ pub mod tests {
             consensus
                 .compare_and_set(deadline, Some(state.seqno), invalid_regressing_seqno)
                 .await,
-            Err(Error::from("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)"))
+            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
         );
 
         // Can correctly update to a new state if we provide the right expected seqno

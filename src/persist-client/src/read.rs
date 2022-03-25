@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::location::ExternalError;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -22,7 +23,7 @@ use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::error::{InvalidUsage, LocationError};
+use crate::error::InvalidUsage;
 use crate::r#impl::shard::Shard;
 use crate::Id;
 
@@ -85,7 +86,7 @@ where
     pub async fn poll_next(
         &mut self,
         timeout: Duration,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, LocationError> {
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
         trace!("SnapshotIter::poll_next timeout={:?}", timeout);
         let contents = std::mem::take(&mut self.contents);
         Ok(contents)
@@ -95,7 +96,7 @@ where
     #[cfg(test)]
     pub async fn read_all(
         &mut self,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, LocationError> {
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
         use crate::NO_TIMEOUT;
 
         let mut ret = Vec::new();
@@ -140,7 +141,7 @@ where
     pub async fn poll_next(
         &mut self,
         timeout: Duration,
-    ) -> Result<Vec<ListenEvent<K, V, T, D>>, LocationError> {
+    ) -> Result<Vec<ListenEvent<K, V, T, D>>, ExternalError> {
         trace!("Listen::poll_next timeout={:?}", timeout);
         let mut ret = Vec::new();
         loop {
@@ -220,7 +221,7 @@ where
         &mut self,
         timeout: Duration,
         new_since: Antichain<T>,
-    ) -> Result<Result<(), InvalidUsage>, LocationError> {
+    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::downgrade_since timeout={:?} new_since={:?}",
             timeout,
@@ -250,7 +251,7 @@ where
         &self,
         timeout: Duration,
         as_of: Antichain<T>,
-    ) -> Result<Result<Listen<K, V, T, D>, InvalidUsage>, LocationError> {
+    ) -> Result<Result<Listen<K, V, T, D>, InvalidUsage>, ExternalError> {
         trace!("ReadHandle::listen timeout={:?} as_of={:?}", timeout, as_of);
         Ok(Ok(Listen {
             upper: as_of.clone(),
@@ -286,7 +287,7 @@ where
         timeout: Duration,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, LocationError> {
+    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} as_of={:?} num_splits={:?}",
             timeout,
@@ -321,7 +322,7 @@ where
         &self,
         timeout: Duration,
         split: SnapshotSplit,
-    ) -> Result<SnapshotIter<K, V, T, D>, LocationError> {
+    ) -> Result<SnapshotIter<K, V, T, D>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} split={:?}",
             timeout,
@@ -349,7 +350,7 @@ where
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
-    pub async fn clone(&self, timeout: Duration) -> Result<Self, LocationError> {
+    pub async fn clone(&self, timeout: Duration) -> Result<Self, ExternalError> {
         trace!("ReadHandle::clone timeout={:?}", timeout);
         let new_reader_id = self
             .state
@@ -369,7 +370,7 @@ where
     pub async fn snapshot_one(
         &self,
         as_of: T,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, LocationError> {
+    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
         use crate::NO_TIMEOUT;
 
         let splits = self
