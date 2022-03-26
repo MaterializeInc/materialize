@@ -559,17 +559,6 @@ fn get_cast(
         return Some(Box::new(|expr| expr));
     }
 
-    if (from.is_custom_type() || to.is_custom_type()) && from.structural_eq(to) {
-        // CastInPlace allowed if going between custom and anonymous or if cast
-        // explicitly requested.
-        if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
-            let return_ty = to.clone();
-            return Some(Box::new(move |expr| {
-                expr.call_unary(UnaryFunc::CastInPlace { return_ty })
-            }));
-        }
-    }
-
     let imp = VALID_CASTS.get(&(from.into(), to.into()))?;
     let template = match (ccx, imp.context) {
         (Explicit, Implicit) | (Explicit, Assignment) | (Explicit, Explicit) => Some(&imp.template),

@@ -3400,9 +3400,6 @@ pub enum UnaryFunc {
     CastMapToString {
         ty: ScalarType,
     },
-    CastInPlace {
-        return_ty: ScalarType,
-    },
     CastInt2VectorToString,
     CeilFloat32(CeilFloat32),
     CeilFloat64(CeilFloat64),
@@ -3843,7 +3840,6 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            CastInPlace { .. } => Ok(a),
             Ascii => Ok(ascii(a)),
             BitLengthString => bit_length(a.unwrap_str()),
             BitLengthBytes => bit_length(a.unwrap_bytes()),
@@ -4101,8 +4097,6 @@ impl UnaryFunc {
             CastJsonbToFloat64 => ScalarType::Float64.nullable(nullable),
             CastJsonbToBool => ScalarType::Bool.nullable(nullable),
 
-            CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
-
             CastRecord1ToRecord2 { return_ty, .. } => {
                 return_ty.without_modifiers().nullable(nullable)
             }
@@ -4353,7 +4347,7 @@ impl UnaryFunc {
             TimezoneTime { .. } => false,
             TimezoneTimestampTz(_) => false,
             TimezoneTimestamp(_) => false,
-            CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } | CastInPlace { .. } => false,
+            CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             ExtractInterval(_)
             | ExtractTime(_)
@@ -4624,7 +4618,6 @@ impl UnaryFunc {
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
-            CastInPlace { .. } => f.write_str("castinplace"),
             Ascii => f.write_str("ascii"),
             CharLength => f.write_str("char_length"),
             BitLengthBytes => f.write_str("bit_length"),
