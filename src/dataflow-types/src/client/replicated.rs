@@ -68,8 +68,7 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica(&mut self, client: C) -> uuid::Uuid {
-        let identifier = uuid::Uuid::new_v4();
+    pub async fn add_replica(&mut self, identifier: uuid::Uuid, client: C) {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(identifier, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
@@ -79,14 +78,13 @@ where
         }
         self.replicas.insert(identifier, client);
         self.hydrate_replica(&identifier).await;
-        identifier
     }
 
     /// Remove a replica by its identifier.
-    pub fn remove_replica(&mut self, id: uuid::Uuid) {
-        self.replicas.remove(&id);
+    pub fn remove_replica(&mut self, id: &uuid::Uuid) {
+        self.replicas.remove(id);
         for (_frontier, frontiers) in self.uppers.iter_mut() {
-            frontiers.1.remove(&id);
+            frontiers.1.remove(id);
         }
     }
 

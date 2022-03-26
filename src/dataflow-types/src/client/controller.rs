@@ -33,6 +33,7 @@ use tokio_stream::StreamMap;
 
 use mz_orchestrator::{Orchestrator, ServiceConfig};
 
+use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
     InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
@@ -79,7 +80,7 @@ where
         instance: ComputeInstanceId,
         config: InstanceConfig,
     ) -> Result<(), anyhow::Error> {
-        let (mut client, logging) = match config {
+        let (client, logging) = match config {
             InstanceConfig::Virtual { logging } => {
                 let client = self.virtual_compute_host.create_instance(instance);
                 (client, logging)
@@ -87,9 +88,7 @@ where
             InstanceConfig::Remote { hosts, logging } => {
                 let client = RemoteClient::new(&hosts);
                 let client = ComputeWrapperClient::new(client, instance);
-                let mut replicas = crate::client::replicated::ActiveReplication::default();
-                let _replica_id = replicas.add_replica(client).await;
-                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
+                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
             }
             InstanceConfig::Managed { size: _, logging } => {
                 let OrchestratorConfig {
@@ -132,18 +131,20 @@ where
                     .collect();
                 let client = RemoteClient::new(&addrs);
                 let client = ComputeWrapperClient::new(client, instance);
-                let mut replicas = crate::client::replicated::ActiveReplication::default();
-                let _replica_id = replicas.add_replica(client).await;
-                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
+                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
             }
         };
-        client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
-            .await?;
+        // Insert a new compute instance controller.
         self.compute.insert(
             instance,
-            compute::ComputeControllerState::new(client, &logging),
+            compute::ComputeControllerState::new(&logging).await?,
         );
+        // Add a replica backing that instance.
+        self.compute_mut(instance)
+            .unwrap()
+            .add_replica(uuid::Uuid::new_v4(), client)
+            .await;
+
         Ok(())
     }
     pub async fn drop_instance(

@@ -660,6 +660,16 @@ where
     }
 }
 
+#[async_trait]
+impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        (**self).recv().await
+    }
+}
+
 /// A convenience type for compatibility.
 #[derive(Debug)]
 pub struct LocalClient<T = mz_repr::Timestamp> {
