@@ -15,6 +15,7 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
@@ -589,6 +590,23 @@ impl Transaction<'_> {
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
             )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn update_compute_instance_config(
+        &mut self,
+        id: ComputeInstanceId,
+        config: &ComputeInstanceConfig,
+    ) -> Result<(), Error> {
+        let config = serde_json::to_string(config)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        match self
+            .inner
+            .prepare_cached("UPDATE compute_instances SET config = ? WHERE id = ?")?
+            .execute(params![config, id])
+        {
+            Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }

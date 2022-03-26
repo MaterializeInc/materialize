@@ -38,6 +38,7 @@ use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
     InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
 };
+use crate::logging::LoggingConfig;
 
 pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
 mod storage;
@@ -79,18 +80,33 @@ where
         &mut self,
         instance: ComputeInstanceId,
         config: InstanceConfig,
+        logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
-        let (client, logging) = match config {
-            InstanceConfig::Virtual { logging } => {
+        // Insert a new compute instance controller.
+        self.compute.insert(
+            instance,
+            compute::ComputeControllerState::new(&logging).await?,
+        );
+
+        // Add replicas backing that instance.
+        match config {
+            InstanceConfig::Virtual => {
                 let client = self.virtual_compute_host.create_instance(instance);
-                (client, logging)
+                self.compute_mut(instance)
+                    .unwrap()
+                    .add_replica("default".into(), client)
+                    .await;
             }
-            InstanceConfig::Remote { hosts, logging } => {
-                let client = RemoteClient::new(&hosts);
-                let client = ComputeWrapperClient::new(client, instance);
-                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
+            InstanceConfig::Remote { replicas } => {
+                let mut compute_instance = self.compute_mut(instance).unwrap();
+                for (name, hosts) in replicas {
+                    let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
+                    let client = ComputeWrapperClient::new(client, instance);
+                    let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                    compute_instance.add_replica(name, client).await;
+                }
             }
-            InstanceConfig::Managed { size: _, logging } => {
+            InstanceConfig::Managed { size: _ } => {
                 let OrchestratorConfig {
                     orchestrator,
                     storage_addr,
@@ -131,19 +147,13 @@ where
                     .collect();
                 let client = RemoteClient::new(&addrs);
                 let client = ComputeWrapperClient::new(client, instance);
-                (Box::new(client) as Box<dyn ComputeClient<T>>, logging)
+                let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                self.compute_mut(instance)
+                    .unwrap()
+                    .add_replica("default".into(), client)
+                    .await;
             }
-        };
-        // Insert a new compute instance controller.
-        self.compute.insert(
-            instance,
-            compute::ComputeControllerState::new(&logging).await?,
-        );
-        // Add a replica backing that instance.
-        self.compute_mut(instance)
-            .unwrap()
-            .add_replica(uuid::Uuid::new_v4(), client)
-            .await;
+        }
 
         Ok(())
     }

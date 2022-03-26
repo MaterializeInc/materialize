@@ -167,11 +167,11 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(&mut self, id: uuid::Uuid, client: Box<dyn ComputeClient<T>>) {
+    pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
         self.compute.client.add_replica(id, client).await;
     }
     /// Removes an existing instance replica, by name.
-    pub fn remove_replica(&mut self, id: &uuid::Uuid) {
+    pub fn remove_replica(&mut self, id: &str) {
         self.compute.client.remove_replica(id);
     }
 
