@@ -11,7 +11,7 @@ anyhow = "1.0.55"
 fstrings = "0.2.3"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false }
-quote = "1.0.14"
+quote = "1.0.17"
 syn = { version = "1.0.89", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
