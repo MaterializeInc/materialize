@@ -84,22 +84,24 @@ def workflow_nightly(c: Composition) -> None:
 
 def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_storage")
-    c.up("dataflowd_compute_1")
-    c.up("dataflowd_compute_2")
-    c.sleep(5)  # TODO: make this unnecessary
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
+
     # Dropping the `default` cluster lightly tests that `materialized` can run
     # and restart without any virtual clusters in the virtual cluster host.
     c.sql("DROP CLUSTER default")
+
+    # Create a remote cluster and verify that tests pass.
+    c.up("dataflowd_compute_1")
+    c.up("dataflowd_compute_2")
     c.sql(
         "CREATE CLUSTER default REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
     )
     c.run("testdrive-svc", *glob)
 
+    # Add a replica to that remote cluster and verify that tests still pass.
     c.up("dataflowd_compute_3")
     c.up("dataflowd_compute_4")
-    c.sleep(5)  # TODO: make this unnecessary
     c.sql(
         """
         ALTER CLUSTER default
@@ -107,4 +109,9 @@ def test_cluster(c: Composition, *glob: str) -> None:
             REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
         """
     )
+    c.run("testdrive-svc", *glob)
+
+    # Kill one of the nodes in the first replica of the compute cluster and
+    # verify that tests still pass.
+    c.kill("dataflowd_compute_1")
     c.run("testdrive-svc", *glob)
