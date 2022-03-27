@@ -2475,10 +2475,11 @@ impl<'a> Parser<'a> {
         match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE, INTROSPECTION])? {
             VIRTUAL => Ok(ClusterOption::Virtual),
             REMOTE => {
+                let name = self.parse_identifier()?;
                 self.expect_token(&Token::LParen)?;
                 let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
                 self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Remote(hosts))
+                Ok(ClusterOption::Remote { name, hosts })
             }
             SIZE => {
                 let _ = self.consume_token(&Token::Eq);
@@ -2870,26 +2871,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type =
-            match self.expect_one_of_keywords(&[INDEX, SINK, SOURCE, VIEW, TABLE, SECRET])? {
-                INDEX => ObjectType::Index,
-                SINK => ObjectType::Sink,
-                SOURCE => ObjectType::Source,
-                VIEW => ObjectType::View,
-                TABLE => ObjectType::Table,
-                SECRET => ObjectType::Secret,
-                _ => unreachable!(),
-            };
-
-        // We support `ALTER INDEX ... {RESET, SET} and `ALTER <object type> RENAME
-        if object_type == ObjectType::Index {
-            return self.parse_alter_index();
-        }
-
-        // We support `ALTER SECRET ... AS and `ALTER <object type> RENAME
-        if object_type == ObjectType::Secret {
-            return self.parse_alter_secret();
-        }
+        let object_type = match self
+            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET, CLUSTER])?
+        {
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            VIEW => ObjectType::View,
+            TABLE => ObjectType::Table,
+            INDEX => return self.parse_alter_index(),
+            SECRET => return self.parse_alter_secret(),
+            CLUSTER => return self.parse_alter_cluster(),
+            _ => unreachable!(),
+        };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_raw_name()?;
@@ -2978,6 +2971,23 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
+    }
+
+    fn parse_alter_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_identifier()?;
+
+        let _ = self.parse_keyword(WITH);
+        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
+            vec![]
+        } else {
+            self.parse_comma_separated(Parser::parse_cluster_option)?
+        };
+        Ok(Statement::AlterCluster(AlterClusterStatement {
+            name,
+            if_exists,
+            options,
+        }))
     }
 
     /// Parse a copy statement

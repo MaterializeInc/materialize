@@ -26,7 +26,7 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -104,6 +104,7 @@ pub enum Plan {
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
     AlterNoop(AlterNoopPlan),
+    AlterComputeInstance(AlterComputeInstancePlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
@@ -152,7 +153,8 @@ pub struct CreateComputeInstancePlan {
 pub enum ComputeInstanceConfig {
     Virtual,
     Remote {
-        hosts: Vec<String>,
+        /// A map from replica name to hostnames.
+        replicas: BTreeMap<String, BTreeSet<String>>,
         introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
     Managed {
@@ -343,6 +345,12 @@ pub struct ReadThenWritePlan {
 #[derive(Debug)]
 pub struct AlterNoopPlan {
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterComputeInstancePlan {
+    pub id: ComputeInstanceId,
+    pub config: ComputeInstanceConfig,
 }
 
 #[derive(Debug)]

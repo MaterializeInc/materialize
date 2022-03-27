@@ -13,7 +13,7 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -51,26 +51,23 @@ use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{
-    AlterSecretStatement, AstInfo, CreateClusterStatement, CreateSecretStatement,
-    CreateViewsSourceTarget, CsrSeedCompiledOrLegacy, Op, Query, RawName, Select, SelectItem,
-    SetExpr, SourceIncludeMetadata, SubscriptPosition, TableFactor, TableWithJoins,
-    UnresolvedObjectName,
-};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
-    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ClusterOption,
-    ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
-    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
-    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
-    DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
-    SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, Value, ViewDefinition,
-    WithOption,
+    AlterClusterStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
+    AlterSecretStatement, AstInfo, AvroSchema, ClusterOption, ColumnOption, Compression,
+    CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
+    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
+    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
+    CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
+    KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, RawName, Select,
+    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption, Statement,
+    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -84,13 +81,14 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig, ComputeInstanceIntrospectionConfig,
-    CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig,
+    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source,
+    Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2497,9 +2495,18 @@ pub fn plan_create_cluster(
     }: CreateClusterStatement,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CLUSTER")?;
+    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
+        name: normalize::ident(name),
+        if_not_exists,
+        config: plan_cluster_options(options)?,
+    }))
+}
 
+fn plan_cluster_options(
+    options: Vec<ClusterOption>,
+) -> Result<ComputeInstanceConfig, anyhow::Error> {
     let mut is_virtual = false;
-    let mut remote_hosts = None;
+    let mut remote_replicas = BTreeMap::new();
     let mut size = None;
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
@@ -2512,15 +2519,15 @@ pub fn plan_create_cluster(
                 }
                 is_virtual = true;
             }
-            ClusterOption::Remote(hosts) => {
-                if remote_hosts.is_some() {
-                    bail!("REMOTE specified more than once");
-                }
-                let mut out = vec![];
+            ClusterOption::Remote { name, hosts } => {
+                let name = normalize::ident(name);
+                let mut hosts_out = BTreeSet::new();
                 for host in hosts {
-                    out.push(with_option_type!(Some(host), String));
+                    hosts_out.insert(with_option_type!(Some(host), String));
                 }
-                remote_hosts = Some(out);
+                if remote_replicas.insert(name, hosts_out).is_some() {
+                    bail!("REMOTE replicas must have unique names");
+                }
             }
             ClusterOption::IntrospectionDebugging(enabled) => {
                 if introspection_debugging.is_some() {
@@ -2554,31 +2561,25 @@ pub fn plan_create_cluster(
         }
     };
 
-    let config = match (is_virtual, remote_hosts, size) {
-        (false, Some(hosts), None) => ComputeInstanceConfig::Remote {
-            hosts,
+    match (is_virtual, remote_replicas.len() > 0, size) {
+        (false, true, None) => Ok(ComputeInstanceConfig::Remote {
+            replicas: remote_replicas,
             introspection,
-        },
-        (false, None, None) | (true, None, None) => {
+        }),
+        (false, false, None) | (true, false, None) => {
             if introspection.is_some() {
                 bail!("VIRTUAL clusters do not support configurable introspection");
             }
-            ComputeInstanceConfig::Virtual
+            Ok(ComputeInstanceConfig::Virtual)
         }
-        (false, None, Some(size)) => ComputeInstanceConfig::Managed {
+        (false, false, Some(size)) => Ok(ComputeInstanceConfig::Managed {
             size,
             introspection,
-        },
-        (true, Some(_), _) | (true, _, Some(_)) | (_, Some(_), Some(_)) => {
+        }),
+        (true, true, _) | (true, _, Some(_)) | (_, true, Some(_)) => {
             bail!("only one of VIRTUAL, REMOTE, and SIZE may be specified")
         }
-    };
-
-    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
-        name: normalize::ident(name),
-        if_not_exists,
-        config,
-    }))
+    }
 }
 
 pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
@@ -3013,6 +3014,39 @@ pub fn plan_alter_secret(
     }: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     bail_unsupported!("ALTER SECRET")
+}
+
+pub fn describe_alter_cluster(
+    _: &StatementContext,
+    _: AlterClusterStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_cluster(
+    scx: &StatementContext,
+    AlterClusterStatement {
+        name,
+        if_exists,
+        options,
+    }: AlterClusterStatement,
+) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("ALTER CLUSTER")?;
+    let id = match scx.resolve_compute_instance(Some(&name)) {
+        Ok(instance) => instance.id(),
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating this
+            // item does not exist.
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }));
+        }
+        Err(err) => return Err(err.into()),
+    };
+    Ok(Plan::AlterComputeInstance(AlterComputeInstancePlan {
+        id,
+        config: plan_cluster_options(options)?,
+    }))
 }
 
 struct DependsOnCollector {
