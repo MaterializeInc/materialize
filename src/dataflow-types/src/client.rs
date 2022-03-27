@@ -1222,18 +1222,34 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::fmt;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::time::Duration;
 
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
-    use tokio::io::{AsyncRead, AsyncWrite};
+    use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
-    use tokio::time;
+    use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
     use crate::client::{Command, GenericClient, Response};
+
+    enum TcpConn<T> {
+        Disconnected,
+        Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
+        Backoff(Instant),
+        Connected(FramedClient<TcpStream, T>),
+    }
+
+    impl<T> fmt::Debug for TcpConn<T> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("TcpConn")
+        }
+    }
 
     /// A client to a remote dataflow server.
     ///
@@ -1243,7 +1259,7 @@ pub mod tcp {
     /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     #[derive(Debug)]
     pub struct TcpClient<T> {
-        connection: Option<FramedClient<TcpStream, T>>,
+        connection: TcpConn<T>,
         addr: String,
     }
 
@@ -1253,27 +1269,45 @@ pub mod tcp {
         /// Use the `connect()` method to put the client into a connected state.
         pub fn new(addr: String) -> TcpClient<T> {
             Self {
-                connection: None,
+                connection: TcpConn::Disconnected,
                 addr,
             }
         }
 
         /// Reports whether the client is actively connected.
         pub fn connected(&self) -> bool {
-            self.connection.is_some()
+            matches!(self.connection, TcpConn::Connected(_))
         }
 
         /// Connects the underlying `connection`.
         pub async fn connect(&mut self) {
-            if self.connection.is_none() {
-                let mut connection = TcpStream::connect(&self.addr).await;
-                while let Err(e) = connection {
-                    tracing::warn!("Connect error: {e}; reconnecting");
-                    time::sleep(Duration::from_secs(1)).await;
-                    connection = TcpStream::connect(&self.addr).await;
+            // This is written in state-machine style to be cancellation safe.
+            loop {
+                match &mut self.connection {
+                    TcpConn::Disconnected => {
+                        let connecting = Box::pin(TcpStream::connect(self.addr.clone()));
+                        self.connection = TcpConn::Connecting(connecting);
+                    }
+                    TcpConn::Connecting(connecting) => match connecting.await {
+                        Ok(connection) => {
+                            tracing::info!("Reconnected to {}", self.addr);
+                            self.connection = TcpConn::Connected(framed_client(connection));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Error connecting to {}: {e}; reconnecting in 1s",
+                                self.addr
+                            );
+                            let deadline = Instant::now() + Duration::from_secs(1);
+                            self.connection = TcpConn::Backoff(deadline);
+                        }
+                    },
+                    TcpConn::Backoff(deadline) => {
+                        time::sleep_until(*deadline).await;
+                        self.connection = TcpConn::Disconnected;
+                    }
+                    TcpConn::Connected(_) => break,
                 }
-                tracing::info!("Reconnected");
-                self.connection = Some(framed_client(connection.unwrap()));
             }
         }
     }
@@ -1284,10 +1318,10 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            if let Some(connection) = &mut self.connection {
+            if let TcpConn::Connected(connection) = &mut self.connection {
                 let result = connection.send(cmd).await;
                 if result.is_err() {
-                    self.connection = None;
+                    self.connection = TcpConn::Disconnected;
                 }
                 Ok(result?)
             } else {
@@ -1296,11 +1330,11 @@ pub mod tcp {
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            if let Some(connection) = &mut self.connection {
+            if let TcpConn::Connected(connection) = &mut self.connection {
                 match connection.next().await {
                     Some(Ok(response)) => Ok(Some(response)),
                     _ => {
-                        self.connection = None;
+                        self.connection = TcpConn::Disconnected;
                         self.connect().await;
                         Err(anyhow::anyhow!("Connection severed; reconnected"))
                     }
