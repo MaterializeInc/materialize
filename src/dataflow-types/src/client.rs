@@ -901,8 +901,8 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                if let Some(message) = self.state.absorb_response(index, response?) {
-                    return Ok(Some(message));
+                if let Some(response) = self.state.absorb_response(index, response) {
+                    return response.map(Some);
                 }
             }
             // Indicate completion of the communication.
@@ -932,6 +932,8 @@ pub mod partitioned {
             (GlobalId, Option<ComputeInstanceId>),
             Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
         >,
+        /// The number of errors observed from underlying clients.
+        seen_errors: usize,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -957,6 +959,7 @@ pub mod partitioned {
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
+                seen_errors: 0,
             }
         }
 
@@ -992,10 +995,22 @@ pub mod partitioned {
         pub fn absorb_response(
             &mut self,
             shard_id: usize,
-            message: Response<T>,
-        ) -> Option<Response<T>> {
+            message: Result<Response<T>, anyhow::Error>,
+        ) -> Option<Result<Response<T>, anyhow::Error>> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
+                Err(e) => {
+                    // Only emit one out of every `parts` errors. (If one
+                    // underlying client observes an error, we expect all of
+                    // the other clients to observe the same error.)
+                    self.seen_errors += 1;
+                    if (self.seen_errors % self.parts) == 0 {
+                        Some(Err(e))
+                    } else {
+                        None
+                    }
+                }
+
+                Ok(Response::Compute(ComputeResponse::FrontierUppers(mut list), instance)) => {
                     for (id, changes) in list.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, Some(instance))) {
                             let iter = frontier.update_iter(changes.drain());
@@ -1020,14 +1035,14 @@ pub mod partitioned {
                     if list.is_empty() {
                         None
                     } else {
-                        Some(Response::Compute(
+                        Some(Ok(Response::Compute(
                             ComputeResponse::FrontierUppers(list),
                             instance,
-                        ))
+                        )))
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
-                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
+                Ok(Response::Storage(StorageResponse::TimestampBindings(mut feedback))) => {
                     for (id, changes) in feedback.changes.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, None)) {
                             let iter = frontier.update_iter(changes.drain());
@@ -1048,11 +1063,11 @@ pub mod partitioned {
                         }
                     }
 
-                    Some(Response::Storage(StorageResponse::TimestampBindings(
+                    Some(Ok(Response::Storage(StorageResponse::TimestampBindings(
                         feedback,
-                    )))
+                    ))))
                 }
-                Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
+                Ok(Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance)) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -1076,15 +1091,15 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&uuid);
-                        Some(Response::Compute(
+                        Some(Ok(Response::Compute(
                             ComputeResponse::PeekResponse(uuid, response),
                             instance,
-                        ))
+                        )))
                     } else {
                         None
                     }
                 }
-                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
+                Ok(Response::Compute(ComputeResponse::TailResponse(id, response), instance)) => {
                     let maybe_entry = self
                         .pending_tails
                         .entry((id, Some(instance)))
@@ -1130,7 +1145,7 @@ pub mod partitioned {
                                     }
                                 }
                                 entry.1 = keep;
-                                Some(Response::Compute(
+                                Some(Ok(Response::Compute(
                                     ComputeResponse::TailResponse(
                                         id,
                                         TailResponse::Batch(TailBatch {
@@ -1140,17 +1155,17 @@ pub mod partitioned {
                                         }),
                                     ),
                                     instance,
-                                ))
+                                )))
                             } else {
                                 None
                             }
                         }
                         TailResponse::Dropped => {
                             *maybe_entry = None;
-                            Some(Response::Compute(
+                            Some(Ok(Response::Compute(
                                 ComputeResponse::TailResponse(id, TailResponse::Dropped),
                                 instance,
-                            ))
+                            )))
                         }
                     }
                 }
