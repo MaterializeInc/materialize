@@ -64,40 +64,6 @@ name = "strum"
 [[bans.deny]]
 name = "strum-macros"
 
-# `thiserror` requires everyone to learn a special DSL. Our current position is
-# that it is clearer to require manual implementations of the `Error` trait.
-[[bans.deny]]
-name = "thiserror"
-wrappers = [
-    # Only list third-party crates here.
-    "async-native-tls",
-    "aws-http",
-    "aws-smithy-xml",
-    "aws-sig-auth",
-    "flatbuffers",
-    "junit-report",
-    "kube-client",
-    "kube-core",
-    "mysql_async",
-    "mysql_common",
-    "opentelemetry",
-    "opentelemetry-otlp",
-    "pprof",
-    "proc-macro-crate",
-    "prometheus",
-    "protoc",
-    "protobuf-codegen",
-    "protobuf-codegen-pure",
-    "protobuf-parse",
-    "pubnub-core",
-    "pubnub-hyper",
-    "simple_asn1",
-    "sysctl",
-    "tiberius",
-    "tungstenite",
-    "zip",
-]
-
 [[bans.deny]]
 name = "log"
 wrappers = [

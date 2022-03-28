@@ -3196,7 +3196,6 @@ name = "mz-coord"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "backtrace",
  "bincode",
  "byteorder",
  "chrono",
@@ -3240,6 +3239,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -3303,6 +3303,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "timely",
  "tokio",
  "tokio-byteorder",
@@ -3561,6 +3562,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "url",

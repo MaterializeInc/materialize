@@ -30,7 +30,6 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
-use std::fmt::Formatter;
 use std::ops::AddAssign;
 
 use async_compression::tokio::bufread::GzipDecoder;
@@ -604,44 +603,32 @@ enum DownloadError {
     SendFailed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum S3Error {
+    #[error("Unable to get S3 object {}/{}: {}", bucket, key, err)]
     GetObjectError {
         bucket: String,
         key: String,
+        #[source]
         err: SdkError<GetObjectError>,
     },
+    #[error("Unable to list S3 object {}: {}", bucket, err)]
     ListObjectsFailed {
         bucket: String,
+        #[source]
         err: SdkError<ListObjectsV2Error>,
     },
+    #[error("IO Error for S3 bucket {}: {}", bucket, err)]
     IoError {
         bucket: String,
+        #[source]
         err: std::io::Error,
     },
 }
 
-impl std::error::Error for S3Error {}
-
 impl From<S3Error> for std::io::Error {
     fn from(err: S3Error) -> Self {
         Self::new(std::io::ErrorKind::Other, Box::new(err))
-    }
-}
-
-impl std::fmt::Display for S3Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            S3Error::GetObjectError { bucket, key, err } => {
-                write!(f, "Unable to get S3 object {}/{}: {}", bucket, key, err)
-            }
-            S3Error::ListObjectsFailed { bucket, err } => {
-                write!(f, "Unable to list S3 bucket {}: {}", bucket, err)
-            }
-            S3Error::IoError { bucket, err } => {
-                write!(f, "IO Error for S3 bucket {}: {}", bucket, err)
-            }
-        }
     }
 }
 
