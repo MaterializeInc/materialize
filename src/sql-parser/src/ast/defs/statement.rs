@@ -51,6 +51,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterCluster(AlterClusterStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement<T>),
     DropSchema(DropSchemaStatement<T>),
@@ -107,6 +108,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
+            Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -877,8 +879,13 @@ impl_display!(CreateClusterStatement);
 pub enum ClusterOption {
     /// The `VIRTUAL` option.
     Virtual,
-    /// The `REMOTE (<host> [, <host> ...])` option.
-    Remote(Vec<WithOptionValue>),
+    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
+    Remote {
+        /// The name.
+        name: Ident,
+        /// The hosts.
+        hosts: Vec<WithOptionValue>,
+    },
     /// The `SIZE [[=] <size>]` option.
     Size(WithOptionValue),
     /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
@@ -891,9 +898,11 @@ impl AstDisplay for ClusterOption {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterOption::Virtual => f.write_str("VIRTUAL"),
-            ClusterOption::Remote(hosts) => {
-                f.write_str("REMOTE (");
-                display::comma_separated(hosts);
+            ClusterOption::Remote { name, hosts } => {
+                f.write_str("REMOTE ");
+                f.write_node(name);
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(hosts));
                 f.write_str(")");
             }
             ClusterOption::Size(size) => {
@@ -1018,6 +1027,33 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
+
+/// `ALTER CLUSTER ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterClusterStatement {
+    /// Name of the cluster to alter.
+    pub name: Ident,
+    /// Whether the `IF EXISTS` clause was specified.
+    pub if_exists: bool,
+    /// The comma-separated options.
+    pub options: Vec<ClusterOption>,
+}
+
+impl AstDisplay for AlterClusterStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CLUSTER ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        if !self.options.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.options));
+        }
+    }
+}
+
+impl_display!(AlterClusterStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {

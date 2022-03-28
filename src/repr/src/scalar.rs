@@ -1683,6 +1683,16 @@ impl<'a> ScalarType {
     /// contrast, two `Numeric` values with different scales are never `Eq` to
     /// one another.
     pub fn base_eq(&self, other: &ScalarType) -> bool {
+        self.eq_inner(other, false)
+    }
+
+    // Determines equality among scalar types that ignores any custom OIDs or
+    // embedded values.
+    pub fn structural_eq(&self, other: &ScalarType) -> bool {
+        self.eq_inner(other, true)
+    }
+
+    pub fn eq_inner(&self, other: &ScalarType, structure_only: bool) -> bool {
         use ScalarType::*;
         match (self, other) {
             (
@@ -1704,8 +1714,8 @@ impl<'a> ScalarType {
                     value_type: r,
                     custom_oid: oid_r,
                 },
-            ) => l.base_eq(r) && oid_l == oid_r,
-            (Array(a), Array(b)) => a.base_eq(b),
+            ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
+            (Array(a), Array(b)) => a.eq_inner(b, structure_only),
             (
                 Record {
                     fields: fields_a,
@@ -1718,15 +1728,19 @@ impl<'a> ScalarType {
                     custom_name: name_b,
                 },
             ) => {
-                oid_a == oid_b
-                    && name_a == name_b
+                (oid_a == oid_b || structure_only)
+                    && (name_a == name_b || structure_only)
                     && fields_a.len() == fields_b.len()
                     && fields_a
                         .iter()
                         .zip(fields_b)
-                        // Compare field names and scalar types, but ignore nullability.
-                        .all(|(a, b)| a.0 == b.0 && a.1.scalar_type.base_eq(&b.1.scalar_type))
+                        // Ignore nullability.
+                        .all(|(a, b)| {
+                            (a.0 == b.0 || structure_only)
+                                && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
+                        })
             }
+            (s, o) if structure_only => s == o,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }

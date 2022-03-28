@@ -23,6 +23,7 @@
 
 use std::collections::BTreeMap;
 
+use anyhow::bail;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -30,15 +31,34 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
+use mz_orchestrator::{Orchestrator, ServiceConfig};
+
+use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
     InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
 };
+use crate::logging::LoggingConfig;
 
 pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
 mod storage;
 pub use compute::{ComputeController, ComputeControllerMut};
 mod compute;
+
+/// Configures an orchestrator for the controller.
+pub struct OrchestratorConfig {
+    /// The orchestrator implementation to use.
+    pub orchestrator: Box<dyn Orchestrator>,
+    /// The dataflowd image to use when starting new compute instances.
+    pub dataflowd_image: String,
+    /// The storage address that compute instances should connect to.
+    pub storage_addr: String,
+    /// The number of storage workers in the storage instance.
+    ///
+    /// TODO(benesch,antiguru): make this something that is discovered in the
+    /// handshake between compute and storage.
+    pub storage_workers: usize,
+}
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 ///
@@ -46,6 +66,7 @@ mod compute;
 /// referred to as the `dataflow_client` in the coordinator to be very
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
+    orchestrator: Option<OrchestratorConfig>,
     storage: StorageControllerState<T>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
     virtual_compute_host: VirtualComputeHost<T>,
@@ -59,26 +80,81 @@ where
         &mut self,
         instance: ComputeInstanceId,
         config: InstanceConfig,
+        logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
-        let (mut client, logging) = match config {
-            InstanceConfig::Virtual { logging } => {
-                let client = self.virtual_compute_host.create_instance(instance);
-                (client, logging)
-            }
-            InstanceConfig::Remote { hosts, logging } => {
-                let client = RemoteClient::connect(&hosts).await?;
-                let client: Box<dyn ComputeClient<T>> =
-                    Box::new(ComputeWrapperClient::new(client, instance));
-                (client, logging)
-            }
-        };
-        client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
-            .await?;
+        // Insert a new compute instance controller.
         self.compute.insert(
             instance,
-            compute::ComputeControllerState::new(client, &logging),
+            compute::ComputeControllerState::new(&logging).await?,
         );
+
+        // Add replicas backing that instance.
+        match config {
+            InstanceConfig::Virtual => {
+                let client = self.virtual_compute_host.create_instance(instance);
+                self.compute_mut(instance)
+                    .unwrap()
+                    .add_replica("default".into(), client)
+                    .await;
+            }
+            InstanceConfig::Remote { replicas } => {
+                let mut compute_instance = self.compute_mut(instance).unwrap();
+                for (name, hosts) in replicas {
+                    let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
+                    let client = ComputeWrapperClient::new(client, instance);
+                    let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                    compute_instance.add_replica(name, client).await;
+                }
+            }
+            InstanceConfig::Managed { size: _ } => {
+                let OrchestratorConfig {
+                    orchestrator,
+                    storage_addr,
+                    storage_workers,
+                    dataflowd_image,
+                } = match &mut self.orchestrator {
+                    Some(orchestrator) => orchestrator,
+                    // TODO(benesch): bailing here is too late. Something
+                    // earlier needs to recognize when we can't create managed
+                    // instances.
+                    _ => bail!("cannot create managed instances in this configuration"),
+                };
+                let service = orchestrator
+                    .namespace("compute")
+                    .ensure_service(
+                        &format!("instance-{instance}"),
+                        ServiceConfig {
+                            image: dataflowd_image.clone(),
+                            args: vec![
+                                "--runtime=compute".into(),
+                                format!("--storage-workers={storage_workers}"),
+                                format!("--storage-addr={storage_addr}"),
+                                "0.0.0.0:2101".into(),
+                            ],
+                            ports: vec![2101, 6876],
+                            // TODO: use `size` to set these.
+                            cpu_limit: None,
+                            memory_limit: None,
+                            // TODO: support sizes large enough to warrant multiple processes.
+                            processes: 1,
+                        },
+                    )
+                    .await?;
+                let addrs: Vec<_> = service
+                    .hosts()
+                    .iter()
+                    .map(|h| format!("{h}:6876"))
+                    .collect();
+                let client = RemoteClient::new(&addrs);
+                let client = ComputeWrapperClient::new(client, instance);
+                let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                self.compute_mut(instance)
+                    .unwrap()
+                    .add_replica("default".into(), client)
+                    .await;
+            }
+        }
+
         Ok(())
     }
     pub async fn drop_instance(
@@ -86,6 +162,12 @@ where
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
+            if let Some(OrchestratorConfig { orchestrator, .. }) = &mut self.orchestrator {
+                orchestrator
+                    .namespace("compute")
+                    .drop_service(&format!("instance-{instance}"))
+                    .await?;
+            }
             compute.client.send(ComputeCommand::DropInstance).await?;
             self.virtual_compute_host.drop_instance(instance);
         }
@@ -186,10 +268,12 @@ where
 impl<T> Controller<T> {
     /// Create a new controller from a client it should wrap.
     pub fn new(
+        orchestrator: Option<OrchestratorConfig>,
         storage_client: Box<dyn StorageClient<T>>,
         virtual_compute_host: VirtualComputeHost<T>,
     ) -> Self {
         Self {
+            orchestrator,
             storage: StorageControllerState::new(storage_client),
             compute: BTreeMap::default(),
             virtual_compute_host,

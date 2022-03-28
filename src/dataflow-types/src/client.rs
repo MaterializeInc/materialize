@@ -17,7 +17,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::pin::Pin;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use enum_iterator::IntoEnumIterator;
@@ -42,6 +41,8 @@ use mz_repr::Row;
 pub mod controller;
 pub use controller::Controller;
 
+pub mod replicated;
+
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command<T = mz_repr::Timestamp> {
@@ -64,16 +65,16 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
     /// In-process virtual instance, likely the default instance
-    Virtual {
-        /// Logging configuration.
-        logging: Option<LoggingConfig>,
-    },
+    Virtual,
     /// Out-of-process named instance
     Remote {
-        /// The hosts to connect to.
-        hosts: Vec<String>,
-        /// Logging configuration.
-        logging: Option<LoggingConfig>,
+        /// A map from replica name to hostnames.
+        replicas: BTreeMap<String, BTreeSet<String>>,
+    },
+    /// A remote but managed instance.
+    Managed {
+        /// The size of the cluster.
+        size: String,
     },
 }
 
@@ -316,28 +317,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     start.push(source.id);
                 }
             }
-            Command::Compute(ComputeCommand::CreateDataflows(dataflows), _instance) => {
-                for dataflow in dataflows.iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
-                    }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::AllowCompaction(frontiers), _instance) => {
-                for (id, frontier) in frontiers.iter() {
-                    if frontier.is_empty() {
-                        cease.push(*id);
-                    }
-                }
-            }
-            Command::Compute(ComputeCommand::CreateInstance(logging), _instance) => {
-                if let Some(logging_config) = logging {
-                    start.extend(logging_config.log_identifiers());
-                }
-            }
+            Command::Compute(command, _instance) => command.frontier_tracking(start, cease),
             _ => {
                 // Other commands have no known impact on frontier tracking.
             }
@@ -350,6 +330,218 @@ impl<T: timely::progress::Timestamp> Command<T> {
         match self {
             Command::Compute(command, _instance) => ComputeCommandKind::from(command).metric_name(),
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
+        }
+    }
+}
+
+impl<T> ComputeCommand<T> {
+    /// Indicates which global ids should start and cease frontier tracking.
+    ///
+    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// added to `cease` will uninstall frontier tracking.
+    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
+        match self {
+            ComputeCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        start.push(*sink_id)
+                    }
+                    for (index_id, _, _) in dataflow.index_exports.iter() {
+                        start.push(*index_id);
+                    }
+                }
+            }
+            ComputeCommand::AllowCompaction(frontiers) => {
+                for (id, frontier) in frontiers.iter() {
+                    if frontier.is_empty() {
+                        cease.push(*id);
+                    }
+                }
+            }
+            ComputeCommand::CreateInstance(logging) => {
+                if let Some(logging_config) = logging {
+                    start.extend(logging_config.log_identifiers());
+                }
+            }
+            _ => {
+                // Other commands have no known impact on frontier tracking.
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ComputeCommandHistory<T> {
+    commands: Vec<ComputeCommand<T>>,
+}
+
+impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    pub fn push(&mut self, command: ComputeCommand<T>) {
+        self.commands.push(command);
+    }
+    /// Reduces `self.history` to a minimal form.
+    ///
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    ///
+    /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
+    /// response or cancelation.
+    ///
+    /// Returns the number of distinct commands that remain.
+    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_command = None;
+        let mut drop_command = None;
+
+        for command in self.commands.drain(..) {
+            match command {
+                create @ ComputeCommand::CreateInstance(_) => {
+                    // We should be able to handle this, should this client need to be restartable.
+                    assert!(create_command.is_none());
+                    create_command = Some(create);
+                }
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
+                }
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                peek @ ComputeCommand::Peek { .. } => {
+                    // We could pre-filter here, but seems hard to access `uuid`
+                    // and take ownership of `peek` at the same time.
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { mut uuids } => {
+                    uuids.retain(|uuid| peeks.contains(uuid));
+                    live_cancels.extend(uuids);
+                }
+            }
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| {
+            // If any index or sink has not been compacted to the empty frontier, it remains active.
+            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
+            // this is fine and normal, and is not evidence that the collection is not in use.
+            let index_active = dataflow
+                .index_exports
+                .iter()
+                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+            let sink_active = dataflow
+                .sink_exports
+                .iter()
+                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+
+            let retain = index_active || sink_active;
+
+            // If we are going to drop the dataflow, we should remove the frontier information so that we
+            // do not instruct anyone to compact a frontier they have not heard of.
+            if !retain {
+                for (id, _, _) in dataflow.index_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+                for (id, _) in dataflow.sink_exports.iter() {
+                    final_frontiers.remove(id);
+                }
+            }
+
+            retain
+        });
+
+        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut same_as_of = false;
+            let mut as_of = Antichain::new();
+            for (id, _, _) in dataflow.index_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            for (id, _) in dataflow.sink_exports.iter() {
+                if let Some(frontier) = final_frontiers.get(id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    same_as_of = true;
+                }
+            }
+            if !same_as_of {
+                dataflow.as_of = Some(as_of);
+            }
+        }
+
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| {
+            if let ComputeCommand::Peek { uuid, .. } = peek {
+                peeks.contains(uuid)
+            } else {
+                unreachable!()
+            }
+        });
+
+        // Record the volume of post-compaction commands.
+        let mut command_count = 1;
+        command_count += live_dataflows.len();
+        command_count += final_frontiers.len();
+        command_count += live_peeks.len();
+        command_count += live_cancels.len();
+        if drop_command.is_some() {
+            command_count += 1;
+        }
+
+        // Reconstitute the commands as a compact history.
+        if let Some(create_command) = create_command {
+            self.commands.push(create_command);
+        }
+        self.commands
+            .push(ComputeCommand::CreateDataflows(live_dataflows));
+        self.commands.push(ComputeCommand::AllowCompaction(
+            final_frontiers.into_iter().collect(),
+        ));
+        self.commands.extend(live_peeks);
+        self.commands.push(ComputeCommand::CancelPeeks {
+            uuids: live_cancels,
+        });
+        if let Some(drop_command) = drop_command {
+            self.commands.push(drop_command);
+        }
+
+        command_count
+    }
+    /// Iterate through the contained commands.
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+        self.commands.iter()
+    }
+
+    /// Report the number of commands.
+    ///
+    /// Importantly, each command can be arbitrarily complicated, so this number could be small
+    /// even while we have few commands that cause many actions to be taken.
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+}
+
+impl<T> Default for ComputeCommandHistory<T> {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
         }
     }
 }
@@ -461,6 +653,16 @@ where
     }
 }
 
+#[async_trait]
+impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        (**self).recv().await
+    }
+}
+
 /// A convenience type for compatibility.
 #[derive(Debug)]
 pub struct LocalClient<T = mz_repr::Timestamp> {
@@ -516,20 +718,22 @@ where
     T: timely::progress::Timestamp + Copy,
 {
     /// Construct a client backed by multiple tcp connections
-    pub async fn connect(
-        addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display],
-    ) -> Result<Self, anyhow::Error> {
+    pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
-            remotes.push(
-                tcp::TcpClient::connect(addr.to_string())
-                    .await
-                    .with_context(|| format!("Connecting to {addr}"))?,
-            );
+            remotes.push(tcp::TcpClient::new(addr.to_string()));
         }
-        Ok(Self {
+        Self {
             client: partitioned::Partitioned::new(remotes),
-        })
+        }
+    }
+
+    /// Construct a client backed by multiple tcp connections
+    pub async fn connect(&mut self) {
+        // TODO: initiate connections concurrently.
+        for remote in self.client.shards.iter_mut() {
+            remote.connect().await;
+        }
     }
 }
 
@@ -631,17 +835,13 @@ where
 /// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
 pub mod partitioned {
 
-    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
-    use std::iter::Fuse;
 
     use async_trait::async_trait;
     use futures::StreamExt;
 
     use mz_expr::GlobalId;
     use mz_repr::{Diff, Row};
-    use timely::order::PartialOrder;
-    use timely::progress::{Antichain, ChangeBatch};
     use tokio_stream::StreamMap;
     use tracing::debug;
 
@@ -649,7 +849,7 @@ pub mod partitioned {
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
-    use super::{Command, PeekResponse, Response};
+    use super::{Command, ComputeCommand, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
     ///
@@ -657,7 +857,7 @@ pub mod partitioned {
     /// and await responses from each of the client shards before it can respond.
     #[derive(Debug)]
     pub struct Partitioned<C, T> {
-        shards: Vec<C>,
+        pub shards: Vec<C>,
         state: PartitionedClientState<T>,
     }
 
@@ -681,6 +881,10 @@ pub mod partitioned {
         T: timely::progress::Timestamp + Copy,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+            // A `CreateInstance` command indicates re-initialization.
+            if let Command::Compute(ComputeCommand::CreateInstance(_), _instance) = &cmd {
+                self.state = PartitionedClientState::new(self.shards.len());
+            }
             self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
@@ -690,9 +894,6 @@ pub mod partitioned {
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            if let Some(stashed) = self.state.stashed_responses.next() {
-                return Ok(Some(stashed));
-            }
             let mut stream: StreamMap<_, _> = self
                 .shards
                 .iter_mut()
@@ -700,11 +901,8 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                let messages = self.state.absorb_response(index, response?).fuse();
-                assert!(self.state.stashed_responses.next().is_none(), "We should have returned the next stashed element either at the beginning of this function, or in the last iteration of this loop!");
-                self.state.stashed_responses = messages;
-                if let Some(message) = self.state.stashed_responses.next() {
-                    return Ok(Some(message));
+                if let Some(response) = self.state.absorb_response(index, response) {
+                    return response.map(Some);
                 }
             }
             // Indicate completion of the communication.
@@ -714,95 +912,6 @@ pub mod partitioned {
 
     use timely::progress::frontier::MutableAntichain;
     use uuid::Uuid;
-
-    /// Buffer for partial results for a `TAIL`.
-    /// This exists so we can consolidate rows and
-    /// sort them by timestamp before passing them to the consumer
-    /// (currently, coord.rs).
-    #[derive(Debug)]
-    struct PendingTail<T> {
-        /// `frontiers[i]` is an antichain representing the times at which we may
-        /// still receive results from worker `i`.
-        frontiers: HashMap<usize, Antichain<T>>,
-        /// Consolidated frontiers
-        change_batch: ChangeBatch<T>,
-        /// The results (possibly unsorted) which have not yet been delivered.
-        buffer: Vec<(T, Row, Diff)>,
-        /// The number of unique shard IDs expected.
-        parts: usize,
-        /// The last progress message that has been reported to the consumer.
-        reported_frontier: Antichain<T>,
-    }
-
-    impl<T: timely::progress::Timestamp + Copy> PendingTail<T> {
-        /// Return all the updates with time less than `upper`,
-        /// in sorted and consolidated representation.
-        pub fn consolidate_up_to(&mut self, upper: Antichain<T>) -> Vec<(T, Row, Diff)> {
-            differential_dataflow::consolidation::consolidate_updates(&mut self.buffer);
-            let split_point = self
-                .buffer
-                .partition_point(|(t, _, _)| !upper.less_equal(t));
-            self.buffer.drain(0..split_point).collect()
-        }
-
-        pub fn push_data<I: IntoIterator<Item = (T, Row, Diff)>>(&mut self, data: I) {
-            self.buffer.extend(data);
-        }
-
-        pub fn record_progress(
-            &mut self,
-            shard_id: usize,
-            progress: Antichain<T>,
-        ) -> Option<Antichain<T>> {
-            // In the future, we can probably replace all this logic with the use of a `MutableAntichain`.
-            // We would need to have the tail workers report both their old frontier and their new frontier, rather
-            // than just the latter. But this will all be subsumed anyway by the proposed refactor to make TAILs
-            // behave like PEEKs.
-            match self.frontiers.entry(shard_id) {
-                Entry::Occupied(mut oe) => {
-                    for element in oe.get().elements() {
-                        self.change_batch.update(*element, -1);
-                    }
-                    assert!(
-                        PartialOrder::less_than(oe.get(), &progress),
-                        "Timestamps should advance"
-                    );
-                    for element in progress.elements() {
-                        self.change_batch.update(*element, 1);
-                    }
-                    oe.insert(progress);
-                }
-                Entry::Vacant(ve) => {
-                    for element in progress.elements() {
-                        self.change_batch.update(*element, 1);
-                    }
-                    ve.insert(progress);
-                }
-            }
-            assert!(self.frontiers.len() <= self.parts);
-            if self.frontiers.len() == self.parts {
-                self.change_batch.compact();
-                let mut min_frontier = Antichain::new();
-                if let Some(time) = self.change_batch.iter().next().map(|(time, _)| *time) {
-                    min_frontier.insert(time);
-                }
-
-                // assert!(self.reported_frontier.less_equal(&min_frontier));
-                assert!(PartialOrder::less_equal(
-                    &self.reported_frontier,
-                    &min_frontier
-                ));
-                if PartialOrder::less_than(&self.reported_frontier, &min_frontier) {
-                    self.reported_frontier = min_frontier.clone();
-                    Some(min_frontier)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-    }
 
     /// Maintained state for sharded dataflow clients.
     ///
@@ -819,14 +928,12 @@ pub mod partitioned {
         parts: usize,
         /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
         /// back until their timestamps are complete.
-        ///
-        /// `None` is a sentinel value indicating that the tail has been dropped and no
-        /// further messages should be forwarded.
-        ///
-        /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        pending_tails: HashMap<(GlobalId, Option<ComputeInstanceId>), Option<PendingTail<T>>>,
-        /// The next responses to return immediately, if any
-        stashed_responses: Fuse<Box<dyn Iterator<Item = Response<T>> + Send>>,
+        pending_tails: HashMap<
+            (GlobalId, Option<ComputeInstanceId>),
+            Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
+        >,
+        /// The number of errors observed from underlying clients.
+        seen_errors: usize,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -847,14 +954,12 @@ pub mod partitioned {
     {
         /// Instantiates a new client state machine wrapping a number of parts.
         pub fn new(parts: usize) -> Self {
-            let stashed_responses: Box<dyn Iterator<Item = Response<T>> + Send> =
-                Box::new(None.into_iter());
             Self {
                 uppers: Default::default(),
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
-                stashed_responses: stashed_responses.fuse(),
+                seen_errors: 0,
             }
         }
 
@@ -890,10 +995,22 @@ pub mod partitioned {
         pub fn absorb_response(
             &mut self,
             shard_id: usize,
-            message: Response<T>,
-        ) -> Box<dyn Iterator<Item = Response<T>> + Send> {
+            message: Result<Response<T>, anyhow::Error>,
+        ) -> Option<Result<Response<T>, anyhow::Error>> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
+                Err(e) => {
+                    // Only emit one out of every `parts` errors. (If one
+                    // underlying client observes an error, we expect all of
+                    // the other clients to observe the same error.)
+                    self.seen_errors += 1;
+                    if (self.seen_errors % self.parts) == 0 {
+                        Some(Err(e))
+                    } else {
+                        None
+                    }
+                }
+
+                Ok(Response::Compute(ComputeResponse::FrontierUppers(mut list), instance)) => {
                     for (id, changes) in list.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, Some(instance))) {
                             let iter = frontier.update_iter(changes.drain());
@@ -916,19 +1033,16 @@ pub mod partitioned {
                     }
 
                     if list.is_empty() {
-                        Box::new(None.into_iter())
+                        None
                     } else {
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::FrontierUppers(list),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Ok(Response::Compute(
+                            ComputeResponse::FrontierUppers(list),
+                            instance,
+                        )))
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
-                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
+                Ok(Response::Storage(StorageResponse::TimestampBindings(mut feedback))) => {
                     for (id, changes) in feedback.changes.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, None)) {
                             let iter = frontier.update_iter(changes.drain());
@@ -949,14 +1063,11 @@ pub mod partitioned {
                         }
                     }
 
-                    Box::new(
-                        Some(Response::Storage(StorageResponse::TimestampBindings(
-                            feedback,
-                        )))
-                        .into_iter(),
-                    )
+                    Some(Ok(Response::Storage(StorageResponse::TimestampBindings(
+                        feedback,
+                    ))))
                 }
-                Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
+                Ok(Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance)) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -980,29 +1091,23 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&uuid);
-                        Box::new(
-                            Some(Response::Compute(
-                                ComputeResponse::PeekResponse(uuid, response),
-                                instance,
-                            ))
-                            .into_iter(),
-                        )
+                        Some(Ok(Response::Compute(
+                            ComputeResponse::PeekResponse(uuid, response),
+                            instance,
+                        )))
                     } else {
-                        Box::new(None.into_iter())
+                        None
                     }
                 }
-                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
+                Ok(Response::Compute(ComputeResponse::TailResponse(id, response), instance)) => {
                     let maybe_entry = self
                         .pending_tails
                         .entry((id, Some(instance)))
                         .or_insert_with(|| {
-                            Some(PendingTail {
-                                frontiers: HashMap::new(),
-                                change_batch: Default::default(),
-                                buffer: Vec::new(),
-                                parts: self.parts,
-                                reported_frontier: Antichain::from_elem(T::minimum()),
-                            })
+                            let mut frontier = MutableAntichain::new();
+                            frontier
+                                .update_iter(std::iter::once((T::minimum(), self.parts as i64)));
+                            Some((frontier, Vec::new()))
                         });
 
                     let entry = match maybe_entry {
@@ -1010,66 +1115,59 @@ pub mod partitioned {
                             // This tail has been dropped;
                             // we should permanently block
                             // any messages from it
-                            return Box::new(None.into_iter());
+                            return None;
                         }
                         Some(entry) => entry,
                     };
 
-                    let responses: Box<dyn Iterator<Item = Response<T>> + Send> = match response {
-                        TailResponse::Progress(frontier) => {
-                            if let Some(new_frontier) = entry.record_progress(shard_id, frontier) {
-                                let data = entry.consolidate_up_to(new_frontier.clone());
-                                let progress_response = TailResponse::Progress(new_frontier);
-                                if data.is_empty() {
-                                    Box::new(
-                                        Some(Response::Compute(
-                                            ComputeResponse::TailResponse(id, progress_response),
-                                            instance,
-                                        ))
-                                        .into_iter(),
-                                    )
-                                } else {
-                                    // Return the data first, then the progress message.
-                                    Box::new(
-                                        [
-                                            Response::Compute(
-                                                ComputeResponse::TailResponse(
-                                                    id,
-                                                    TailResponse::Rows(data),
-                                                ),
-                                                instance,
-                                            ),
-                                            Response::Compute(
-                                                ComputeResponse::TailResponse(
-                                                    id,
-                                                    progress_response,
-                                                ),
-                                                instance,
-                                            ),
-                                        ]
-                                        .into_iter(),
-                                    )
+                    use crate::TailBatch;
+                    use differential_dataflow::consolidation::consolidate_updates;
+                    match response {
+                        TailResponse::Batch(TailBatch {
+                            lower,
+                            upper,
+                            mut updates,
+                        }) => {
+                            let old_frontier = entry.0.frontier().to_owned();
+                            entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
+                            entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
+                            entry.1.append(&mut updates);
+                            let new_frontier = entry.0.frontier().to_owned();
+                            if old_frontier != new_frontier {
+                                consolidate_updates(&mut entry.1);
+                                let mut ship = Vec::new();
+                                let mut keep = Vec::new();
+                                for (time, data, diff) in entry.1.drain(..) {
+                                    if new_frontier.less_equal(&time) {
+                                        keep.push((time, data, diff));
+                                    } else {
+                                        ship.push((time, data, diff));
+                                    }
                                 }
+                                entry.1 = keep;
+                                Some(Ok(Response::Compute(
+                                    ComputeResponse::TailResponse(
+                                        id,
+                                        TailResponse::Batch(TailBatch {
+                                            lower: old_frontier,
+                                            upper: new_frontier,
+                                            updates: ship,
+                                        }),
+                                    ),
+                                    instance,
+                                )))
                             } else {
-                                Box::new(None.into_iter())
+                                None
                             }
-                        }
-                        TailResponse::Rows(rows) => {
-                            entry.push_data(rows);
-                            Box::new(None.into_iter())
                         }
                         TailResponse::Dropped => {
                             *maybe_entry = None;
-                            Box::new(
-                                Some(Response::Compute(
-                                    ComputeResponse::TailResponse(id, TailResponse::Dropped),
-                                    instance,
-                                ))
-                                .into_iter(),
-                            )
+                            Some(Ok(Response::Compute(
+                                ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                instance,
+                            )))
                         }
-                    };
-                    responses
+                    }
                 }
             }
         }
@@ -1139,36 +1237,93 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::fmt;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Duration;
+
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
-    use tokio::io::{AsyncRead, AsyncWrite};
+    use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
+    use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
     use crate::client::{Command, GenericClient, Response};
 
+    enum TcpConn<T> {
+        Disconnected,
+        Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
+        Backoff(Instant),
+        Connected(FramedClient<TcpStream, T>),
+    }
+
+    impl<T> fmt::Debug for TcpConn<T> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("TcpConn")
+        }
+    }
+
     /// A client to a remote dataflow server.
+    ///
+    /// If the client experiences errors, it will attempt a reconnection in the `recv` method and
+    /// produce an error for the call in which that reconnection happens, allowing a bearer to
+    /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
+    /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     #[derive(Debug)]
     pub struct TcpClient<T> {
-        connection: FramedClient<TcpStream, T>,
+        connection: TcpConn<T>,
         addr: String,
     }
 
     impl<T> TcpClient<T> {
-        /// Connects a remote client to the specified remote dataflow server.
-        pub async fn connect(addr: String) -> Result<TcpClient<T>, anyhow::Error> {
-            let connection = framed_client(TcpStream::connect(&addr).await?);
-            Ok(Self { connection, addr })
+        /// Creates a new `TcpClient` initially in a disconnected state.
+        ///
+        /// Use the `connect()` method to put the client into a connected state.
+        pub fn new(addr: String) -> TcpClient<T> {
+            Self {
+                connection: TcpConn::Disconnected,
+                addr,
+            }
         }
 
-        pub async fn reconnect(&mut self) {
-            let mut connection = TcpStream::connect(&self.addr).await;
-            while connection.is_err() {
-                connection = TcpStream::connect(&self.addr).await;
+        /// Reports whether the client is actively connected.
+        pub fn connected(&self) -> bool {
+            matches!(self.connection, TcpConn::Connected(_))
+        }
+
+        /// Connects the underlying `connection`.
+        pub async fn connect(&mut self) {
+            // This is written in state-machine style to be cancellation safe.
+            loop {
+                match &mut self.connection {
+                    TcpConn::Disconnected => {
+                        let connecting = Box::pin(TcpStream::connect(self.addr.clone()));
+                        self.connection = TcpConn::Connecting(connecting);
+                    }
+                    TcpConn::Connecting(connecting) => match connecting.await {
+                        Ok(connection) => {
+                            tracing::info!("Reconnected to {}", self.addr);
+                            self.connection = TcpConn::Connected(framed_client(connection));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Error connecting to {}: {e}; reconnecting in 1s",
+                                self.addr
+                            );
+                            let deadline = Instant::now() + Duration::from_secs(1);
+                            self.connection = TcpConn::Backoff(deadline);
+                        }
+                    },
+                    TcpConn::Backoff(deadline) => {
+                        time::sleep_until(*deadline).await;
+                        self.connection = TcpConn::Disconnected;
+                    }
+                    TcpConn::Connected(_) => break,
+                }
             }
-            self.connection = framed_client(connection.unwrap());
         }
     }
 
@@ -1178,22 +1333,30 @@ pub mod tcp {
         T: timely::progress::Timestamp + Copy + Unpin,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            // on error, we attempt to reconnect, and communicate the error.
-            let result = self.connection.send(cmd).await;
-            if result.is_err() {
-                self.reconnect().await;
+            if let TcpConn::Connected(connection) = &mut self.connection {
+                let result = connection.send(cmd).await;
+                if result.is_err() {
+                    self.connection = TcpConn::Disconnected;
+                }
+                Ok(result?)
+            } else {
+                Err(anyhow::anyhow!("Sent into disconnected channel"))
             }
-            Ok(result?)
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            match self.connection.next().await {
-                None => Ok(None),
-                Some(Ok(response)) => Ok(Some(response)),
-                Some(error) => {
-                    self.reconnect().await;
-                    Ok(Some(error?))
+            if let TcpConn::Connected(connection) = &mut self.connection {
+                match connection.next().await {
+                    Some(Ok(response)) => Ok(Some(response)),
+                    _ => {
+                        self.connection = TcpConn::Disconnected;
+                        self.connect().await;
+                        Err(anyhow::anyhow!("Connection severed; reconnected"))
+                    }
                 }
+            } else {
+                self.connect().await;
+                Err(anyhow::anyhow!("Connection severed; reconnected"))
             }
         }
     }

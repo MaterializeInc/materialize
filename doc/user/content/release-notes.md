@@ -19,6 +19,23 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
+{{% version-header v0.24.0 %}}
+
+- Restore the documented behavior of the
+  [`--differential-idle-merge-effort`](/cli/#dataflow-tuning)
+  and [`--timely-progress-mode`](/cli/#dataflow-tuning)
+  command line flags {{% gh 11256 %}}.
+
+  Due to a bug, these parameters were silently ignored between v0.9.13
+  and v0.23.0.
+
+- Fix a bug where a statement descriptor could change before execution,
+  resulting in an error or a crash {{% gh 11214 11258 %}}.
+
+- Limit the views in the [`pg_catalog`](/sql/system-catalog#pg_catalog) schema
+  to reflect the state of only the current database {{% gh 11292 %}}. The new
+  behavior matches PostgreSQL.
+
 {{% version-header v0.23.0 %}}
 
 - **Breaking change.** Change the default [listen address](/cli/#listen-address)

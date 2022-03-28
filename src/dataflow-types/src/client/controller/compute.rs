@@ -29,6 +29,8 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
+use crate::client::replicated::ActiveReplication;
+use crate::client::GenericClient;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
@@ -41,7 +43,7 @@ use super::ReadPolicy;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
-    pub(super) client: Box<dyn ComputeClient<T>>,
+    pub(super) client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
@@ -91,7 +93,10 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) fn new(client: Box<dyn ComputeClient<T>>, logging: &Option<LoggingConfig>) -> Self {
+    pub(super) async fn new(
+        // client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
+        logging: &Option<LoggingConfig>,
+    ) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -105,11 +110,16 @@ where
                 );
             }
         }
-        Self {
+        let mut client = crate::client::replicated::ActiveReplication::default();
+        client
+            .send(ComputeCommand::CreateInstance(logging.clone()))
+            .await?;
+
+        Ok(Self {
             client,
             collections,
             peeks: Default::default(),
-        }
+        })
     }
 }
 
@@ -154,6 +164,15 @@ where
         crate::client::controller::StorageControllerMut {
             storage: &mut self.storage,
         }
+    }
+
+    /// Adds a new instance replica, by name.
+    pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
+        self.compute.client.add_replica(id, client).await;
+    }
+    /// Removes an existing instance replica, by name.
+    pub fn remove_replica(&mut self, id: &str) {
+        self.compute.client.remove_replica(id);
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.

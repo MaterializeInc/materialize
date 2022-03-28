@@ -7,7 +7,7 @@ rust-version = "1.59.0"
 publish = false
 
 [dependencies]
-libc = "0.2.120"
+libc = "0.2.121"
 mz-ore = { path = "../ore", default-features = false }
 
 [dev-dependencies]

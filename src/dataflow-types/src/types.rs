@@ -62,15 +62,21 @@ impl PeekResponse {
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TailResponse<T = mz_repr::Timestamp> {
-    /// Progress information. Subsequent messages from this worker will only contain timestamps
-    /// greater or equal to an element of this frontier.
-    ///
-    /// An empty antichain indicates the end.
-    Progress(Antichain<T>),
-    /// Rows that should be returned in order to the client.
-    Rows(Vec<(T, Row, Diff)>),
+    /// A batch of updates over a non-empty interval of time.
+    Batch(TailBatch<T>),
     /// The TAIL dataflow was dropped before completing. Indicates the end.
     Dropped,
+}
+
+/// A batch of updates for the interval `[lower, upper)`.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TailBatch<T> {
+    /// The lower frontier of the batch of updates.
+    pub lower: Antichain<T>,
+    /// The upper frontier of the batch of updates.
+    pub upper: Antichain<T>,
+    /// All updates greater than `lower` and not greater than `upper`.
+    pub updates: Vec<(T, Row, Diff)>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

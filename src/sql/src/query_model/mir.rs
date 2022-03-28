@@ -639,6 +639,7 @@ impl<'a> Lowerer<'a> {
             other => {
                 return Err(QGMError::from(UnsupportedQuantifierType {
                     quantifier_type: other.clone(),
+                    context: "MIR conversion".to_string(),
                 }))
             }
         }
@@ -766,7 +767,9 @@ impl<'a> Lowerer<'a> {
             },
             other => {
                 return Err(QGMError::from(UnsupportedBoxScalarExpr {
+                    context: "MIR conversion".to_string(),
                     scalar: other.clone(),
+                    explanation: None,
                 }))
             }
         };

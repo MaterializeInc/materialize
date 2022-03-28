@@ -92,6 +92,8 @@ struct Args {
     storage_addr: String,
     #[clap(long, default_value = "0")]
     storage_workers: usize,
+    #[clap(long)]
+    linger: bool,
 }
 
 #[tokio::main]
@@ -231,22 +233,29 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         }
     };
 
-    let (conn, _addr) = listener.accept().await?;
-    info!("coordinator connection accepted");
-
-    let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
     loop {
-        select! {
-            cmd = conn.try_next() => match cmd? {
-                None => break,
-                Some(cmd) => { client.send(cmd).await.unwrap(); },
-            },
-            res = client.recv() => {
-                match res.unwrap() {
+        let (conn, _addr) = listener.accept().await?;
+        info!("coordinator connection accepted");
+
+        let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
+        loop {
+            select! {
+                cmd = conn.try_next() => match cmd? {
                     None => break,
-                    Some(response) => { conn.send(response).await?; }
+                    Some(cmd) => { client.send(cmd).await.unwrap(); },
+                },
+                res = client.recv() => {
+                    match res.unwrap() {
+                        None => break,
+                        Some(response) => { conn.send(response).await?; }
+                    }
                 }
             }
+        }
+        if !args.linger {
+            break;
+        } else {
+            info!("coordinator connection gone; lingering");
         }
     }
 

@@ -132,19 +132,20 @@ pub mod server {
         let shared = Default::default();
         let state = Arc::new(Mutex::new(shared));
 
+        let client_id = std::sync::atomic::AtomicU64::default();
+
         loop {
             select! {
                 _ = async {
-                    let mut client_id = 0;
                     loop {
-                        client_id += 1;
                         match listener.accept().await {
                             Ok((socket, addr)) => {
+                                let id = client_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                                 let render_requests = render_requests.clone();
-                                debug!("Accepting client {client_id} on {addr}...");
+                                debug!("Accepting client {id} on {addr}...");
                                 let state = Arc::clone(&state);
                                 mz_ore::task::spawn(|| "client loop", async move {
-                                    handle_compute(client_id, Arc::clone(&state), socket, render_requests.clone()).await
+                                    handle_compute(id, Arc::clone(&state), socket, render_requests.clone()).await
                                 });
                             }
                             Err(e) => {
@@ -164,7 +165,9 @@ pub mod server {
                         let mut state = state.lock().await;
                         if let Some(subscription) = state.subscriptions.get_mut(&response.subscription_id) {
                             if let Some(client_id) = subscription.client_id {
-                                state.channels.get_mut(&client_id).unwrap().send(response).unwrap();
+                                if let Some(channel) = state.channels.get_mut(&client_id){
+                                    let _ = channel.send(response);
+                                }
                             } else {
                                 subscription.stash.push(response);
                             }
@@ -246,7 +249,7 @@ pub mod server {
                         return Ok(());
                     }
                 },
-                response = client_rx.recv() => connection.send(response.expect("Channel closed before dropping source")).await?,
+                Some(response) = client_rx.recv() => connection.send(response).await?,
             }
         }
     }
@@ -372,6 +375,7 @@ pub mod client {
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tokio::task::JoinHandle;
+    use tokio::time;
     use tokio_serde::formats::Bincode;
     use tracing::{debug, info, warn};
 
@@ -550,11 +554,16 @@ pub mod client {
     ) -> std::io::Result<(TcpEventLinkClientHandle, JoinHandle<std::io::Result<()>>)> {
         let (announce_tx, announce_rx) = unbounded_channel();
         info!("About to connect to {addr:?}");
-        let stream = TcpStream::connect(addr).await?;
+        let mut stream = TcpStream::connect(&addr).await;
+        while let Err(e) = stream {
+            tracing::warn!("Connect error: {e}; reconnecting");
+            time::sleep(Duration::from_secs(1)).await;
+            stream = TcpStream::connect(&addr).await;
+        }
         info!("Connected to storage server");
         let thread = mz_ore::task::spawn(
             || "storage client",
-            run_client(stream, announce_rx, workers),
+            run_client(stream.unwrap(), announce_rx, workers),
         );
 
         Ok((

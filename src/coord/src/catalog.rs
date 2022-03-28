@@ -224,6 +224,10 @@ impl CatalogState {
             })
     }
 
+    pub fn get_compute_instance(&self, id: ComputeInstanceId) -> &ComputeInstance {
+        &self.compute_instances_by_id[&id]
+    }
+
     #[tracing::instrument(level = "trace", skip(self))]
     fn insert_item(
         &mut self,
@@ -298,6 +302,7 @@ impl CatalogState {
         let introspection = match &config {
             ComputeInstanceConfig::Virtual => &virtual_compute_host_introspection,
             ComputeInstanceConfig::Remote { introspection, .. } => introspection,
+            ComputeInstanceConfig::Managed { introspection, .. } => introspection,
         };
         let logging = match introspection {
             None => None,
@@ -365,11 +370,15 @@ impl CatalogState {
             }
         };
         let config = match config {
-            ComputeInstanceConfig::Virtual => InstanceConfig::Virtual { logging },
+            ComputeInstanceConfig::Virtual => InstanceConfig::Virtual,
             ComputeInstanceConfig::Remote {
-                hosts,
+                replicas,
                 introspection: _,
-            } => InstanceConfig::Remote { hosts, logging },
+            } => InstanceConfig::Remote { replicas },
+            ComputeInstanceConfig::Managed {
+                size,
+                introspection: _,
+            } => InstanceConfig::Managed { size },
         };
         self.compute_instances_by_id.insert(
             id,
@@ -378,6 +387,7 @@ impl CatalogState {
                 config,
                 id,
                 indexes: HashSet::new(),
+                logging,
             },
         );
         self.compute_instances_by_name.insert(name, id);
@@ -577,6 +587,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub config: InstanceConfig,
+    pub logging: Option<DataflowLoggingConfig>,
     pub indexes: HashSet<GlobalId>,
 }
 
@@ -1916,6 +1927,10 @@ impl Catalog {
                 to_name: QualifiedObjectName,
                 to_item: CatalogItem,
             },
+            UpdateComputeInstanceConfig {
+                id: ComputeInstanceId,
+                config: InstanceConfig,
+            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -2193,6 +2208,35 @@ impl Catalog {
                         to_item,
                     }]
                 }
+                Op::UpdateComputeInstanceConfig { id, config } => {
+                    tx.update_compute_instance_config(id, &config)?;
+                    let config = match config {
+                        ComputeInstanceConfig::Virtual => InstanceConfig::Virtual,
+                        ComputeInstanceConfig::Remote {
+                            replicas,
+                            introspection,
+                        } => {
+                            if introspection.is_some() {
+                                coord_bail!(
+                                    "cannot change introspection options on existing cluster"
+                                );
+                            }
+                            InstanceConfig::Remote { replicas }
+                        }
+                        ComputeInstanceConfig::Managed {
+                            size,
+                            introspection,
+                        } => {
+                            if introspection.is_some() {
+                                coord_bail!(
+                                    "cannot change introspection options on existing cluster"
+                                );
+                            }
+                            InstanceConfig::Managed { size }
+                        }
+                    };
+                    vec![Action::UpdateComputeInstanceConfig { id, config }]
+                }
             });
         }
 
@@ -2381,6 +2425,10 @@ impl Catalog {
                     schema.items.insert(new_entry.name().item.clone(), id);
                     state.entry_by_id.insert(id, new_entry.clone());
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
+                }
+
+                Action::UpdateComputeInstanceConfig { id, config } => {
+                    state.compute_instances_by_id.get_mut(&id).unwrap().config = config;
                 }
             }
         }
@@ -2654,6 +2702,10 @@ pub enum Op {
     UpdateItem {
         id: GlobalId,
         to_item: CatalogItem,
+    },
+    UpdateComputeInstanceConfig {
+        id: ComputeInstanceId,
+        config: ComputeInstanceConfig,
     },
 }
 

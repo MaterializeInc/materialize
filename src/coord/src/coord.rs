@@ -91,8 +91,9 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ComputeResponse, CreateSourceCommand, Response as DataflowResponse,
-    StorageResponse, TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
+    ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
+    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
+    DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -127,15 +128,15 @@ use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
-    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
-    TailFrom, TailPlan, View,
+    AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, ComputeInstanceIntrospectionConfig,
+    CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
+    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -463,7 +464,11 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
-                .create_instance(instance.id, instance.config.clone())
+                .create_instance(
+                    instance.id,
+                    instance.config.clone(),
+                    instance.logging.clone(),
+                )
                 .await
                 .unwrap();
         }
@@ -1471,6 +1476,7 @@ impl Coordinator {
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
+                    | Statement::AlterCluster(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
@@ -1806,6 +1812,9 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::AlterComputeInstance(plan) => {
+                tx.send(self.sequence_alter_compute_instance(plan).await, session);
+            }
             Plan::AlterItemRename(plan) => {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
@@ -2013,7 +2022,11 @@ impl Coordinator {
                     .resolve_compute_instance(&plan.name)
                     .expect("compute instance must exist after creation");
                 self.dataflow_client
-                    .create_instance(instance.id, instance.config.clone())
+                    .create_instance(
+                        instance.id,
+                        instance.config.clone(),
+                        instance.logging.clone(),
+                    )
                     .await
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
@@ -2026,6 +2039,76 @@ impl Coordinator {
             }
             Err(err) => Err(err),
         }
+    }
+
+    async fn sequence_alter_compute_instance(
+        &mut self,
+        plan: AlterComputeInstancePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let instance = self.catalog.state().get_compute_instance(plan.id);
+        let old_config = instance.config.clone();
+
+        let ops = vec![catalog::Op::UpdateComputeInstanceConfig {
+            id: plan.id,
+            config: plan.config.clone(),
+        }];
+        let mut replicas_to_remove = vec![];
+        let mut replicas_to_add = vec![];
+        self.catalog_transact(ops, |tx| {
+            let new_config = &tx.catalog.get_compute_instance(plan.id).config;
+            match (old_config, new_config) {
+                (InstanceConfig::Virtual, InstanceConfig::Virtual) => Ok(()),
+                (
+                    InstanceConfig::Remote {
+                        replicas: old_replicas,
+                    },
+                    InstanceConfig::Remote {
+                        replicas: new_replicas,
+                    },
+                ) => {
+                    for (name, old_hosts) in &old_replicas {
+                        match new_replicas.get(name) {
+                            None => replicas_to_remove.push(name.clone()),
+                            Some(new_hosts) => {
+                                if old_hosts != new_hosts {
+                                    coord_bail!("cannot change definition of existing replica");
+                                }
+                            }
+                        }
+                    }
+                    for (name, new_hosts) in new_replicas {
+                        if !old_replicas.contains_key(name) {
+                            replicas_to_add.push((name.clone(), new_hosts.clone()));
+                        }
+                    }
+                    Ok(())
+                }
+                (
+                    InstanceConfig::Managed { size: old_size },
+                    InstanceConfig::Managed { size: new_size },
+                ) => {
+                    if old_size != *new_size {
+                        coord_bail!("cannot yet change size of cluster");
+                    }
+                    Ok(())
+                }
+                _ => coord_bail!("cannot change type of existing cluster"),
+            }
+        })
+        .await?;
+        // TODO(benesch,mcsherry): move this logic into the controller.
+        let mut compute_instance = self.dataflow_client.compute_mut(plan.id).unwrap();
+        for name in replicas_to_remove {
+            compute_instance.remove_replica(&name);
+        }
+        for (name, hosts) in replicas_to_add {
+            use mz_dataflow_types::client::{ComputeClient, ComputeWrapperClient, RemoteClient};
+            let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
+            let client = ComputeWrapperClient::new(client, plan.id);
+            let client: Box<dyn ComputeClient<_>> = Box::new(client);
+            compute_instance.add_replica(name, client).await;
+        }
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
     }
 
     async fn sequence_create_secret(

@@ -142,6 +142,7 @@ steps:
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
+    timeout_in_minutes: 10
     inputs: [test/cluster]
     plugins:
       - ./ci/plugins/mzcompose:

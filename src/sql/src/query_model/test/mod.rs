@@ -11,7 +11,7 @@ pub(crate) mod catalog;
 pub(crate) mod util;
 
 use crate::plan::query::QueryLifetime;
-use crate::plan::StatementContext;
+use crate::plan::{HirRelationExpr, StatementContext};
 use mz_expr_test_util::generate_explanation;
 use mz_lowertest::*;
 
@@ -35,6 +35,8 @@ enum Directive {
     Opt,
     /// Optimize and decorrelate the model. Then convert it to a `MirRelationExpr`.
     EndToEnd,
+    /// Ensure that the HIR ⇒ QGM ⇒ HIR round trip reaches a fixpoint after one iteration.
+    RoundTrip,
 }
 
 lazy_static! {
@@ -114,6 +116,19 @@ fn run_command(
         match model.try_into() {
             Ok(mir) => Ok(generate_explanation(catalog, &mir, args.get("format"))),
             Err(err) => Err(err.to_string()),
+        }
+    } else if matches!(directive, Directive::RoundTrip) {
+        let hir = HirRelationExpr::try_from(model)?;
+        let model2 = Model::try_from(hir.clone())?;
+        let hir2 = HirRelationExpr::try_from(model2)?;
+        if !hir.eq(&hir2) {
+            Err(format!(
+                "HirRelationExpr is not same after round-trip.\nOld:\n{}\nNew:\n{}\n",
+                hir.pretty(),
+                hir2.pretty()
+            ))
+        } else {
+            Ok(hir2.pretty())
         }
     } else {
         match model.as_dot(input, catalog, false) {

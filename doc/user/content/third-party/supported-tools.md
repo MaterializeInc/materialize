@@ -63,6 +63,9 @@ Materialize has a [direct PostgreSQL source](/sql/create-source/postgres/) tha
 | Amazon Aurora | {{< supportLevel beta >}} | AWS Aurora can be configured to work with Materialize by enabling logical replication via `rds.logical_replication`. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#aws-aurora) [](#notify) |
 | Amazon Aurora Serverless | {{< supportLevel researching >}} | Aurora serverless V1 does [not currently support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) the logical replication required to integrate. | [](#notify) |
 | Heroku Postgres | {{< supportLevel researching >}} | Heroku Postgres does not open up access to logical replication. But an indirect connection may be possible via Kafka and [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors). | [](#notify) |
+| Azure Database for PostgreSQL | {{< supportLevel beta >}} | Users must [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#azure-database-for-postgresql) [](#notify) |
+| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}} | Logical replication is enabled by default. The `doadmin` user is not a superuser, you will not be able to create a publication for _all_ tables. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#digitalocean-managed-postgresql) [](#notify) |
+| CrunchyBridge Postgres| {{< supportLevel beta >}} | Logical replication is enabled by default. Users can [connect directly via a replication slot](/sql/create-source/postgres/). | [More Info](/sql/create-source/postgres/) [](#notify) |
 
 ### Other Databases
 
@@ -114,7 +117,7 @@ The following popular PostgreSQL libraries and drivers have been tested and conf
 | Node.js | {{< supportLevel production >}} | The [`node-postgres` library](https://node-postgres.com/) can be used to [manage](/guides/node-js/#manage-sources-views-and-indexes), [query](/guides/node-js/#query) and even [stream](/guides/node-js/#stream) data from Materialize. | [More Info](/guides/node-js/) |
 | Python | {{< supportLevel production >}} | The [`psycopg2` python package](https://pypi.org/project/psycopg2/) can be used to interact with Materialize as if it were a PostgreSQL DB. | |
 | Java | {{< supportLevel production >}} | The popular [PostgreSQL JDBC driver](https://jdbc.postgresql.org/) can be used to interact with Materialize as if it were a PostgreSQL DB. |  |
-| Golang | {{< supportLevel production >}} | TODO: Confirm which Go drivers have been tested. |  |
+| Golang | {{< supportLevel production >}} | The [`pgx` - PostgreSQL Driver and Toolkit]https://github.com/jackc/pgx) for Golang has been confirmed to work with Materialize. | [More Info](/guides/golang/) |
 | PHP | {{< supportLevel production >}} | The standard PHP [PostgreSQL Extension](https://www.php.net/manual/en/ref.pgsql.php) can be used to interact with Materialize as if it were a PostgreSQL DB. |  |
 
 ## Frameworks and ORMs
