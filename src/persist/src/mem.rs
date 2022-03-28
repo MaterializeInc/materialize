@@ -12,11 +12,13 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime as AsyncRuntime;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::warn;
 
 use crate::client::RuntimeClient;
@@ -25,7 +27,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
 use crate::runtime::{self, RuntimeConfig};
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, BlobRead, Consensus, LockInfo, Log, SeqNo, VersionedData};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -582,9 +584,55 @@ impl MemMultiRegistry {
     }
 }
 
+#[derive(Debug)]
+struct MemConsensus {
+    data: Arc<TokioMutex<Option<VersionedData>>>,
+}
+
+impl Default for MemConsensus {
+    fn default() -> Self {
+        Self {
+            data: Arc::new(TokioMutex::new(None)),
+        }
+    }
+}
+
+#[async_trait]
+impl Consensus for MemConsensus {
+    async fn head(&self, _deadline: Instant) -> Result<Option<VersionedData>, Error> {
+        Ok(self.data.lock().await.clone())
+    }
+
+    async fn compare_and_set(
+        &mut self,
+        _deadline: Instant,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<Result<(), Option<VersionedData>>, Error> {
+        let mut data = self.data.lock().await;
+        let seqno = data.as_ref().map(|data| data.seqno);
+
+        if seqno != expected {
+            return Ok(Err(data.clone()));
+        }
+
+        // Only apply the update if the new sequence number is strictly greater
+        // than the current sequence number.
+        if let Some(seqno) = seqno {
+            if new.seqno <= seqno {
+                return Ok(Err(data.clone()));
+            }
+        }
+
+        *data = Some(new);
+
+        Ok(Ok(()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, log_impl_test};
+    use crate::storage::tests::{blob_impl_test, consensus_impl_test, log_impl_test};
     use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
@@ -608,6 +656,11 @@ mod tests {
             move |path| Ok(registry_read.lock()?.blob_read(path)),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn mem_consensus() -> Result<(), Error> {
+        consensus_impl_test(|| Ok(MemConsensus::default())).await
     }
 
     // This test covers a regression that was affecting the nemesis tests where
