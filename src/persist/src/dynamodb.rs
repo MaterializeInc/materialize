@@ -242,7 +242,7 @@ impl DynamoDbConsensusCore {
             .await
         {
             Ok(resp) => {
-                println!("resp.items");
+                println!("responses {:?}", resp.items);
                 Ok(vec![])
             }
             Err(_) => Err(Error::from("error occurred while scanning")),
@@ -278,8 +278,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn dynamodb_consensus() -> Result<(), Error> {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamodb_consensus() -> Result<(), Error> {
         mz_ore::test::init_logging();
         let config = match futures_executor::block_on(DynamoDbConsensusConfig::new_for_test())? {
             Some(client) => client,
