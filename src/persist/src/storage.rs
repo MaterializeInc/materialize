@@ -13,6 +13,7 @@ use std::fmt;
 use std::io::Read;
 use std::ops::{Add, Range};
 use std::str::FromStr;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_executor::block_on;
@@ -211,6 +212,46 @@ pub trait Blob: BlobRead + Sized {
     async fn delete(&mut self, key: &str) -> Result<(), Error>;
 }
 
+/// An abstraction for a single arbitrarily-sized binary blob and a associated
+/// version number (sequence number).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VersionedData {
+    /// The sequence number of the data.
+    pub seqno: SeqNo,
+    /// The data itself.
+    pub data: Vec<u8>,
+}
+
+/// An abstraction for [VersionedData] held in a location in persistent storage
+/// where the data are conditionally updated by version.
+///
+/// Users are expected to use this API with consistently increasing sequence numbers
+/// to allow multiple processes across multiple machines to agree to a total order
+/// of the evolution of the data.
+///
+/// TODO: Do we need to expose the evolution of this data across a series of versions?
+#[async_trait]
+pub trait Consensus: std::fmt::Debug {
+    /// Returns a recent version of `data`, and the corresponding sequence number, if
+    /// one exists at this location.
+    async fn head(&self, deadline: Instant) -> Result<Option<VersionedData>, Error>;
+
+    /// Update the [VersionedData] stored at this location to `new`, iff the current
+    /// sequence number is exactly `expected`.
+    ///
+    /// Returns a recent version and data from this location iff the current sequence
+    /// number does not equal `expected`.
+    ///
+    /// This data is initialized to None, and the first call to compare_and_swap needs to
+    /// happen with None as the expected value to set the state.
+    async fn compare_and_swap(
+        &mut self,
+        expected: Option<SeqNo>,
+        new: Option<VersionedData>,
+        deadline: Instant,
+    ) -> Result<Result<(), Option<VersionedData>>, Error>;
+}
+
 /// The partially structured information stored in an exclusive-writer lock.
 ///
 /// To allow for restart without operator intervention in situations where we've
@@ -333,6 +374,7 @@ impl From<(&str, &str)> for LockInfo {
 #[cfg(test)]
 pub mod tests {
     use std::ops::RangeInclusive;
+    use std::time::Duration;
 
     use mz_persist_types::Codec;
 
@@ -618,6 +660,104 @@ pub mod tests {
         assert_eq!(read0.close().await, Ok(true));
         assert!(read0.get("k0").await.is_err());
         assert!(read0.list_keys().await.is_err());
+
+        Ok(())
+    }
+
+    pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, Error>>(
+        mut new_fn: F,
+    ) -> Result<(), Error> {
+        let mut consensus = new_fn()?;
+
+        // Enforce that this entire test completes within 10 minutes.
+        let deadline = Instant::now() + Duration::from_secs(600);
+
+        // Starting value of consensus data is None.
+        assert_eq!(consensus.head(deadline).await, Ok(None));
+
+        let new_state = VersionedData {
+            seqno: SeqNo(5),
+            data: "abc".as_bytes().to_vec(),
+        };
+
+        // Incorrectly setting the data with a non-None expected should fail.
+        assert_eq!(
+            consensus
+                .compare_and_swap(Some(SeqNo(0)), Some(new_state.clone()), deadline)
+                .await,
+            Ok(Err(None))
+        );
+
+        // Correctly updating the state with the correct expected value should succeed.
+        assert_eq!(
+            consensus
+                .compare_and_swap(None, Some(new_state.clone()), deadline)
+                .await,
+            Ok(Ok(()))
+        );
+
+        // We can observe the a recent value on successful update.
+        assert_eq!(consensus.head(deadline).await, Ok(Some(new_state.clone())));
+
+        // It is allowed (though exceedingly strange) to set the sequence number back to
+        // itself.
+        assert_eq!(
+            consensus
+                .compare_and_swap(
+                    Some(new_state.seqno.clone()),
+                    Some(new_state.clone()),
+                    deadline
+                )
+                .await,
+            Ok(Ok(()))
+        );
+
+        let new_state2 = VersionedData {
+            seqno: SeqNo(10),
+            data: "def".as_bytes().to_vec(),
+        };
+
+        // Trying to update without the correct expected seqno fails, (even if expected > current)
+        assert_eq!(
+            consensus
+                .compare_and_swap(Some(SeqNo(7)), Some(new_state2.clone()), deadline)
+                .await,
+            Ok(Err(Some(new_state.clone())))
+        );
+
+        // Trying to update without the correct expected seqno fails, (even if expected < current)
+        assert_eq!(
+            consensus
+                .compare_and_swap(Some(SeqNo(3)), Some(new_state2.clone()), deadline)
+                .await,
+            Ok(Err(Some(new_state.clone())))
+        );
+
+        // Can correctly update to a new state if we provide the right expected seqno
+        assert_eq!(
+            consensus
+                .compare_and_swap(
+                    Some(new_state.seqno.clone()),
+                    Some(new_state2.clone()),
+                    deadline
+                )
+                .await,
+            Ok(Ok(()))
+        );
+
+        // We can observe the a recent value on successful update.
+        assert_eq!(consensus.head(deadline).await, Ok(Some(new_state2.clone())));
+
+        // Can set the state back to None.
+        assert_eq!(
+            consensus
+                .compare_and_swap(Some(new_state2.seqno.clone()), None, deadline)
+                .await,
+            Ok(Ok(()))
+        );
+
+        // The most recent value of consensus data is None.
+        assert_eq!(consensus.head(deadline).await, Ok(None));
 
         Ok(())
     }
