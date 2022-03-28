@@ -80,3 +80,26 @@ impl Action for SqlTimeoutAction {
         Ok(ControlFlow::Continue)
     }
 }
+
+pub struct MaxTriesAction {
+    max_tries: Option<usize>,
+}
+
+pub fn build_max_tries(mut cmd: BuiltinCommand) -> Result<MaxTriesAction, anyhow::Error> {
+    let max_tries = cmd.args.string("max-tries")?;
+    Ok(MaxTriesAction {
+        max_tries: Some(max_tries.parse::<usize>()?),
+    })
+}
+
+#[async_trait]
+impl Action for MaxTriesAction {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        state.max_tries = self.max_tries.unwrap_or(state.default_max_tries);
+        Ok(ControlFlow::Continue)
+    }
+}

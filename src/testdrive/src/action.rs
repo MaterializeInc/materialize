@@ -78,6 +78,8 @@ pub struct Config {
     pub temp_dir: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
+    /// The default number of tries for retriable operations.
+    pub default_max_tries: usize,
     /// The initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
@@ -138,6 +140,8 @@ pub struct State {
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
     timeout: Duration,
+    default_max_tries: usize,
+    max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
     regex: Option<Regex>,
@@ -540,6 +544,7 @@ pub(crate) async fn build(
                     "set-sql-timeout" => {
                         Box::new(set::build_sql_timeout(builtin).map_err(wrap_err)?)
                     }
+                    "set-max-tries" => Box::new(set::build_max_tries(builtin).map_err(wrap_err)?),
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
                     }
@@ -780,6 +785,8 @@ pub async fn create_state(
         _tempfile,
         default_timeout: config.default_timeout,
         timeout: config.default_timeout,
+        default_max_tries: config.default_max_tries,
+        max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         regex: None,

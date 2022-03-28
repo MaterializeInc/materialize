@@ -135,7 +135,8 @@ impl Action for SqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }
         .retry_async_canceling(|retry_state| async move {
@@ -389,7 +390,8 @@ impl Action for FailSqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }.retry_async(|retry_state| async move {
             match self.try_redo(state, &query).await {

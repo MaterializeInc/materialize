@@ -67,6 +67,9 @@ struct Args {
     /// Default timeout for cancellable operations.
     #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s", value_name = "DURATION")]
     default_timeout: Duration,
+    /// The default number of times to retry a query expecting it to converge to the desired result.
+    #[clap(long, default_value = "18446744073709551615", value_name = "N")]
+    default_max_tries: usize,
     /// Initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
@@ -262,6 +265,7 @@ async fn main() {
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
         default_timeout: args.default_timeout,
+        default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
 
