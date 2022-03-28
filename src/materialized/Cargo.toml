@@ -52,7 +52,7 @@ include_dir = "0.7.2"
 itertools = "0.10.3"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.120"
+libc = "0.2.121"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
