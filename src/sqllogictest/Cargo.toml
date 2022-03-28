@@ -28,7 +28,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", b
 regex = "1.5.4"
 serde_json = "1.0.79"
 tempfile = "3.2.0"
-time = "0.3.7"
+time = "0.3.9"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
