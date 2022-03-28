@@ -25,7 +25,10 @@ use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
-use crate::location::{Atomicity, Blob, BlobRead, Consensus, LockInfo, Log, SeqNo, VersionedData};
+use crate::location::{
+    Atomicity, Blob, BlobMulti, BlobRead, Consensus, LocationError, LockInfo, Log, SeqNo,
+    VersionedData,
+};
 use crate::runtime::{self, RuntimeConfig};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
@@ -583,8 +586,79 @@ impl MemMultiRegistry {
     }
 }
 
+#[derive(Debug, Default)]
+struct MemBlobMultiCore {
+    dataz: HashMap<String, Vec<u8>>,
+}
+
+impl MemBlobMultiCore {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
+        Ok(self.dataz.get(key).cloned())
+    }
+
+    fn set(&mut self, key: &str, value: Vec<u8>) -> Result<(), LocationError> {
+        self.dataz.insert(key.to_owned(), value);
+        Ok(())
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>, LocationError> {
+        Ok(self.dataz.keys().cloned().collect())
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), LocationError> {
+        self.dataz.remove(key);
+        Ok(())
+    }
+}
+
+/// Configuration for opening a [MemBlobMulti].
+#[derive(Debug, Default)]
+pub struct MemBlobMultiConfig {
+    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+}
+
+/// An in-memory implementation of [BlobMulti].
 #[derive(Debug)]
-struct MemConsensus {
+pub struct MemBlobMulti {
+    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+}
+
+impl MemBlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub fn open(config: MemBlobMultiConfig) -> Self {
+        MemBlobMulti { core: config.core }
+    }
+}
+
+#[async_trait]
+impl BlobMulti for MemBlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
+        self.core.lock().await.get(key)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, LocationError> {
+        self.core.lock().await.list_keys()
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        _atomic: Atomicity,
+    ) -> Result<(), LocationError> {
+        // NB: This is always atomic, so we're free to ignore the atomic param.
+        self.core.lock().await.set(key, value)
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), LocationError> {
+        self.core.lock().await.delete(key)
+    }
+}
+
+/// An in-memory implementation of [Consensus].
+#[derive(Debug)]
+pub struct MemConsensus {
     data: Arc<Mutex<Option<VersionedData>>>,
 }
 
@@ -603,7 +677,7 @@ impl Consensus for MemConsensus {
     }
 
     async fn compare_and_swap(
-        &mut self,
+        &self,
         expected: Option<SeqNo>,
         new: Option<VersionedData>,
         _deadline: Instant,

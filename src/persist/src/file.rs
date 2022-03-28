@@ -530,17 +530,21 @@ pub struct FileBlobMulti {
     core: FileBlobCore,
 }
 
-#[async_trait]
-impl BlobMulti for FileBlobMulti {
-    type Config = FileBlobConfig;
-
-    async fn open_multi(_deadline: Instant, config: FileBlobConfig) -> Result<Self, LocationError> {
+impl FileBlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open_multi(
+        _deadline: Instant,
+        config: FileBlobConfig,
+    ) -> Result<Self, LocationError> {
         let core = FileBlobCore {
             base_dir: Some(config.base_dir),
         };
         Ok(FileBlobMulti { core })
     }
+}
 
+#[async_trait]
+impl BlobMulti for FileBlobMulti {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
         let value = self.core.get(key)?;
         Ok(value)

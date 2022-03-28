@@ -49,7 +49,7 @@ use crate::location::{BlobRead, SeqNo};
 pub struct Id(pub u64);
 
 /// The structure serialized and stored as an entry in a
-/// [crate::storage::Log].
+/// [crate::location::Log].
 ///
 /// Invariants:
 /// - The updates field is non-empty.
@@ -62,7 +62,7 @@ pub struct LogEntry {
     pub updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, i64)>)>,
 }
 
-/// The structure serialized and stored as a value in [crate::storage::Blob]
+/// The structure serialized and stored as a value in [crate::location::Blob]
 /// storage for metadata keys.
 ///
 /// Invariants:
@@ -222,7 +222,7 @@ impl UnsealedSnapshotMeta {
     }
 }
 
-/// The structure serialized and stored as a value in [crate::storage::Blob]
+/// The structure serialized and stored as a value in [crate::location::Blob]
 /// storage for data keys corresponding to unsealed data.
 ///
 /// Invariants:
@@ -236,7 +236,7 @@ pub struct BlobUnsealedBatch {
     pub updates: Vec<ColumnarRecords>,
 }
 
-/// The structure serialized and stored as a value in [crate::storage::Blob]
+/// The structure serialized and stored as a value in [crate::location::Blob]
 /// storage for data keys corresponding to trace data.
 ///
 /// This batch represents the data that was originally written at some time in

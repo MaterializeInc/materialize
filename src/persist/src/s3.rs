@@ -741,11 +741,9 @@ pub struct S3BlobMulti {
     core: S3BlobCore,
 }
 
-#[async_trait]
-impl BlobMulti for S3BlobMulti {
-    type Config = S3BlobConfig;
-
-    async fn open_multi(_deadline: Instant, config: S3BlobConfig) -> Result<Self, LocationError> {
+impl S3BlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open(_deadline: Instant, config: S3BlobConfig) -> Result<Self, LocationError> {
         let core = S3BlobCore {
             client: Some(config.client),
             bucket: config.bucket,
@@ -755,7 +753,10 @@ impl BlobMulti for S3BlobMulti {
         };
         Ok(S3BlobMulti { core })
     }
+}
 
+#[async_trait]
+impl BlobMulti for S3BlobMulti {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError> {
         let value = self.core.get(key).await?;
         Ok(value)

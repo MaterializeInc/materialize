@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::Read;
-use std::ops::{Add, Range};
+use std::ops::Range;
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -77,7 +77,7 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
 
 impl timely::PartialOrder for SeqNo {
@@ -86,11 +86,10 @@ impl timely::PartialOrder for SeqNo {
     }
 }
 
-impl Add<u64> for SeqNo {
-    type Output = SeqNo;
-
-    fn add(self, rhs: u64) -> SeqNo {
-        SeqNo(self.0 + rhs)
+impl SeqNo {
+    /// Returns the next SeqNo in the sequence.
+    pub fn next(self) -> SeqNo {
+        SeqNo(self.0 + 1)
     }
 }
 
@@ -112,6 +111,12 @@ impl std::fmt::Display for LocationError {
 }
 
 impl std::error::Error for LocationError {}
+
+impl From<anyhow::Error> for LocationError {
+    fn from(inner: anyhow::Error) -> Self {
+        LocationError { inner }
+    }
+}
 
 impl From<Error> for LocationError {
     fn from(x: Error) -> Self {
@@ -272,7 +277,7 @@ pub trait Consensus: std::fmt::Debug {
     /// This data is initialized to None, and the first call to compare_and_swap needs to
     /// happen with None as the expected value to set the state.
     async fn compare_and_swap(
-        &mut self,
+        &self,
         expected: Option<SeqNo>,
         new: Option<VersionedData>,
         deadline: Instant,
@@ -402,13 +407,7 @@ impl From<(&str, &str)> for LockInfo {
 ///
 /// TODO: Rename this to Blob when we delete Blob.
 #[async_trait]
-pub trait BlobMulti: Sized {
-    /// The configuration necessary to open this type of storage.
-    type Config;
-
-    /// Opens the given location for non-exclusive read-write access.
-    async fn open_multi(deadline: Instant, config: Self::Config) -> Result<Self, LocationError>;
-
+pub trait BlobMulti: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, LocationError>;
 
@@ -729,7 +728,7 @@ pub mod tests {
     pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
-        let mut consensus = new_fn()?;
+        let consensus = new_fn()?;
 
         // Enforce that this entire test completes within 10 minutes.
         let deadline = Instant::now() + Duration::from_secs(600);

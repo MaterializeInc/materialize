@@ -10,21 +10,25 @@
 //! Read capabilities and handles
 
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_persist::location::LocationError;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{BlobMulti, LocationError};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::trace;
+use tracing::{info, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::shard::Shard;
+use crate::r#impl::machine::Machine;
 use crate::Id;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -55,7 +59,7 @@ impl ReaderId {
 pub struct SnapshotSplit {
     id: Id,
     as_of: Vec<[u8; 8]>,
-    contents: Vec<(Vec<u8>, Vec<u8>, [u8; 8], [u8; 8])>,
+    batches: Vec<String>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -65,7 +69,9 @@ pub struct SnapshotSplit {
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
     as_of: Antichain<T>,
-    contents: Vec<((Result<K, String>, Result<V, String>), T, D)>,
+    batches: Vec<String>,
+    blob: Arc<dyn BlobMulti>,
+    _phantom: PhantomData<(K, V, T, D)>,
 }
 
 impl<K, V, T, D> SnapshotIter<K, V, T, D>
@@ -88,8 +94,67 @@ where
         timeout: Duration,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, LocationError> {
         trace!("SnapshotIter::poll_next timeout={:?}", timeout);
-        let contents = std::mem::take(&mut self.contents);
-        Ok(contents)
+        let deadline = Instant::now() + timeout;
+        let key = match self.batches.last() {
+            Some(x) => x.clone(),
+            // All done!
+            None => return Ok(vec![]),
+        };
+        loop {
+            // TODO: Deduplicate this with the logic in Listen.
+            let value = self.blob.get(deadline, &key).await?;
+            let value = match value {
+                Some(x) => x,
+                // If the underlying impl of blob isn't linearizable, then we
+                // might get a key reference that that blob isn't returning yet.
+                // Keep trying, it'll show up. The deadline will eventually bail
+                // us out of this loop if something has gone wrong internally.
+                //
+                // TODO: This should increment a counter.
+                None => {
+                    let sleep = Duration::from_secs(1);
+                    info!(
+                        "unexpected missing blob, trying again in {:?}: {}",
+                        sleep, key
+                    );
+                    tokio::time::sleep(sleep).await;
+                    continue;
+                }
+            };
+
+            // Now that we've successfully gotten the batch, we can remove it
+            // from the list. We wait until now to keep this method idempotent
+            // for retries.
+            //
+            // TODO: Restructure this loop so this is more obviously correct.
+            assert_eq!(self.batches.pop().as_ref(), Some(&key));
+
+            let batch = BlobTraceBatchPart::decode(&value).map_err(|err| {
+                LocationError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
+            })?;
+            let mut ret = Vec::new();
+            for chunk in batch.updates {
+                for ((k, v), t, d) in chunk.iter() {
+                    // TODO: Get rid of the to_le_bytes.
+                    let t = T::decode(t.to_le_bytes());
+                    if self.as_of.less_than(&t) {
+                        // This happens to be in the batch, but it would get
+                        // covered by a listen started at the same as_of.
+                        continue;
+                    }
+                    let k = K::decode(k);
+                    let v = V::decode(v);
+                    // TODO: Get rid of the to_le_bytes.
+                    let d = D::decode(d.to_le_bytes());
+                    ret.push(((k, v), t, d));
+                }
+            }
+            if ret.is_empty() {
+                // We might have filtered everything.
+                continue;
+            }
+            return Ok(ret);
+        }
     }
 
     /// Test helper to read all data in the snapshot.
@@ -126,8 +191,9 @@ pub enum ListenEvent<K, V, T, D> {
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
     as_of: Antichain<T>,
-    pub(crate) upper: Antichain<T>,
-    shard: Shard<K, V, T, D>,
+    frontier: Antichain<T>,
+    machine: Machine<K, V, T, D>,
+    blob: Arc<dyn BlobMulti>,
 }
 
 impl<K, V, T, D> Listen<K, V, T, D>
@@ -143,41 +209,89 @@ where
         timeout: Duration,
     ) -> Result<Vec<ListenEvent<K, V, T, D>>, LocationError> {
         trace!("Listen::poll_next timeout={:?}", timeout);
-        let mut ret = Vec::new();
-        loop {
-            let state = self.shard.clone().into_inner();
-            let state = state.lock().await;
-            let new_upper = Antichain::from(
-                state
-                    .upper
-                    .iter()
-                    .map(|x| T::decode(*x))
-                    .collect::<Vec<_>>(),
-            );
-            if PartialOrder::less_than(&self.upper, &new_upper) {
-                // TODO: We could order contents to avoid scanning the entire
-                // thing every time, but this impl is meant as a placeholder, so
-                // let's see how far we get without that.
-                let mut updates = Vec::new();
-                for (k, v, t, d) in state.contents.iter() {
-                    let t = T::decode(*t);
-                    if self.as_of.less_than(&t) && self.upper.less_equal(&t) {
-                        debug_assert_eq!(new_upper.less_equal(&t), false);
-                        let k = K::decode(&k);
-                        let v = V::decode(&v);
-                        let d = D::decode(*d);
-                        updates.push(((k, v), t, d));
-                    }
-                }
-                if !updates.is_empty() {
-                    ret.push(ListenEvent::Updates(updates));
-                }
-                self.upper = new_upper;
-                ret.push(ListenEvent::Progress(self.upper.clone()));
-                return Ok(ret);
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        let deadline = Instant::now() + timeout;
+
+        let (batch_keys, desc) = self
+            .machine
+            .next_listen_batch(deadline, &self.frontier)
+            .await?;
+        let updates = self.fetch_batch(deadline, &batch_keys).await?;
+        let mut ret = Vec::with_capacity(2);
+        if !updates.is_empty() {
+            ret.push(ListenEvent::Updates(updates));
         }
+        ret.push(ListenEvent::Progress(desc.upper().clone()));
+        self.frontier = desc.upper().clone();
+        return Ok(ret);
+    }
+
+    /// Test helper to read from the listener until the given frontier is
+    /// reached.
+    #[cfg(test)]
+    pub async fn read_until(
+        &mut self,
+        ts: &T,
+    ) -> Result<Vec<ListenEvent<K, V, T, D>>, LocationError> {
+        use crate::NO_TIMEOUT;
+
+        let mut ret = Vec::new();
+        while self.frontier.less_than(ts) {
+            let mut next = self.poll_next(NO_TIMEOUT).await?;
+            ret.append(&mut next);
+        }
+        return Ok(ret);
+    }
+
+    async fn fetch_batch(
+        &self,
+        deadline: Instant,
+        keys: &[String],
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, LocationError> {
+        let mut ret = Vec::new();
+        for key in keys {
+            // TODO: Deduplicate this with the logic in SnapshotIter.
+            let value = loop {
+                let value = self.blob.get(deadline, &key).await?;
+                match value {
+                    Some(x) => break x,
+                    // If the underlying impl of blob isn't linearizable, then we
+                    // might get a key reference that that blob isn't returning yet.
+                    // Keep trying, it'll show up. The deadline will eventually bail
+                    // us out of this loop if something has gone wrong internally.
+                    //
+                    // TODO: This should increment a counter.
+                    None => {
+                        let sleep = Duration::from_secs(1);
+                        info!(
+                            "unexpected missing blob, trying again in {:?}: {}",
+                            sleep, key
+                        );
+                        tokio::time::sleep(sleep).await;
+                    }
+                };
+            };
+            let batch = BlobTraceBatchPart::decode(&value).map_err(|err| {
+                LocationError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
+            })?;
+            for chunk in batch.updates {
+                for ((k, v), t, d) in chunk.iter() {
+                    // TODO: Get rid of the to_le_bytes.
+                    let t = T::decode(t.to_le_bytes());
+                    if !self.as_of.less_than(&t) {
+                        // This happens to be in the batch, but it
+                        // would get covered by a snapshot started
+                        // at the same as_of.
+                        continue;
+                    }
+                    let k = K::decode(k);
+                    let v = V::decode(v);
+                    // TODO: Get rid of the to_le_bytes.
+                    let d = D::decode(d.to_le_bytes());
+                    ret.push(((k, v), t, d));
+                }
+            }
+        }
+        return Ok(ret);
     }
 }
 
@@ -187,9 +301,15 @@ where
 pub struct ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // TODO: Only the T bound should exist, the rest are a temporary artifact of
+    // the current implementation.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     pub(crate) reader_id: ReaderId,
-    pub(crate) state: Shard<K, V, T, D>,
+    pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) blob: Arc<dyn BlobMulti>,
 
     pub(crate) since: Antichain<T>,
 }
@@ -227,7 +347,14 @@ where
             timeout,
             new_since
         );
-        // TODO: No-op for now.
+        let deadline = Instant::now() + timeout;
+        let res = self
+            .machine
+            .downgrade_since(deadline, &self.reader_id, &new_since)
+            .await?;
+        if let Err(err) = res {
+            return Ok(Err(err));
+        }
         self.since = new_since;
         Ok(Ok(()))
     }
@@ -253,10 +380,18 @@ where
         as_of: Antichain<T>,
     ) -> Result<Result<Listen<K, V, T, D>, InvalidUsage>, LocationError> {
         trace!("ReadHandle::listen timeout={:?} as_of={:?}", timeout, as_of);
+        if PartialOrder::less_than(&as_of, &self.since) {
+            return Ok(Err(InvalidUsage(anyhow!(
+                "listen with as_of {:?} cannot be served by shard with since: {:?}",
+                as_of,
+                self.since
+            ))));
+        }
         Ok(Ok(Listen {
-            upper: as_of.clone(),
-            as_of,
-            shard: self.state.clone(),
+            as_of: as_of.clone(),
+            frontier: as_of,
+            machine: self.machine.clone(),
+            blob: Arc::clone(&self.blob),
         }))
     }
 
@@ -294,24 +429,23 @@ where
             as_of,
             num_splits
         );
-        let state = self.state.clone().into_inner();
-        let state = state.lock().await;
+        let deadline = Instant::now() + timeout;
+        // Hack: Keep this method `&self` instead of `&mut self` by cloning the
+        // cached copy of the state, updating it, and throwing it away
+        // afterward.
+        let batches = match self.machine.clone().snapshot(deadline, &as_of).await? {
+            Ok(x) => x,
+            Err(err) => return Ok(Err(err)),
+        };
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
-                id: state.shard_id,
+                id: self.machine.id(),
                 as_of: as_of.iter().map(|x| T::encode(x)).collect(),
-                contents: Vec::new(),
+                batches: Vec::new(),
             })
             .collect::<Vec<_>>();
-        for (idx, (k, v, t, d)) in state.contents.iter().enumerate() {
-            let mut t = T::decode(*t);
-            if as_of.less_than(&t) {
-                continue;
-            }
-            t.advance_by(as_of.borrow());
-            splits[idx % num_splits.get()]
-                .contents
-                .push((k.clone(), v.clone(), T::encode(&t), *d));
+        for (idx, batch_key) in batches.into_iter().enumerate() {
+            splits[idx % num_splits.get()].batches.push(batch_key);
         }
         return Ok(Ok(splits));
     }
@@ -322,19 +456,19 @@ where
         &self,
         timeout: Duration,
         split: SnapshotSplit,
-    ) -> Result<SnapshotIter<K, V, T, D>, LocationError> {
+    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, LocationError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} split={:?}",
             timeout,
             split
         );
-        // TODO: Each part should have a read capability attached to it and then
-        // we should use that here instead of the handle's capability.
-        let contents = split
-            .contents
-            .into_iter()
-            .map(|(k, v, t, d)| ((K::decode(&k), V::decode(&v)), T::decode(t), D::decode(d)))
-            .collect();
+        if split.id != self.machine.id() {
+            return Ok(Err(InvalidUsage(anyhow!(
+                "snapshot shard id {} doesn't match handle id {}",
+                split.id,
+                self.machine.id()
+            ))));
+        }
         let iter = SnapshotIter {
             as_of: Antichain::from(
                 split
@@ -343,24 +477,29 @@ where
                     .map(|x| T::decode(*x))
                     .collect::<Vec<_>>(),
             ),
-            contents,
+            batches: split.batches,
+            blob: Arc::clone(&self.blob),
+            _phantom: PhantomData,
         };
-        Ok(iter)
+        Ok(Ok(iter))
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
     pub async fn clone(&self, timeout: Duration) -> Result<Self, LocationError> {
         trace!("ReadHandle::clone timeout={:?}", timeout);
-        let new_reader_id = self
-            .state
-            .clone_reader(&self.reader_id)
+        let deadline = Instant::now() + timeout;
+        let new_reader_id = ReaderId::new();
+        let mut machine = self.machine.clone();
+        let read_cap = machine
+            .clone_reader(deadline, &self.reader_id)
             .await
             .expect("TODO: return a lease expired error instead");
         let new_reader = ReadHandle {
             reader_id: new_reader_id,
-            state: self.state.clone(),
-            since: self.since.clone(),
+            machine,
+            blob: Arc::clone(&self.blob),
+            since: read_cap.since,
         };
         Ok(new_reader)
     }
@@ -386,17 +525,28 @@ where
         };
         assert_eq!(splits.len(), 1);
         let split = splits.pop().unwrap();
-        let iter = self.snapshot_iter(NO_TIMEOUT, split).await?;
-        Ok(Ok(iter))
+        self.snapshot_iter(NO_TIMEOUT, split).await
     }
 }
 
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // TODO: Only the T bound should exist, the rest are a temporary artifact of
+    // the current implementation.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(60);
         // TODO: Use tokio instead of futures_executor.
-        futures_executor::block_on(self.state.deregister_reader(&self.reader_id));
+        let res = futures_executor::block_on(self.machine.expire_reader(deadline, &self.reader_id));
+        if let Err(err) = res {
+            info!(
+                "drop failed to expire reader {}, falling back to lease timeout: {:?}",
+                self.reader_id, err
+            );
+        }
     }
 }
