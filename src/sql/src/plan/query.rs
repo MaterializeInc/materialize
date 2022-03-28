@@ -164,7 +164,7 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc()?;
+    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
     let defaults = table
         .table_details()
         .expect("attempted to insert into non-table");
@@ -307,7 +307,9 @@ pub fn plan_copy_from(
             table_name.full_name_str()
         );
     }
-    let mut desc = table.desc()?.clone();
+    let mut desc = table
+        .desc(&scx.catalog.resolve_full_name(table.name()))?
+        .clone();
     let _ = table
         .table_details()
         .expect("attempted to insert into non-table");
@@ -367,7 +369,7 @@ pub fn plan_copy_from_rows(
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
     let table = catalog.get_item(&id);
-    let desc = table.desc()?;
+    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let defaults = table
         .table_details()
@@ -508,7 +510,7 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc()?;
+    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -4681,7 +4683,9 @@ impl<'a> QueryContext<'a> {
             ResolvedObjectName::Object { id, full_name, .. } => {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
-                let desc = item.desc()?.clone();
+                let desc = item
+                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
+                    .clone();
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.id()),
                     typ: desc.typ().clone(),

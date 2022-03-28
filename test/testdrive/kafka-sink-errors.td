@@ -130,13 +130,13 @@ contains:retention bytes for sink topics must be greater than or equal to -1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:catalog item 's1' is a sink and so cannot be depended upon
+contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
 ! CREATE VIEW v2 AS SELECT * FROM s1
-contains:catalog item 's1' is a sink and so cannot be depended upon
+contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
 ! SELECT * FROM s1
-contains:catalog item 's1' is a sink and so cannot be depended upon
+contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
 > DROP SINK s1
 

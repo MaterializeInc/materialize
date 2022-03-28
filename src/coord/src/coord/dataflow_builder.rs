@@ -27,7 +27,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, Row};
 
-use crate::catalog::{CatalogItem, CatalogState};
+use crate::catalog::{CatalogItem, CatalogState, SYSTEM_CONN_ID};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
@@ -121,10 +121,12 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         on_id: *id,
                         key: idx.keys.to_vec(),
                     };
-                    let desc = self
-                        .catalog
-                        .get_entry(id)
-                        .desc()
+                    let entry = self.catalog.get_entry(id);
+                    let desc = entry
+                        .desc(&self.catalog.resolve_full_name(
+                            entry.name(),
+                            entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                        ))
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone());
                 }
@@ -223,7 +225,14 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             return Ok(None);
         }
         let on_entry = self.catalog.get_entry(&index.on);
-        let on_type = on_entry.desc().unwrap().typ().clone();
+        let on_type = on_entry
+            .desc(&self.catalog.resolve_full_name(
+                on_entry.name(),
+                on_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+            ))
+            .unwrap()
+            .typ()
+            .clone();
         let name = index_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;

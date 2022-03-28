@@ -297,7 +297,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self) -> Result<&RelationDesc, CatalogError>;
+    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, CatalogError>;
 
     /// Returns the resolved function.
     ///

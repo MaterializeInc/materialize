@@ -145,6 +145,7 @@ use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
+    SYSTEM_CONN_ID,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -1666,12 +1667,14 @@ impl Coordinator {
         let df = self
             .catalog_transact(ops, |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
+                let from_entry = builder.catalog.get_entry(&sink.from);
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
-                    from_desc: builder
-                        .catalog
-                        .get_entry(&sink.from)
-                        .desc()
+                    from_desc: from_entry
+                        .desc(&builder.catalog.resolve_full_name(
+                            from_entry.name(),
+                            from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                        ))
                         .unwrap()
                         .clone(),
                     connector: connector.clone(),
@@ -2405,6 +2408,7 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact(vec![op], |txn| -> Result<(), CoordError> {
+                let from_entry = txn.catalog.get_entry(&sink.from);
                 // Insert a dummy dataflow to trigger validation before we try to actually create
                 // the external sink resources (e.g. Kafka Topics)
                 txn.dataflow_builder(sink.compute_instance)
@@ -2413,7 +2417,13 @@ impl Coordinator {
                         id,
                         mz_dataflow_types::sinks::SinkDesc {
                             from: sink.from,
-                            from_desc: txn.catalog.get_entry(&sink.from).desc().unwrap().clone(),
+                            from_desc: from_entry
+                                .desc(&txn.catalog.resolve_full_name(
+                                    from_entry.name(),
+                                    from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                                ))
+                                .unwrap()
+                                .clone(),
                             connector: SinkConnector::Tail(TailSinkConnector {}),
                             envelope: Some(sink.envelope),
                             as_of: SinkAsOf {
@@ -3382,7 +3392,14 @@ impl Coordinator {
         let dataflow = match from {
             TailFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
-                let from_desc = from.desc().unwrap().clone();
+                let from_desc = from
+                    .desc(
+                        &self
+                            .catalog
+                            .resolve_full_name(from.name(), session.conn_id()),
+                    )
+                    .unwrap()
+                    .clone();
                 let sink_id = self.catalog.allocate_user_id()?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("tail-{}", sink_id);
@@ -3991,7 +4008,14 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             mut selection => {
                 let desc_arity = match self.catalog.try_get_entry(&plan.id) {
-                    Some(table) => table.desc().expect("desc called on table").arity(),
+                    Some(table) => table
+                        .desc(
+                            &self
+                                .catalog
+                                .resolve_full_name(table.name(), session.conn_id()),
+                        )
+                        .expect("desc called on table")
+                        .arity(),
                     None => {
                         tx.send(
                             Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
@@ -4042,7 +4066,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match self.catalog.try_get_entry(&id) {
-            Some(table) => table.desc()?,
+            Some(table) => table.desc(
+                &self
+                    .catalog
+                    .resolve_full_name(table.name(), session.conn_id()),
+            )?,
             None => {
                 return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
                     id.to_string(),
@@ -4108,7 +4136,14 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog.try_get_entry(&id) {
-            Some(table) => table.desc().expect("desc called on table").clone(),
+            Some(table) => table
+                .desc(
+                    &self
+                        .catalog
+                        .resolve_full_name(table.name(), session.conn_id()),
+                )
+                .expect("desc called on table")
+                .clone(),
             None => {
                 tx.send(
                     Err(CoordError::SqlCatalog(CatalogError::UnknownItem(

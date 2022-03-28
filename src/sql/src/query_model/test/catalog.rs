@@ -88,7 +88,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn desc(&self) -> Result<&RelationDesc, CatalogError> {
+    fn desc(&self, _: &FullObjectName) -> Result<&RelationDesc, CatalogError> {
         match &self {
             TestCatalogItem::BaseTable { desc, .. } => Ok(desc),
             _ => Err(CatalogError::UnknownItem(format!(

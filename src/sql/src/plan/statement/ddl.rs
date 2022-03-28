@@ -1990,7 +1990,7 @@ pub fn plan_create_sink(
 
     let mut with_options = normalize::options(&with_options);
 
-    let desc = from.desc()?;
+    let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connector {
         CreateSinkConnector::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
@@ -2218,7 +2218,7 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc()?;
+    let on_desc = on.desc(&scx.catalog.resolve_full_name(on.name()))?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
@@ -2226,7 +2226,7 @@ pub fn plan_create_index(
             // `key_parts` is None if we're creating a "default" index, i.e.
             // creating the index as if the index had been created alongside the
             // view source, e.g. `CREATE MATERIALIZED...`
-            on.desc()?
+            on.desc(&scx.catalog.resolve_full_name(on.name()))?
                 .typ()
                 .default_key()
                 .iter()

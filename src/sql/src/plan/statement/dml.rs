@@ -283,7 +283,11 @@ pub fn describe_tail(
     stmt: TailStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let relation_desc = match stmt.relation {
-        TailRelation::Name(name) => scx.get_item_by_resolved_name(&name)?.desc()?.clone(),
+        TailRelation::Name(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            item.desc(&scx.catalog.resolve_full_name(item.name()))?
+                .clone()
+        }
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;

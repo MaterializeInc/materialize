@@ -79,7 +79,7 @@ pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
 
-const SYSTEM_CONN_ID: u32 = 0;
+pub const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -206,6 +206,29 @@ impl CatalogState {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_) => false,
+        }
+    }
+
+    pub fn resolve_full_name(&self, name: &QualifiedObjectName, conn_id: u32) -> FullObjectName {
+        let database = match &name.qualifiers.database_spec {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        };
+        let schema = self
+            .get_schema(
+                &name.qualifiers.database_spec,
+                &name.qualifiers.schema_spec,
+                conn_id,
+            )
+            .name()
+            .schema
+            .clone();
+        FullObjectName {
+            database,
+            schema,
+            item: name.item.clone(),
         }
     }
 
@@ -740,7 +763,7 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &QualifiedObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+    pub fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
         match &self {
             CatalogItem::Source(src) => Ok(&src.desc),
             CatalogItem::Table(tbl) => Ok(&tbl.desc),
@@ -750,7 +773,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_) => Err(SqlCatalogError::InvalidDependency {
-                name: name.item.clone(),
+                name: name.to_string(),
                 typ: self.typ(),
             }),
         }
@@ -900,8 +923,8 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
-        self.item.desc(self.name())
+    pub fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+        self.item.desc(name)
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -972,6 +995,12 @@ impl CatalogEntry {
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
     pub fn used_by(&self) -> &[GlobalId] {
         &self.used_by
+    }
+
+    /// Returns the connection ID that this item belongs to, if this item is
+    /// temporary.
+    pub fn conn_id(&self) -> Option<u32> {
+        self.item.conn_id()
     }
 }
 
@@ -1581,26 +1610,7 @@ impl Catalog {
     }
 
     pub fn resolve_full_name(&self, name: &QualifiedObjectName, conn_id: u32) -> FullObjectName {
-        let database = match &name.qualifiers.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-            ResolvedDatabaseSpecifier::Id(id) => {
-                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
-            }
-        };
-        let schema = self
-            .get_schema(
-                &name.qualifiers.database_spec,
-                &name.qualifiers.schema_spec,
-                conn_id,
-            )
-            .name()
-            .schema
-            .clone();
-        FullObjectName {
-            database,
-            schema,
-            item: name.item.clone(),
-        }
+        self.state.resolve_full_name(name, conn_id)
     }
 
     /// Returns the named catalog item, if it exists.
@@ -3126,8 +3136,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.oid()
     }
 
-    fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
-        Ok(self.desc()?)
+    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+        Ok(self.desc(name)?)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {

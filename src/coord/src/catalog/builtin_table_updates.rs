@@ -134,7 +134,9 @@ impl CatalogState {
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
         };
 
-        if let Ok(desc) = entry.desc() {
+        if let Ok(desc) = entry
+            .desc(&self.resolve_full_name(entry.name(), entry.conn_id().unwrap_or(SYSTEM_CONN_ID)))
+        {
             let defaults = match entry.item() {
                 CatalogItem::Table(table) => Some(&table.defaults),
                 _ => None,
@@ -332,8 +334,17 @@ impl CatalogState {
         });
 
         for (i, key) in index.keys.iter().enumerate() {
+            let on_entry = self.get_entry(&index.on);
             let nullable = key
-                .typ(self.get_entry(&index.on).desc().unwrap().typ())
+                .typ(
+                    on_entry
+                        .desc(&self.resolve_full_name(
+                            on_entry.name(),
+                            on_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                        ))
+                        .unwrap()
+                        .typ(),
+                )
                 .nullable;
             let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
             let key_sql = key_sqls
