@@ -35,7 +35,10 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
 
     # https://github.com/tokio-rs/tokio/pull/4521
-    { name = "tokio-util", version = "0.6.9" }
+    { name = "tokio-util", version = "0.6.9" },
+
+    # https://github.com/awslabs/smithy-rs/pull/1301
+    { name = "urlencoding", version = "1.3.0" },
 ]
 
 # Use `tracing` instead.
