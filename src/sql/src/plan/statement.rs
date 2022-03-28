@@ -105,6 +105,7 @@ pub fn describe(
         param_types: RefCell::new(param_types),
     };
 
+    // most statements can be described with a raw statement
     let desc = match &stmt {
         // DDL statements.
         Statement::CreateDatabase(stmt) => Some(ddl::describe_create_database(&scx, stmt)?),
@@ -127,7 +128,7 @@ pub fn describe(
         Statement::AlterObjectRename(stmt) => Some(ddl::describe_alter_object_rename(&scx, stmt)?),
         Statement::AlterIndex(stmt) => Some(ddl::describe_alter_index_options(&scx, stmt)?),
         Statement::AlterSecret(stmt) => Some(ddl::describe_alter_secret_options(&scx, stmt)?),
-        (Statement::AlterCluster(stmt), None) => ddl::describe_alter_cluster(&scx, stmt)?,
+        Statement::AlterCluster(stmt) => Some(ddl::describe_alter_cluster(&scx, stmt)?),
 
         // `SHOW` statements.
         Statement::ShowCreateTable(stmt) => Some(show::describe_show_create_table(&scx, stmt)?),

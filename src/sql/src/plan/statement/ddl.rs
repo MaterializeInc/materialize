@@ -65,10 +65,10 @@ use crate::ast::{
     CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
     DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
     DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption,
+    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -3051,7 +3051,7 @@ pub fn plan_alter_secret(
 
 pub fn describe_alter_cluster(
     _: &StatementContext,
-    _: AlterClusterStatement,
+    _: &AlterClusterStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
