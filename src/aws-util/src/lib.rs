@@ -16,6 +16,10 @@ mod util;
 
 pub mod config;
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "dynamodb")))]
+#[cfg(feature = "dynamodb")]
+pub mod dynamodb;
+
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "kinesis")))]
 #[cfg(feature = "kinesis")]
 pub mod kinesis;

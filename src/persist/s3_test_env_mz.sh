@@ -15,3 +15,4 @@
 export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
 export AWS_DEFAULT_REGION="us-east-2"
 export AWS_PROFILE="mz-scratch-admin"
+export MZ_PERSIST_EXTERNAL_STORAGE_TEST_DYNAMO_TABLE="ruchir-consensus-test"

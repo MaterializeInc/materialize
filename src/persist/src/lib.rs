@@ -21,6 +21,7 @@
 use std::fmt;
 
 pub mod client;
+pub mod dynamodb;
 pub mod error;
 pub mod file;
 pub mod gen;

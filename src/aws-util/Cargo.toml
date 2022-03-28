@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
+aws-sdk-dynamodb = { version = "0.8.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-kinesis = { version = "0.8.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-s3 = { version = "0.8.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sqs = { version = "0.8.0", default-features = false, features = ["native-tls"], optional = true }
@@ -20,6 +21,7 @@ hyper-tls = { version = "0.5.0" }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
 
 [features]
+dynamodb = ["aws-sdk-dynamodb"]
 kinesis = ["aws-sdk-kinesis"]
 sqs = ["aws-sdk-sqs"]
 s3 = ["aws-sdk-s3"]
