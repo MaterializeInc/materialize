@@ -296,7 +296,7 @@ pub trait Consensus: std::fmt::Debug {
     /// This data is initialized to None, and the first call to compare_and_set needs to
     /// happen with None as the expected value to set the state.
     async fn compare_and_set(
-        &mut self,
+        &self,
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -873,7 +873,7 @@ pub mod tests {
     pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
-        let mut consensus = new_fn()?;
+        let consensus = new_fn()?;
 
         // Enforce that this entire test completes within 10 minutes.
         let deadline = Instant::now() + Duration::from_secs(600);

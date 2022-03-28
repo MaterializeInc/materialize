@@ -16,24 +16,23 @@
 
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_persist::location::ExternalError;
+use mz_persist::location::{BlobMulti, Consensus, ExternalError};
+use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tokio::sync::Mutex;
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::r#impl::shard::{Shard, State};
-use crate::read::ReadHandle;
-use crate::write::WriteHandle;
+use crate::r#impl::machine::Machine;
+use crate::read::{ReadHandle, ReaderId};
+use crate::write::{WriteHandle, WriterId};
 
 pub mod error;
 pub mod read;
@@ -43,7 +42,8 @@ pub mod write;
 ///
 /// TODO: Move this to another crate.
 pub(crate) mod r#impl {
-    pub mod shard;
+    pub mod machine;
+    pub mod state;
 }
 
 // Notes
@@ -54,6 +54,28 @@ pub(crate) mod r#impl {
 // TODOs
 // - Decide if the inner and outer error of the two-level errors should be
 //   swapped.
+// - Split errors into definitely failed vs maybe failed variants. More
+//   generally, possibly we just overhaul our errors.
+// - Figure out how to communicate that a lease expired.
+// - Add a cache around location usage.
+// - Crate mz_persist_client shouldn't depend on mz_persist. Pull common code
+//   out into mz_persist_types or a new crate.
+// - Hook up timeouts into various location impls.
+// - Incremental state
+// - After incremental state, state roll-ups and truncation
+// - Permanent storage format for State
+// - Non-polling listener
+// - Impls and tests for setting upper to empty antichain (no more writes)
+// - Impls and tests for setting since to empty antichain (no more reads)
+// - Idempotence and retries + tests
+// - Leasing
+// - Physical and logical compaction
+// - Garbage collection of blob and consensus data
+// - Nemesis
+// - Benchmarks
+// - Logging
+// - Tests, tests, tests
+// - Test coverage of every `PartialOrder::less_*` call
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist. This location can contain any number of persist shards.
@@ -85,7 +107,8 @@ impl Id {
 /// single [Location].
 #[derive(Debug)]
 pub struct Client {
-    shards: Arc<Mutex<HashMap<Id, Arc<Mutex<State>>>>>,
+    blob: Arc<dyn BlobMulti>,
+    consensus: Arc<dyn Consensus>,
 }
 
 impl Client {
@@ -94,7 +117,7 @@ impl Client {
     ///
     /// The same `location` may be used concurrently from multiple processes.
     /// Concurrent usage is subject to the constraints documented on individual
-    /// methods (mostly [WriteHandle::write_batch]).
+    /// methods (mostly [WriteHandle::append]).
     pub async fn new(
         timeout: Duration,
         location: Location,
@@ -106,8 +129,11 @@ impl Client {
             location,
             role_arn
         );
+        let blob = MemBlobMulti::open(MemBlobMultiConfig::default());
+        let consensus = MemConsensus::default();
         Ok(Client {
-            shards: Arc::new(Mutex::new(HashMap::new())),
+            blob: Arc::new(blob),
+            consensus: Arc::new(consensus),
         })
     }
 
@@ -136,14 +162,24 @@ impl Client {
         D: Semigroup + Codec64,
     {
         trace!("Client::open timeout={:?} id={:?}", timeout, id);
-        let mut shards = self.shards.lock().await;
-        let state = shards
-            .entry(id)
-            .or_insert_with(|| Shard::<K, V, T, D>::new(id.clone()).into_inner());
-        let state = Shard::decode(Arc::clone(state))
-            .await
-            .expect("internal error: newly created shard's codecs don't match");
-        Ok(state.recover_capabilities().await)
+        let deadline = Instant::now() + timeout;
+        let mut machine = Machine::new(id, Arc::clone(&self.consensus));
+        let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
+        let (write_cap, read_cap) = machine.register(deadline, &writer_id, &reader_id).await?;
+        let writer = WriteHandle {
+            writer_id,
+            machine: machine.clone(),
+            blob: Arc::clone(&self.blob),
+            upper: write_cap.upper,
+        };
+        let reader = ReadHandle {
+            reader_id,
+            machine,
+            blob: Arc::clone(&self.blob),
+            since: read_cap.since,
+        };
+
+        Ok((writer, reader))
     }
 }
 
@@ -189,7 +225,7 @@ mod tests {
 
     #[tokio::test]
     async fn sanity_check() -> Result<(), Box<dyn std::error::Error>> {
-        mz_ore::test::init_logging_default("warn");
+        mz_ore::test::init_logging();
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -205,7 +241,7 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        write.write_batch_slice(&data[..2], 3).await??;
+        write.append_slice(&data[..2], 3).await??;
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 2.
@@ -216,15 +252,17 @@ mod tests {
         assert_eq!(snap.read_all().await?, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
-        write.write_batch_slice(&data[2..], 4).await??;
+        write.append_slice(&data[2..], 4).await??;
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
         let expected_events = vec![
-            ListenEvent::Updates(all_ok(&data[1..], 2)),
+            ListenEvent::Updates(all_ok(&data[1..2], 1)),
+            ListenEvent::Progress(Antichain::from_elem(3)),
+            ListenEvent::Updates(all_ok(&data[2..], 1)),
             ListenEvent::Progress(Antichain::from_elem(4)),
         ];
-        assert_eq!(listen.poll_next(NO_TIMEOUT).await?, expected_events);
+        assert_eq!(listen.read_until(&4).await?, expected_events);
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(NO_TIMEOUT, Antichain::from_elem(2))
@@ -266,7 +304,7 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         let mut snap = read.snapshot_one(2).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data[..2], 2));
+        assert_eq!(snap.read_all().await?, all_ok(&data[..2], 1));
 
         // Try and write with the expected upper.
         let res = write2
@@ -285,7 +323,7 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(4));
 
         let mut snap = read.snapshot_one(3).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data, 3));
+        assert_eq!(snap.read_all().await?, all_ok(&data, 1));
 
         Ok(())
     }

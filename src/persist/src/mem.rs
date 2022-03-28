@@ -674,8 +674,9 @@ impl BlobMulti for MemBlobMulti {
     }
 }
 
+/// An in-memory implementation of [Consensus].
 #[derive(Debug)]
-struct MemConsensus {
+pub struct MemConsensus {
     data: Arc<TokioMutex<Option<VersionedData>>>,
 }
 
@@ -694,7 +695,7 @@ impl Consensus for MemConsensus {
     }
 
     async fn compare_and_set(
-        &mut self,
+        &self,
         _deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,

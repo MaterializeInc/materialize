@@ -66,7 +66,7 @@ impl SqliteConsensus {
     ///
     /// TODO: We probably are going to move this function directly into the [Consensus]
     /// trait itself.
-    async fn truncate(&mut self, sequence_number: SeqNo) -> Result<(), Error> {
+    async fn truncate(&self, sequence_number: SeqNo) -> Result<(), Error> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "DELETE FROM consensus
@@ -100,7 +100,7 @@ impl Consensus for SqliteConsensus {
     }
 
     async fn compare_and_set(
-        &mut self,
+        &self,
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
