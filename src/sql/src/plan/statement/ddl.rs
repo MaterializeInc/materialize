@@ -2739,7 +2739,7 @@ pub fn plan_drop_schema(
         if_exists,
     }: DropSchemaStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    match scx.resolve_schema(name.clone()) {
+    match scx.resolve_schema(name) {
         Ok(schema) => {
             let database_id = match schema.database() {
                 ResolvedDatabaseSpecifier::Ambient => bail!(
