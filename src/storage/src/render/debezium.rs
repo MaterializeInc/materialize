@@ -207,11 +207,16 @@ where
                             for (row, time, diff) in tx_data.drain(..) {
                                 assert_eq!(diff, 1);
                                 let mut i = row.iter();
-                                let (status, tx_id, event_count): (_, _, Option<i64>) = (
-                                    i.next().expect("status field validated to exist").unwrap_str(),
-                                    i.next().expect("tx_id field validated exist").unwrap_str().to_owned(),
-                                    i.next().expect("event_count field validated exist").try_into().unwrap(),
-                                );
+                                let status = i.next().expect("status field validated to exist").unwrap_str();
+                                let tx_id = i.next().expect("tx_id field validated exist").unwrap_str().to_owned();
+                                let event_count: Option<i64> =
+                                    match i.next().expect("event_count field validated exist") {
+                                        Datum::Int16(i) => Some(i.into()),
+                                        Datum::Int32(i) => Some(i.into()),
+                                        Datum::Int64(i) => Some(i),
+                                        Datum::Null => None,
+                                        d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
+                                    };
                                 if status != "END" {
                                     continue;
                                 }
@@ -356,8 +361,6 @@ where
                                         if *count == 0 {
                                             let (_, tx_cap) = tx_cap_entry.remove_entry();
                                             binary_cap.downgrade(&tx_cap.time());
-                                            // XXX(chae): is this necessary?
-                                            let _ = Rc::try_unwrap(tx_cap);
                                         }
                                     }
                                     None => panic!("need event count for tx_id {:?}", tx_id),

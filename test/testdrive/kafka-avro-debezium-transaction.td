@@ -175,8 +175,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 
+#
 # Create a source using an inline schema.
-
+#
 > CREATE MATERIALIZED SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH(tx_metadata = data_txdata)
@@ -186,7 +187,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 5}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 
-
 > SELECT a, b FROM data_schema_inline
 a  b
 -----
@@ -194,9 +194,7 @@ a  b
 2  3
 4  5
 
-# XXX(chae): TODO: allow reading when only have some of the data that's described by tx: e.g. be able to read if we've submiited the the BEGIN/END tx_id 5 records but not the tx_id 5 data records
-
-$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=7
+$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
 {"status": "BEGIN", "id": "5", "event_count": null, "data_collections": null}
 {"status": "END", "id": "5", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
 
@@ -223,9 +221,9 @@ a  b
 4  5
 8  9
 
-# Create a source using a file schema. This should fail if the named schema file
-# does not exist.
-
+#
+# Create a source using a file schema
+#
 ! CREATE MATERIALIZED SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
@@ -259,7 +257,67 @@ $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "<TIMESTAMP>"}}
 
+#
+# Test reading from the source when tx and data don't match
+#
+# Sleep to make sure we get a different RT timestamp from previous messages
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
+$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
+{"status": "BEGIN", "id": "7", "event_count": null, "data_collections": null}
+{"status": "END", "id": "7", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
+
+> SELECT a, b FROM data_schema_inline
+a  b
+-----
+1  1
+2  3
+4  5
+8  9
+
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 2, "b": 7}}, "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "7"}}
+
+> SELECT a, b FROM data_schema_inline
+a  b
+-----
+1  1
+2  3
+4  5
+8  9
+2  7
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 3, "b": 9}}, "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "9"}}
+
+> SELECT a, b FROM data_schema_inline
+a  b
+-----
+1  1
+2  3
+4  5
+8  9
+2  7
+
+$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
+{"status": "BEGIN", "id": "9", "event_count": null, "data_collections": null}
+{"status": "END", "id": "9", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
+
+> SELECT a, b FROM data_schema_inline
+a  b
+-----
+1  1
+2  3
+4  5
+8  9
+2  7
+3  9
+
+#
+# Testing tx_metadata specification
+#
 $ kafka-create-topic topic=data-txdata-bad-schema
 
 > CREATE MATERIALIZED SOURCE data_txdata_bad_schema
