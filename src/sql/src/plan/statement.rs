@@ -28,7 +28,7 @@ use crate::catalog::{
 use crate::names::{
     resolve_names_stmt, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
     QualifiedObjectName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    SchemaSpecifier,
+    ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
@@ -623,6 +623,19 @@ impl<'a> StatementContext<'a> {
 
     pub fn active_database(&self) -> Option<&DatabaseId> {
         self.catalog.active_database()
+    }
+
+    pub fn resolve_optional_schema(
+        &self,
+        schema_name: &Option<ResolvedSchemaName>,
+    ) -> Result<SchemaSpecifier, PlanError> {
+        match schema_name {
+            Some(ResolvedSchemaName::Schema { schema_spec, .. }) => Ok(schema_spec.clone()),
+            None => self.resolve_active_schema().map(|spec| spec.clone()),
+            Some(ResolvedSchemaName::Error) => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
     }
 
     pub fn resolve_active_schema(&self) -> Result<&SchemaSpecifier, PlanError> {

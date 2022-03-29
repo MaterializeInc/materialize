@@ -2714,8 +2714,8 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type
         | ObjectType::Secret => plan_drop_items(scx, object_type, names, cascade),
-        ObjectType::Role => plan_drop_role(scx, if_exists, names),
-        ObjectType::Cluster => plan_drop_cluster(scx, if_exists, names, cascade),
+        ObjectType::Role => unreachable!("DROP ROLE handled separately"),
+        ObjectType::Cluster => unreachable!("DROP CLUSTER handled separately"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }

@@ -273,7 +273,7 @@ pub fn show_objects<'a>(
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Cluster => show_clusters(scx, filter),
-        ObjectType::Secret => show_secrets(scx, from, filter),,
+        ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -285,13 +285,7 @@ fn show_tables<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = match &from {
-        Some(ResolvedSchemaName::Schema { schema_spec, .. }) => schema_spec,
-        None => scx.resolve_active_schema()?,
-        Some(ResolvedSchemaName::Error) => {
-            unreachable!("should have been handled by name resolution")
-        }
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
@@ -317,13 +311,7 @@ fn show_sources<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = match &from {
-        Some(ResolvedSchemaName::Schema { schema_spec, .. }) => schema_spec,
-        None => scx.resolve_active_schema()?,
-        Some(ResolvedSchemaName::Error) => {
-            unreachable!("should have been handled by name resolution")
-        }
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = match (full, materialized) {
         (false, false) => format!(
@@ -381,13 +369,7 @@ fn show_views<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = match &from {
-        Some(ResolvedSchemaName::Schema { schema_spec, .. }) => schema_spec,
-        None => scx.resolve_active_schema()?,
-        Some(ResolvedSchemaName::Error) => {
-            unreachable!("should have been handled by name resolution")
-        }
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = if !full & !materialized {
         format!(
@@ -481,13 +463,7 @@ fn show_types<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = match &from {
-        Some(ResolvedSchemaName::Schema { schema_spec, .. }) => schema_spec,
-        None => scx.resolve_active_schema()?,
-        Some(ResolvedSchemaName::Error) => {
-            unreachable!("should have been handled by name resolution")
-        }
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
@@ -513,13 +489,7 @@ fn show_all_objects<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = match &from {
-        Some(ResolvedSchemaName::Schema { schema_spec, .. }) => schema_spec,
-        None => scx.resolve_active_schema()?,
-        Some(ResolvedSchemaName::Error) => {
-            unreachable!("should have been handled by name resolution")
-        }
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
@@ -653,22 +623,18 @@ pub fn show_clusters<'a>(
 
 pub fn show_secrets<'a>(
     scx: &'a StatementContext<'a>,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     scx.require_experimental_mode("SHOW SECRETS")?;
 
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
         "SELECT sec.name FROM mz_catalog.mz_secrets sec
         JOIN mz_catalog.mz_schemas s ON sec.schema_id = s.id
         WHERE schema_id = {}",
-        schema.id(),
+        schema_spec,
     );
 
     ShowSelect::new(scx, query, filter, None, None)
