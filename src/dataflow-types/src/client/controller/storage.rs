@@ -99,6 +99,9 @@ pub trait StorageController: Debug + Send {
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     );
 
+    /// Send a request to obtain "linearized" timestamps for the given sources.
+    async fn linearize_sources(&mut self, source_ids: Vec<GlobalId>) -> Result<(), anyhow::Error>;
+
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
 }
 
@@ -344,8 +347,19 @@ impl<T: Timestamp + Lattice> StorageController for Controller<T> {
                 );
         }
     }
+
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
         self.state.client.recv().await
+    }
+
+    async fn linearize_sources(&mut self, source_ids: Vec<GlobalId>) -> Result<(), anyhow::Error> {
+        self.state
+            .client
+            .send(StorageCommand::LinearizeSources(source_ids))
+            .await
+            .expect("Storage command failed; unrecoverable");
+
+        Ok(())
     }
 }
 

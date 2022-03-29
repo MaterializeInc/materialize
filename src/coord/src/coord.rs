@@ -92,8 +92,8 @@ use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
-    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
+    LinearizedTimestampBindingFeedback, Response as DataflowResponse, StorageResponse,
+    TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -914,6 +914,11 @@ impl Coordinator {
                 if !source_since_updates.is_empty() {
                     self.persisted_table_allow_compaction(&source_since_updates);
                 }
+            }
+            DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
+                LinearizedTimestampBindingFeedback { bindings: _ },
+            )) => {
+                // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
         }
     }
@@ -3155,6 +3160,7 @@ impl Coordinator {
             .id;
 
         let source_ids = source.depends_on();
+
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         let in_transaction = matches!(
@@ -3256,6 +3262,7 @@ impl Coordinator {
 
             timestamp
         } else {
+            // TODO(guswynn): acquire_read_holds for linearized reads
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
@@ -3264,6 +3271,12 @@ impl Coordinator {
             }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
+
+        // before we have the corrected timestamp ^
+        // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
+        // `linearize_sources(source_ids.iter().collect()).await`
+        // ------------------------------
+        // after we have the timestamp \/
 
         let source = self.view_optimizer.optimize(source)?;
 

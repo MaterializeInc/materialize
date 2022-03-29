@@ -220,6 +220,16 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
         /// The timestamp to advance to.
         advance_to: T,
     },
+
+    /// "Linearize" the listed sources.
+    ///
+    /// If these sources are valid and "linearizable", then the response
+    /// will respond with timestamps that are guaranteed to be up-to-date
+    /// with the max offset found at the time of the command issuance.
+    ///
+    /// Note: "linearizable" in this context may not represent
+    /// true linearizability in all cases.
+    LinearizeSources(Vec<GlobalId>),
 }
 
 impl StorageCommandKind {
@@ -234,6 +244,7 @@ impl StorageCommandKind {
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",
             StorageCommandKind::RenderSources => "render_sources",
+            StorageCommandKind::LinearizeSources => "linearize_sources",
         }
     }
 }
@@ -554,6 +565,14 @@ impl<T> Default for ComputeCommandHistory<T> {
     }
 }
 
+/// Data about timestamp bindings, sent to the coordinator, in service
+/// of a specific "linearized" read request
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
+    /// Timestamp bindings that are adequate for "linearized" reads
+    pub bindings: Vec<(GlobalId, PartitionId, T)>,
+}
+
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
@@ -599,6 +618,10 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback<T>),
+
+    /// Data about timestamp bindings, sent to the coordinator, in service
+    /// of a specific "linearized" read request
+    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
 }
 
 /// A client to a running dataflow server.
@@ -1111,6 +1134,10 @@ pub mod partitioned {
                         feedback,
                     ))))
                 }
+                // TODO(guswynn): is this the correct implementation?
+                Response::Storage(StorageResponse::LinearizedTimestamps(feedback)) => Some(Ok(
+                    Response::Storage(StorageResponse::LinearizedTimestamps(feedback)),
+                )),
                 Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
