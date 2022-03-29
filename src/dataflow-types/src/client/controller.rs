@@ -36,12 +36,12 @@ use mz_orchestrator::{Orchestrator, ServiceConfig};
 use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
-    InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
+    InstanceConfig, RemoteClient, Response, StorageResponse, VirtualComputeHost,
 };
 use crate::logging::LoggingConfig;
 
-pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
-mod storage;
+pub use storage::{StorageController, StorageControllerState};
+pub mod storage;
 pub use compute::{ComputeController, ComputeControllerMut};
 mod compute;
 
@@ -67,7 +67,7 @@ pub struct OrchestratorConfig {
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
     orchestrator: Option<OrchestratorConfig>,
-    storage: StorageControllerState<T>,
+    storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
     virtual_compute_host: VirtualComputeHost<T>,
 }
@@ -178,29 +178,24 @@ where
 impl<T> Controller<T> {
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&self) -> StorageController<T> {
-        StorageController {
-            storage: &self.storage,
-        }
+    pub fn storage(&self) -> &dyn StorageController<Timestamp = T> {
+        &*self.storage_controller
     }
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(&mut self) -> StorageControllerMut<T> {
-        StorageControllerMut {
-            storage: &mut self.storage,
-        }
+    pub fn storage_mut(&mut self) -> &mut dyn StorageController<Timestamp = T> {
+        &mut *self.storage_controller
     }
 
     /// Acquires an immutable handle to a controller for the indicated compute instance, if it exists.
     #[inline]
     pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
         let compute = self.compute.get(&instance)?;
-        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeController {
             _instance: instance,
             compute,
-            storage: &self.storage,
+            storage_controller: self.storage(),
         })
     }
 
@@ -208,11 +203,10 @@ impl<T> Controller<T> {
     #[inline]
     pub fn compute_mut(&mut self, instance: ComputeInstanceId) -> Option<ComputeControllerMut<T>> {
         let compute = self.compute.get_mut(&instance)?;
-        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeControllerMut {
             instance,
             compute,
-            storage: &mut self.storage,
+            storage_controller: &mut *self.storage_controller,
         })
     }
 }
@@ -231,7 +225,7 @@ where
             Some((instance, response)) = compute_stream.next() => {
                 Some(Response::Compute(response?, instance))
             }
-            response = self.storage.client.recv() => {
+            response = self.storage_controller.recv() => {
                 response?.map(Response::Storage)
             }
             else => None,
@@ -254,7 +248,7 @@ where
                         .await;
                 }
                 Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
-                    self.storage_mut()
+                    self.storage_controller
                         .update_write_frontiers(&feedback.changes)
                         .await;
                 }
@@ -267,14 +261,14 @@ where
 
 impl<T> Controller<T> {
     /// Create a new controller from a client it should wrap.
-    pub fn new(
+    pub fn new<S: StorageController<Timestamp = T> + 'static>(
         orchestrator: Option<OrchestratorConfig>,
-        storage_client: Box<dyn StorageClient<T>>,
+        storage_controller: S,
         virtual_compute_host: VirtualComputeHost<T>,
     ) -> Self {
         Self {
             orchestrator,
-            storage: StorageControllerState::new(storage_client),
+            storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
             virtual_compute_host,
         }
