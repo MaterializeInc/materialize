@@ -21,7 +21,7 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DatabaseId, DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
+    Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
     ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use crate::plan::statement::StatementDesc;

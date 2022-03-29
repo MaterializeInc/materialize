@@ -17,13 +17,14 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
-use mz_expr::{DatabaseId, GlobalId, PartitionId, SchemaId};
+use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
-    ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
+    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
 };
 use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;

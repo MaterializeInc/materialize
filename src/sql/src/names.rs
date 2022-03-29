@@ -9,13 +9,15 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::Error;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DatabaseId, GlobalId, LocalId, SchemaId};
+use mz_expr::{GlobalId, LocalId};
 use mz_ore::str::StrExt;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
@@ -560,6 +562,60 @@ impl AstInfo for Aug {
     type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
     type CteId = LocalId;
+}
+
+/// The identifier for a schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct SchemaId(pub i64);
+
+impl SchemaId {
+    /// Constructs a new schema identifier. It is the caller's responsibility
+    /// to provide a unique `id`.
+    pub fn new(id: i64) -> Self {
+        SchemaId(id)
+    }
+}
+
+impl fmt::Display for SchemaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for SchemaId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: i64 = s.parse()?;
+        Ok(SchemaId(val))
+    }
+}
+
+/// The identifier for a database.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct DatabaseId(pub i64);
+
+impl DatabaseId {
+    /// Constructs a new database identifier. It is the caller's responsibility
+    /// to provide a unique `id`.
+    pub fn new(id: i64) -> Self {
+        DatabaseId(id)
+    }
+}
+
+impl fmt::Display for DatabaseId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for DatabaseId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: i64 = s.parse()?;
+        Ok(DatabaseId(val))
+    }
 }
 
 #[derive(Debug)]

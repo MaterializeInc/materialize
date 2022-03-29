@@ -31,7 +31,7 @@ use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersist
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, MzOffset, SourceConnector, Timeline,
 };
-use mz_expr::{DatabaseId, PartitionId, SchemaId};
+use mz_expr::PartitionId;
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -46,8 +46,9 @@ use mz_sql::catalog::{
     CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
 use mz_sql::names::{
-    Aug, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaSpecifier,
+    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
 };
 use mz_sql::plan::{
     ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSecretPlan,

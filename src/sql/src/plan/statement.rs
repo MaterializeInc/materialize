@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use anyhow::bail;
 
-use mz_expr::{DatabaseId, GlobalId};
+use mz_expr::GlobalId;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{DropObjectsStatement, UnresolvedDatabaseName};
 
@@ -26,9 +26,9 @@ use crate::catalog::{
     SessionCatalog,
 };
 use crate::names::{
-    resolve_names_stmt, resolve_object_name, FullObjectName, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    SchemaSpecifier,
+    resolve_names_stmt, resolve_object_name, DatabaseId, FullObjectName, ObjectQualifiers,
+    PartialObjectName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
+    ResolvedObjectName, SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::{query, AlterNoopPlan, DropDatabasePlan, DropSchemaPlan};

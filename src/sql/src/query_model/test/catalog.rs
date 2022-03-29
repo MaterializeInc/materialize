@@ -14,8 +14,8 @@ use crate::catalog::{
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
-    Aug, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaSpecifier,
+    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use crate::plan::StatementDesc;
 use crate::DEFAULT_SCHEMA;
@@ -23,7 +23,7 @@ use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
-use mz_expr::{DatabaseId, DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr, SchemaId};
+use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::{RelationDesc, RelationType, ScalarType};

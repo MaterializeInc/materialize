@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{DatabaseId, GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing, SchemaId};
+use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
 
@@ -45,7 +45,9 @@ use crate::ast::{
     TransactionAccessMode,
 };
 use crate::catalog::CatalogType;
-use crate::names::{Aug, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier};
+use crate::names::{
+    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;

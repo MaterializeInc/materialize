@@ -10,13 +10,13 @@
 use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
-use mz_expr::{DatabaseId, GlobalId, MirScalarExpr, SchemaId};
+use mz_expr::{GlobalId, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType};
-use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
