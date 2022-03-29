@@ -20,13 +20,17 @@
 
 use tempfile::NamedTempFile;
 
-use mz_coord::catalog::{Catalog, CatalogItem, Op, Table};
-use mz_coord::session::Session;
+use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
+use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
-use mz_sql::names::{resolve_names, DatabaseSpecifier, FullName};
+use mz_sql::catalog::CatalogDatabase;
+use mz_sql::names::{
+    resolve_names, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier,
+};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
+use mz_sql::DEFAULT_SCHEMA;
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
@@ -43,14 +47,26 @@ async fn datadriven() {
                 "add-table" => {
                     let id = catalog.allocate_user_id().unwrap();
                     let oid = catalog.allocate_oid().unwrap();
+                    let database_id = catalog
+                        .resolve_database(DEFAULT_DATABASE_NAME)
+                        .unwrap()
+                        .id();
+                    let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+                    let schema_spec = catalog
+                        .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, SYSTEM_CONN_ID)
+                        .unwrap()
+                        .id
+                        .clone();
                     catalog
                         .transact(
                             vec![Op::CreateItem {
                                 id,
                                 oid,
-                                name: FullName {
-                                    database: DatabaseSpecifier::Name("materialize".into()),
-                                    schema: "public".into(),
+                                name: QualifiedObjectName {
+                                    qualifiers: ObjectQualifiers {
+                                        database_spec,
+                                        schema_spec,
+                                    },
                                     item: test_case.input.trim_end().to_string(),
                                 },
                                 item: CatalogItem::Table(Table {

@@ -22,7 +22,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::names::{
+    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
+};
 use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;
 
@@ -333,29 +336,29 @@ impl Connection {
         Ok(())
     }
 
-    pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
+    pub fn load_databases(&self) -> Result<Vec<(DatabaseId, String)>, Error> {
         self.inner
             .prepare("SELECT id, name FROM databases")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
-                Ok((id, name))
+                Ok((DatabaseId(id), name))
             })?
             .collect()
     }
 
-    pub fn load_schemas(&self) -> Result<Vec<(i64, Option<String>, String)>, Error> {
+    pub fn load_schemas(&self) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
         self.inner
             .prepare(
-                "SELECT schemas.id, databases.name, schemas.name
+                "SELECT schemas.id, schemas.name, databases.id
                 FROM schemas
                 LEFT JOIN databases ON schemas.database_id = databases.id",
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
-                let database_name: Option<String> = row.get(1)?;
-                let schema_name: String = row.get(2)?;
-                Ok((id, database_name, schema_name))
+                let schema_name: String = row.get(1)?;
+                let database_id: Option<i64> = row.get(2)?;
+                Ok((SchemaId(id), schema_name, database_id.map(DatabaseId)))
             })?
             .collect()
     }
@@ -425,11 +428,11 @@ pub struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
-    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
+    pub fn load_items(&self) -> Result<Vec<(GlobalId, QualifiedObjectName, Vec<u8>)>, Error> {
         // Order user views by their GlobalId
         self.inner
             .prepare(
-                "SELECT items.gid, databases.name, schemas.name, items.name, items.definition
+                "SELECT items.gid, databases.id, schemas.id, items.name, items.definition
                 FROM items
                 JOIN schemas ON items.schema_id = schemas.id
                 JOIN databases ON schemas.database_id = databases.id
@@ -437,49 +440,23 @@ impl Transaction<'_> {
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
-                let database: Option<String> = row.get(1)?;
-                let schema: String = row.get(2)?;
+                let database: i64 = row.get(1)?;
+                let schema: i64 = row.get(2)?;
                 let item: String = row.get(3)?;
                 let definition: Vec<u8> = row.get(4)?;
                 Ok((
                     id.0,
-                    FullName {
-                        database: DatabaseSpecifier::from(database),
-                        schema,
+                    QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::from(database),
+                            schema_spec: SchemaSpecifier::from(schema),
+                        },
                         item,
                     },
                     definition,
                 ))
             })?
             .collect()
-    }
-
-    pub fn load_database_id(&self, database_name: &str) -> Result<i64, Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM databases WHERE name = ?")?
-            .query_row(params![database_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(SqlCatalogError::UnknownDatabase(database_name.to_owned()).into())
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn load_schema_id(&self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM schemas WHERE database_id = ? AND name = ?")?
-            .query_row(params![database_id, schema_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
-            }
-            Err(err) => Err(err.into()),
-        }
     }
 
     fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
@@ -532,13 +509,13 @@ impl Transaction<'_> {
             .collect()
     }
 
-    pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
+    pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
             .execute(params![database_name])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Ok(_) => Ok(DatabaseId(self.inner.last_insert_rowid())),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::DatabaseAlreadyExists(database_name.to_owned()),
             )),
@@ -546,13 +523,17 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn insert_schema(&mut self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
+    pub fn insert_schema(
+        &mut self,
+        database_id: DatabaseId,
+        schema_name: &str,
+    ) -> Result<SchemaId, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
-            .execute(params![database_id, schema_name])
+            .execute(params![database_id.0, schema_name])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Ok(_) => Ok(SchemaId(self.inner.last_insert_rowid())),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::SchemaAlreadyExists(schema_name.to_owned()),
             )),
@@ -614,7 +595,7 @@ impl Transaction<'_> {
     pub fn insert_item(
         &self,
         id: GlobalId,
-        schema_id: i64,
+        schema_id: SchemaId,
         item_name: &str,
         item: &[u8],
     ) -> Result<(), Error> {
@@ -623,7 +604,7 @@ impl Transaction<'_> {
             .prepare_cached(
                 "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
             )?
-            .execute(params![SqlVal(&id), schema_id, item_name, item])
+            .execute(params![SqlVal(&id), schema_id.0, item_name, item])
         {
             Ok(_) => Ok(()),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
@@ -699,29 +680,33 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn remove_database(&self, name: &str) -> Result<(), Error> {
+    pub fn remove_database(&self, id: &DatabaseId) -> Result<(), Error> {
         let n = self
             .inner
-            .prepare_cached("DELETE FROM databases WHERE name = ?")?
-            .execute(params![name])?;
+            .prepare_cached("DELETE FROM databases WHERE id = ?")?
+            .execute(params![id.0])?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownDatabase(name.to_owned()).into())
+            Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
         }
     }
 
-    pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), Error> {
+    pub fn remove_schema(
+        &self,
+        database_id: &DatabaseId,
+        schema_id: &SchemaId,
+    ) -> Result<(), Error> {
         let n = self
             .inner
-            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND name = ?")?
-            .execute(params![database_id, schema_name])?;
+            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND id = ?")?
+            .execute(params![database_id.0, schema_id.0])?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
+            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id.0, schema_id.0)).into())
         }
     }
 

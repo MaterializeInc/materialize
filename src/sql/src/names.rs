@@ -9,101 +9,59 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::Error;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{GlobalId, Id, LocalId};
+use mz_expr::{GlobalId, LocalId};
 use mz_ore::str::StrExt;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawName, Statement, UnresolvedDataType,
-    UnresolvedObjectName,
+    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawObjectName, Statement,
+    UnresolvedDataType, UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::{PlanError, QueryContext, StatementContext};
 
-/// A fully-qualified name of an item in the catalog.
+/// A fully-qualified human readable name of an item in the catalog.
 ///
 /// Catalog names compare case sensitively. Use
 /// [`normalize::unresolved_object_name`] to
 /// perform proper case folding if converting an [`UnresolvedObjectName`] to a
-/// `FullName`.
+/// `FullObjectName`.
 ///
 /// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct FullName {
+pub struct FullObjectName {
     /// The database name.
-    pub database: DatabaseSpecifier,
+    pub database: RawDatabaseSpecifier,
     /// The schema name.
     pub schema: String,
     /// The item name.
     pub item: String,
 }
 
-impl fmt::Display for FullName {
+impl fmt::Display for FullObjectName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let DatabaseSpecifier::Name(database) = &self.database {
+        if let RawDatabaseSpecifier::Name(database) = &self.database {
             write!(f, "{}.", database)?;
         }
         write!(f, "{}.{}", self.schema, self.item)
     }
 }
 
-/// A name of a database in a [`FullName`].
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum DatabaseSpecifier {
-    /// The "ambient" database, which is always present and is not named
-    /// explicitly, but by omission.
-    Ambient,
-    /// A normal database with a name.
-    Name(String),
-}
-
-impl fmt::Display for DatabaseSpecifier {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DatabaseSpecifier::Ambient => f.write_str("<none>"),
-            DatabaseSpecifier::Name(name) => f.write_str(name),
-        }
-    }
-}
-
-impl From<Option<String>> for DatabaseSpecifier {
-    fn from(s: Option<String>) -> DatabaseSpecifier {
-        match s {
-            None => DatabaseSpecifier::Ambient,
-            Some(name) => DatabaseSpecifier::Name(name),
-        }
-    }
-}
-
-/// The fully-qualified name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct SchemaName {
-    pub database: DatabaseSpecifier,
-    pub schema: String,
-}
-
-impl fmt::Display for SchemaName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.database {
-            DatabaseSpecifier::Ambient => f.write_str(&self.schema),
-            DatabaseSpecifier::Name(name) => write!(f, "{}.{}", name, self.schema),
-        }
-    }
-}
-
-impl From<FullName> for UnresolvedObjectName {
-    fn from(full_name: FullName) -> UnresolvedObjectName {
+impl From<FullObjectName> for UnresolvedObjectName {
+    fn from(full_name: FullObjectName) -> UnresolvedObjectName {
         let mut name_parts = Vec::new();
-        if let DatabaseSpecifier::Name(database) = full_name.database {
+        if let RawDatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
         }
         name_parts.push(Ident::new(full_name.schema));
@@ -112,18 +70,35 @@ impl From<FullName> for UnresolvedObjectName {
     }
 }
 
-/// An optionally-qualified name of an item in the catalog.
+/// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
+/// and schema.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct QualifiedObjectName {
+    pub qualifiers: ObjectQualifiers,
+    pub item: String,
+}
+
+impl fmt::Display for QualifiedObjectName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let ResolvedDatabaseSpecifier::Id(id) = &self.qualifiers.database_spec {
+            write!(f, "{}.", id)?;
+        }
+        write!(f, "{}.{}", self.qualifiers.schema_spec, self.item)
+    }
+}
+
+/// An optionally-qualified human-readable name of an item in the catalog.
 ///
-/// This is like a [`FullName`], but either the database or schema name may be
+/// This is like a [`FullObjectName`], but either the database or schema name may be
 /// omitted.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PartialName {
+pub struct PartialObjectName {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub item: String,
 }
 
-impl PartialName {
+impl PartialObjectName {
     // Whether either self or other might be a (possibly differently qualified)
     // version of the other.
     pub fn matches(&self, other: &Self) -> bool {
@@ -139,7 +114,7 @@ impl PartialName {
     }
 }
 
-impl fmt::Display for PartialName {
+impl fmt::Display for PartialObjectName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
             write!(f, "{}.", database)?;
@@ -151,16 +126,213 @@ impl fmt::Display for PartialName {
     }
 }
 
-impl From<FullName> for PartialName {
-    fn from(n: FullName) -> PartialName {
-        PartialName {
-            database: match n.database {
-                DatabaseSpecifier::Ambient => None,
-                DatabaseSpecifier::Name(name) => Some(name),
-            },
+impl From<FullObjectName> for PartialObjectName {
+    fn from(n: FullObjectName) -> PartialObjectName {
+        let database = match n.database {
+            RawDatabaseSpecifier::Ambient => None,
+            RawDatabaseSpecifier::Name(name) => Some(name),
+        };
+        PartialObjectName {
+            database,
             schema: Some(n.schema),
             item: n.item,
         }
+    }
+}
+
+impl From<String> for PartialObjectName {
+    fn from(item: String) -> Self {
+        PartialObjectName {
+            database: None,
+            schema: None,
+            item,
+        }
+    }
+}
+
+/// A fully-qualified human readable name of a schema in the catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct FullSchemaName {
+    /// The database name
+    pub database: RawDatabaseSpecifier,
+    /// The schema name
+    pub schema: String,
+}
+
+impl fmt::Display for FullSchemaName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let RawDatabaseSpecifier::Name(database) = &self.database {
+            write!(f, "{}.", database)?;
+        }
+        write!(f, "{}", self.schema)
+    }
+}
+
+/// The fully-qualified non-human readable name of a schema in the catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct QualifiedSchemaName {
+    pub database: ResolvedDatabaseSpecifier,
+    pub schema: String,
+}
+
+impl fmt::Display for QualifiedSchemaName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.database {
+            ResolvedDatabaseSpecifier::Ambient => f.write_str(&self.schema),
+            ResolvedDatabaseSpecifier::Id(id) => write!(f, "{}.{}", id, self.schema),
+        }
+    }
+}
+
+/// An optionally-qualified name of an schema in the catalog.
+///
+/// This is like a [`FullSchemaName`], but either the database or schema name may be
+/// omitted.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PartialSchemaName {
+    pub database: Option<String>,
+    pub schema: String,
+}
+
+impl fmt::Display for PartialSchemaName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(database) = &self.database {
+            write!(f, "{}.", database)?;
+        }
+        write!(f, "{}", self.schema)
+    }
+}
+
+/// A human readable name of a database.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum RawDatabaseSpecifier {
+    /// The "ambient" database, which is always present and is not named
+    /// explicitly, but by omission.
+    Ambient,
+    /// A normal database with a name.
+    Name(String),
+}
+
+impl fmt::Display for RawDatabaseSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ambient => f.write_str("<none>"),
+            Self::Name(name) => f.write_str(name),
+        }
+    }
+}
+
+impl From<Option<String>> for RawDatabaseSpecifier {
+    fn from(s: Option<String>) -> RawDatabaseSpecifier {
+        match s {
+            None => Self::Ambient,
+            Some(name) => Self::Name(name),
+        }
+    }
+}
+
+/// An id of a database.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ResolvedDatabaseSpecifier {
+    /// The "ambient" database, which is always present and is not named
+    /// explicitly, but by omission.
+    Ambient,
+    /// A normal database with a name.
+    Id(DatabaseId),
+}
+
+impl fmt::Display for ResolvedDatabaseSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ambient => f.write_str("<none>"),
+            Self::Id(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl AstDisplay for ResolvedDatabaseSpecifier {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("{}", self));
+    }
+}
+
+impl From<i64> for ResolvedDatabaseSpecifier {
+    fn from(id: i64) -> Self {
+        Self::Id(DatabaseId(id))
+    }
+}
+
+/*
+ * TODO(jkosh44) It's possible that in order to fix
+ * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary
+ * schemas unique Ids. If/when that happens we can remove this enum and refer to all schemas by
+ * their Id.
+ */
+/// An id of a schema.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum SchemaSpecifier {
+    /// A temporary schema
+    Temporary,
+    /// A normal database with a name.
+    Id(SchemaId),
+}
+
+impl SchemaSpecifier {
+    const TEMPORARY_SCHEMA_ID: i64 = -1;
+}
+
+impl fmt::Display for SchemaSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Temporary => f.write_str(format!("{}", Self::TEMPORARY_SCHEMA_ID).as_str()),
+            Self::Id(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl AstDisplay for SchemaSpecifier {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("{}", self));
+    }
+}
+
+impl From<i64> for SchemaSpecifier {
+    fn from(id: i64) -> Self {
+        if id == Self::TEMPORARY_SCHEMA_ID {
+            Self::Temporary
+        } else {
+            Self::Id(SchemaId(id))
+        }
+    }
+}
+
+impl From<&SchemaSpecifier> for SchemaId {
+    fn from(schema_spec: &SchemaSpecifier) -> Self {
+        match schema_spec {
+            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Id(id) => id.clone(),
+        }
+    }
+}
+
+impl From<SchemaSpecifier> for SchemaId {
+    fn from(schema_spec: SchemaSpecifier) -> Self {
+        match schema_spec {
+            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Id(id) => id,
+        }
+    }
+}
+
+impl From<&SchemaSpecifier> for i64 {
+    fn from(schema_spec: &SchemaSpecifier) -> Self {
+        SchemaId::from(schema_spec).0
+    }
+}
+
+impl From<SchemaSpecifier> for i64 {
+    fn from(schema_spec: SchemaSpecifier) -> Self {
+        SchemaId::from(schema_spec).0
     }
 }
 
@@ -171,32 +343,64 @@ impl From<FullName> for PartialName {
 pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ResolvedObjectName {
-    pub id: Id,
-    pub raw_name: PartialName,
-    // Whether this object, when printed out, should use [id AS name] syntax. We
-    // want this for things like tables and sources, but not for things like
-    // types.
-    pub print_id: bool,
+pub struct ObjectQualifiers {
+    pub database_spec: ResolvedDatabaseSpecifier,
+    pub schema_spec: SchemaSpecifier,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ResolvedObjectName {
+    Object {
+        id: GlobalId,
+        qualifiers: ObjectQualifiers,
+        full_name: FullObjectName,
+        // Whether this object, when printed out, should use [id AS name] syntax. We
+        // want this for things like tables and sources, but not for things like
+        // types.
+        print_id: bool,
+    },
+    Cte {
+        id: LocalId,
+        name: String,
+    },
+    Error,
+}
+
+impl ResolvedObjectName {
+    pub fn full_name_str(&self) -> String {
+        match self {
+            ResolvedObjectName::Object { full_name, .. } => full_name.to_string(),
+            ResolvedObjectName::Cte { name, .. } => name.clone(),
+            ResolvedObjectName::Error => "error in name resolution".to_string(),
+        }
+    }
 }
 
 impl AstDisplay for ResolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if self.print_id {
-            f.write_str(format!("[{} AS ", self.id));
-        }
-        let n = self.raw_name();
-        if let Some(database) = n.database {
-            f.write_node(&Ident::new(database));
-            f.write_str(".");
-        }
-        if let Some(schema) = n.schema {
-            f.write_node(&Ident::new(schema));
-            f.write_str(".");
-        }
-        f.write_node(&Ident::new(n.item));
-        if self.print_id {
-            f.write_str("]");
+        match self {
+            ResolvedObjectName::Object {
+                id,
+                qualifiers: _,
+                full_name,
+                print_id,
+            } => {
+                if *print_id {
+                    f.write_str(format!("[{} AS ", id));
+                }
+                if let RawDatabaseSpecifier::Name(database) = &full_name.database {
+                    f.write_node(&Ident::new(database));
+                    f.write_str(".");
+                }
+                f.write_node(&Ident::new(&full_name.schema));
+                f.write_str(".");
+                f.write_node(&Ident::new(&full_name.item));
+                if *print_id {
+                    f.write_str("]");
+                }
+            }
+            ResolvedObjectName::Cte { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedObjectName::Error => {}
         }
     }
 }
@@ -207,9 +411,43 @@ impl std::fmt::Display for ResolvedObjectName {
     }
 }
 
-impl ResolvedObjectName {
-    pub fn raw_name(&self) -> PartialName {
-        self.raw_name.clone()
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ResolvedSchemaName {
+    Schema {
+        database_spec: ResolvedDatabaseSpecifier,
+        schema_spec: SchemaSpecifier,
+        full_name: FullSchemaName,
+    },
+    Error,
+}
+
+impl AstDisplay for ResolvedSchemaName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedSchemaName::Schema { full_name, .. } => {
+                if let RawDatabaseSpecifier::Name(database) = &full_name.database {
+                    f.write_node(&Ident::new(database));
+                    f.write_str(".");
+                }
+                f.write_node(&Ident::new(&full_name.schema));
+            }
+            ResolvedSchemaName::Error => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ResolvedDatabaseName {
+    Database { id: DatabaseId, name: String },
+    Error,
+}
+
+impl AstDisplay for ResolvedDatabaseName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedDatabaseName::Database { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedDatabaseName::Error => {}
+        }
     }
 }
 
@@ -231,10 +469,12 @@ pub enum ResolvedDataType {
     },
     Named {
         id: GlobalId,
-        name: PartialName,
+        qualifiers: ObjectQualifiers,
+        full_name: FullObjectName,
         modifiers: Vec<i64>,
         print_id: bool,
     },
+    Error,
 }
 
 impl AstDisplay for ResolvedDataType {
@@ -256,22 +496,23 @@ impl AstDisplay for ResolvedDataType {
             }
             ResolvedDataType::Named {
                 id,
-                name,
+                full_name,
                 modifiers,
                 print_id,
+                ..
             } => {
                 if *print_id {
                     f.write_str(format!("[{} AS ", id));
                 }
-                if let Some(database) = &name.database {
+                if let RawDatabaseSpecifier::Name(database) = &full_name.database {
                     f.write_node(&Ident::new(database));
                     f.write_str(".");
                 }
-                if let Some(schema) = &name.schema {
-                    f.write_node(&Ident::new(schema));
-                    f.write_str(".");
-                }
-                f.write_node(&Ident::new(&name.item));
+
+                f.write_node(&Ident::new(&full_name.schema));
+                f.write_str(".");
+
+                f.write_node(&Ident::new(&full_name.item));
                 if *print_id {
                     f.write_str("]");
                 }
@@ -281,6 +522,7 @@ impl AstDisplay for ResolvedDataType {
                     f.write_str(")");
                 }
             }
+            ResolvedDataType::Error => {}
         }
     }
 }
@@ -308,6 +550,7 @@ impl ResolvedDataType {
             ResolvedDataType::Named { id, .. } => {
                 ids.push(id.clone());
             }
+            ResolvedDataType::Error => {}
         };
         ids
     }
@@ -315,9 +558,65 @@ impl ResolvedDataType {
 
 impl AstInfo for Aug {
     type ObjectName = ResolvedObjectName;
+    type SchemaName = ResolvedSchemaName;
+    type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
-    type Id = Id;
+    type CteId = LocalId;
+}
+
+/// The identifier for a schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct SchemaId(pub i64);
+
+impl SchemaId {
+    /// Constructs a new schema identifier. It is the caller's responsibility
+    /// to provide a unique `id`.
+    pub fn new(id: i64) -> Self {
+        SchemaId(id)
+    }
+}
+
+impl fmt::Display for SchemaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for SchemaId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: i64 = s.parse()?;
+        Ok(SchemaId(val))
+    }
+}
+
+/// The identifier for a database.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct DatabaseId(pub i64);
+
+impl DatabaseId {
+    /// Constructs a new database identifier. It is the caller's responsibility
+    /// to provide a unique `id`.
+    pub fn new(id: i64) -> Self {
+        DatabaseId(id)
+    }
+}
+
+impl fmt::Display for DatabaseId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for DatabaseId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: i64 = s.parse()?;
+        Ok(DatabaseId(val))
+    }
 }
 
 #[derive(Debug)]
@@ -350,25 +649,30 @@ impl<'a> NameResolver<'a> {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
                     ResolvedDataType::Named { id, modifiers, .. } => {
-                        let element_item = self.catalog.get_item_by_id(&id);
+                        let element_item = self.catalog.get_item(&id);
                         let array_item = match element_item.type_details() {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
                                 ..
-                            }) => self.catalog.get_item_by_id(&array_id),
+                            }) => self.catalog.get_item(&array_id),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
                             None => sql_bail!(
                                 "{} does not refer to a type",
-                                element_item.name().to_string().quoted()
+                                self.catalog
+                                    .resolve_full_name(element_item.name())
+                                    .to_string()
+                                    .quoted()
                             ),
                         };
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
-                            name: array_item.name().clone().into(),
+                            qualifiers: array_item.name().qualifiers.clone(),
+                            full_name: self.catalog.resolve_full_name(array_item.name()),
                             modifiers,
                             print_id: true,
                         })
                     }
+                    ResolvedDataType::Error => sql_bail!("type \"{}[]\" does not exist", name),
                 }
             }
             UnresolvedDataType::List(elem_type) => {
@@ -387,23 +691,25 @@ impl<'a> NameResolver<'a> {
                 })
             }
             UnresolvedDataType::Other { name, typ_mod } => {
-                let (name, item) = match name {
-                    RawName::Name(name) => {
+                let (full_name, item) = match name {
+                    RawObjectName::Name(name) => {
                         let name = normalize::unresolved_object_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
-                        (item.name().clone().into(), item)
+                        let full_name = self.catalog.resolve_full_name(item.name());
+                        (full_name, item)
                     }
-                    RawName::Id(id, name) => {
-                        let name = normalize::unresolved_object_name(name)?;
+                    RawObjectName::Id(id, mut name) => {
                         let gid: GlobalId = id.parse()?;
-                        let item = self.catalog.get_item_by_id(&gid);
-                        (name, item)
+                        let item = self.catalog.get_item(&gid);
+                        let full_name = normalize::full_name(&mut name)?;
+                        (full_name, item)
                     }
                 };
                 self.ids.insert(item.id());
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
-                    name,
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name,
                     modifiers: typ_mod,
                     print_id: true,
                 })
@@ -434,7 +740,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             let id = LocalId::new(self.ctes.len() as u64);
             ctes.push(Cte {
                 alias: cte.alias,
-                id: Id::Local(id),
+                id,
                 query: self.fold_query(cte.query),
             });
             let old_val = self.ctes.insert(cte_name.clone(), id);
@@ -467,7 +773,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         result
     }
 
-    fn fold_id(&mut self, _id: <Raw as AstInfo>::Id) -> <Aug as AstInfo>::Id {
+    fn fold_cte_id(&mut self, _id: <Raw as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
         panic!("this should have been handled when walking the CTE");
     }
 
@@ -475,25 +781,15 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         object_name: <Raw as AstInfo>::ObjectName,
     ) -> <Aug as AstInfo>::ObjectName {
-        let error_response = ResolvedObjectName {
-            id: Id::Global(GlobalId::System(0)),
-            raw_name: PartialName {
-                database: None,
-                schema: None,
-                item: "".to_string(),
-            },
-            print_id: false,
-        };
-
         match object_name {
-            RawName::Name(raw_name) => {
+            RawObjectName::Name(raw_name) => {
                 let raw_name = match normalize::unresolved_object_name(raw_name) {
                     Ok(raw_name) => raw_name,
                     Err(e) => {
                         if self.status.is_ok() {
                             self.status = Err(e);
                         }
-                        return error_response;
+                        return ResolvedObjectName::Error;
                     }
                 };
 
@@ -501,10 +797,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 if raw_name.database.is_none() && raw_name.schema.is_none() {
                     let norm_name = normalize::ident(Ident::new(&raw_name.item));
                     if let Some(id) = self.ctes.get(&norm_name) {
-                        return ResolvedObjectName {
-                            id: Id::Local(*id),
-                            raw_name,
-                            print_id: false,
+                        return ResolvedObjectName::Cte {
+                            id: *id,
+                            name: norm_name,
                         };
                     }
                 }
@@ -516,9 +811,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             item.item_type(),
                             CatalogItemType::Func | CatalogItemType::Type
                         );
-                        ResolvedObjectName {
-                            id: Id::Global(item.id()),
-                            raw_name: item.name().clone().into(),
+                        ResolvedObjectName::Object {
+                            id: item.id(),
+                            qualifiers: item.name().qualifiers.clone(),
+                            full_name: self.catalog.resolve_full_name(item.name()),
                             print_id,
                         }
                     }
@@ -526,30 +822,45 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        error_response
+                        ResolvedObjectName::Error
                     }
                 }
             }
-            RawName::Id(id, raw_name) => {
+            RawObjectName::Id(id, mut raw_name) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        return error_response;
+                        return ResolvedObjectName::Error;
                     }
                 };
-                if self.catalog.try_get_item_by_id(&gid).is_none() {
-                    if self.status.is_ok() {
-                        self.status = Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                let item = match self.catalog.try_get_item(&gid) {
+                    Some(item) => item,
+                    None => {
+                        if self.status.is_ok() {
+                            self.status =
+                                Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                        }
+                        return ResolvedObjectName::Error;
                     }
-                    return error_response;
-                }
+                };
+
                 self.ids.insert(gid.clone());
-                ResolvedObjectName {
-                    id: Id::Global(gid),
-                    raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                let full_name = match normalize::full_name(&mut raw_name) {
+                    Ok(full_name) => full_name,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        return ResolvedObjectName::Error;
+                    }
+                };
+                ResolvedObjectName::Object {
+                    id: gid,
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name,
                     print_id: true,
                 }
             }
@@ -566,16 +877,67 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 if self.status.is_ok() {
                     self.status = Err(e);
                 }
-                ResolvedDataType::Named {
-                    id: GlobalId::User(0),
-                    name: PartialName {
-                        database: None,
-                        schema: None,
-                        item: "ignored".into(),
-                    },
-                    modifiers: vec![],
-                    print_id: false,
+                ResolvedDataType::Error
+            }
+        }
+    }
+
+    fn fold_schema_name(
+        &mut self,
+        name: <Raw as AstInfo>::SchemaName,
+    ) -> <Aug as AstInfo>::SchemaName {
+        let norm_name = match normalize::unresolved_schema_name(name) {
+            Ok(norm_name) => norm_name,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e);
                 }
+                return ResolvedSchemaName::Error;
+            }
+        };
+        match self
+            .catalog
+            .resolve_schema(norm_name.database.as_deref(), norm_name.schema.as_str())
+        {
+            Ok(schema) => {
+                let raw_database_spec = match schema.database() {
+                    ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+                    ResolvedDatabaseSpecifier::Id(id) => {
+                        RawDatabaseSpecifier::Name(self.catalog.get_database(id).name().to_string())
+                    }
+                };
+                ResolvedSchemaName::Schema {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                    full_name: FullSchemaName {
+                        database: raw_database_spec,
+                        schema: schema.name().schema.clone(),
+                    },
+                }
+            }
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                ResolvedSchemaName::Error
+            }
+        }
+    }
+
+    fn fold_database_name(
+        &mut self,
+        database_name: <Raw as AstInfo>::DatabaseName,
+    ) -> <Aug as AstInfo>::DatabaseName {
+        match self.catalog.resolve_database(database_name.0.as_str()) {
+            Ok(database) => ResolvedDatabaseName::Database {
+                id: database.id(),
+                name: database_name.0.into_string(),
+            },
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                ResolvedDatabaseName::Error
             }
         }
     }
@@ -697,21 +1059,32 @@ pub struct NameSimplifier<'a> {
 
 impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
     fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
-        if let Id::Global(id) = name.id {
-            let item = self.catalog.get_item_by_id(&id);
-            if PartialName::from(item.name().clone()) == name.raw_name() {
-                name.print_id = false;
+        if let ResolvedObjectName::Object {
+            id,
+            full_name,
+            print_id,
+            ..
+        } = name
+        {
+            let item = self.catalog.get_item(&id);
+            let catalog_full_name = self.catalog.resolve_full_name(item.name());
+            if catalog_full_name == *full_name {
+                *print_id = false;
             }
         }
     }
 
     fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
         if let ResolvedDataType::Named {
-            id, name, print_id, ..
+            id,
+            full_name,
+            print_id,
+            ..
         } = name
         {
-            let item = self.catalog.get_item_by_id(id);
-            if PartialName::from(item.name().clone()) == *name {
+            let item = self.catalog.get_item(id);
+            let catalog_full_name = self.catalog.resolve_full_name(item.name());
+            if catalog_full_name == *full_name {
                 *print_id = false;
             }
         }

@@ -51,7 +51,7 @@ use mz_sql_parser::ast::{
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, PartialName, ResolvedDataType, ResolvedObjectName};
+use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -154,23 +154,26 @@ pub fn plan_insert_query(
     source: InsertSource<Aug>,
 ) -> Result<(GlobalId, HirRelationExpr), PlanError> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let table = scx.get_item_by_name(&table_name)?;
+    let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
     if table.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot insert into {} '{}'",
             table.item_type(),
-            table.name()
+            table_name.full_name_str()
         );
     }
-    let desc = table.desc()?;
+    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
     let defaults = table
         .table_details()
         .expect("attempted to insert into non-table");
 
     if table.id().is_system() {
-        sql_bail!("cannot insert into system table '{}'", table.name());
+        sql_bail!(
+            "cannot insert into system table '{}'",
+            table_name.full_name_str()
+        );
     }
 
     let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
@@ -199,7 +202,7 @@ pub fn plan_insert_query(
                 sql_bail!(
                     "column {} of relation {} does not exist",
                     c.as_str().quoted(),
-                    table.name().to_string().quoted()
+                    table_name.full_name_str().quoted()
                 );
             }
         }
@@ -294,23 +297,28 @@ pub fn plan_copy_from(
     table_name: ResolvedObjectName,
     columns: Vec<Ident>,
 ) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
-    let table = scx.get_item_by_name(&table_name)?;
+    let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
     if table.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot insert into {} '{}'",
             table.item_type(),
-            table.name()
+            table_name.full_name_str()
         );
     }
-    let mut desc = table.desc()?.clone();
+    let mut desc = table
+        .desc(&scx.catalog.resolve_full_name(table.name()))?
+        .clone();
     let _ = table
         .table_details()
         .expect("attempted to insert into non-table");
 
     if table.id().is_system() {
-        sql_bail!("cannot insert into system table '{}'", table.name());
+        sql_bail!(
+            "cannot insert into system table '{}'",
+            table_name.full_name_str()
+        );
     }
 
     let mut ordering = Vec::with_capacity(columns.len());
@@ -337,7 +345,7 @@ pub fn plan_copy_from(
                 sql_bail!(
                     "column {} of relation {} does not exist",
                     c.as_str().quoted(),
-                    table.name().to_string().quoted()
+                    table_name.full_name_str().quoted()
                 );
             }
         }
@@ -360,8 +368,8 @@ pub fn plan_copy_from_rows(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
-    let table = catalog.get_item_by_id(&id);
-    let desc = table.desc()?;
+    let table = catalog.get_item(&id);
+    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let defaults = table
         .table_details()
@@ -478,24 +486,31 @@ pub fn plan_mutation_query_inner(
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get global ID.
-    let id = match table_name.id {
-        Id::Global(id) => id,
+    let id = match table_name {
+        ResolvedObjectName::Object { id, .. } => id,
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
     // Perform checks on item with given ID.
-    let item = qcx.scx.get_item_by_id(&id);
+    let item = qcx.scx.get_item(&id);
     if item.item_type() != CatalogItemType::Table {
-        sql_bail!("cannot mutate {} '{}'", item.item_type(), item.name());
+        sql_bail!(
+            "cannot mutate {} '{}'",
+            item.item_type(),
+            table_name.full_name_str()
+        );
     }
     if id.is_system() {
-        sql_bail!("cannot mutate system table '{}'", item.name());
+        sql_bail!(
+            "cannot mutate system table '{}'",
+            table_name.full_name_str()
+        );
     }
 
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc()?;
+    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -906,20 +921,15 @@ fn plan_query_inner(
             &cte.alias.columns,
         )?;
 
-        match cte.id {
-            Id::Local(id) => {
-                let old_val = qcx.ctes.insert(
-                    id,
-                    CteDesc {
-                        val,
-                        name: cte_name,
-                        val_desc,
-                    },
-                );
-                old_cte_values.push((id, old_val));
-            }
-            _ => unreachable!(),
-        }
+        let old_val = qcx.ctes.insert(
+            cte.id,
+            CteDesc {
+                val,
+                name: cte_name,
+                val_desc,
+            },
+        );
+        old_cte_values.push((cte.id, old_val));
     }
     let limit = match &q.limit {
         None => None,
@@ -1774,7 +1784,7 @@ fn plan_scalar_table_funcs(
     let mut i = 0;
     for (id, num_cols) in table_funcs.values().zip(num_cols) {
         for _ in 0..num_cols {
-            scope.items[i].table_name = Some(PartialName {
+            scope.items[i].table_name = Some(PartialObjectName {
                 database: None,
                 schema: None,
                 item: id.clone(),
@@ -1786,7 +1796,7 @@ fn plan_scalar_table_funcs(
         // Ordinality column. This doubles as the
         // `is_exists_column_for_a_table_function_that_was_in_the_target_list` later on
         // because it only needs to be NULL or not.
-        scope.items[i].table_name = Some(PartialName {
+        scope.items[i].table_name = Some(PartialObjectName {
             database: None,
             schema: None,
             item: id.clone(),
@@ -2269,7 +2279,7 @@ fn plan_table_function_internal(
         Some(table_name) => normalize::unresolved_object_name(table_name.clone())?.item,
         None => resolved_name.item.clone(),
     };
-    let scope_name = Some(PartialName {
+    let scope_name = Some(PartialObjectName {
         database: None,
         schema: None,
         item: table_name,
@@ -2329,7 +2339,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                 .get(i)
                 .map(|a| normalize::column_name(a.clone()))
                 .unwrap_or_else(|| item.column_name.clone());
-            item.table_name = Some(PartialName {
+            item.table_name = Some(PartialObjectName {
                 database: None,
                 schema: None,
                 item: table_name.clone(),
@@ -2504,7 +2514,7 @@ fn expand_select_item<'a>(
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
                         &[],
-                        &PartialName {
+                        &PartialObjectName {
                             database: None,
                             schema: None,
                             item: name.as_str().to_string(),
@@ -3832,7 +3842,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // to a table.
     let items = ecx.scope.items_from_table(
         &ecx.qcx.outer_scopes,
-        &PartialName {
+        &PartialObjectName {
             database: None,
             schema: None,
             item: col_name.as_str().to_owned(),
@@ -4260,12 +4270,10 @@ pub fn scalar_type_from_sql(
                 custom_oid: None,
             })
         }
-        ResolvedDataType::Named {
-            id,
-            modifiers,
-            name: _,
-            print_id: _,
-        } => scalar_type_from_catalog(scx, *id, modifiers),
+        ResolvedDataType::Named { id, modifiers, .. } => {
+            scalar_type_from_catalog(scx, *id, modifiers)
+        }
+        ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
     }
 }
 
@@ -4274,12 +4282,15 @@ fn scalar_type_from_catalog(
     id: GlobalId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
-    let entry = scx.catalog.get_item_by_id(&id);
+    let entry = scx.catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
         None => sql_bail!(
             "{} does not refer to a type",
-            entry.name().to_string().quoted()
+            scx.catalog
+                .resolve_full_name(entry.name())
+                .to_string()
+                .quoted()
         ),
     };
     match &type_details.typ {
@@ -4340,7 +4351,7 @@ fn scalar_type_from_catalog(
             if !modifiers.is_empty() {
                 sql_bail!(
                     "{} does not support type modifiers",
-                    &entry.name().to_string()
+                    scx.catalog.resolve_full_name(entry.name()).to_string()
                 );
             }
             match t {
@@ -4349,14 +4360,14 @@ fn scalar_type_from_catalog(
                 ))),
                 CatalogType::List { element_id } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
+                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
                 }),
                 CatalogType::Map {
                     key_id: _,
                     value_id,
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item_by_id(&id).oid()),
+                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
@@ -4372,7 +4383,7 @@ fn scalar_type_from_catalog(
                             ))
                         })
                         .collect::<Result<Vec<_>, PlanError>>()?;
-                    let catalog_item = scx.catalog.get_item_by_id(&id);
+                    let catalog_item = scx.catalog.get_item(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
                         custom_name: None,
@@ -4392,7 +4403,10 @@ fn scalar_type_from_catalog(
                 CatalogType::Oid => Ok(ScalarType::Oid),
                 CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
                 CatalogType::Pseudo => {
-                    sql_bail!("cannot reference pseudo type {}", entry.name().to_string())
+                    sql_bail!(
+                        "cannot reference pseudo type {}",
+                        scx.catalog.resolve_full_name(entry.name()).to_string()
+                    )
                 }
                 CatalogType::RegClass => Ok(ScalarType::RegClass),
                 CatalogType::RegProc => Ok(ScalarType::RegProc),
@@ -4665,9 +4679,24 @@ impl<'a> QueryContext<'a> {
         &self,
         object: ResolvedObjectName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
-        match object.id {
-            Id::Local(id) => {
-                let name = object.raw_name;
+        match object {
+            ResolvedObjectName::Object { id, full_name, .. } => {
+                let name = full_name.into();
+                let item = self.scx.get_item(&id);
+                let desc = item
+                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
+                    .clone();
+                let expr = HirRelationExpr::Get {
+                    id: Id::Global(item.id()),
+                    typ: desc.typ().clone(),
+                };
+
+                let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
+
+                Ok((expr, scope))
+            }
+            ResolvedObjectName::Cte { id, name } => {
+                let name = name.into();
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
@@ -4678,22 +4707,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            Id::Global(id) => {
-                let item = self.scx.get_item_by_id(&id);
-                let desc = item.desc()?.clone();
-                let expr = HirRelationExpr::Get {
-                    id: Id::Global(item.id()),
-                    typ: desc.typ().clone(),
-                };
-
-                let scope = Scope::from_source(Some(object.raw_name), desc.iter_names().cloned());
-
-                Ok((expr, scope))
-            }
-            Id::LocalBareSource => {
-                // This is never introduced except when planning source transformations.
-                unreachable!()
-            }
+            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 

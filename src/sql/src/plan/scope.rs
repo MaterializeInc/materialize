@@ -50,7 +50,7 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::ColumnName;
 
 use crate::ast::Expr;
-use crate::names::{Aug, PartialName};
+use crate::names::{Aug, PartialObjectName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
@@ -58,7 +58,7 @@ use crate::plan::plan_utils::JoinSide;
 #[derive(Debug, Clone)]
 pub struct ScopeItem {
     /// The name of the table that produced this scope item, if any.
-    pub table_name: Option<PartialName>,
+    pub table_name: Option<PartialObjectName>,
     /// The name of the column.
     pub column_name: ColumnName,
     /// The expressions from which this scope item is derived. Used by `GROUP
@@ -147,7 +147,7 @@ impl ScopeItem {
     }
 
     /// Constructs a new scope item from a name.
-    pub fn from_name<N>(table_name: Option<PartialName>, column_name: N) -> ScopeItem
+    pub fn from_name<N>(table_name: Option<PartialObjectName>, column_name: N) -> ScopeItem
     where
         N: Into<ColumnName>,
     {
@@ -166,7 +166,7 @@ impl ScopeItem {
         item
     }
 
-    pub fn is_from_table(&self, table_name: &PartialName) -> bool {
+    pub fn is_from_table(&self, table_name: &PartialObjectName) -> bool {
         match &self.table_name {
             None => false,
             Some(n) => n.matches(table_name),
@@ -182,7 +182,7 @@ impl Scope {
         }
     }
 
-    pub fn from_source<I, N>(table_name: Option<PartialName>, column_names: I) -> Self
+    pub fn from_source<I, N>(table_name: Option<PartialObjectName>, column_names: I) -> Self
     where
         I: IntoIterator<Item = N>,
         N: Into<ColumnName>,
@@ -255,7 +255,7 @@ impl Scope {
     pub fn items_from_table<'a>(
         &'a self,
         outer_scopes: &'a [Scope],
-        table: &PartialName,
+        table: &PartialObjectName,
     ) -> Result<Vec<(ColumnRef, &'a ScopeItem)>, PlanError> {
         let mut seen_level = None;
         let items: Vec<_> = self
@@ -275,7 +275,7 @@ impl Scope {
         &'a self,
         outer_scopes: &[Scope],
         mut matches: M,
-        table_name: Option<&PartialName>,
+        table_name: Option<&PartialObjectName>,
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError>
     where
@@ -353,7 +353,7 @@ impl Scope {
     pub fn resolve_table_column<'a>(
         &'a self,
         outer_scopes: &[Scope],
-        table_name: &PartialName,
+        table_name: &PartialObjectName,
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError> {
         let mut seen_at_level = None;
@@ -383,7 +383,7 @@ impl Scope {
     pub fn resolve<'a>(
         &'a self,
         outer_scopes: &[Scope],
-        table_name: Option<&PartialName>,
+        table_name: Option<&PartialObjectName>,
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError> {
         match table_name {
@@ -434,10 +434,10 @@ impl Scope {
         }
     }
 
-    fn table_names(&self) -> HashSet<&PartialName> {
+    fn table_names(&self) -> HashSet<&PartialObjectName> {
         self.items
             .iter()
             .filter_map(|name| name.table_name.as_ref())
-            .collect::<HashSet<&PartialName>>()
+            .collect::<HashSet<&PartialObjectName>>()
     }
 }

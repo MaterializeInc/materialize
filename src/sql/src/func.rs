@@ -23,7 +23,7 @@ use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::ast::{SelectStatement, Statement};
-use crate::names::{resolve_names, resolve_names_expr, PartialName};
+use crate::names::{resolve_names, resolve_names_expr, PartialObjectName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -39,7 +39,7 @@ use crate::plan::StatementContext;
 #[derive(Clone, Copy, Debug)]
 pub enum FuncSpec<'a> {
     /// A function name.
-    Func(&'a PartialName),
+    Func(&'a PartialObjectName),
     /// An operator name.
     Op(&'a str),
 }

@@ -27,10 +27,13 @@ use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption,
-    Statement, TableFactor, TableFunction, UnresolvedObjectName, Value, ViewDefinition,
+    Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition,
 };
 
-use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
+use crate::names::{
+    Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+};
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
@@ -39,23 +42,49 @@ pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
+/// Normalizes a single identifier.
+pub fn ident_ref(ident: &Ident) -> &str {
+    ident.as_str()
+}
+
 /// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
 /// Normalizes an unresolved object name.
-pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
+pub fn unresolved_object_name(
+    mut name: UnresolvedObjectName,
+) -> Result<PartialObjectName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
-    let out = PartialName {
+    let out = PartialObjectName {
         item: ident(
             name.0
                 .pop()
                 .expect("name checked to have at least one component"),
         ),
         schema: name.0.pop().map(ident),
+        database: name.0.pop().map(ident),
+    };
+    assert!(name.0.is_empty());
+    Ok(out)
+}
+
+/// Normalizes an unresolved schema name.
+pub fn unresolved_schema_name(
+    mut name: UnresolvedSchemaName,
+) -> Result<PartialSchemaName, PlanError> {
+    if name.0.len() < 1 || name.0.len() > 2 {
+        return Err(PlanError::MisqualifiedName(name.to_string()));
+    }
+    let out = PartialSchemaName {
+        schema: ident(
+            name.0
+                .pop()
+                .expect("name checked to have at least one component"),
+        ),
         database: name.0.pop().map(ident),
     };
     assert!(name.0.is_empty());
@@ -108,14 +137,32 @@ pub fn option_objects(options: &[SqlOption<Aug>]) -> BTreeMap<String, SqlOption<
 /// Unnormalizes an object name.
 ///
 /// This is the inverse of the [`unresolved_object_name`] function.
-pub fn unresolve(name: FullName) -> UnresolvedObjectName {
+pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
     let mut out = vec![];
-    if let DatabaseSpecifier::Name(n) = name.database {
+    if let RawDatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
     }
     out.push(Ident::new(name.schema));
     out.push(Ident::new(name.item));
     UnresolvedObjectName(out)
+}
+
+/// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
+/// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
+pub fn full_name(raw_name: &mut UnresolvedObjectName) -> Result<FullObjectName, anyhow::Error> {
+    match raw_name.0.len() {
+        3 => Ok(FullObjectName {
+            item: ident(raw_name.0.pop().unwrap()),
+            schema: ident(raw_name.0.pop().unwrap()),
+            database: RawDatabaseSpecifier::Name(ident(raw_name.0.pop().unwrap())),
+        }),
+        2 => Ok(FullObjectName {
+            item: ident(raw_name.0.pop().unwrap()),
+            schema: ident(raw_name.0.pop().unwrap()),
+            database: RawDatabaseSpecifier::Ambient,
+        }),
+        _ => bail!("unresolved name {} not fully qualified", raw_name),
+    }
 }
 
 /// Normalizes a `CREATE` statement.
@@ -131,13 +178,13 @@ pub fn create_statement(
     mut stmt: Statement<Aug>,
 ) -> Result<String, anyhow::Error> {
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(
-            scx.allocate_name(unresolved_object_name(name.clone())?),
-        ))
+        Ok(unresolve(scx.allocate_full_name(
+            unresolved_object_name(name.clone())?,
+        )?))
     };
 
     let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_temporary_name(
+        Ok(unresolve(scx.allocate_temporary_full_name(
             unresolved_object_name(name.clone())?,
         )))
     };
@@ -146,8 +193,8 @@ pub fn create_statement(
         scx: &StatementContext,
         name: &mut UnresolvedObjectName,
     ) -> Result<(), PlanError> {
-        let full_name = scx.resolve_function(name.clone())?;
-        *name = unresolve(full_name.name().clone());
+        let item = scx.resolve_function(name.clone())?;
+        *name = unresolve(scx.catalog.resolve_full_name(item.name()));
         Ok(())
     }
 

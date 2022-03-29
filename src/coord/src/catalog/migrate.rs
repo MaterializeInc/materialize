@@ -31,7 +31,7 @@ use mz_sql::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
-    ProtobufSchema, Raw, RawIdent, RawName, SqlOption, Statement, TableFunction,
+    ProtobufSchema, Raw, RawIdent, RawObjectName, SqlOption, Statement, TableFunction,
     UnresolvedDataType, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use mz_sql::names::resolve_names_stmt;
@@ -365,8 +365,8 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
                 if name.name() == &*CHAR_REFERENCE {
                     let t = TEXT_REFERENCE.clone();
                     *name = match name {
-                        RawName::Name(_) => RawName::Name(t),
-                        RawName::Id(id, _) => RawName::Id(id.clone(), t),
+                        RawObjectName::Name(_) => RawObjectName::Name(t),
+                        RawObjectName::Id(id, _) => RawObjectName::Id(id.clone(), t),
                     };
                     *typ_mod = vec![];
                 }
@@ -644,8 +644,8 @@ fn ast_rewrite_type_references_0_6_1(
                     ]);
                 }
                 *name = match name {
-                    RawName::Name(_) => RawName::Name(unresolved_name),
-                    RawName::Id(id, _) => RawName::Id(id.clone(), unresolved_name),
+                    RawObjectName::Name(_) => RawObjectName::Name(unresolved_name),
+                    RawObjectName::Id(id, _) => RawObjectName::Id(id.clone(), unresolved_name),
                 }
             }
         }

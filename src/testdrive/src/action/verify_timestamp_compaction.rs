@@ -19,7 +19,7 @@ use mz_coord::session::Session;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::PartialName;
+use mz_sql::names::PartialObjectName;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -64,7 +64,7 @@ impl Action for VerifyTimestampCompactionAction {
                             .await?;
                         let item_id = catalog
                             .for_session(&Session::dummy())
-                            .resolve_item(&PartialName {
+                            .resolve_item(&PartialObjectName {
                                 database: None,
                                 schema: None,
                                 item: self.source.clone(),

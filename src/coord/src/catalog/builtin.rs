@@ -1266,7 +1266,7 @@ lazy_static! {
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_relations (id, oid, schema_id, name, type) AS
+    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type) AS
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
@@ -1276,7 +1276,7 @@ UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_objects (id, oid, schema_id, name, type) AS
+    sql: "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type) AS
     SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
 UNION
     SELECT id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
@@ -1300,7 +1300,7 @@ UNION
 pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     name: "mz_catalog_names",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog_names AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_catalog_names AS SELECT
     o.id AS global_id,
     coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
 FROM mz_catalog.mz_objects o
@@ -1312,7 +1312,7 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
 pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     name: "mz_dataflow_names",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_dataflow_names AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_dataflow_names AS SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker,
     mz_dataflow_operator_addresses.address[1] AS local_id,
@@ -1330,7 +1330,7 @@ WHERE
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_dataflow_operator_dataflows AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_dataflow_operator_dataflows AS SELECT
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
     mz_dataflow_operators.worker,
@@ -1351,7 +1351,7 @@ WHERE
 pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_materialization_frontiers AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_materialization_frontiers AS SELECT
     global_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
@@ -1361,7 +1361,7 @@ GROUP BY global_id",
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_records_per_dataflow_operator AS
+    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow_operator AS
 WITH records_cte AS (
     SELECT
         operator,
@@ -1390,7 +1390,7 @@ WHERE
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_records_per_dataflow AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow AS SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker,
@@ -1411,7 +1411,7 @@ GROUP BY
 pub const MZ_RECORDS_PER_DATAFLOW_GLOBAL: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_global",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_records_per_dataflow_global AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow_global AS SELECT
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name,
     pg_catalog.SUM(mz_records_per_dataflow.records) as records
@@ -1426,7 +1426,7 @@ GROUP BY
 pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
     name: "mz_perf_arrangement_records",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_perf_arrangement_records AS
+    sql: "CREATE VIEW mz_catalog.mz_perf_arrangement_records AS
 WITH records_cte AS (
     SELECT
         operator,
@@ -1447,7 +1447,7 @@ FROM
 pub const MZ_PERF_PEEK_DURATIONS_CORE: BuiltinView = BuiltinView {
     name: "mz_perf_peek_durations_core",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_perf_peek_durations_core AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_core AS SELECT
     d_upper.worker,
     d_upper.duration_ns::pg_catalog.text AS le,
     pg_catalog.sum(d_summed.count) AS count
@@ -1464,7 +1464,7 @@ GROUP BY d_upper.worker, d_upper.duration_ns",
 pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
     name: "mz_perf_peek_durations_bucket",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_perf_peek_durations_bucket AS
+    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_bucket AS
 (
     SELECT * FROM mz_catalog.mz_perf_peek_durations_core
 ) UNION (
@@ -1477,7 +1477,7 @@ pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
 pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
     name: "mz_perf_peek_durations_aggregates",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_perf_peek_durations_aggregates AS SELECT worker, pg_catalog.sum(duration_ns * count) AS sum, pg_catalog.sum(count) AS count
+    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_aggregates AS SELECT worker, pg_catalog.sum(duration_ns * count) AS sum, pg_catalog.sum(count) AS count
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
     id: GlobalId::System(5012),
@@ -1486,7 +1486,7 @@ GROUP BY worker",
 pub const MZ_PERF_DEPENDENCY_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_perf_dependency_frontiers",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_perf_dependency_frontiers AS SELECT DISTINCT
+    sql: "CREATE VIEW mz_catalog.mz_perf_dependency_frontiers AS SELECT DISTINCT
     mcn.name AS dataflow,
     mcn_source.name AS source,
     frontier_source.time - frontier_df.time AS lag_ms
@@ -1511,7 +1511,7 @@ JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = source_inf
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_namespace AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_namespace AS SELECT
 s.oid AS oid,
 s.name AS nspname,
 NULL::pg_catalog.oid AS nspowner,
@@ -1524,7 +1524,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_class AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_class AS SELECT
     mz_objects.oid,
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
@@ -1573,7 +1573,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_database AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_database AS SELECT
     oid,
     name as datname,
     NULL::pg_catalog.oid AS datdba,
@@ -1589,7 +1589,7 @@ WHERE (d.id IS NULL OR d.name = pg_catalog.current_database())",
 pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_index AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_objects.oid AS indrelid,
     false::pg_catalog.bool AS indisprimary,
@@ -1623,7 +1623,7 @@ GROUP BY mz_indexes.oid, mz_objects.oid",
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_description AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_description AS SELECT
     c.oid as objoid,
     NULL::pg_catalog.oid as classoid,
     0::pg_catalog.int4 as objsubid,
@@ -1636,7 +1636,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_type AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_type AS SELECT
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
@@ -1687,7 +1687,7 @@ FROM
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_attribute AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_attribute AS SELECT
     mz_objects.oid as attrelid,
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
@@ -1714,7 +1714,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_proc AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_proc AS SELECT
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
@@ -1728,7 +1728,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_RANGE: BuiltinView = BuiltinView {
     name: "pg_range",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_range AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_range AS SELECT
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
 WHERE false",
@@ -1738,7 +1738,7 @@ WHERE false",
 pub const PG_ENUM: BuiltinView = BuiltinView {
     name: "pg_enum",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_enum AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_enum AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.oid AS enumtypid,
     NULL::pg_catalog.float4 AS enumsortorder,
@@ -1750,7 +1750,7 @@ WHERE false",
 pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     name: "pg_attrdef",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_attrdef AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_attrdef AS SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
     mz_columns.position AS adnum,
@@ -1766,7 +1766,7 @@ WHERE default IS NOT NULL",
 pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_settings AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_settings AS SELECT
     *
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
@@ -1777,7 +1777,7 @@ FROM (VALUES
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_scheduling_elapsed AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_scheduling_elapsed AS SELECT
     id, worker, pg_catalog.count(*) AS elapsed_ns
 FROM
     mz_catalog.mz_scheduling_elapsed_internal
@@ -1789,7 +1789,7 @@ GROUP BY
 pub const MZ_SCHEDULING_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_scheduling_histogram",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_scheduling_histogram AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_scheduling_histogram AS SELECT
     id, worker, duration_ns, pg_catalog.count(*) AS count
 FROM
     mz_catalog.mz_scheduling_histogram_internal
@@ -1801,7 +1801,7 @@ GROUP BY
 pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_scheduling_parks AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_scheduling_parks AS SELECT
     worker, slept_for, requested, pg_catalog.count(*) AS count
 FROM
     mz_catalog.mz_scheduling_parks_internal
@@ -1813,7 +1813,7 @@ GROUP BY
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
     name: "mz_message_counts",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_message_counts AS
+    sql: "CREATE VIEW mz_catalog.mz_message_counts AS
 WITH sent_cte AS (
     SELECT
         channel,
@@ -1849,7 +1849,7 @@ FROM sent_cte JOIN received_cte USING (channel, source_worker, target_worker)",
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_reachability",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_dataflow_operator_reachability AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_dataflow_operator_reachability AS SELECT
     address,
     port,
     worker,
@@ -1865,7 +1865,7 @@ GROUP BY address, port, worker, update_type, timestamp",
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_arrangement_sizes",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_arrangement_sizes AS
+    sql: "CREATE VIEW mz_catalog.mz_arrangement_sizes AS
 WITH batches_cte AS (
     SELECT
         operator,
@@ -1898,7 +1898,7 @@ FROM batches_cte JOIN records_cte USING (operator, worker)",
 pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
     name: "mz_arrangement_sharing",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_arrangement_sharing AS
+    sql: "CREATE VIEW mz_catalog.mz_arrangement_sharing AS
 SELECT
     operator,
     worker,
@@ -1913,7 +1913,7 @@ GROUP BY operator, worker",
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     name: "pg_constraint",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_constraint AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_constraint AS SELECT
     NULL::pg_catalog.oid as oid,
     NULL::pg_catalog.text as conname,
     NULL::pg_catalog.oid as connamespace,
@@ -1946,7 +1946,7 @@ WHERE false",
 pub const PG_TABLES: BuiltinView = BuiltinView {
     name: "pg_tables",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_tables AS
+    sql: "CREATE VIEW pg_catalog.pg_tables AS
 SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
@@ -1960,7 +1960,7 @@ WHERE c.relkind = ANY (ARRAY['r','p'])",
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_am AS
+    sql: "CREATE VIEW pg_catalog.pg_am AS
 SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS amname,
     NULL::pg_catalog.regproc AS amhandler,
@@ -1972,7 +1972,7 @@ WHERE false",
 pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_roles AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_roles AS SELECT
     r.name AS rolname,
     '********'::pg_catalog.text AS rolpassword,
     r.oid AS oid
@@ -1984,7 +1984,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 pub const PG_VIEWS: BuiltinView = BuiltinView {
     name: "pg_views",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_views AS SELECT
+    sql: "CREATE VIEW pg_catalog.pg_views AS SELECT
     s.name AS schemaname,
     v.name AS viewname,
     NULL::pg_catalog.oid AS viewowner
@@ -1998,7 +1998,7 @@ WHERE d.name = pg_catalog.current_database()",
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
-    sql: "CREATE VIEW columns AS
+    sql: "CREATE VIEW information_schema.columns AS
 SELECT
     d.name as table_catalog,
     s.name AS table_schema,
@@ -2019,7 +2019,7 @@ JOIN mz_catalog.mz_databases d on s.database_id = d.id",
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
-    sql: "CREATE VIEW tables AS SELECT
+    sql: "CREATE VIEW information_schema.tables AS SELECT
     d.name as table_catalog,
     s.name AS table_schema,
     r.name AS table_name,
@@ -2038,7 +2038,7 @@ JOIN mz_catalog.mz_databases d on s.database_id = d.id",
 pub const PG_COLLATION: BuiltinView = BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_class
+    sql: "CREATE VIEW pg_catalog.pg_class
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS collname,
@@ -2058,7 +2058,7 @@ WHERE false",
 pub const PG_POLICY: BuiltinView = BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_class
+    sql: "CREATE VIEW pg_catalog.pg_class
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS polname,
@@ -2076,7 +2076,7 @@ WHERE false",
 pub const PG_INHERITS: BuiltinView = BuiltinView {
     name: "pg_inherits",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_inherits
+    sql: "CREATE VIEW pg_catalog.pg_inherits
 AS SELECT
     NULL::pg_catalog.oid AS inhrelid,
     NULL::pg_catalog.oid AS inhparent,

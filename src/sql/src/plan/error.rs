@@ -22,7 +22,7 @@ use mz_repr::strconv::ParseError;
 use mz_repr::ColumnName;
 
 use crate::catalog::CatalogError;
-use crate::names::PartialName;
+use crate::names::PartialObjectName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
@@ -33,19 +33,19 @@ pub enum PlanError {
         issue_no: Option<usize>,
     },
     UnknownColumn {
-        table: Option<PartialName>,
+        table: Option<PartialObjectName>,
         column: ColumnName,
     },
     UngroupedColumn {
-        table: Option<PartialName>,
+        table: Option<PartialObjectName>,
         column: ColumnName,
     },
     WrongJoinTypeForLateralColumn {
-        table: Option<PartialName>,
+        table: Option<PartialObjectName>,
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
-    AmbiguousTable(PartialName),
+    AmbiguousTable(PartialObjectName),
     UnknownColumnInUsingClause {
         column: ColumnName,
         join_side: JoinSide,
@@ -68,6 +68,7 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
+    InvalidTemporarySchema,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -156,6 +157,9 @@ impl fmt::Display for PlanError {
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidTemporarySchema => {
+                write!(f, "cannot create temporary item in non-temporary schema")
+            }
         }
     }
 }
@@ -223,7 +227,7 @@ impl From<EvalError> for PlanError {
 }
 
 struct ColumnDisplay<'a> {
-    table: &'a Option<PartialName>,
+    table: &'a Option<PartialObjectName>,
     column: &'a ColumnName,
 }
 

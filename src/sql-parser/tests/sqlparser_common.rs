@@ -27,7 +27,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawName, UnresolvedDataType};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawObjectName, UnresolvedDataType};
 use mz_sql_parser::parser::{self, ParserError};
 
 #[test]
@@ -179,7 +179,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
             self.seen_idents.push(ident.as_str());
         }
         fn visit_object_name(&mut self, object_name: &'a <Raw as AstInfo>::ObjectName) {
-            if let RawName::Name(name) = object_name {
+            if let RawObjectName::Name(name) = object_name {
                 for ident in &name.0 {
                     self.seen_idents.push(ident.as_str());
                 }

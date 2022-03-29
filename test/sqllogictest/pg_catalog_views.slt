@@ -21,3 +21,12 @@ SELECT * FROM pg_catalog.pg_views WHERE viewname LIKE 'test_%'
 schemaname  viewname    viewowner
 public      test_view1  NULL
 public      test_view2  NULL
+
+mode standard
+
+# test SHOW CREATE for pg_views
+query TT
+SHOW CREATE VIEW pg_views
+----
+pg_catalog.pg_views
+CREATE VIEW "pg_catalog"."pg_views" AS SELECT "s"."name" AS "schemaname", "v"."name" AS "viewname", NULL::"pg_catalog"."oid" AS "viewowner" FROM "mz_catalog"."mz_views" AS "v" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "v"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" WHERE "d"."name" = "pg_catalog"."current_database"()
