@@ -22,7 +22,7 @@ futures = "0.3.21"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
+log = "0.4.16"
 mz-aws-util = { path = "../aws-util" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
