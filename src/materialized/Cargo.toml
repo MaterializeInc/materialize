@@ -98,7 +98,7 @@ opentelemetry-otlp = { version = "0.10"}
 tracing-opentelemetry = "0.17"
 tonic = { version = "0.6.2", features = ["transport"] }
 tokio-native-tls = { version = "0.3.0" }
-native-tls = { version = "0.2.9", features = ["alpn"] }
+native-tls = { version = "0.2.10", features = ["alpn"] }
 hyper-proxy = { version = "0.9.1" }
 hyper-tls = { version = "0.5.0" }
 
