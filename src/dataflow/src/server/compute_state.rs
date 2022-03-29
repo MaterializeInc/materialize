@@ -91,21 +91,31 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
 
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                    // Collect the exported object identifiers, paired with their associated "collection" identifier.
+                    // The latter is used to extract dependency information, which is in terms of collections ids.
+                    let sink_ids = dataflow
+                        .sink_exports
+                        .iter()
+                        .map(|(sink_id, sink)| (*sink_id, sink.from));
+                    let index_ids = dataflow
+                        .index_exports
+                        .iter()
+                        .map(|(idx_id, idx, _)| (*idx_id, idx.on_id));
+                    let exported_ids = index_ids.chain(sink_ids);
+
+                    // Initialize frontiers for each object, and optionally log their construction.
+                    for (object_id, collection_id) in exported_ids {
                         self.compute_state
                             .reported_frontiers
-                            .insert(*sink_id, Antichain::from_elem(0));
-                    }
-                    for (idx_id, idx, _) in dataflow.index_exports.iter() {
-                        self.compute_state
-                            .reported_frontiers
-                            .insert(*idx_id, Antichain::from_elem(0));
+                            .insert(object_id, Antichain::from_elem(0));
+
+                        // Log dataflow construction, frontier construction, and any dependencies.
                         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(*idx_id, true));
-                            logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
-                            for import_id in dataflow.depends_on(idx.on_id) {
+                            logger.log(MaterializedEvent::Dataflow(object_id, true));
+                            logger.log(MaterializedEvent::Frontier(object_id, 0, 1));
+                            for import_id in dataflow.depends_on(collection_id) {
                                 logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: *idx_id,
+                                    dataflow: object_id,
                                     source: import_id,
                                 })
                             }
