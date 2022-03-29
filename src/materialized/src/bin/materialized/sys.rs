@@ -219,7 +219,6 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
     for signum in &[
         signal::SIGHUP,
         signal::SIGINT,
-        signal::SIGPIPE,
         signal::SIGALRM,
         signal::SIGTERM,
         signal::SIGUSR1,
