@@ -3689,10 +3689,6 @@ impl Coordinator {
                 if since.less_equal(&timestamp) {
                     None
                 } else {
-                    eprintln!(
-                        "SOURCE {:?} has since {:?}; timestamp: {:?}",
-                        id, since, timestamp
-                    );
                     Some(since)
                 }
             });

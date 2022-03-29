@@ -675,13 +675,13 @@ pub fn plan_create_source(
                         "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
-                    tx_metadata,
+                            tx_metadata,
                             mode: DebeziumMode::Full(dedup_projection?),
                         }),
                         "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
-                    tx_metadata,
+                            tx_metadata,
                             mode: DebeziumMode::None,
                         }),
                         "full_in_range" => {
@@ -740,7 +740,7 @@ pub fn plan_create_source(
                                     UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                                         before_idx,
                                         after_idx,
-                    tx_metadata,
+                                        tx_metadata,
                                         mode: DebeziumMode::FullInRange {
                                             start,
                                             end,

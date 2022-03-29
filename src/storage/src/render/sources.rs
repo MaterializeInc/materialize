@@ -149,8 +149,6 @@ pub(crate) fn import_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    // XXX(chae): will contain gloabl id for consistency topic source.  IN source envelope struct.  Generated from planning
-    // Similar to processing an e.g. SELCET from non-materialized Source: DataflowDesc?
     SourceInstanceDesc {
         description: src,
         arguments:
