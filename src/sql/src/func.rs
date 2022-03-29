@@ -539,6 +539,16 @@ impl ParamList {
         }
     }
 
+    /// Reports whether the parameter list contains any [`TypeCategory::Pseudo`] parameters.
+    fn has_pseudo_params(&self) -> bool {
+        match self {
+            ParamList::Exact(p) => p
+                .iter()
+                .any(|p| matches!(TypeCategory::from_param(p), TypeCategory::Pseudo)),
+            ParamList::Variadic(p) => matches!(TypeCategory::from_param(p), TypeCategory::Pseudo),
+        }
+    }
+
     /// Enforces polymorphic type consistency by finding the concrete type that
     /// satisfies the constraints expressed by the polymorphic types in the
     /// parameter list.
@@ -819,7 +829,10 @@ impl ParamList {
             .map(|p| {
                 CoercibleScalarExpr::Coerced(HirScalarExpr::literal_null(match p {
                     ParamType::Plain(t) => t.clone(),
-                    o => unreachable!("o {:?} is polymorphic and doesn't have a ScalarType", o),
+                    o => unreachable!(
+                        "{:?} represents a pseudo type and doesn't have a ScalarType",
+                        o
+                    ),
                 }))
             })
             .collect()
@@ -971,10 +984,9 @@ impl From<ScalarBaseType> for ParamType {
     fn from(s: ScalarBaseType) -> ParamType {
         use ScalarBaseType::*;
         let s = match s {
-            Array => return ParamType::ArrayAny,
-            List => return ParamType::ListAny,
-            Map => return ParamType::MapAny,
-            Record => return ParamType::RecordAny,
+            Array | List | Map | Record => {
+                panic!("use polymorphic parameters rather than {:?}", s);
+            }
             Bool => ScalarType::Bool,
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,
@@ -1551,8 +1563,8 @@ macro_rules! impl_def {
         let op = Operation::from($op);
         let params = ParamList::from($params);
         assert!(
-            !params.has_polymorphic(),
-            "loading builtin functions failed: polymorphic functions must have return types explicitly defined"
+            !params.has_pseudo_params(),
+            "loading builtin functions failed: functions with pseudo type params must explicitly define return type"
         );
 
         let cexprs = params.contrive_coercible_exprs();
