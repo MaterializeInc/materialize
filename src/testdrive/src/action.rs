@@ -95,11 +95,8 @@ pub struct Config {
     pub materialized_pgconfig: tokio_postgres::Config,
     /// Session parameters to set after connecting to materialized.
     pub materialized_params: Vec<(String, String)>,
-    /// An optional path to the catalog file for the materialized instance.
-    ///
-    /// If present, testdrive will periodically verify that the on-disk catalog
-    /// matches its expectations.
-    pub materialized_catalog_path: Option<PathBuf>,
+    /// An optional path to the data directory for the materialized instance.
+    pub materialized_data_path: Option<PathBuf>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -148,7 +145,7 @@ pub struct State {
     regex_replacement: String,
 
     // === Materialize state. ===
-    materialized_catalog_path: Option<PathBuf>,
+    materialized_data_path: Option<PathBuf>,
     materialized_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
@@ -665,16 +662,15 @@ pub async fn create_state(
         }
     };
 
-    let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
-        match fs::metadata(&path) {
-            Ok(m) if !m.is_file() => {
-                bail!("materialized catalog path is not a regular file");
+    let materialized_data_path = match config.materialized_data_path.clone() {
+        Some(path) => match fs::metadata(&path) {
+            Ok(m) if !m.is_dir() => {
+                bail!("materialized data path is not a directory");
             }
-            Ok(_) => Some(path.to_path_buf()),
-            Err(e) => return Err(e).context("opening materialized catalog path"),
-        }
-    } else {
-        None
+            Ok(_) => Some(path),
+            Err(e) => return Err(e).context("opening materialized data directory"),
+        },
+        None => None,
     };
 
     let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
@@ -793,7 +789,7 @@ pub async fn create_state(
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
-        materialized_catalog_path,
+        materialized_data_path,
         materialized_addr,
         materialized_user,
         pgclient,

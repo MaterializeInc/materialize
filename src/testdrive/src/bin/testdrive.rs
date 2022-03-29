@@ -121,12 +121,9 @@ struct Args {
     /// materialized.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     materialized_param: Vec<(String, String)>,
-    /// Validate the on-disk state of the specified materialized catalog.
-    ///
-    /// If present, testdrive will periodically verify that the on-disk catalog
-    /// matches its expectations.
+    /// Validate the on-disk state of the specified materialized data directory.
     #[clap(long, value_name = "PATH")]
-    validate_catalog: Option<PathBuf>,
+    validate_data_dir: Option<PathBuf>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.
@@ -272,7 +269,7 @@ async fn main() {
         // === Materialize options. ===
         materialized_pgconfig: args.materialized_url,
         materialized_params: args.materialized_param,
-        materialized_catalog_path: args.validate_catalog,
+        materialized_data_path: args.validate_data_dir,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,

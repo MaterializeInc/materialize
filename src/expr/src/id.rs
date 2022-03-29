@@ -10,7 +10,10 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::gen::id::{proto_partition_id, ProtoPartitionId};
 use anyhow::{anyhow, Error};
+use bytes::BufMut;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
@@ -131,10 +134,51 @@ impl fmt::Display for SourceInstanceId {
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
 ///     None -> sources that have no notion of partitioning (e.g file sources)
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     None,
+}
+
+impl From<&PartitionId> for ProtoPartitionId {
+    fn from(x: &PartitionId) -> Self {
+        ProtoPartitionId {
+            kind: Some(match x {
+                PartitionId::Kafka(x) => proto_partition_id::Kind::Kafka(*x),
+                PartitionId::None => proto_partition_id::Kind::None(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoPartitionId> for PartitionId {
+    type Error = String;
+
+    fn try_from(x: ProtoPartitionId) -> Result<Self, Self::Error> {
+        match x.kind {
+            Some(proto_partition_id::Kind::Kafka(x)) => Ok(PartitionId::Kafka(x)),
+            Some(proto_partition_id::Kind::None(_)) => Ok(PartitionId::None),
+            None => return Err("unknown partition_id".into()),
+        }
+    }
+}
+
+impl mz_persist_types::Codec for PartitionId {
+    fn codec_name() -> String {
+        "protobuf[PartitionId]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        ProtoPartitionId::from(self)
+            .encode(buf)
+            .expect("provided buffer had sufficient capacity")
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        ProtoPartitionId::decode(buf)
+            .map_err(|err| err.to_string())?
+            .try_into()
+    }
 }
 
 impl fmt::Display for PartitionId {

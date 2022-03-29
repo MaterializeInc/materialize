@@ -699,7 +699,9 @@ pub mod sources {
     /// Universal language for describing message positions in Materialize, in a source independent
     /// way. Invidual sources like Kafka or File sources should explicitly implement their own offset
     /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
-    #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Hash, Serialize, Deserialize)]
+    #[derive(
+        Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
+    )]
     pub struct MzOffset {
         pub offset: i64,
     }

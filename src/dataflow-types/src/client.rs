@@ -560,7 +560,7 @@ pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// Durability frontier changes
     pub changes: Vec<(GlobalId, ChangeBatch<T>)>,
     /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, PartitionId, T, MzOffset)>,
+    pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
 }
 
 /// Responses that the worker/dataflow can provide back to the coordinator.
@@ -1098,6 +1098,7 @@ pub mod partitioned {
                     // The following block implements a `list.retain()` of non-empty change batches.
                     // This is more verbose than `list.retain()` because that method cannot mutate
                     // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+                    // TODO(petrosagg): replace this loop with `Vec::retain_mut` once it stabilizes
                     let mut cursor = 0;
                     while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
                         if changes.is_empty() {

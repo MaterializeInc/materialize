@@ -23,13 +23,15 @@
 //! failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use crate::client::controller::storage::StorageController;
+use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
 use crate::client::GenericClient;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
@@ -82,6 +84,55 @@ pub enum ComputeError {
     PeekSinceViolation(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
+    /// An error during an interaction with Storage
+    StorageError(StorageError),
+}
+
+impl Error for ComputeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InstanceMissing(_)
+            | Self::IdentifierMissing(_)
+            | Self::DataflowMalformed
+            | Self::DataflowSinceViolation(_)
+            | Self::PeekSinceViolation(_) => None,
+            Self::ClientError(err) => Some(err.root_cause()),
+            Self::StorageError(err) => err.source(),
+        }
+    }
+}
+
+impl fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("compute error: ")?;
+        match self {
+            Self::InstanceMissing(id) => write!(
+                f,
+                "command referenced an instance that was not present: {id}"
+            ),
+            Self::IdentifierMissing(id) => write!(
+                f,
+                "command referenced an identifier that was not present: {id}"
+            ),
+            Self::DataflowMalformed => write!(f, "dataflow was malformed"),
+            Self::DataflowSinceViolation(id) => write!(
+                f,
+                "dataflow as_of was not greater than the `since` of the identifier: {id}"
+            ),
+            Self::PeekSinceViolation(id) => write!(
+                f,
+                "peek timestamp was not greater than the `since` of the identifier: {id}"
+            ),
+            Self::ClientError(err) => write!(f, "underlying client error: {err}"),
+            Self::StorageError(err) => write!(f, "storage interaction error: {err}"),
+        }
+    }
+}
+
+impl From<StorageError> for ComputeError {
+    fn from(error: StorageError) -> Self {
+        Self::StorageError(error)
+    }
 }
 
 impl From<anyhow::Error> for ComputeError {
@@ -244,14 +295,14 @@ where
                 .collect();
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_updates)
-                .await;
+                .await?;
             // Update compute read capabilities for inputs.
             let mut compute_read_updates = compute_dependencies
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
             self.update_read_capabilities(&mut compute_read_updates)
-                .await;
+                .await?;
 
             // Install collection state for each of the exports.
             for (sink_id, _) in dataflow.sink_exports.iter() {
@@ -327,7 +378,7 @@ where
         // Install a compaction hold on `id` at `timestamp`.
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
-        self.update_read_capabilities(&mut updates).await;
+        self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
         self.compute
@@ -345,7 +396,7 @@ where
     }
     /// Cancels existing peek requests.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.remove_peeks(uuids.iter().cloned()).await;
+        self.remove_peeks(uuids.iter().cloned()).await?;
         self.compute
             .client
             .send(ComputeCommand::CancelPeeks {
@@ -368,7 +419,7 @@ where
         let policies = frontiers
             .into_iter()
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await;
+        self.set_read_policy(policies.collect()).await?;
         Ok(())
     }
 
@@ -380,7 +431,10 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+    pub async fn set_read_policy(
+        &mut self,
+        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+    ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
@@ -406,8 +460,9 @@ where
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await;
+                .await?;
         }
+        Ok(())
     }
 }
 
@@ -441,7 +496,10 @@ where
     }
 
     /// Accept write frontier updates from the compute layer.
-    pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
+    pub(super) async fn update_write_frontiers(
+        &mut self,
+        updates: &[(GlobalId, ChangeBatch<T>)],
+    ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
             let collection = self
@@ -471,15 +529,16 @@ where
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await;
+                .await?;
         }
+        Ok(())
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
     pub(super) async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
-    ) {
+    ) -> Result<(), ComputeError> {
         // Locations to record consequences that we need to act on.
         let mut storage_todo = BTreeMap::default();
         let mut compute_net = Vec::default();
@@ -537,11 +596,15 @@ where
         if !storage_todo.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_todo)
-                .await;
+                .await?;
         }
+        Ok(())
     }
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    pub(super) async fn remove_peeks(&mut self, peek_ids: impl IntoIterator<Item = uuid::Uuid>) {
+    pub(super) async fn remove_peeks(
+        &mut self,
+        peek_ids: impl IntoIterator<Item = uuid::Uuid>,
+    ) -> Result<(), ComputeError> {
         let mut updates = peek_ids
             .into_iter()
             .flat_map(|uuid| {
@@ -551,7 +614,8 @@ where
                     .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
             })
             .collect();
-        self.update_read_capabilities(&mut updates).await;
+        self.update_read_capabilities(&mut updates).await?;
+        Ok(())
     }
 }
 

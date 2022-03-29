@@ -13,6 +13,7 @@ harness = false
 [dependencies]
 aho-corasick = "0.7.18"
 anyhow = "1.0.55"
+bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
 dec = "0.4.8"
@@ -29,11 +30,13 @@ mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
+mz-persist-types = { path = "../persist-types" }
 num = "0.4.0"
 num-iter = "0.1.42"
 num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 paste = "1.0.7"
+prost = "0.9.0"
 regex = "1.5.4"
 regex-syntax = "0.6.25"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -43,6 +46,9 @@ sha-1 = "0.10.0"
 sha2 = "0.10.2"
 uncased = "0.9.6"
 uuid = "0.8.2"
+
+[build-dependencies]
+prost-build = "0.9.1"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }

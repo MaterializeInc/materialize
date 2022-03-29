@@ -35,6 +35,8 @@ mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
+mz-stash = { path = "../stash" }
+mz-timely-util = { path = "../timely-util" }
 num_enum = "0.5.7"
 prost = "0.9.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

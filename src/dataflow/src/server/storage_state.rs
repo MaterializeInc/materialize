@@ -416,12 +416,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     changes.push((*id, change_batch));
                 }
                 // Add all timestamp bindings we know about between the old and new frontier.
-                bindings.extend(
-                    history
-                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
-                        .into_iter()
-                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
-                );
+                bindings.push((
+                    *id,
+                    history.get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow()),
+                ));
                 prev_frontier.clone_from(&new_frontier);
             }
         }

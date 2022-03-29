@@ -239,18 +239,22 @@ where
                         // response about a terminated instance.
                         .expect("Reference to absent instance")
                         .update_write_frontiers(updates)
-                        .await;
+                        .await?;
                 }
                 Response::Compute(ComputeResponse::PeekResponse(uuid, _response), instance) => {
                     self.compute_mut(*instance)
                         .expect("Reference to absent instance")
                         .remove_peeks(std::iter::once(*uuid))
-                        .await;
+                        .await?;
                 }
                 Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
                     self.storage_controller
                         .update_write_frontiers(&feedback.changes)
-                        .await;
+                        .await?;
+
+                    self.storage_mut()
+                        .persist_timestamp_bindings(&feedback)
+                        .await?;
                 }
                 _ => {}
             }

@@ -7,35 +7,55 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use itertools::Itertools;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_assert_eq;
-use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{DatabaseSpecifier, FullName};
 use mz_sql::plan::ComputeInstanceConfig;
+use mz_stash::Stash;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
+/// A catalog migration
+trait Migration {
+    /// Appies a catalog migration given the top level data directory and an active transaction to
+    /// the catalog's SQLite database.
+    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error>;
+}
+
+impl<'a> Migration for &'a str {
+    fn apply(&self, _path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
+        tx.execute_batch(self)?;
+        Ok(())
+    }
+}
+
+impl<F: Fn(&Path, &rusqlite::Transaction) -> Result<(), Error>> Migration for F {
+    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
+        (self)(path, tx)
+    }
+}
+
 /// Schema migrations for the on-disk state.
-const MIGRATIONS: &[&str] = &[
+const MIGRATIONS: &[&dyn Migration] = &[
     // Creates initial schema.
     //
     // Introduced for v0.1.0.
-    "CREATE TABLE gid_alloc (
+    &"CREATE TABLE gid_alloc (
          next_gid integer NOT NULL
      );
 
@@ -80,7 +100,7 @@ const MIGRATIONS: &[&str] = &[
     // ATTENTION: this migration blows away data and must not be used as a model
     // for future migrations! It is only acceptable now because we have not yet
     // made any consistency promises to users.
-    "DROP TABLE timestamps;
+    &"DROP TABLE timestamps;
      CREATE TABLE timestamps (
         sid blob NOT NULL,
         vid blob NOT NULL,
@@ -93,14 +113,14 @@ const MIGRATIONS: &[&str] = &[
     // Introduces settings table to support persistent node settings.
     //
     // Introduced in v0.4.0.
-    "CREATE TABLE settings (
+    &"CREATE TABLE settings (
         name TEXT PRIMARY KEY,
         value TEXT
     );",
     // Creates the roles table and a default "materialize" user.
     //
     // Introduced in v0.7.0.
-    "CREATE TABLE roles (
+    &"CREATE TABLE roles (
         id   integer PRIMARY KEY,
         name text NOT NULL UNIQUE
     );
@@ -108,7 +128,7 @@ const MIGRATIONS: &[&str] = &[
     // Makes the mz_internal schema literal so it can store functions.
     //
     // Introduced in v0.7.0.
-    "INSERT INTO schemas (database_id, name) VALUES
+    &"INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'mz_internal');",
     // Adjusts timestamp table to support replayable source timestamp bindings.
     //
@@ -117,7 +137,7 @@ const MIGRATIONS: &[&str] = &[
     // ATTENTION: this migration blows away data and must not be used as a model
     // for future migrations! It is only acceptable now because we have not yet
     // made any consistency promises to users.
-    "DROP TABLE timestamps;
+    &"DROP TABLE timestamps;
      CREATE TABLE timestamps (
         sid blob NOT NULL,
         pid blob NOT NULL,
@@ -128,22 +148,80 @@ const MIGRATIONS: &[&str] = &[
     // Makes the information_schema schema literal so it can store functions.
     //
     // Introduced in v0.9.12.
-    "INSERT INTO schemas (database_id, name) VALUES
+    &"INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'information_schema');",
     // Adds index to timestamp table to more efficiently compact timestamps.
     //
     // Introduced in v0.12.0.
-    "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
+    &"CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
     // Adds table to track users' compute instances.
     //
     // Introduced in v0.22.0.
-    "CREATE TABLE compute_instances (
+    &"CREATE TABLE compute_instances (
         id   integer PRIMARY KEY,
         name text NOT NULL UNIQUE
     );
     INSERT INTO compute_instances VALUES (1, 'default');",
     // Introduced in v0.24.0.
-    "ALTER TABLE compute_instances ADD COLUMN config text",
+    &"ALTER TABLE compute_instances ADD COLUMN config text",
+    // Migrates timestamp bindings from the coordinator's catalog to STORAGE's internal state
+    // Introduced in v0.25.0.
+    &|data_dir_path: &Path, tx: &rusqlite::Transaction| {
+        let source_ids = tx
+            .prepare("SELECT DISTINCT sid FROM timestamps")?
+            .query_and_then([], |row| Ok(row.get::<_, SqlVal<GlobalId>>(0)?.0))?
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        std::fs::create_dir_all(data_dir_path.join("storage/")).unwrap();
+        let stash = Stash::open(&data_dir_path.join("storage/timestamp_bindings"))
+            .expect("unable to open STORAGE stash");
+        let mut statement = tx.prepare(
+            "SELECT pid, timestamp, offset FROM timestamps WHERE sid = ? ORDER BY pid, timestamp",
+        )?;
+        for source_id in source_ids {
+            let bindings = statement
+                .query_and_then(params![SqlVal(&source_id)], |row| {
+                    let partition: PartitionId = row
+                        .get::<_, String>(0)
+                        .unwrap()
+                        .parse()
+                        .expect("parsing partition id from string cannot fail");
+                    let timestamp: i64 = row.get(1)?;
+                    let offset = MzOffset {
+                        offset: row.get(2)?,
+                    };
+
+                    Ok((partition, timestamp, offset))
+                })?
+                .collect::<Result<Vec<_>, Error>>()?;
+
+            let mut ts_binding_stash = stash
+                .collection::<PartitionId, ()>(&source_id.to_string())
+                .expect("failed to read timestamp bindings");
+
+            // See
+            // [mz_dataflow_types::client::controller::StorageControllerMut::persist_timestamp_bindings]
+            // for an explanation of the logic
+            let mut last_reported_ts_bindings: HashMap<_, MzOffset> = HashMap::new();
+            let seal_ts = bindings.iter().map(|(_, ts, _)| *ts).max();
+            ts_binding_stash
+                .update_many(bindings.into_iter().map(|(pid, ts, offset)| {
+                    let prev_offset = last_reported_ts_bindings.entry(pid.clone()).or_default();
+                    let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
+                    prev_offset.offset = offset.offset;
+                    update
+                }))
+                .expect("failed to write timestamp bindings");
+
+            ts_binding_stash
+                .seal(Antichain::from_iter(seal_ts).borrow())
+                .expect("failed to write timestamp bindings");
+        }
+
+        tx.execute_batch("DROP TABLE timestamps;")?;
+
+        Ok(())
+    },
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -169,7 +247,11 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(path: &Path, experimental_mode: Option<bool>) -> Result<Connection, Error> {
+    pub fn open(
+        path: &Path,
+        data_dir_path: &Path,
+        experimental_mode: Option<bool>,
+    ) -> Result<Connection, Error> {
         let mut sqlite = rusqlite::Connection::open(path)?;
 
         // Validate application ID.
@@ -181,7 +263,7 @@ impl Connection {
             // `user_version` of zero indicates that the zeroth migration has
             // been applied.
             tx.execute_batch(&format!("PRAGMA application_id = {}", APPLICATION_ID))?;
-            tx.execute_batch(MIGRATIONS[0])?;
+            MIGRATIONS[0].apply(data_dir_path, &tx)?;
         } else if app_id != APPLICATION_ID {
             return Err(Error::new(ErrorKind::Corruption {
                 detail: "catalog file has incorrect application_id".into(),
@@ -192,13 +274,13 @@ impl Connection {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run.
         let version: u32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
-        for (i, sql) in MIGRATIONS
+        for (i, migration) in MIGRATIONS
             .iter()
             .enumerate()
             .skip(usize::cast_from(version) + 1)
         {
             let tx = sqlite.transaction()?;
-            tx.execute_batch(sql)?;
+            migration.apply(data_dir_path, &tx)?;
             tx.execute_batch(&format!("PRAGMA user_version = {}", i))?;
             tx.commit()?;
         }
@@ -482,56 +564,6 @@ impl Transaction<'_> {
         }
     }
 
-    fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
-        let bindings_vec = self
-            .load_timestamp_bindings(*source_id)
-            .map_err(|e| format!("{}", e))?;
-
-        let bindings_by_pid = bindings_vec.iter().group_by(|(pid, _ts, _offset)| pid);
-
-        for (pid, bindings) in &bindings_by_pid {
-            let mut latest_offset = 0;
-            let mut latest_ts = 0;
-            for (_pid, ts, offset) in bindings {
-                if offset.offset < latest_offset {
-                    return Err(format!(
-                        "Unexpected offset {} for pid {}. All bindings: {:?}",
-                        offset, pid, bindings_vec
-                    ));
-                }
-                if *ts < latest_ts {
-                    return Err(format!(
-                        "Timestamps should not be decreasing but got {} for pid {}. All bindings: {:?}",
-                        ts, pid, bindings_vec
-                    ));
-                }
-                latest_offset = offset.offset;
-                latest_ts = *ts;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn load_timestamp_bindings(
-        &self,
-        source_id: GlobalId,
-    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
-        self.inner
-            .prepare_cached(
-                "SELECT pid, timestamp, offset from timestamps where sid = ? order by pid, timestamp")?
-            .query_and_then(params![SqlVal(&source_id)], |row| -> Result<_, Error> {
-                let partition: PartitionId = row.get::<_, String>(0)?.parse().expect("parsing partition id from string cannot fail");
-                let timestamp: Timestamp = row.get(1)?;
-                let offset = MzOffset {
-                    offset: row.get(2)?,
-                };
-
-                Ok((partition, timestamp, offset))
-            })?
-            .collect()
-    }
-
     pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
         match self
             .inner
@@ -630,72 +662,6 @@ impl Transaction<'_> {
                 ErrorKind::ItemAlreadyExists(item_name.to_owned()),
             )),
             Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn insert_timestamp_binding(
-        &self,
-        source_id: &GlobalId,
-        partition_id: &str,
-        timestamp: Timestamp,
-        offset: i64,
-    ) -> Result<(), Error> {
-        let result = self
-            .inner
-            .prepare_cached(
-                "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
-            )?
-              .execute(params![SqlVal(source_id), partition_id, timestamp, offset]);
-
-        soft_assert_eq!(self.validate_timestamp_bindings(source_id), Ok(()));
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn delete_timestamp_bindings(&self, source_id: GlobalId) -> Result<(), Error> {
-        let result = self
-            .inner
-            .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
-            .execute(params![SqlVal(&source_id)]);
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn compact_timestamp_bindings(
-        &self,
-        source_id: GlobalId,
-        frontier: Timestamp,
-    ) -> Result<(), Error> {
-        // we need to keep one binding that is not beyond the frontier, so that
-        // on restart we don't emit timestamps that are beyond the previously
-        // written consistency frontier. Otherwise, data with those timestamps
-        // would get written again.
-        let latest_not_beyond_compaction: Option<Timestamp> = self
-            .inner
-            .prepare_cached(
-                "SELECT max(timestamp) FROM timestamps WHERE sid = ? AND timestamp <= ?",
-            )?
-            .query_row(params![SqlVal(&source_id), frontier], |row| row.get(0))?;
-
-        if let Some(latest_not_beyond_compaction) = latest_not_beyond_compaction {
-            let result = match self
-                .inner
-                .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
-                .execute(params![SqlVal(&source_id), latest_not_beyond_compaction])
-            {
-                Ok(_) => Ok(()),
-                Err(err) => Err(err.into()),
-            };
-
-            result
-        } else {
-            Ok(())
         }
     }
 

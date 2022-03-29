@@ -295,6 +295,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // Load the coordinator catalog from disk.
     let coord_storage = mz_coord::catalog::storage::Connection::open(
         &config.data_directory.join("catalog"),
+        &config.data_directory,
         Some(config.experimental_mode),
     )?;
 
@@ -383,7 +384,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             let (storage_client, virtual_compute_host) =
                 mz_dataflow_types::client::split_client(dataflow_client);
             let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
+                mz_dataflow_types::client::controller::storage::Controller::new(
+                    storage_client,
+                    config.data_directory.join("storage"),
+                );
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
@@ -416,7 +420,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 client
             }));
             let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
+                mz_dataflow_types::client::controller::storage::Controller::new(
+                    storage_client,
+                    config.data_directory.join("storage"),
+                );
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,

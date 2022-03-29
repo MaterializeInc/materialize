@@ -57,18 +57,19 @@ SERVICES = [
         ],
         volumes_extra=["secrets:/share/secrets"],
     ),
-    # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD
-    # to load the catalog from disk but does *not* run migrations. There is no
-    # guarantee that HEAD can load an old catalog without running migrations.
+    # N.B.: we need to use `validate_data_dir=False` because testdrive uses
+    # HEAD to load the catalog from disk but does *not* run migrations. There
+    # is no guarantee that HEAD can load an old catalog without running
+    # migrations.
     #
     # When testdrive is targeting a HEAD materialized, we re-enable catalog
-    # validation below by manually passing the `--validate-catalog` flag.
+    # validation below by manually passing the `--validate-data-dir` flag.
     #
     # Disabling catalog validation is preferable to using a versioned testdrive
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        validate_catalog=False,
+        validate_data_dir=False,
         volumes_extra=["secrets:/share/secrets"],
     ),
 ]
@@ -183,7 +184,7 @@ def test_upgrade_from_version(
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
         seed,
-        "--validate-catalog=/share/mzdata/catalog",
+        "--validate-data-dir=/share/mzdata",
         f"check-{style}from-{version_glob}-{filter}.td",
     )
 
@@ -259,7 +260,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
-        validate_catalog=False,
+        validate_data_dir=False,
     )
 
     return (kafka, schema_registry, testdrive)

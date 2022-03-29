@@ -18,7 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 use mz_coord::catalog::{Catalog, CatalogItem, Op, Table};
 use mz_coord::session::Session;
@@ -34,10 +34,14 @@ use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 #[tokio::test]
 async fn datadriven() {
     datadriven::walk_async("tests/testdata", |mut f| async {
-        let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())
-            .await
-            .unwrap();
+        let data_dir = TempDir::new().unwrap();
+        let mut catalog = Catalog::open_debug(
+            &data_dir.path().join("catalog"),
+            data_dir.path(),
+            NOW_ZERO.clone(),
+        )
+        .await
+        .unwrap();
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
                 "add-table" => {

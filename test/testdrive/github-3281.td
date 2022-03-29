@@ -12,7 +12,7 @@
 # Verifies that the precedence of `->>`, `::`, and `CAST` are not mishandled
 # when rendering a SQL statement.
 
-# With the `--validate-catalog` option, which is enabled in CI, Testdrive
+# With the `--validate-data-dir` option, which is enabled in CI, Testdrive
 # will verify that views can be persisted and reloaded from the catalog, so the
 # very presence of this once-buggy view is a sufficient test.
 
