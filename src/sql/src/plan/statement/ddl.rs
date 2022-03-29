@@ -73,9 +73,8 @@ use crate::ast::{
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    resolve_names_data_type, Aug, QualifiedObjectName, ResolvedClusterName, ResolvedDataType,
-    ResolvedDatabaseName, ResolvedDatabaseSpecifier, ResolvedObjectName, ResolvedSchemaName,
-    SchemaSpecifier,
+    resolve_names_data_type, resolve_object_name, Aug, QualifiedObjectName, ResolvedClusterName,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -2643,21 +2642,27 @@ pub fn describe_drop_database(
 
 pub fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement { name, restrict, .. }: DropDatabaseStatement<Aug>,
+    DropDatabaseStatement {
+        name,
+        restrict,
+        if_exists,
+    }: DropDatabaseStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    match name {
-        ResolvedDatabaseName::Database { id, name } => {
-            let database = scx.get_database(&id);
+    let id = match scx.resolve_database(&name) {
+        Ok(database) => {
             if restrict && database.has_schemas() {
                 bail!(
                     "database '{}' cannot be dropped with RESTRICT while it contains schemas",
                     name,
                 );
             }
-            Ok(Plan::DropDatabase(DropDatabasePlan { id: Some(id) }))
+            Some(database.id())
         }
-        ResolvedDatabaseName::Error => unreachable!("error should be caught by name resolution"),
-    }
+        // TODO(benesch/jkosh44): generate a notice indicating that the database does not exist.
+        Err(_) if if_exists => None,
+        Err(e) => return Err(e.into()),
+    };
+    Ok(Plan::DropDatabase(DropDatabasePlan { id }))
 }
 
 pub fn describe_drop_objects(
@@ -2674,8 +2679,8 @@ pub fn plan_drop_objects(
         object_type,
         names,
         cascade,
-        ..
-    }: DropObjectsStatement<Aug>,
+        if_exists,
+    }: DropObjectsStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     if materialized {
         bail!(
@@ -2683,6 +2688,24 @@ pub fn plan_drop_objects(
             object_type
         );
     }
+
+    let names: Vec<_> = names
+        .into_iter()
+        .map(|name| resolve_object_name(scx, name))
+        .collect();
+
+    let names = if !if_exists && names.iter().any(|res| res.is_err()) {
+        let error = names
+            .into_iter()
+            .filter_map(|res| res.err())
+            .next()
+            .expect("branch only taken if there are errors");
+        return Err(error.into());
+    } else {
+        // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
+        names.into_iter().filter_map(|res| res.ok()).collect()
+    };
+
     match object_type {
         ObjectType::Source
         | ObjectType::Table
@@ -2706,42 +2729,46 @@ pub fn describe_drop_schema(
 
 pub fn plan_drop_schema(
     scx: &StatementContext,
-    DropSchemaStatement { name, cascade, .. }: DropSchemaStatement<Aug>,
+    DropSchemaStatement {
+        name,
+        cascade,
+        if_exists,
+    }: DropSchemaStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    match &name {
-        ResolvedSchemaName::Schema {
-            database_spec,
-            schema_spec,
-            full_name,
-        } => {
-            let database_id = match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => bail!(
-                    "cannot drop schema {} because it is required by the database system",
-                    full_name
-                ),
-                ResolvedDatabaseSpecifier::Id(id) => id,
-            };
-            let schema_id = match schema_spec {
-                // This branch should be unreachable because the temporary schema is in the ambient
-                // database, but this is just to protect against the case that ever changes.
-                SchemaSpecifier::Temporary => bail!(
-                    "cannot drop schema {} because it is required by the database system",
-                    full_name,
-                ),
-                SchemaSpecifier::Id(id) => id,
-            };
-            let schema = scx.get_schema(database_spec, schema_spec);
+    match scx.resolve_schema(name.clone()) {
+        Ok(schema) => {
             if !cascade && schema.has_items() {
                 bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
-                    full_name,
+                    normalize::unresolved_schema_name(name)?
                 );
             }
+            let database_id = match schema.database() {
+                ResolvedDatabaseSpecifier::Ambient => bail!(
+                    "cannot drop schema {} because it is required by the database system",
+                    schema.name().schema
+                ),
+                ResolvedDatabaseSpecifier::Id(id) => id,
+            };
+            let schema_id = match schema.id() {
+                // This branch should be unreachable because the temporary schema is in the ambient
+                // database, but this is just to protect against the case that ever changes.
+                SchemaSpecifier::Temporary => bail!(
+                    "cannot drop schema {} because it is a temporary schema",
+                    schema.name().schema,
+                ),
+                SchemaSpecifier::Id(id) => id,
+            };
             Ok(Plan::DropSchema(DropSchemaPlan {
                 id: Some((database_id.clone(), schema_id.clone())),
             }))
         }
-        ResolvedSchemaName::Error => unreachable!("name resolution should have caught this error"),
+        Err(_) if if_exists => {
+            // TODO(benesch/jkosh44): generate a notice indicating that the
+            // schema does not exist.
+            Ok(Plan::DropSchema(DropSchemaPlan { id: None }))
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -2991,17 +3018,12 @@ pub fn plan_alter_object_rename(
         name,
         object_type,
         to_item_name,
-        ..
-    }: AlterObjectRenameStatement<Aug>,
+        if_exists,
+    }: AlterObjectRenameStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    match name {
-        ResolvedObjectName::Object {
-            id,
-            full_name,
-            qualifiers,
-            ..
-        } => {
-            let entry = scx.get_item(&id);
+    match scx.resolve_item(name) {
+        Ok(entry) => {
+            let full_name = scx.catalog.resolve_full_name(entry.name());
             if entry.item_type() != object_type {
                 bail!(
                     "{} is a {} not a {}",
@@ -3011,23 +3033,25 @@ pub fn plan_alter_object_rename(
                 )
             }
             let proposed_name = QualifiedObjectName {
-                qualifiers,
+                qualifiers: entry.name().qualifiers.clone(),
                 item: to_item_name.clone().into_string(),
             };
             if scx.item_exists(&proposed_name) {
                 bail!("{} is already taken by item in schema", to_item_name)
             }
             Ok(Plan::AlterItemRename(AlterItemRenamePlan {
-                id,
+                id: entry.id(),
                 current_full_name: full_name,
                 to_name: normalize::ident(to_item_name),
                 object_type,
             }))
         }
-        ResolvedObjectName::Cte { .. } => unreachable!("unable to parse alter object for CTE"),
-        ResolvedObjectName::Error => {
-            unreachable!("should have been handled during name resolution")
+        Err(_) if if_exists => {
+            // TODO(benesch/jkosh44): generate a notice indicating this
+            // item does not exist.
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
         }
+        Err(e) => Err(e.into()),
     }
 }
 
