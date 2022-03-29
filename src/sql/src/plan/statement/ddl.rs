@@ -73,8 +73,9 @@ use crate::ast::{
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    resolve_names_data_type, resolve_object_name, Aug, QualifiedObjectName, ResolvedClusterName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
+    resolve_names_data_type, resolve_object_name, Aug, FullSchemaName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -2737,12 +2738,6 @@ pub fn plan_drop_schema(
 ) -> Result<Plan, anyhow::Error> {
     match scx.resolve_schema(name.clone()) {
         Ok(schema) => {
-            if !cascade && schema.has_items() {
-                bail!(
-                    "schema '{}' cannot be dropped without CASCADE while it contains objects",
-                    normalize::unresolved_schema_name(name)?
-                );
-            }
             let database_id = match schema.database() {
                 ResolvedDatabaseSpecifier::Ambient => bail!(
                     "cannot drop schema {} because it is required by the database system",
@@ -2750,6 +2745,21 @@ pub fn plan_drop_schema(
                 ),
                 ResolvedDatabaseSpecifier::Id(id) => id,
             };
+            if !cascade && schema.has_items() {
+                let full_schema_name = FullSchemaName {
+                    database: match schema.name().database {
+                        ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+                        ResolvedDatabaseSpecifier::Id(id) => {
+                            RawDatabaseSpecifier::Name(scx.get_database(&id).name().to_string())
+                        }
+                    },
+                    schema: schema.name().schema.clone(),
+                };
+                bail!(
+                    "schema '{}' cannot be dropped without CASCADE while it contains objects",
+                    full_schema_name
+                );
+            }
             let schema_id = match schema.id() {
                 // This branch should be unreachable because the temporary schema is in the ambient
                 // database, but this is just to protect against the case that ever changes.
