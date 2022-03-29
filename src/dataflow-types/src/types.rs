@@ -155,10 +155,10 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
-    pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc<T>)>,
+    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -241,12 +241,12 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
                 keys: vec![description.key.clone()],
             }),
         );
-        self.index_exports.push((id, description, on_type));
+        self.index_exports.insert(id, (description, on_type));
     }
 
     /// Exports as `id` a sink described by `description`.
     pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<T>) {
-        self.sink_exports.push((id, description));
+        self.sink_exports.insert(id, description);
     }
 
     /// Returns true iff `id` is already imported.

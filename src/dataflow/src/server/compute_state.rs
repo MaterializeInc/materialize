@@ -100,7 +100,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     let index_ids = dataflow
                         .index_exports
                         .iter()
-                        .map(|(idx_id, idx, _)| (*idx_id, idx.on_id));
+                        .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
                     let exported_ids = index_ids.chain(sink_ids);
 
                     // Initialize frontiers for each object, and optionally log their construction.

@@ -354,7 +354,7 @@ impl<T> ComputeCommand<T> {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         start.push(*sink_id)
                     }
-                    for (index_id, _, _) in dataflow.index_exports.iter() {
+                    for (index_id, _) in dataflow.index_exports.iter() {
                         start.push(*index_id);
                     }
                 }
@@ -449,7 +449,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             let index_active = dataflow
                 .index_exports
                 .iter()
-                .any(|(id, _, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
+                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
             let sink_active = dataflow
                 .sink_exports
                 .iter()
@@ -460,7 +460,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             // If we are going to drop the dataflow, we should remove the frontier information so that we
             // do not instruct anyone to compact a frontier they have not heard of.
             if !retain {
-                for (id, _, _) in dataflow.index_exports.iter() {
+                for (id, _) in dataflow.index_exports.iter() {
                     final_frontiers.remove(id);
                 }
                 for (id, _) in dataflow.sink_exports.iter() {
@@ -475,7 +475,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         for dataflow in live_dataflows.iter_mut() {
             let mut same_as_of = false;
             let mut as_of = Antichain::new();
-            for (id, _, _) in dataflow.index_exports.iter() {
+            for (id, _) in dataflow.index_exports.iter() {
                 if let Some(frontier) = final_frontiers.get(id) {
                     as_of.extend(frontier.clone());
                 } else {

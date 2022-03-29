@@ -283,16 +283,14 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
             let indexes = dataflow
                 .index_exports
                 .iter()
-                .cloned()
-                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.depends_on(idx.on_id), idx))
+                .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
                 .collect::<Vec<_>>();
 
             // Determine sinks to export
             let sinks = dataflow
                 .sink_exports
                 .iter()
-                .cloned()
-                .map(|(sink_id, sink)| (sink_id, dataflow.depends_on(sink.from), sink))
+                .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
                 .collect::<Vec<_>>();
 
             // Build declared objects.
