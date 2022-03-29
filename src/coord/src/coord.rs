@@ -2121,13 +2121,14 @@ impl Coordinator {
         let CreateSecretPlan {
             name,
             secret: _,
+            full_name,
             if_not_exists,
         } = plan;
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
-            create_sql: format!("CREATE SECRET {} AS '********'", name),
+            create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
 
         let ops = vec![catalog::Op::CreateItem {

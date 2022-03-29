@@ -2627,9 +2627,12 @@ pub fn plan_create_secret(
 
     let secret = Secret { create_sql };
 
+    let full_name = scx.catalog.resolve_full_name(&name);
+
     Ok(Plan::CreateSecret(CreateSecretPlan {
         name,
         secret,
+        full_name,
         if_not_exists: *if_not_exists,
     }))
 }
