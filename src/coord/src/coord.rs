@@ -3424,7 +3424,7 @@ impl Coordinator {
             }
         };
 
-        let (sink_id, sink_desc) = &dataflow.sink_exports[0];
+        let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
         session.add_drop_sink(compute_instance, *sink_id);
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
@@ -4624,7 +4624,7 @@ impl Coordinator {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.index_exports.iter().map(|(id, _, _)| *id));
+            output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
             output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
@@ -5285,7 +5285,7 @@ pub mod fast_path_peek {
                     thinned_arity: index_thinned_arity,
                 }) => {
                     let mut output_ids = Vec::new();
-                    output_ids.extend(dataflow.index_exports.iter().map(|(id, _, _)| *id));
+                    output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
                     output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
 
                     // Very important: actually create the dataflow (here, so we can destructure).

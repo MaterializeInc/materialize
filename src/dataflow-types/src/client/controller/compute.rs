@@ -266,7 +266,7 @@ where
                     ),
                 );
             }
-            for (index_id, _, _) in dataflow.index_exports.iter() {
+            for (index_id, _) in dataflow.index_exports.iter() {
                 self.compute.collections.insert(
                     *index_id,
                     CollectionState::new(
