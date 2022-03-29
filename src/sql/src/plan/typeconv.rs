@@ -495,6 +495,14 @@ lazy_static! {
                 Some(|e: HirScalarExpr| e.call_unary(CastListToString { ty }))
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+
+                if let (l @ ScalarType::List {custom_oid: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_oid requires at least Assignment context
+                    if ccx == CastContext::Implicit && !l.base_eq(r) {
+                        return None;
+                    }
+                }
+
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
