@@ -1113,6 +1113,7 @@ where
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
             ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
+            ExecuteResponse::DroppedSecret => command_complete!("DROP SECRET"),
             ExecuteResponse::EmptyQuery => {
                 self.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)

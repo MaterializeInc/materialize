@@ -222,7 +222,7 @@ pub fn show_objects<'a>(
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Cluster => show_clusters(scx, filter),
-        ObjectType::Secret => show_secrets(scx, filter),
+        ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -634,11 +634,23 @@ pub fn show_clusters<'a>(
 
 pub fn show_secrets<'a>(
     scx: &'a StatementContext<'a>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     scx.require_experimental_mode("SHOW SECRETS")?;
 
-    let query = "SELECT mz_secrets.name FROM mz_catalog.mz_secrets".to_string();
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
+    } else {
+        scx.resolve_active_schema()?
+    };
+
+    let query = format!(
+        "SELECT sec.name FROM mz_catalog.mz_secrets sec
+        JOIN mz_catalog.mz_schemas s ON sec.schema_id = s.id
+        WHERE schema_id = {}",
+        schema.id(),
+    );
 
     ShowSelect::new(scx, query, filter, None, None)
 }

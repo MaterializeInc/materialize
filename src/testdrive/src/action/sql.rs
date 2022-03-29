@@ -28,8 +28,9 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Raw, Statement, ViewDefinition,
+    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, Raw, Statement,
+    ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
@@ -102,6 +103,13 @@ impl Action for SqlAction {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
+            Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP SECRET IF EXISTS {} CASCADE", name),
                 )
                 .await
             }

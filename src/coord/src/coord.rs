@@ -2753,9 +2753,9 @@ impl Coordinator {
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
+            ObjectType::Secret => ExecuteResponse::DroppedSecret,
             ObjectType::Role => unreachable!("DROP ROLE is handled elsewhere"),
             ObjectType::Cluster => unreachable!("DROP CLUSTER is handled elsewhere"),
-            ObjectType::Secret => unreachable!("DROP SECRET is handled elsewhere"),
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }

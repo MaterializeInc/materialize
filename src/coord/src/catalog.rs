@@ -841,9 +841,18 @@ impl CatalogEntry {
         }
     }
 
+    /// Returns the inner [`Sink`] if this entry is a sink, else `None`.
     pub fn sink(&self) -> Option<&Sink> {
         match self.item() {
             CatalogItem::Sink(sink) => Some(sink),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Secret`] if this entry is a secret, else `None`.
+    pub fn secret(&self) -> Option<&Secret> {
+        match self.item() {
+            CatalogItem::Secret(secret) => Some(secret),
             _ => None,
         }
     }
