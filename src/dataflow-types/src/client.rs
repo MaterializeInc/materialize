@@ -332,6 +332,14 @@ impl<T: timely::progress::Timestamp> Command<T> {
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
         }
     }
+
+    /// Obtain the instance for this command, or `None` to indicate a storage command.
+    pub fn instance(&self) -> Option<ComputeInstanceId> {
+        match self {
+            Command::Compute(_, instance) => Some(*instance),
+            Command::Storage(_) => None,
+        }
+    }
 }
 
 impl<T> ComputeCommand<T> {
@@ -562,6 +570,16 @@ pub enum Response<T = mz_repr::Timestamp> {
     Compute(ComputeResponse<T>, ComputeInstanceId),
     /// A storage response.
     Storage(StorageResponse<T>),
+}
+
+impl<T> Response<T> {
+    /// Obtain the instance this response comes from, or `None` to indicate a storage response.
+    pub fn instance(&self) -> Option<ComputeInstanceId> {
+        match self {
+            Response::Compute(_, instance) => Some(*instance),
+            Response::Storage(_) => None,
+        }
+    }
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
@@ -857,8 +875,12 @@ pub mod partitioned {
     /// and await responses from each of the client shards before it can respond.
     #[derive(Debug)]
     pub struct Partitioned<C, T> {
+        /// The individual shards representing per-worker clients.
         pub shards: Vec<C>,
-        state: PartitionedClientState<T>,
+        /// The number of errors observed from underlying clients.
+        seen_errors: usize,
+        /// The state per compute instance. `None` represents Storage.
+        state: HashMap<Option<ComputeInstanceId>, PartitionedClientState<T>>,
     }
 
     impl<C, T> Partitioned<C, T>
@@ -867,9 +889,14 @@ pub mod partitioned {
     {
         /// Create a client partitioned across multiple client shards.
         pub fn new(shards: Vec<C>) -> Self {
+            // TODO: Have Storage announce its creation like compute.
+            let mut state: HashMap<_, _> = Default::default();
+            state.insert(None, PartitionedClientState::new(shards.len()));
+
             Self {
-                state: PartitionedClientState::new(shards.len()),
                 shards,
+                state,
+                seen_errors: 0,
             }
         }
     }
@@ -881,11 +908,19 @@ pub mod partitioned {
         T: timely::progress::Timestamp + Copy,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+            let instance = cmd.instance();
             // A `CreateInstance` command indicates re-initialization.
             if let Command::Compute(ComputeCommand::CreateInstance(_), _instance) = &cmd {
-                self.state = PartitionedClientState::new(self.shards.len());
+                self.state
+                    .insert(instance, PartitionedClientState::new(self.shards.len()));
             }
-            self.state.observe_command(&cmd);
+            self.state
+                .get_mut(&instance)
+                .expect("command for non-existing instance")
+                .observe_command(&cmd);
+            if let Command::Compute(ComputeCommand::DropInstance, _instance) = &cmd {
+                self.state.remove(&instance);
+            }
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
                 shard.send(cmd_part).await?;
@@ -894,6 +929,7 @@ pub mod partitioned {
         }
 
         async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+            let parts = self.shards.len();
             let mut stream: StreamMap<_, _> = self
                 .shards
                 .iter_mut()
@@ -901,8 +937,31 @@ pub mod partitioned {
                 .enumerate()
                 .collect();
             while let Some((index, response)) = stream.next().await {
-                if let Some(response) = self.state.absorb_response(index, response) {
-                    return response.map(Some);
+                match response {
+                    Err(e) => {
+                        // Only emit one out of every `parts` errors. (If one
+                        // underlying client observes an error, we expect all of
+                        // the other clients to observe the same error.)
+                        self.seen_errors += 1;
+                        if (self.seen_errors % parts) == 0 {
+                            return Err(e);
+                        } else {
+                            return Ok(None);
+                        }
+                    }
+                    Ok(response) => match self.state.get_mut(&response.instance()) {
+                        Some(state) => {
+                            if let Some(response) = state.absorb_response(index, response) {
+                                return response.map(Some);
+                            }
+                        }
+                        None => {
+                            debug!(
+                                "Response for missing instance {instance:?}",
+                                instance = response.instance()
+                            );
+                        }
+                    },
                 }
             }
             // Indicate completion of the communication.
@@ -932,8 +991,6 @@ pub mod partitioned {
             (GlobalId, Option<ComputeInstanceId>),
             Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
         >,
-        /// The number of errors observed from underlying clients.
-        seen_errors: usize,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -959,7 +1016,6 @@ pub mod partitioned {
                 peek_responses: Default::default(),
                 parts,
                 pending_tails: Default::default(),
-                seen_errors: 0,
             }
         }
 
@@ -995,22 +1051,10 @@ pub mod partitioned {
         pub fn absorb_response(
             &mut self,
             shard_id: usize,
-            message: Result<Response<T>, anyhow::Error>,
+            message: Response<T>,
         ) -> Option<Result<Response<T>, anyhow::Error>> {
             match message {
-                Err(e) => {
-                    // Only emit one out of every `parts` errors. (If one
-                    // underlying client observes an error, we expect all of
-                    // the other clients to observe the same error.)
-                    self.seen_errors += 1;
-                    if (self.seen_errors % self.parts) == 0 {
-                        Some(Err(e))
-                    } else {
-                        None
-                    }
-                }
-
-                Ok(Response::Compute(ComputeResponse::FrontierUppers(mut list), instance)) => {
+                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
                     for (id, changes) in list.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, Some(instance))) {
                             let iter = frontier.update_iter(changes.drain());
@@ -1042,7 +1086,7 @@ pub mod partitioned {
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
-                Ok(Response::Storage(StorageResponse::TimestampBindings(mut feedback))) => {
+                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
                     for (id, changes) in feedback.changes.iter_mut() {
                         if let Some(frontier) = self.uppers.get_mut(&(*id, None)) {
                             let iter = frontier.update_iter(changes.drain());
@@ -1067,7 +1111,7 @@ pub mod partitioned {
                         feedback,
                     ))))
                 }
-                Ok(Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance)) => {
+                Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -1099,7 +1143,7 @@ pub mod partitioned {
                         None
                     }
                 }
-                Ok(Response::Compute(ComputeResponse::TailResponse(id, response), instance)) => {
+                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
                     let maybe_entry = self
                         .pending_tails
                         .entry((id, Some(instance)))

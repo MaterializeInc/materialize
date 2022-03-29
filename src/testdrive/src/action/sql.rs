@@ -28,8 +28,9 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Raw, Statement, ViewDefinition,
+    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, Raw, Statement,
+    ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
@@ -105,6 +106,13 @@ impl Action for SqlAction {
                 )
                 .await
             }
+            Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP SECRET IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
             _ => Ok(()),
         }
     }
@@ -135,10 +143,11 @@ impl Action for SqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }
-        .retry_async(|retry_state| async move {
+        .retry_async_canceling(|retry_state| async move {
             match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -389,7 +398,8 @@ impl Action for FailSqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }.retry_async(|retry_state| async move {
             match self.try_redo(state, &query).await {

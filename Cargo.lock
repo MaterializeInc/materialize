@@ -2236,9 +2236,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
-version = "0.14.17"
+version = "0.14.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "043f0e083e9901b6cc658a77d1eb86f4fc650bbb977a4337dd63192826aa85dd"
+checksum = "b26ae0a80afebe130861d90abf98e3814a4f28a4c6ffeb5ab8ebb2be311e0ef2"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2573,7 +2573,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-tungstenite",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tower",
  "tower-http",
  "tracing",
@@ -3288,7 +3288,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-serde",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tracing",
  "url",
  "uuid",
@@ -3347,7 +3347,7 @@ dependencies = [
  "tokio",
  "tokio-serde",
  "tokio-stream",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tracing",
  "url",
  "uuid",
@@ -3367,7 +3367,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-serde",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3731,10 +3731,14 @@ dependencies = [
  "bytes",
  "crossbeam-channel",
  "differential-dataflow",
+ "futures-executor",
  "futures-util",
+ "mz-ore",
  "mz-persist-types",
  "serde",
  "timely",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3814,7 +3818,7 @@ dependencies = [
  "tokio",
  "tokio-openssl",
  "tokio-stream",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tracing",
 ]
 
@@ -4119,7 +4123,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.1",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -4609,9 +4613,9 @@ dependencies = [
 
 [[package]]
 name = "paste"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0744126afe1a6dd7f394cb50a716dbe086cb06e255e53d8d0185d82828358fb5"
+checksum = "0c520e05135d6e763148b6426a837e239041653ba7becd2e538c076c738025fc"
 
 [[package]]
 name = "peeking_take_while"
@@ -5517,9 +5521,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4a3381e03edd24287172047536f20cabde766e2cd3e65e6b00fb3af51c4f38d"
+checksum = "d65bd28f48be7196d222d95b9243287f48d27aca604e08497513019ff0502cc4"
 
 [[package]]
 name = "serde"
@@ -6255,17 +6259,17 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
+checksum = "0edfdeb067411dba2044da6d1cb2df793dd35add7888d73c16e3381ded401764"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
- "log",
  "pin-project-lite",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use mz_ore::str::StrExt;
-use mz_sql_parser::ast::RawObjectName;
+use mz_sql_parser::ast::{CreateSecretStatement, RawObjectName};
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -42,6 +42,10 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             // The last name in an ObjectName is the item name. The item name
             // does not have a fixed index.
             // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            let object_name_len = name.0.len() - 1;
+            name.0[object_name_len] = Ident::new(to_item_name);
+        }
+        Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
             let object_name_len = name.0.len() - 1;
             name.0[object_name_len] = Ident::new(to_item_name);
         }
@@ -91,7 +95,7 @@ pub fn create_stmt_rename_refs(
         }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
-        Statement::CreateSource(_) | Statement::CreateTable(_) => {}
+        Statement::CreateSource(_) | Statement::CreateTable(_) | Statement::CreateSecret(_) => {}
         _ => unreachable!("Internal error: only catalog items need to update item refs"),
     }
 
