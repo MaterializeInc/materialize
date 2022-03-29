@@ -118,6 +118,44 @@ $ set txschema={
     "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
   }
 
+$ set txschema-bad-schema={
+    "type": "record",
+    "name": "TransactionMetadataValue",
+    "namespace": "io.debezium.connector.common",
+    "fields": [
+      {"name": "status", "type": "string"},
+      {
+        "name": "id",
+        "type": ["null", "string"]
+      },
+      {
+        "name": "event_count",
+        "type": ["null", "long"],
+        "default": null
+      },
+      {
+        "name": "data_collections",
+        "type": [
+          "null",
+          {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "name": "ConnectDefault",
+              "namespace": "io.confluent.connect.Avro",
+              "fields": [
+                {"name": "data_collection", "type": "string"},
+                {"name": "event_count", "type": "long"}
+              ]
+            }
+          }
+        ],
+        "default": null
+      }
+    ],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+  }
+
 $ kafka-create-topic topic=data-txdata
 
 > CREATE MATERIALIZED SOURCE data_txdata
@@ -220,3 +258,30 @@ $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "<TIMESTAMP>"}}
+
+
+$ kafka-create-topic topic=data-txdata-bad-schema
+
+> CREATE MATERIALIZED SOURCE data_txdata_bad_schema
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-txdata-bad-schema-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${txschema-bad-schema}'
+  ENVELOPE NONE
+
+
+$ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-schema} timestamp=4
+{"status": "BEGIN", "id": null, "event_count": null, "data_collections": null}
+{"status": "END", "id": {"string": "1"}, "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
+
+! CREATE MATERIALIZED SOURCE data_schema_inline_with_bad_schema_tx_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH(tx_metadata = data_txdata_bad_schema)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+contains:second column of tx_metadata desc should be a non-nullable string
+
+! CREATE MATERIALIZED SOURCE data_schema_inline_with_sink
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH(tx_metadata = data_sink)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+contains:tx_metadata catalog item doesn't have a desc

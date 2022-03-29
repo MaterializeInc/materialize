@@ -208,9 +208,9 @@ where
                                 assert_eq!(diff, 1);
                                 let mut i = row.iter();
                                 let (status, tx_id, event_count): (_, _, Option<i64>) = (
-                                    i.next().unwrap().unwrap_str(),
-                                    i.next().unwrap().unwrap_str().to_owned(),
-                                    i.next().unwrap().try_into().unwrap(),
+                                    i.next().expect("status field validated to exist").unwrap_str(),
+                                    i.next().expect("tx_id field validated exist").unwrap_str().to_owned(),
+                                    i.next().expect("event_count field validated exist").try_into().unwrap(),
                                 );
                                 if status != "END" {
                                     continue;
@@ -229,14 +229,14 @@ where
                                         continue;
                                     }
                                 };
-                                // XXX(chae): single struct to combine these two
                                 match tx_mapping.insert(tx_id.clone(), time) {
                                     None => {
                                         tx_event_count.insert(tx_id.clone(), event_count);
                                         tx_cap_map
                                             .insert(tx_id.clone(), Rc::clone(&tx_metadata_cap));
                                     }
-                                    Some(val) => panic!("unexpected {:?} in map??", val),
+                                    Some(val) if val == time => {},
+                                    Some(val) => panic!("unexpected mismatch in duplicate END record for {:?}: {:?} vs {:?}", tx_id, time, val),
                                 }
                             }
                         }
@@ -277,15 +277,7 @@ where
                                 }
                             };
 
-                            let tx_id = match value.iter().nth(transaction_idx).unwrap() {
-                                Datum::List(l) => match l.iter().nth(tx_id_idx).unwrap() {
-                                    Datum::String(s) => s,
-                                    d => panic!("type error: expected string, found {:?}", d),
-                                },
-                                d => {
-                                    panic!("type error: expected record, found {:?}", d)
-                                }
-                            };
+                            let tx_id = value.iter().nth(transaction_idx).unwrap().unwrap_list().iter().nth(tx_id_idx).unwrap().unwrap_str();
 
                             let tx_time: Timestamp = match tx_mapping.get(tx_id) {
                                 Some(time) => *time,

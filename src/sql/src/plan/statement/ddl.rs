@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -50,7 +50,7 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
@@ -645,6 +645,51 @@ pub fn plan_create_source(
                                             &src,
                                         ]),
                                     )?)?;
+                            let mut desc_iter = item
+                                .desc()
+                                .context("tx_metadata catalog item doesn't have a desc")?
+                                .iter();
+
+                            match desc_iter.next() {
+                                Some((
+                                    _,
+                                    ColumnType {
+                                        scalar_type: ScalarType::String,
+                                        nullable: false,
+                                    },
+                                )) => (),
+                                Some(_) | None => {
+                                    bail!("first column of tx_metadata desc should be a non-nullable string")
+                                }
+                            }
+
+                            match desc_iter.next() {
+                                Some((
+                                    _,
+                                    ColumnType {
+                                        scalar_type: ScalarType::String,
+                                        nullable: false,
+                                    },
+                                )) => (),
+                                Some(_) | None => {
+                                    bail!("second column of tx_metadata desc should be a non-nullable string")
+                                }
+                            }
+
+                            match desc_iter.next() {
+                                Some((
+                                    _,
+                                    ColumnType {
+                                        scalar_type:
+                                            ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64,
+                                        nullable: _,
+                                    },
+                                )) => (),
+                                Some(_) | None => {
+                                    bail!("third column of tx_metadata desc should be an integer type")
+                                }
+                            }
+
                             depends_on.push(item.id());
                             depends_on.extend(item.uses());
 
