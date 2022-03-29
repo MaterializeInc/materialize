@@ -151,7 +151,7 @@ use crate::client::{Client, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
-use crate::coord::dataflow_builder::ExprPrepStyle;
+use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
@@ -2126,13 +2126,9 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
-
         let temp_storage = RowArena::new();
-        self.dataflow_builder(compute_instance).prep_scalar_expr(
+        prep_scalar_expr(
+            self.catalog.state(),
             &mut secret.secret_as.clone(),
             ExprPrepStyle::OneShot {
                 logical_time: None,
@@ -3306,7 +3302,8 @@ impl Coordinator {
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            builder.prep_relation_expr(
+            prep_relation_expr(
+                self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
                     logical_time: Some(timestamp),
@@ -3559,7 +3556,8 @@ impl Coordinator {
             // Explicitly requested timestamps should be respected.
             QueryWhen::AtTimestamp(mut timestamp) => {
                 let temp_storage = RowArena::new();
-                self.dataflow_builder(compute_instance).prep_scalar_expr(
+                prep_scalar_expr(
+                    self.catalog.state(),
                     &mut timestamp,
                     ExprPrepStyle::OneShot {
                         logical_time: None,
