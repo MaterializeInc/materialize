@@ -926,17 +926,13 @@ impl ParamType {
 
     fn oid(&self) -> u32 {
         match self {
-            ParamType::Plain(t) => match t {
-                ScalarType::List { custom_oid, .. } | ScalarType::Map { custom_oid, .. }
-                    if custom_oid.is_some() =>
-                {
-                    custom_oid.unwrap()
-                }
-                t => {
-                    let t: mz_pgrepr::Type = t.into();
-                    t.oid()
-                }
-            },
+            ParamType::Plain(t) => {
+                assert!(!t.is_custom_type(),
+                    "custom types cannot currently be used as parameters; use a polymorphic parameter that accepts the custom type instead"
+                );
+                let t: mz_pgrepr::Type = t.into();
+                t.oid()
+            }
             ParamType::Any => postgres_types::Type::ANY.oid(),
             ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
             ParamType::ArrayElementAny => postgres_types::Type::ANYELEMENT.oid(),
