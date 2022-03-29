@@ -30,7 +30,7 @@ name = "materialized-unstable"
 [dependencies]
 anyhow = "1.0.55"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-async-trait = "0.1.52"
+async-trait = "0.1.53"
 atty = "0.2.14"
 backtrace = "0.3.64"
 base64 = "0.13.0"
@@ -83,7 +83,7 @@ serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 shell-words = "1.1.0"
 sysctl = "0.4.4"
-sysinfo = "0.23.5"
+sysinfo = "0.23.6"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["sync"] }
@@ -98,7 +98,7 @@ opentelemetry-otlp = { version = "0.10"}
 tracing-opentelemetry = "0.17"
 tonic = { version = "0.6.2", features = ["transport"] }
 tokio-native-tls = { version = "0.3.0" }
-native-tls = { version = "0.2.9", features = ["alpn"] }
+native-tls = { version = "0.2.10", features = ["alpn"] }
 hyper-proxy = { version = "0.9.1" }
 hyper-tls = { version = "0.5.0" }
 
