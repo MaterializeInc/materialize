@@ -134,7 +134,7 @@ count
 # in a row. Obviously, this test will not always catch the issue since the original
 # bug was nondeterministic, but this is a good best-effort smake test.
 
-$ set-sql-timeout duration=0s force=true
+$ set-max-tries max-tries=1
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>

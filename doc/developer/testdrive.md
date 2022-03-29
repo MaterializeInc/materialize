@@ -621,6 +621,14 @@ default timeout, unless you specify `force=true`. Use this override with
 caution! It may cause the test to fail in test environments that introduce
 overhead and need a larger `--default-timeout` to succeed.
 
+#### `$ set-max-tries max-tries=N`
+
+Adjust the number of tries testdrive will perform while waiting for a SQL statement to arrive to the desired result.
+
+Set `max-tries` to `1` in order to ensure that statements are executed only once. If the desired result is not achieved on the first try, the test will fail. This is
+useful when testing operations that should return the right result immediately rather than eventually.
+
+
 ## Actions on Avro OCF files
 
 #### `$ avro-ocf-write path=... schema=... codec=(snapy|null) [repeat=N]`
