@@ -70,7 +70,8 @@ impl From<FullObjectName> for UnresolvedObjectName {
     }
 }
 
-/// A fully-qualified non-human readable name of an item in the catalog.
+/// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
+/// and schema.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct QualifiedObjectName {
     pub qualifiers: ObjectQualifiers,
