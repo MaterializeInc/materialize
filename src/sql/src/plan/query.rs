@@ -777,7 +777,7 @@ pub fn plan_secret_as(scx: &StatementContext, expr: Expr<Aug>) -> Result<MirScal
         allow_windows: false,
     };
     let expr = plan_expr(ecx, &expr)?
-        .type_as_any(ecx)?
+        .type_as(ecx, &ScalarType::Bytes)?
         .lower_uncorrelated()?;
     Ok(expr)
 }

@@ -2140,16 +2140,9 @@ impl Coordinator {
             },
         )?;
         let evaled = secret.secret_as.eval(&[], &temp_storage)?;
-        let ty = secret.secret_as.typ(&RelationType::empty());
 
         // TODO martin: hook the payload into a secrets backend
-        let _payload = match ty.scalar_type {
-            ScalarType::Bytes => evaled.unwrap_bytes(),
-            _ => coord_bail!(
-                "can't use {} as a binary vector for AS",
-                self.catalog.for_session(session).humanize_column_type(&ty)
-            ),
-        };
+        let _payload = evaled.unwrap_bytes();
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
