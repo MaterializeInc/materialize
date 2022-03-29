@@ -90,7 +90,7 @@ CREATE MATERIALIZED VIEW jsonified_kinesis_source AS
     data->>'field1' AS field_1,
     data->>'field2' AS field_2,
     data->>'field3' AS field_3
-  FROM (SELECT text::jsonb AS data FROM json_source);
+  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
 ```
 
 {{< /tab >}}
