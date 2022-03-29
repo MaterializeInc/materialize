@@ -150,7 +150,7 @@ It likely has a more verbose diagnostic API that describes its state, which shou
     For example, the user may ask to not receive the initial snapshot, rather that receive and then discard it.
     For example, the user may provide filtering and projection that can be applied before the data are transmitted.
 
-*   `UpdateAndDowngrade(WriteCapability(id, frontier), updates, new_frontier)`: applies `updates` to `id` and downgrades `frontier` to `new_frontier`.
+*   `Append(WriteCapability(id, frontier), updates, new_frontier)`: applies `updates` to `id` and downgrades `frontier` to `new_frontier`.
 
     All times in `updates` must be greater or equal to `frontier` and not greater or equal to `new_frontier`.
 
@@ -245,7 +245,7 @@ All writes at a timestamp are visible to all reads at the same timestamp.
 
 SELECT statements observe all data mutations up through and including their timestamp.
 For this reason, we strictly advance the timestamp for each write that occurs after a read, to ensure that the write is not visible to the read.
-ADAPTER uses `UpdateAndDowngrade` in response to the first read after a write, to ensure that prior writes are readable and to strictly advance the write frontier.
+ADAPTER uses `Append` in response to the first read after a write, to ensure that prior writes are readable and to strictly advance the write frontier.
 
 Some DML operations, like UPDATE and DELETE, require a read-write transaction which prevents other writes from intervening.
 In these and other non-trivial cases, we rely on the total order of timestamps to provide the apparent total order of system execution.
@@ -267,8 +267,8 @@ Two sources created with the same arguments are not guaranteed to have the same 
 Sources remain active until a `DROP SOURCE` command is received, at which point the Adapter layer drops its read capability.
 
 One common specialization of source is the "table".
-The `CREATE TABLE` command introduces a new source that is not automatically populated by an external source, and is instead populated by `UpdateAndDowngrade` commands.
-The Adapter layer may use a write-ahead log to durably coalesce multiple writes at the same timestamp, as the `UpdateAndDowngrade` command does not otherwise allow this.
+The `CREATE TABLE` command introduces a new source that is not automatically populated by an external source, and is instead populated by `Append` commands.
+The Adapter layer may use a write-ahead log to durably coalesce multiple writes at the same timestamp, as the `Append` command does not otherwise allow this.
 The `DROP TABLE` command drops both the read and write capabilities for the source.
 
 ## Indexes
@@ -300,7 +300,7 @@ Read-after-write, and general transactions are technically possible using advanc
 All MZ collections support compensating update actions, and one can tentatively deploy updates and eventually potentially retract them, as long as others are unable to observe violations of atomicity.
 Further detail available upon request.
 
-It is critical that Adapter not deploy `UpdateAndDowngrade` commands to Storage and Compute until a transaction has committed.
+It is critical that Adapter not deploy `Append` commands to Storage and Compute until a transaction has committed.
 These lower layers should provide similar "transactional" interfaces that validate tentative commands and ensure they can be committed without errors.
 
 ## Compaction
