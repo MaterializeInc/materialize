@@ -1711,7 +1711,7 @@ impl Coordinator {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
             Plan::CreateSecret(plan) => {
-                tx.send(self.sequence_create_secret(plan).await, session);
+                tx.send(self.sequence_create_secret(&session, plan).await, session);
             }
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
@@ -2116,14 +2116,40 @@ impl Coordinator {
 
     async fn sequence_create_secret(
         &mut self,
+        session: &Session,
         plan: CreateSecretPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateSecretPlan {
             name,
-            secret: _,
+            secret,
             full_name,
             if_not_exists,
         } = plan;
+
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
+
+        let temp_storage = RowArena::new();
+        self.dataflow_builder(compute_instance).prep_scalar_expr(
+            &mut secret.secret_as.clone(),
+            ExprPrepStyle::OneShot {
+                logical_time: None,
+                session,
+            },
+        )?;
+        let evaled = secret.secret_as.eval(&[], &temp_storage)?;
+        let ty = secret.secret_as.typ(&RelationType::empty());
+
+        // TODO martin: hook the payload into a secrets backend
+        let _payload = match ty.scalar_type {
+            ScalarType::Bytes => evaled.unwrap_bytes(),
+            _ => coord_bail!(
+                "can't use {} as a binary vector for AS",
+                self.catalog.for_session(session).humanize_column_type(&ty)
+            ),
+        };
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;

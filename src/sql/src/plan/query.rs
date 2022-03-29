@@ -30,7 +30,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, GlobalId, Id, LocalId, RowSetFinishing};
+use mz_expr::{func as expr_func, GlobalId, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -757,6 +757,29 @@ pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Aug>>) -> Result<Que
         .type_as_any(ecx)?
         .lower_uncorrelated()?;
     Ok(QueryWhen::AtTimestamp(expr))
+}
+
+/// Plans an expression in the AS position of a `CREATE SECRET`.
+pub fn plan_secret_as(scx: &StatementContext, expr: Expr<Aug>) -> Result<MirScalarExpr, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+
+    transform_ast::transform_expr(scx, &mut expr.clone())?;
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "AS",
+        scope: &scope,
+        relation_type: &desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_windows: false,
+    };
+    let expr = plan_expr(ecx, &expr)?
+        .type_as_any(ecx)?
+        .lower_uncorrelated()?;
+    Ok(expr)
 }
 
 pub fn plan_default_expr(

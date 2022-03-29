@@ -442,6 +442,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Secret {
     pub create_sql: String,
+    pub secret_as: MirScalarExpr,
 }
 
 #[derive(Clone, Debug)]
