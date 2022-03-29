@@ -3713,6 +3713,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rand",
+ "rusqlite",
  "semver",
  "serde",
  "serde_json",

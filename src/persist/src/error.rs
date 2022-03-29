@@ -101,6 +101,12 @@ impl<T> From<sync::PoisonError<T>> for Error {
     }
 }
 
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::String(format!("sqlite: {}", e))
+    }
+}
+
 /// A stub implementation of [Log] that always returns errors.
 ///
 /// This exists to let us keep the (surprisingly non-trivial) Log plumbing while

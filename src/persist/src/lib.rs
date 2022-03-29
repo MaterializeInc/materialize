@@ -30,6 +30,7 @@ pub mod operators;
 pub mod pfuture;
 pub mod runtime;
 pub mod s3;
+pub mod sqlite;
 pub mod storage;
 pub mod unreliable;
 pub mod workload;
