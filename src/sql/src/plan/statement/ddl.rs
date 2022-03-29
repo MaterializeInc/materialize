@@ -631,13 +631,19 @@ pub fn plan_create_source(
                 }
                 DbzMode::Plain => {
                     // XXX(chae): should this be for upsert too?
+                    // TODO(chae): validate shape of tx_metadata item: maybe including full dbz dedup?
                     let tx_metadata = match with_options.remove("tx_metadata") {
                         Some(Value::String(src)) => {
                             // XXX(chae): this seems like I'm breaking a boundary by accessing scx.catalog
+                            // Also please I would like a suggestion on purifying / getting a resolved name
                             let item =
                                 scx.catalog
                                     .resolve_item(&normalize::unresolved_object_name(
-                                        UnresolvedObjectName::unqualified(&src),
+                                        UnresolvedObjectName::qualified(&[
+                                            "materialize",
+                                            "public",
+                                            &src,
+                                        ]),
                                     )?)?;
                             depends_on.push(item.id());
                             depends_on.extend(item.uses());
@@ -663,7 +669,7 @@ pub fn plan_create_source(
                         "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
                             before_idx,
                             after_idx,
-                    tx_metadata,
+                            tx_metadata,
                             mode: DebeziumMode::Ordered(dedup_projection?),
                         }),
                         "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
@@ -1050,14 +1056,10 @@ fn typecheck_debezium_dedup(
     let tx_id_idx = match tx_id {
         Some((idx, (_, ty))) => match &ty.scalar_type {
             ScalarType::String => Some(idx),
-            _ => None, //bail!("'total_order' column must be an bigint"),
+            _ => None,
         },
-        None => None, //bail!("'total_order' field missing from tx record"),
+        None => None,
     };
-    eprintln!(
-        "TX IDX: {:?}, TX ID: {:?}, TX ID IDX: {:?}",
-        transaction_idx, tx_id, tx_id_idx
-    );
     Ok(DebeziumDedupProjection {
         source_idx,
         snapshot_idx,

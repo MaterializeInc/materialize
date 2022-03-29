@@ -441,9 +441,6 @@ where
                         // render envelopes
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
-                                // XXX(chae): use timestamps of END tx messages as timestamp for everything in the transaction
-                                // XXX(chae): use dbz deduplication full for tx source
-                                // XXX(chae): add depends_on for Sources in catalog
                                 let (stream, errors) = match dbz_envelope.tx_metadata {
                                     Some(tx_id) => {
                                         let tx_src_desc = storage_state
@@ -459,32 +456,24 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
-                                                    operators: linear_operators.clone(),
-                                                    persist: persist.clone(),
+                                                    operators: None,
+                                                    persist,
                                                 },
                                                 storage_state,
                                                 scope,
-                                                materialized_logging.clone(),
-                                                src_id,
+                                                materialized_logging,
+                                                tx_id,
                                             );
                                         needed_tokens.push(tx_token);
                                         error_collections.push(tx_source_err);
 
-                                        // XXX: try rendering tx and pass _that_ to render the data stream? rather than the raw colelction.
-                                        //      will do the deduplication and use the time we read in the tx data -- rather than needing the tx_id to be a u64?
-                                        //      would also make error handling more natural?
-                                        //      but would need to handle the mapping between the tx timestamp / tx id so we can assign timestamp to data
-                                        let (dbz_render, dbz_err, token) =
-                                            super::debezium::render_tx(
-                                                dbz_envelope,
-                                                &results,
-                                                tx_source_ok,
-                                                dataflow_debug_name.clone(),
-                                            );
-                                        if let Some(tok) = token {
-                                            needed_tokens.push(Rc::new(tok));
-                                        }
-                                        (dbz_render, dbz_err)
+                                        super::debezium::render_tx(
+                                            src_id,
+                                            dbz_envelope,
+                                            &results,
+                                            tx_source_ok,
+                                            dataflow_debug_name.clone(),
+                                        )
                                     }
                                     None => super::debezium::render(
                                         dbz_envelope,

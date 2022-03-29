@@ -120,17 +120,15 @@ $ set txschema={
 
 $ kafka-create-topic topic=data-txdata
 
-$ kafka-ingest format=avro topic=data-txdata schema=${txschema}
-{"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
-{"status": "END", "id": "1", "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
-{"status": "BEGIN", "id": "5", "event_count": null, "data_collections": null}
-{"status": "END", "id": "5", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
-
 > CREATE MATERIALIZED SOURCE data_txdata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-txdata-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${txschema}'
-  ENVELOPE NONE 
+  ENVELOPE NONE
 
+
+$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=4
+{"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
+{"status": "END", "id": "1", "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
 
 
 $ kafka-create-topic topic=data
@@ -150,12 +148,24 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 5}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 
+
 > SELECT a, b FROM data_schema_inline
-a  b 
+a  b
 -----
-1  1 
-2  3 
+1  1
+2  3
 4  5
+
+# XXX(chae): TODO: allow reading when only have some of the data that's described by tx: e.g. be able to read if we've submiited the the BEGIN/END tx_id 5 records but not the tx_id 5 data records
+
+$ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=7
+{"status": "BEGIN", "id": "5", "event_count": null, "data_collections": null}
+{"status": "END", "id": "5", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
+
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 8, "b": 9}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "5"}}
+
 
 > CREATE SINK data_sink FROM data_schema_inline
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
@@ -172,7 +182,7 @@ a  b
 ----
 1  1
 2  3
-4  5 
+4  5
 8  9
 
 # Create a source using a file schema. This should fail if the named schema file
@@ -198,13 +208,15 @@ a  b
 ----
 1  1
 2  3
-4  5 
+4  5
 8  9
 
-$ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "4"}}
-{"before": null, "after": {"row": {"a": 2, "b": 3}}, "transaction": {"id": "4"}}
-{"before": null, "after": {"row": {"a": 4, "b": 5}}, "transaction": {"id": "4"}}
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "5"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2, "b": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 4, "b": 5}}, "transaction": {"id": "<TIMESTAMP>"}}
+
+$ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "<TIMESTAMP>"}}

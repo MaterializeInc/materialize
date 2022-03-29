@@ -16,7 +16,6 @@ use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_dataflow_types::sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode};
 use mz_expr::PartitionId;
 use mz_repr::MessagePayload;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -397,8 +396,6 @@ where
                     } else if matches!(&value, Some(Ok(_))) {
                         n_successes += 1;
                     }
-
-                    eprintln!("GIVING RECORD AT CAP {:?}", cap);
 
                     session.give(DecodeResult {
                         key,

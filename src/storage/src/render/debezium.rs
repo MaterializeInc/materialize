@@ -7,32 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
-use std::cell::RefCell;
 use std::cmp::max;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ops::{Add, Sub};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
-use differential_dataflow::capture::{Message, Progress, YieldingIter};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::AsCollection;
-use differential_dataflow::Collection;
-use timely::dataflow::channels::pact::Pipeline;
+use differential_dataflow::{Collection, Hashable};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
-use timely::scheduling::SyncActivator;
 use tracing::{debug, error, info, warn};
 
 use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
-use mz_expr::GlobalId;
+use mz_expr::{EvalError, GlobalId};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::DecodeResult;
@@ -130,6 +125,7 @@ where
 }
 
 pub(crate) fn render_tx<G: Scope>(
+    data_id: GlobalId,
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
     tx_ok: Collection<G, Row, Diff>,
@@ -137,249 +133,267 @@ pub(crate) fn render_tx<G: Scope>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
-    Option<Box<dyn Any>>,
 )
 where
     G: ScopeParent<Timestamp = Timestamp>,
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
-    // XXX(chae): TODOs
-    // - pull tx metadata from another place
-    // - handle errors here? decode_cdc just logs and drops errors.  This might not be appropriate here? What is the time domain of the errors?
-    // XXX(chae): use timestamps of END tx messages as timestamp for everything in the transaction
-    // XXX(chae): use dbz deduplication full for tx source
-    let channel: Rc<RefCell<VecDeque<Message<_, <G as ScopeParent>::Timestamp, Diff>>>> =
-        Rc::new(RefCell::new(VecDeque::new()));
-    let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
-    // XXX(chae): Figure out mapping from tx_id to ts -- including stalling the data pipeline until the tx pipeline has info
-    let tx_map: Rc<RefCell<HashMap<_, Timestamp>>> = Rc::new(RefCell::new(HashMap::new()));
-    input.sink(Pipeline, "envelope-debezium", {
-        let channel = Rc::clone(&channel);
-        let activator = Rc::clone(&activator);
-        let envelope = envelope.clone();
-        let debug_name = debug_name.clone();
-        let mut data = vec![];
-        let mut dedup_state = HashMap::new();
-        let (transaction_idx, tx_id_idx) = match envelope {
-            DebeziumEnvelope {
-                mode:
-                    DebeziumMode::Full(DebeziumDedupProjection {
-                        transaction_idx,
-                        tx_id_idx,
-                        ..
-                    }),
-                ..
-            }
-            | DebeziumEnvelope {
-                mode:
-                    DebeziumMode::Ordered(DebeziumDedupProjection {
-                        transaction_idx,
-                        tx_id_idx,
-                        ..
-                    }),
-                ..
-            }
-            | DebeziumEnvelope {
-                mode:
-                    DebeziumMode::FullInRange {
-                        projection:
-                            DebeziumDedupProjection {
-                                transaction_idx,
-                                tx_id_idx,
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            } => (
-                transaction_idx,
-                tx_id_idx.expect("render_tx should only be called when there's a transaction"),
-            ),
-            DebeziumEnvelope {
-                mode: DebeziumMode::None,
-                ..
-            } => panic!("render_tx should be called with a dedup mode"),
-        };
-        move |input| {
-            while let Some((cap, refmut_data)) = input.next() {
-                //let mut session = output.session(&cap);
-                refmut_data.swap(&mut data);
-                for result in data.drain(..) {
-                    let key = match result.key.transpose() {
-                        Ok(key) => key,
-                        Err(err) => {
-                            //session.give((Err(err.into()), cap.time().clone(), 1));
-                            channel.borrow_mut().push_back(Message::Updates(vec![(
-                                Err(err.into()),
-                                // XXX(chae): what's the right time domain for errors?
-                                cap.time().clone(),
-                                1,
-                            )]));
-                            continue;
-                        }
-                    };
-                    let value = match result.value {
-                        Some(Ok(value)) => value,
-                        Some(Err(err)) => {
-                            //session.give((Err(err.into()), cap.time().clone(), 1));
-                            channel.borrow_mut().push_back(Message::Updates(vec![(
-                                Err(err.into()),
-                                // XXX(chae): what's the right time domain for errors?
-                                cap.time().clone(),
-                                1,
-                            )]));
-                            continue;
-                        }
-                        None => continue,
-                    };
+    let hashed_id = data_id.hashed();
 
-                    let partition_dedup = dedup_state
-                        .entry(result.partition.clone())
-                        .or_insert_with(|| DebeziumDeduplicationState::new(envelope.clone()));
-                    let should_use = match partition_dedup {
-                        Some(ref mut s) => {
-                            let res = s.should_use_record(
-                                key,
-                                &value,
-                                result.position,
-                                result.upstream_time_millis,
-                                &debug_name,
-                            );
-                            match res {
-                                Ok(b) => b,
-                                Err(err) => {
-                                    channel.borrow_mut().push_back(Message::Updates(vec![(
-                                        Err(err),
-                                        // XXX(chae): what's the right time domain for errors?
-                                        cap.time().clone(),
-                                        1,
-                                    )]));
+    let (transaction_idx, tx_id_idx) = match envelope {
+        DebeziumEnvelope {
+            mode:
+                DebeziumMode::Full(DebeziumDedupProjection {
+                    transaction_idx,
+                    tx_id_idx,
+                    ..
+                }),
+            ..
+        }
+        | DebeziumEnvelope {
+            mode:
+                DebeziumMode::Ordered(DebeziumDedupProjection {
+                    transaction_idx,
+                    tx_id_idx,
+                    ..
+                }),
+            ..
+        }
+        | DebeziumEnvelope {
+            mode:
+                DebeziumMode::FullInRange {
+                    projection:
+                        DebeziumDedupProjection {
+                            transaction_idx,
+                            tx_id_idx,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } => (
+            *transaction_idx,
+            tx_id_idx.expect("render_tx should only be called when there's a transaction"),
+        ),
+        DebeziumEnvelope {
+            mode: DebeziumMode::None,
+            ..
+        } => panic!("render_tx should be called with a dedup mode"),
+    };
+
+    // XXX(chae): Should we try to avoid moving everything to one worker?
+    tx_ok
+        .inner
+        .binary_frontier(
+            &input,
+            Exchange::new(move |_| hashed_id),
+            Exchange::new(move |_| hashed_id),
+            "envelope-debezium-tx",
+            {
+                let envelope = envelope.clone();
+                let mut tx_data = vec![];
+                let mut data = vec![];
+                let mut data_buffer = VecDeque::new();
+                let mut dedup_state = HashMap::new();
+                let mut tx_mapping = HashMap::new();
+                let mut tx_event_count = HashMap::new();
+                let mut tx_cap_map = HashMap::new();
+                move |mut binary_cap, op_info| {
+                    let activator = input.scope().activator_for(&op_info.address[..]);
+                    move |tx_metadata_input, data_input, output| {
+                        while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
+                            refmut_data.swap(&mut tx_data);
+                            let tx_metadata_cap = Rc::new(tx_metadata_cap.retain());
+                            for (row, time, diff) in tx_data.drain(..) {
+                                assert_eq!(diff, 1);
+                                let mut i = row.iter();
+                                let (status, tx_id, event_count): (_, _, Option<i64>) = (
+                                    i.next().unwrap().unwrap_str(),
+                                    i.next().unwrap().unwrap_str().to_owned(),
+                                    i.next().unwrap().try_into().unwrap(),
+                                );
+                                if status != "END" {
                                     continue;
+                                }
+                                let event_count = match event_count {
+                                    Some(c) => c,
+                                    None => {
+                                        // XXX(chae): maybe a panic??
+                                        output.session(&*tx_metadata_cap).give((
+                                            Err(DataflowError::EvalError(EvalError::Internal(
+                                                String::from("Need events_remaining in END record"),
+                                            ))),
+                                            time,
+                                            1,
+                                        ));
+                                        continue;
+                                    }
+                                };
+                                // XXX(chae): single struct to combine these two
+                                match tx_mapping.insert(tx_id.clone(), time) {
+                                    None => {
+                                        tx_event_count.insert(tx_id.clone(), event_count);
+                                        tx_cap_map
+                                            .insert(tx_id.clone(), Rc::clone(&tx_metadata_cap));
+                                    }
+                                    Some(val) => panic!("unexpected {:?} in map??", val),
                                 }
                             }
                         }
-                        None => true,
-                    };
 
-                    if should_use {
-                        let time = match value.iter().nth(transaction_idx).unwrap() {
-                            Datum::List(l) => match l.iter().nth(tx_id_idx).unwrap() {
-                                Datum::String(s) => match s.parse() {
-                                    Ok(s) => s,
-                                    Err(e) => panic!("blah"),
+                        while let Some((_data_cap, refmut_data)) = data_input.next() {
+                            // RefOrMut doesn't let us drain directly into iterator
+                            refmut_data.swap(&mut data);
+                            data_buffer.extend(data.drain(..));
+                        }
+                        while let Some(result) = data_buffer.get(0) {
+                            let result = result.clone();
+                            let key = match result.key.transpose() {
+                                Ok(key) => key,
+                                Err(err) => {
+                                    output.session(&binary_cap).give((
+                                        Err(err.into()),
+                                        *binary_cap.time(),
+                                        1,
+                                    ));
+                                    let _ = data_buffer.pop_front();
+                                    continue;
+                                }
+                            };
+                            let value = match result.value {
+                                Some(Ok(value)) => value,
+                                Some(Err(err)) => {
+                                    output.session(&binary_cap).give((
+                                        Err(err.into()),
+                                        *binary_cap.time(),
+                                        1,
+                                    ));
+                                    let _ = data_buffer.pop_front();
+                                    continue;
+                                }
+                                None => {
+                                    let _ = data_buffer.pop_front();
+                                    continue;
+                                }
+                            };
+
+                            let tx_id = match value.iter().nth(transaction_idx).unwrap() {
+                                Datum::List(l) => match l.iter().nth(tx_id_idx).unwrap() {
+                                    Datum::String(s) => s,
+                                    d => panic!("type error: expected string, found {:?}", d),
                                 },
-                                d => panic!("type error: expected string, found {:?}", d),
-                            },
-                            d => {
-                                panic!("type error: expected record, found {:?}", d)
-                            }
-                        };
+                                d => {
+                                    panic!("type error: expected record, found {:?}", d)
+                                }
+                            };
 
-                        match value.iter().nth(before_idx).unwrap() {
-                            Datum::List(l) => {
-                                channel.borrow_mut().push_back(Message::Updates(vec![(
-                                    Ok(Row::pack(&l)),
-                                    time.clone(),
-                                    -1,
-                                )]));
+                            let tx_time: Timestamp = match tx_mapping.get(tx_id) {
+                                Some(time) => *time,
+                                None => break,
+                            };
+
+                            // We're committed to processing it if we have a tx_time
+                            let _ = data_buffer.pop_front();
+
+                            let partition_dedup = dedup_state
+                                .entry(result.partition.clone())
+                                .or_insert_with(|| {
+                                    DebeziumDeduplicationState::new(envelope.clone())
+                                });
+                            let should_use = match partition_dedup {
+                                Some(ref mut s) => {
+                                    let res = s.should_use_record(
+                                        key,
+                                        &value,
+                                        result.position,
+                                        result.upstream_time_millis,
+                                        &debug_name,
+                                    );
+                                    match res {
+                                        Ok(b) => b,
+                                        Err(err) => {
+                                            // XXX(chae): is it worth trying to use `tx_cap` if it exists or should just use `binary_cap`?
+                                            // If we would dedup the message below, we might not have a cap
+                                            match tx_cap_map.get(tx_id) {
+                                                Some(c) => output.session(&**c).give((
+                                                    Err(err),
+                                                    *c.time(),
+                                                    1,
+                                                )),
+                                                None => output.session(&binary_cap).give((
+                                                    Err(err),
+                                                    *binary_cap.time(),
+                                                    1,
+                                                )),
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                }
+                                None => true,
+                            };
+
+                            if should_use {
+                                let tx_cap_entry = match tx_cap_map.entry(tx_id.to_string()) {
+                                    Entry::Occupied(e) => e,
+                                    Entry::Vacant(_) => panic!("Must have cap if using record"),
+                                };
+
+                                let mut session = output.session(&**tx_cap_entry.get());
+                                match value.iter().nth(before_idx).unwrap() {
+                                    Datum::List(l) => {
+                                        session.give((Ok(Row::pack(&l)), tx_time, -1));
+                                    }
+                                    Datum::Null => {}
+                                    d => {
+                                        panic!("type error: expected record, found {:?}", d)
+                                    }
+                                }
+                                match value.iter().nth(after_idx).unwrap() {
+                                    Datum::List(l) => {
+                                        session.give((Ok(Row::pack(&l)), tx_time, 1));
+                                    }
+                                    Datum::Null => {}
+                                    d => {
+                                        panic!("type error: expected record, found {:?}", d)
+                                    }
+                                }
+                                match tx_event_count.get_mut(tx_id) {
+                                    Some(count) => {
+                                        *count -= 1;
+                                        if *count == 0 {
+                                            let (_, tx_cap) = tx_cap_entry.remove_entry();
+                                            binary_cap.downgrade(&tx_cap.time());
+                                            // XXX(chae): is this necessary?
+                                            let _ = Rc::try_unwrap(tx_cap);
+                                        }
+                                    }
+                                    None => panic!("need event count for tx_id {:?}", tx_id),
+                                }
                             }
-                            Datum::Null => {}
-                            d => panic!("type error: expected record, found {:?}", d),
                         }
-                        match value.iter().nth(after_idx).unwrap() {
-                            Datum::List(l) => {
-                                channel.borrow_mut().push_back(Message::Updates(vec![(
-                                    Ok(Row::pack(&l)),
-                                    time.clone(),
-                                    1,
-                                )]));
-                            }
-                            Datum::Null => {}
-                            d => panic!("type error: expected record, found {:?}", d),
+
+                        if !data_buffer.is_empty() || !tx_cap_map.is_empty() {
+                            activator.activate_after(Duration::from_secs(1));
+                        } else {
+                            let tx_frontier = tx_metadata_input.frontier().frontier().to_owned();
+                            let data_frontier = data_input.frontier().frontier().to_owned();
+                            let meet = data_frontier.meet(&tx_frontier);
+                            // Having binary_cap be Capability<u64> rather than Capability<Antichain<u64>>
+                            // means we can't just clear it. Other choice is wrapping it in an `Option` and
+                            // then `take`ing it if `meet` is the empty Antichain. But then we'd have a
+                            // bunch of unwraps everywhere.
+                            let meet_u64 = meet.into_iter().next().unwrap_or(u64::MAX);
+                            let _ = binary_cap.try_downgrade(&meet_u64);
                         }
                     }
                 }
-            }
-            if let Some(activator) = activator.borrow_mut().as_mut() {
-                activator.activate().unwrap()
-            }
-        }
-    });
-
-    // XXX(chae): use an activator to ensure progress?
-    // Current state: only `max(Progress.upper) - 1` is considered closed by the coordinator.  So things written at max cannot be queried via sql.
-    tx_ok.inner.sink(Pipeline, "envelope-debezium-txdata", {
-        let channel = Rc::clone(&channel);
-        let activator = Rc::clone(&activator);
-        let tx_map = Rc::clone(&tx_map);
-        //let count = Rc::clone(&count);
-        //let mut dedup_state = HashMap::new();
-        let mut data = vec![];
-        use timely::progress::Timestamp as _;
-        let last = Rc::new(RefCell::new(<G as ScopeParent>::Timestamp::minimum()));
-        move |input| {
-            while let Some((cap, refmut_data)) = input.next() {
-                refmut_data.swap(&mut data);
-                for (row, time, diff) in data.drain(..) {
-                    assert_eq!(diff, 1);
-                    let mut i = row.iter();
-                    let (status, tx_id, event_count): (
-                        _,
-                        <G as ScopeParent>::Timestamp,
-                        Option<i64>,
-                    ) = (
-                        i.next().unwrap().unwrap_str(),
-                        i.next().unwrap().unwrap_str().parse().unwrap(),
-                        i.next().unwrap().try_into().unwrap(),
-                    );
-                    eprintln!(
-                        "TX META STREAM: {:?} {:?} {:?}; TIME: {:?}; CAP TIME {:?}",
-                        status,
-                        tx_id,
-                        event_count,
-                        time,
-                        cap.time(),
-                    );
-                    tx_map.borrow_mut().insert(tx_id, time);
-                    if status == "END" {
-                        let data_time = tx_id;
-                        let tx_upper_time = tx_id + 1;
-                        // XXX(chae): Transform into time domain provided by the tx data rather than using the tx_id as the time
-                        channel.borrow_mut().push_back(Message::Progress(Progress {
-                            lower: vec![last.borrow().clone()],
-                            upper: vec![(tx_upper_time.clone())],
-                            counts: vec![(data_time.clone(), event_count.unwrap() as usize)],
-                        }));
-                        *last.borrow_mut() = tx_upper_time;
-                    }
-                }
-            }
-            if let Some(activator) = activator.borrow_mut().as_mut() {
-                activator.activate().unwrap()
-            }
-        }
-    });
-    struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
-    impl<T: std::fmt::Debug> Iterator for VdIterator<T> {
-        type Item = T;
-        fn next(&mut self) -> Option<T> {
-            eprintln!("PROVIDING {:?}", self.0.borrow_mut().get(0));
-            self.0.borrow_mut().pop_front()
-        }
-    }
-    let (token, stream) = differential_dataflow::capture::source::build(input.scope(), move |ac| {
-        *activator.borrow_mut() = Some(ac);
-        YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
-    });
-    let (ok, err) = stream
-        //.as_collection()
-        //.inner
-        //.ok_err(|(row, ts, diff)| Ok((row, ts, diff as i64)));
+            },
+        )
         .ok_err(|(res, time, diff)| match res {
             Ok(v) => Ok((v, time, diff)),
             Err(e) => Err((e, time, diff)),
-        });
-    (ok, err, Some(token))
+        })
 }
 
 /// Track whether or not we should skip a specific debezium message
