@@ -20,7 +20,7 @@
 
 use tempfile::NamedTempFile;
 
-use mz_coord::catalog::{Catalog, CatalogItem, Op, Table};
+use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
@@ -53,7 +53,7 @@ async fn datadriven() {
                         .id();
                     let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
                     let schema_spec = catalog
-                        .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, 0)
+                        .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, SYSTEM_CONN_ID)
                         .unwrap()
                         .id
                         .clone();
