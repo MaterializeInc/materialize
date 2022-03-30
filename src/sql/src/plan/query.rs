@@ -760,12 +760,15 @@ pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Aug>>) -> Result<Que
 }
 
 /// Plans an expression in the AS position of a `CREATE SECRET`.
-pub fn plan_secret_as(scx: &StatementContext, expr: Expr<Aug>) -> Result<MirScalarExpr, PlanError> {
+pub fn plan_secret_as(
+    scx: &StatementContext,
+    mut expr: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    transform_ast::transform_expr(scx, &mut expr.clone())?;
+    transform_ast::transform_expr(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
