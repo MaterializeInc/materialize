@@ -310,7 +310,14 @@ pub fn create_statement(
             for opt in with_options.iter_mut() {
                 if let SqlOption::ObjectName { name, object_name } = opt {
                     if ident_ref(name) == "tx_metadata" {
-                        *object_name = allocate_name(object_name)?;
+                        // Use the catalog to resolve to a fully qualified name
+                        *object_name = unresolve(
+                            scx.catalog.resolve_full_name(
+                                scx.catalog
+                                    .resolve_item(&unresolved_object_name(object_name.clone())?)?
+                                    .name(),
+                            ),
+                        );
                     }
                 }
             }
