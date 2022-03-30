@@ -889,12 +889,10 @@ impl Coordinator {
                 }
             }
             DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
-                LinearizedTimestampBindingFeedback {
-                    timestamp: _,
-                    peek_id: _,
-                },
+                LinearizedTimestampBindingFeedback { timestamp, peek_id },
             )) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
+                println!("got timestamp: {} for peek:{}", timestamp, peek_id);
             }
         }
     }
@@ -3163,6 +3161,7 @@ impl Coordinator {
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
+        dbg!(&source);
         let source_ids = source.depends_on();
 
         let timeline = self.validate_timeline(source_ids.clone())?;
@@ -3277,6 +3276,26 @@ impl Coordinator {
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
+        let yes_ids = self
+            .index_oracle(compute_instance)
+            .actual_sources(source_ids.iter())
+            .storage_ids
+            .iter()
+            .copied()
+            .collect();
+
+        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
+        // small but unlikely chance that it's not unique to completed peeks.
+        let mut uuid = Uuid::new_v4();
+        while self.pending_peeks.contains_key(&uuid) {
+            uuid = Uuid::new_v4();
+        }
+
+        let _ = self
+            .dataflow_client
+            .storage_mut()
+            .linearize_sources(uuid.clone(), yes_ids)
+            .await;
         // before we have the corrected timestamp ^
         // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
         // `linearize_sources(source_ids.iter().collect()).await`
@@ -3349,6 +3368,7 @@ impl Coordinator {
                 conn_id,
                 source.arity(),
                 compute_instance,
+                uuid,
             )
             .await?;
 
@@ -5281,6 +5301,7 @@ pub mod fast_path_peek {
             conn_id: u32,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
+            uuid: Uuid,
         ) -> Result<crate::ExecuteResponse, CoordError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
@@ -5386,13 +5407,6 @@ pub mod fast_path_peek {
 
             // Endpoints for sending and receiving peek responses.
             let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
-
-            // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
-            // small but unlikely chance that it's not unique to completed peeks.
-            let mut uuid = Uuid::new_v4();
-            while self.pending_peeks.contains_key(&uuid) {
-                uuid = Uuid::new_v4();
-            }
 
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.

@@ -1200,6 +1200,19 @@ pub mod sources {
         pub desc: RelationDesc,
     }
 
+    /*
+    /// lalala
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub enum SourceLinearizationStatus {
+        NotAvailable,
+        NotImplemented,
+        Implemented(Box<dyn SourceTimestampLinearizer + Send + Sync>),
+    }
+
+    /// lalala
+    pub trait SourceTimestampLinearizer {}
+    */
+
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceConnector {
         External {

@@ -246,3 +246,35 @@ impl<T: Timestamp> CollectionState<T> {
         }
     }
 }
+
+/// lalala
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceLinearizationResult {
+    NotAvailable,
+    NotImplemented,
+    Answer(Vec<(mz_expr::PartitionId, crate::sources::MzOffset)>),
+}
+
+/// lalala
+#[async_trait]
+pub trait SourceTimestampLinearizer {
+    async fn give_answer(&self) -> SourceLinearizationResult;
+}
+
+#[async_trait]
+impl SourceTimestampLinearizer for crate::sources::SourceDesc {
+    async fn give_answer(&self) -> SourceLinearizationResult {
+        use crate::sources::ExternalSourceConnector::*;
+        use crate::sources::SourceConnector::*;
+        use SourceLinearizationResult::*;
+        match &self.connector {
+            Local { .. } => todo!("determine if this is reachable"),
+            External { connector, .. } => match connector {
+                Kafka(_connector) => Answer(vec![]),
+                Kinesis(_connector) => NotAvailable,
+                File(_connector) => NotImplemented,
+                _ => todo!("implement others"),
+            },
+        }
+    }
+}

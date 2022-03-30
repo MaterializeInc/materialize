@@ -25,6 +25,7 @@ use mz_dataflow_types::client::controller::storage::{
     CollectionState, StorageController, StorageControllerState, StorageError,
 };
 use mz_dataflow_types::client::controller::ReadPolicy;
+use mz_dataflow_types::client::LinearizedTimestampBindingFeedback;
 use mz_dataflow_types::client::{
     CreateSourceCommand, StorageClient, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
@@ -38,6 +39,9 @@ use mz_stash::Stash;
 #[derive(Debug)]
 pub struct Controller<T> {
     state: StorageControllerState<T>,
+    /// lalala
+    pub internal_responses: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
+    responder: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
 }
 
 #[async_trait]
@@ -390,10 +394,6 @@ where
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
-        self.state.client.recv().await
-    }
-
     /// "Linearize" the listed sources.
     ///
     /// If these sources are valid and "linearizable", then the response
@@ -404,11 +404,77 @@ where
     /// true linearizability in all cases.
     async fn linearize_sources(
         &mut self,
-        _peek_id: Uuid,
-        _source_ids: Vec<GlobalId>,
+        peek_id: Uuid,
+        source_ids: Vec<GlobalId>,
     ) -> Result<(), anyhow::Error> {
-        // TODO(guswynn): implement this function
+        dbg!(&source_ids);
+        for id in source_ids {
+            let desc = self.collection(id).unwrap().description.0.clone();
+            let sender = self.responder.clone();
+            let ts_binding_collection = self
+                .state
+                .stash
+                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
+                .unwrap();
+            let stash = self.state.stash.clone();
+            tokio::spawn(async move {
+                match desc.give_answer().await {
+                    SourceLinearizationResult::Answer(answer) => {
+                        let mut i = tokio::time::interval(std::time::Duration::from_secs(1));
+                        let t = loop {
+                            let mut last_bindings: HashMap<_, (T, MzOffset)> = HashMap::new();
+                            for ((pid, _), time, diff) in stash.iter(ts_binding_collection).unwrap()
+                            {
+                                let entry = last_bindings
+                                    .entry(pid.clone())
+                                    .or_insert((T::minimum(), MzOffset::default()));
+                                let time = T::try_from(time).expect("timestamp overflowed i64");
+                                entry.1.offset += diff;
+                                entry.0 = std::cmp::max(time, entry.0.clone());
+                            }
+
+                            dbg!(&last_bindings);
+
+                            let mut out = vec![];
+                            for (pid, offset) in &answer {
+                                if let Some(p) = last_bindings.get(&pid) {
+                                    if &p.1 <= offset {
+                                        out.push(p.0.clone());
+                                    }
+                                }
+                            }
+
+                            if out.len() == answer.len() {
+                                break out.iter().max().unwrap().clone();
+                            }
+                            i.tick().await;
+                        };
+
+                        sender.send(StorageResponse::LinearizedTimestamps(
+                            LinearizedTimestampBindingFeedback {
+                                timestamp: t,
+                                peek_id,
+                            },
+                        ))
+                    }
+                    .unwrap(),
+                    _ => {}
+                }
+            });
+        }
         Ok(())
+    }
+
+    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
+        tokio::select! {
+            biased;
+            thing = self.internal_responses.recv() => {
+                Ok(thing)
+            },
+            thing = self.state.client.recv() => {
+                thing
+            }
+        }
     }
 }
 
@@ -420,8 +486,11 @@ where
 {
     /// Create a new storage controller from a client it should wrap.
     pub fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             state: StorageControllerState::new(client, state_dir),
+            internal_responses: rx,
+            responder: tx,
         }
     }
 
@@ -431,5 +500,63 @@ where
             self.collection(id)?;
         }
         Ok(())
+    }
+}
+
+/// lalala
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceLinearizationResult {
+    /// lalala
+    NotAvailable,
+    /// lalala
+    NotImplemented,
+    /// lalala
+    Answer(Vec<(mz_expr::PartitionId, mz_dataflow_types::sources::MzOffset)>),
+}
+
+/// lalala
+#[async_trait]
+pub trait SourceTimestampLinearizer {
+    /// lalal
+    async fn give_answer(&self) -> SourceLinearizationResult;
+}
+
+#[async_trait]
+impl SourceTimestampLinearizer for mz_dataflow_types::sources::SourceDesc {
+    async fn give_answer(&self) -> SourceLinearizationResult {
+        use mz_dataflow_types::sources::ExternalSourceConnector::*;
+        use mz_dataflow_types::sources::SourceConnector::*;
+        use std::sync::Arc;
+        use SourceLinearizationResult::*;
+        match &self.connector {
+            Local { .. } => SourceLinearizationResult::NotImplemented,
+            External { connector, .. } => match connector {
+                Kafka(connector) => {
+                    let connector2 = connector.clone();
+                    let consumer = Arc::new(
+                        mz_ore::task::spawn_blocking(
+                            || "lalala",
+                            move || {
+                                crate::source::create_consumer(
+                                    "lalala",
+                                    mz_kafka_util::client::MzClientContext,
+                                    &connector2,
+                                )
+                            },
+                        )
+                        .await
+                        .unwrap(),
+                    );
+
+                    let offsets = crate::source::fetch_max_offsets(consumer, &connector.topic)
+                        .await
+                        .unwrap();
+                    Answer(offsets)
+                }
+                Kinesis(_connector) => NotAvailable,
+                File(_connector) => NotImplemented,
+                _ => todo!("implement others"),
+            },
+        }
     }
 }

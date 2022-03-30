@@ -81,6 +81,7 @@ pub use file::read_file_task;
 pub use file::FileReadStyle;
 pub use file::FileSourceReader;
 pub use kafka::KafkaSourceReader;
+pub use kafka::{create_consumer, fetch_max_offsets};
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
@@ -313,6 +314,16 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
         self.as_ref().map(|v| v.is_empty()).unwrap_or_default()
     }
 }
+
+/// lalala
+pub enum SourceLinearizationStatus {
+    NotAvailable,
+    NotImplemented,
+    Implemented(Box<dyn SourceTimestampLinearizer + Send + Sync>),
+}
+
+/// lalala
+pub trait SourceTimestampLinearizer {}
 
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.

@@ -91,6 +91,37 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
         id_bundle
     }
 
+    /// lalala
+    pub fn actual_sources<'a, I>(&self, ids: I) -> CollectionIdBundle
+    where
+        I: IntoIterator<Item = &'a GlobalId>,
+    {
+        let mut id_bundle = CollectionIdBundle::default();
+        let mut todo: BTreeSet<GlobalId> = ids.into_iter().cloned().collect();
+
+        // Iteratively extract the largest element, potentially introducing lesser elements.
+        while let Some(id) = todo.iter().rev().next().cloned() {
+            // Extract available indexes as those that are enabled, and installed on the cluster.
+            match self.catalog.get_entry(&id).item() {
+                // Unmaterialized view. Search its dependencies.
+                view @ CatalogItem::View(_) => {
+                    todo.extend(view.uses());
+                }
+                CatalogItem::Source(_) | CatalogItem::Table(_) => {
+                    // Unmaterialized source or table. Record that we are
+                    // missing at least one index.
+                    id_bundle.storage_ids.insert(id);
+                }
+                _ => {
+                    // Non-indexable thing; no work to do.
+                }
+            }
+            todo.remove(&id);
+        }
+
+        id_bundle
+    }
+
     pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
         self.catalog
             .get_indexes_on(id)

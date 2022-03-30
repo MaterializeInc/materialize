@@ -101,6 +101,17 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
 
+        let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
+        let consumer = create_consumer(
+            &source_name,
+            GlueConsumerContext {
+                activator: consumer_activator,
+                stats_tx,
+            },
+            &kc,
+        );
+        let consumer = Arc::new(consumer);
+
         let KafkaSourceConnector {
             addrs,
             config_options,
@@ -109,21 +120,6 @@ impl SourceReader for KafkaSourceReader {
             cluster_id,
             ..
         } = kc;
-        let kafka_config = create_kafka_config(
-            &source_name,
-            &addrs,
-            group_id_prefix,
-            cluster_id,
-            &config_options,
-        );
-        let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-        let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext {
-                activator: consumer_activator,
-                stats_tx,
-            })
-            .expect("Failed to create Kafka Consumer");
-        let consumer = Arc::new(consumer);
 
         // Start offsets is a map from pid -> next 0-indexed offset to read from,
         // which is equivalent to 1 + the last 0-indexed offset read.
@@ -827,4 +823,60 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// lalala
+pub fn create_consumer<C: rdkafka::client::ClientContext + rdkafka::consumer::ConsumerContext>(
+    source_name: &str,
+    context: C,
+    kc: &KafkaSourceConnector,
+) -> BaseConsumer<C> {
+    let KafkaSourceConnector {
+        addrs,
+        topic,
+        config_options,
+        group_id_prefix,
+        cluster_id,
+        ..
+    } = kc;
+    let kafka_config = create_kafka_config(
+        &source_name,
+        &addrs,
+        group_id_prefix.clone(),
+        cluster_id.clone(),
+        &config_options,
+    );
+    kafka_config
+        .create_with_context(context)
+        .expect("Failed to create Kafka Consumer")
+}
+
+/// Fetches the existing parts and their maximum offsets.
+pub async fn fetch_max_offsets<
+    C: rdkafka::client::ClientContext + rdkafka::consumer::ConsumerContext + 'static,
+>(
+    consumer: Arc<BaseConsumer<C>>,
+    topic: &str,
+) -> Result<Vec<(PartitionId, MzOffset)>, anyhow::Error> {
+    mz_ore::task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            // There cannot be more than i32 partitions
+            let parts = mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                Duration::from_secs(10),
+            )?;
+
+            let mut max_offsets = Vec::with_capacity(parts.len());
+            for pid in parts {
+                let (_low, high) =
+                    consumer.fetch_watermarks(&topic, pid, Duration::from_secs(10))?;
+                max_offsets.push((PartitionId::Kafka(pid), KafkaOffset { offset: high }.into()));
+            }
+
+            Ok(max_offsets)
+        }
+    })
+    .await?
 }

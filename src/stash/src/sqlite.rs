@@ -58,7 +58,7 @@ CREATE TABLE uppers (
 /// file is not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the on-disk format will be accompanied by a clear
 /// migration path.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sqlite {
     conn: Arc<Mutex<Connection>>,
 }
