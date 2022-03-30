@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+
 use mz_ore::str::StrExt;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
@@ -61,20 +63,8 @@ pub enum ErrorKind {
     Storage(#[from] rusqlite::Error),
     #[error("persistence error: {0}")]
     Persistence(#[from] mz_persist::error::Error),
-    #[error("{}",
-        if depender == dependee {
-            format!("renaming conflict: in {}, {}", dependee, message)
-        } else {
-            format!("renaming conflict: in {}, which uses {}, {}",
-                depender, dependee, message
-            )
-        }
-    )]
-    AmbiguousRename {
-        depender: String,
-        dependee: String,
-        message: String,
-    },
+    #[error(transparent)]
+    AmbiguousRenamed(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
     TypeRename(String),
     #[error(
@@ -144,5 +134,38 @@ impl From<SqlCatalogError> for Error {
 impl From<mz_persist::error::Error> for Error {
     fn from(e: mz_persist::error::Error) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+#[derive(Debug)]
+pub struct AmbiguousRename {
+    pub depender: String,
+    pub dependee: String,
+    pub message: String,
+}
+
+// Implement `Display` for `MinMax`.
+impl fmt::Display for AmbiguousRename {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.depender == self.dependee {
+            write!(
+                f,
+                "renaming conflict: in {}, {}",
+                self.dependee, self.message
+            )
+        } else {
+            write!(
+                f,
+                "renaming conflict: in {}, which uses {}, {}",
+                self.depender, self.dependee, self.message
+            )
+        }
+    }
+}
+
+impl std::error::Error for AmbiguousRename {
+    // Explicitly no source for this kind of error
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
     }
 }
