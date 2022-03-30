@@ -313,7 +313,8 @@ pub fn plan_create_source(
     } = &stmt;
 
     let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options);
+    let mut with_options = normalize::options(with_options_original);
+    let mut with_option_objects = normalize::option_objects(with_options_original);
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
@@ -631,15 +632,20 @@ pub fn plan_create_source(
                 }
                 DbzMode::Plain => {
                     // XXX(chae): should this be for upsert too?
-                    let tx_metadata = match with_options.remove("tx_metadata") {
-                        Some(Value::String(src)) => {
-                            let item =
-                                scx.catalog
-                                    .resolve_item(&normalize::unresolved_object_name(
-                                        UnresolvedObjectName::qualified(
-                                            &src.split(".").collect::<Vec<_>>(),
-                                        ),
-                                    )?)?;
+                    let tx_metadata = match with_option_objects.remove("tx_metadata") {
+                        Some(SqlOption::ObjectName {
+                            name: _,
+                            object_name: tx_metadata,
+                        }) => {
+                            // `with_option_objects` and `with_options` should correspond.  We want
+                            // to keep the `ObjectName` information but we also need to remove the
+                            // key from `with_options` so pass our validation below that all keys
+                            // are used.
+                            with_options.remove("tx_metadata").unwrap();
+
+                            let item = scx
+                                .catalog
+                                .resolve_item(&normalize::unresolved_object_name(tx_metadata)?)?;
                             let full_name = scx.catalog.resolve_full_name(item.name());
                             let mut desc_iter = item
                                 .desc(&full_name)
@@ -691,7 +697,7 @@ pub fn plan_create_source(
 
                             Some(item.id())
                         }
-                        Some(v) => bail!("tx_metadata must be a String found {:?}", v),
+                        Some(v) => bail!("tx_metadata must be a Object found {:?}", v),
                         None => None,
                     };
 
