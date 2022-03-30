@@ -698,10 +698,10 @@ impl<'a> NameResolver<'a> {
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
-                    RawObjectName::Id(id, mut name) => {
+                    RawObjectName::Id(id, name) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item(&gid);
-                        let full_name = normalize::full_name(&mut name)?;
+                        let full_name = normalize::full_name(name)?;
                         (full_name, item)
                     }
                 };
@@ -826,7 +826,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     }
                 }
             }
-            RawObjectName::Id(id, mut raw_name) => {
+            RawObjectName::Id(id, raw_name) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
@@ -848,7 +848,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 };
 
                 self.ids.insert(gid.clone());
-                let full_name = match normalize::full_name(&mut raw_name) {
+                let full_name = match normalize::full_name(raw_name) {
                     Ok(full_name) => full_name,
                     Err(e) => {
                         if self.status.is_ok() {
