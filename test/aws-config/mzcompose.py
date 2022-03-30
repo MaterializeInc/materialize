@@ -14,11 +14,13 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from retry import retry
+from typing import Any, Callable, Dict, List, Optional
 
 import boto3
 from mypy_boto3_iam import IAMClient
 from mypy_boto3_sts import STSClient
+from mypy_boto3_s3 import S3Client
 
 from materialize.mzcompose import Composition, UIError
 from materialize.mzcompose.services import Materialized, Testdrive
@@ -26,6 +28,8 @@ from materialize.mzcompose.services import Materialized, Testdrive
 EXTERNAL_ID = str(random.randrange(0, 2**64))
 SEED = random.randrange(0, 2**32)
 DISCARD = "http://127.0.0.1:9"
+BUCKET_NAME = f"testdrive-test-{SEED}"
+BUCKET_ARN = f"arn:aws:s3:::{BUCKET_NAME}"
 
 # == Services ==
 
@@ -75,6 +79,7 @@ def workflow_default(c: Composition) -> None:
 
     created_roles: List[CreatedRole] = []
     try:
+        bucket = create_bucket()
         allowed = create_role(iam, "Allow", current_user, created_roles)
         denied = create_role(iam, "Deny", current_user, created_roles)
         requires_eid = create_role(
@@ -84,7 +89,10 @@ def workflow_default(c: Composition) -> None:
             session, allowed.arn, requires_eid.arn, denied.arn
         )
 
-        wait_for_role(sts, allowed.arn)
+        wait_for_role(sts, denied.arn, wait_for_bucket(bucket, False))
+        wait_for_role(sts, allowed.arn, wait_for_bucket(bucket, True))
+
+        
 
         td_args = [
             f"--aws-region={aws_region}",
@@ -171,6 +179,19 @@ def workflow_default(c: Composition) -> None:
         if errored:
             raise UIError("Unable to completely clean up AWS resources")
 
+@dataclass
+class CreatedBucket:
+    location: str
+
+def create_bucket() -> CreatedBucket:
+    bucket = CreatedBucket()
+    try:
+        client = boto3.client('s3')
+        resp = client.create_bucket(Bucket=BUCKET_NAME)
+        bucket.location = resp['Location']
+    except Exception as e:
+        raise UIError("Unable to create s3 bucket")
+    return bucket
 
 @dataclass
 class CreatedRole:
@@ -183,6 +204,7 @@ def create_role(
     iam: IAMClient,
     effect: str,
     current_user: str,
+    bucket_location: str,
     created: List[CreatedRole],
     external_id: Optional[str] = None,
 ) -> CreatedRole:
@@ -219,12 +241,12 @@ def create_role(
                     {
                         "Effect": effect,
                         "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": "arn:aws:s3:::testdrive*",
+                        "Resource": bucket_location,
                     },
                     {
                         "Effect": effect,
                         "Action": ["s3:GetObject", "s3:GetObjectAcl"],
-                        "Resource": "arn:aws:s3:::testdrive*/*",
+                        "Resource": f"{bucket_location}*/*",
                     },
                 ],
             }
@@ -287,28 +309,34 @@ region = {region}
 """
 
 
-def wait_for_role(sts: STSClient, role_arn: str) -> None:
+def wait_for_role(sts: STSClient, role_arn: str, resource_callback: Callable[[CreatedBucket, bool], None]) -> None:
     """
     Verify that it is possible to assume the given role
 
     In practice this always seems to take less than 10 seconds, but give it up
     to 90 to reduce any chance of flakiness.
     """
-    for i in range(90, 0, -1):
-        try:
-            sts.assume_role(
-                RoleArn=role_arn, RoleSessionName="mzcomposevalidatecreated"
-            )
-        except Exception as e:
-            if i % 10 == 0:
-                print(f"Unable to assume role, {i} seconds remaining: {e}")
-            time.sleep(1)
-            continue
-        print(f"Successfully assumed role {role_arn}")
-        break
-    else:
+    @retry(Exception, tries=14, delay=1, backoff=2, max_delay=8)
+    def assume():
+        sts.assume_role(
+            RoleArn=role_arn, RoleSessionName="mzcomposevalidatecreated"
+        )
+    try:
+        assume()
+    except Exception as e:
         raise UIError("Never able to assume role")
 
+    print(f"Successfully assumed role {role_arn}")
+    try:
+            resource_callback()
+    except Exception as e:
+        print(f"Unable to perform bucket list check: {e}")
+        
+
+@retry(Exception, tries=30, delay=1)
+def wait_for_bucket(bucket: CreatedBucket, has_access: bool) -> None:
+    client = boto3.client('s3')
+    client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
 
 def write_aws_config(local_dir: Path, text: str) -> None:
     config_file = local_dir / "config"
