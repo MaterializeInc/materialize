@@ -634,17 +634,20 @@ pub fn plan_create_source(
                     // TODO(chae): validate shape of tx_metadata item: maybe including full dbz dedup?
                     let tx_metadata = match with_options.remove("tx_metadata") {
                         Some(Value::String(src)) => {
-                            let mut unresolved_name =
-                                UnresolvedObjectName::qualified(&["materialize", "public", &src]);
                             // XXX(chae): this seems like I'm breaking a boundary by accessing scx.catalog
                             // Also please I would like a suggestion on purifying / getting a resolved name
                             let item =
                                 scx.catalog
                                     .resolve_item(&normalize::unresolved_object_name(
-                                        unresolved_name.clone(),
+                                        UnresolvedObjectName::qualified(&[
+                                            "materialize",
+                                            "public",
+                                            &src,
+                                        ]),
                                     )?)?;
+                            let full_name = scx.catalog.resolve_full_name(item.name());
                             let mut desc_iter = item
-                                .desc(&normalize::full_name(&mut unresolved_name)?)
+                                .desc(&full_name)
                                 .context("tx_metadata catalog item doesn't have a desc")?
                                 .iter();
 
