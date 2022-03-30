@@ -4645,8 +4645,7 @@ impl Coordinator {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
-            output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
+            output_ids.extend(dataflow.export_ids());
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.dataflow_client
@@ -5305,9 +5304,7 @@ pub mod fast_path_peek {
                     permutation: index_permutation,
                     thinned_arity: index_thinned_arity,
                 }) => {
-                    let mut output_ids = Vec::new();
-                    output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
-                    output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
+                    let output_ids = dataflow.export_ids().collect();
 
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client

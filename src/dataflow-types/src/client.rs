@@ -441,58 +441,32 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             }
         }
 
-        // Discard dataflows whose outputs have all been allowed to compact away.
-        live_dataflows.retain(|dataflow| {
-            // If any index or sink has not been compacted to the empty frontier, it remains active.
-            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
-            // this is fine and normal, and is not evidence that the collection is not in use.
-            let index_active = dataflow
-                .index_exports
-                .iter()
-                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-            let sink_active = dataflow
-                .sink_exports
-                .iter()
-                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-
-            let retain = index_active || sink_active;
-
-            // If we are going to drop the dataflow, we should remove the frontier information so that we
-            // do not instruct anyone to compact a frontier they have not heard of.
-            if !retain {
-                for (id, _) in dataflow.index_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-                for (id, _) in dataflow.sink_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-            }
-
-            retain
-        });
-
         // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
         for dataflow in live_dataflows.iter_mut() {
-            let mut same_as_of = false;
             let mut as_of = Antichain::new();
-            for (id, _) in dataflow.index_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
                     as_of.extend(frontier.clone());
                 } else {
-                    same_as_of = true;
+                    as_of.extend(dataflow.as_of.clone().unwrap());
                 }
             }
-            for (id, _) in dataflow.sink_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
-                    as_of.extend(frontier.clone());
-                } else {
-                    same_as_of = true;
+
+            // Remove compaction for any collection that brought us to `as_of`.
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    if frontier == &as_of {
+                        final_frontiers.remove(&id);
+                    }
                 }
             }
-            if !same_as_of {
-                dataflow.as_of = Some(as_of);
-            }
+
+            dataflow.as_of = Some(as_of);
         }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
         // Retain only those peeks that have not yet been processed.
         live_peeks.retain(|peek| {
@@ -517,15 +491,21 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_command) = create_command {
             self.commands.push(create_command);
         }
-        self.commands
-            .push(ComputeCommand::CreateDataflows(live_dataflows));
-        self.commands.push(ComputeCommand::AllowCompaction(
-            final_frontiers.into_iter().collect(),
-        ));
+        if !live_dataflows.is_empty() {
+            self.commands
+                .push(ComputeCommand::CreateDataflows(live_dataflows));
+        }
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
+        }
         self.commands.extend(live_peeks);
-        self.commands.push(ComputeCommand::CancelPeeks {
-            uuids: live_cancels,
-        });
+        if !live_cancels.is_empty() {
+            self.commands.push(ComputeCommand::CancelPeeks {
+                uuids: live_cancels,
+            });
+        }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
         }

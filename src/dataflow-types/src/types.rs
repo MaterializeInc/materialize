@@ -307,6 +307,14 @@ impl<P, T> DataflowDescription<P, T>
 where
     P: CollectionPlan,
 {
+    /// Identifiers of exported objects (indexes and sinks).
+    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.index_exports
+            .keys()
+            .chain(self.sink_exports.keys())
+            .cloned()
+    }
+
     /// Returns the description of the object to build with the specified
     /// identifier.
     ///
