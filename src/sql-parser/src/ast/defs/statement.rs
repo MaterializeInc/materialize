@@ -1698,7 +1698,7 @@ pub enum SqlOption<T: AstInfo> {
     },
     ObjectName {
         name: Ident,
-        object_name: UnresolvedObjectName,
+        object_name: T::ObjectName,
     },
     DataType {
         name: Ident,

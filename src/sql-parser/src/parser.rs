@@ -2849,7 +2849,7 @@ impl<'a> Parser<'a> {
             SqlOption::Value { name, value }
         } else {
             self.prev_token();
-            if let Ok(object_name) = self.parse_object_name() {
+            if let Ok(object_name) = self.parse_raw_name() {
                 SqlOption::ObjectName { name, object_name }
             } else {
                 self.expected(self.peek_pos(), "option value", token)?
