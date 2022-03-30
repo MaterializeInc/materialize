@@ -339,7 +339,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     }
                 }
             }
-            StorageCommand::LinearizeSources(_source_ids) => {}
         }
     }
 

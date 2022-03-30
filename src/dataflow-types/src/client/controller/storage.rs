@@ -352,13 +352,16 @@ impl<T: Timestamp + Lattice> StorageController for Controller<T> {
         self.state.client.recv().await
     }
 
-    async fn linearize_sources(&mut self, source_ids: Vec<GlobalId>) -> Result<(), anyhow::Error> {
-        self.state
-            .client
-            .send(StorageCommand::LinearizeSources(source_ids))
-            .await
-            .expect("Storage command failed; unrecoverable");
-
+    /// "Linearize" the listed sources.
+    ///
+    /// If these sources are valid and "linearizable", then the response
+    /// will respond with timestamps that are guaranteed to be up-to-date
+    /// with the max offset found at the time of the command issuance.
+    ///
+    /// Note: "linearizable" in this context may not represent
+    /// true linearizability in all cases.
+    async fn linearize_sources(&mut self, _source_ids: Vec<GlobalId>) -> Result<(), anyhow::Error> {
+        // TODO(guswynn): implement this function
         Ok(())
     }
 }

@@ -220,16 +220,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
         /// The timestamp to advance to.
         advance_to: T,
     },
-
-    /// "Linearize" the listed sources.
-    ///
-    /// If these sources are valid and "linearizable", then the response
-    /// will respond with timestamps that are guaranteed to be up-to-date
-    /// with the max offset found at the time of the command issuance.
-    ///
-    /// Note: "linearizable" in this context may not represent
-    /// true linearizability in all cases.
-    LinearizeSources(Vec<GlobalId>),
 }
 
 impl StorageCommandKind {
@@ -244,7 +234,6 @@ impl StorageCommandKind {
             StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             StorageCommandKind::Insert => "insert",
             StorageCommandKind::RenderSources => "render_sources",
-            StorageCommandKind::LinearizeSources => "linearize_sources",
         }
     }
 }
