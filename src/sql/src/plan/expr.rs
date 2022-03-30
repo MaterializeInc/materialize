@@ -397,6 +397,23 @@ impl AbstractExpr for CoercibleScalarExpr {
     ) -> Self::Type {
         match self {
             CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
+            CoercibleScalarExpr::LiteralRecord(scalars) => {
+                let mut fields = vec![];
+                for (i, scalar) in scalars.iter().enumerate() {
+                    fields.push((
+                        format!("f{}", i + 1).into(),
+                        scalar.typ(outers, inner, params)?,
+                    ));
+                }
+                Some(ColumnType {
+                    scalar_type: ScalarType::Record {
+                        fields,
+                        custom_oid: None,
+                        custom_name: None,
+                    },
+                    nullable: false,
+                })
+            }
             _ => None,
         }
     }

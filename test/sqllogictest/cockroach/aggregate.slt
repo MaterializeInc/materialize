@@ -701,7 +701,7 @@ SELECT avg(a) FROM abc
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT avg(c) FROM abc
 
-query error unable to determine which implementation to use
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT avg((a,c)) FROM abc
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -710,7 +710,7 @@ SELECT sum(a) FROM abc
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum(c) FROM abc
 
-query error unable to determine which implementation to use
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum((a,c)) FROM abc
 
 statement ok
