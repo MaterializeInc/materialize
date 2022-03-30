@@ -138,6 +138,74 @@ where
         )
         .await
     }
+
+    /// Applies `updates` to this shard and downgrades this handle's upper to
+    /// `new_upper` iff the current global upper of this shard is `expected_upper`.
+    ///
+    /// The innermost `Result` is `Ok` if the updates were successfully written.
+    /// If not, an `Err` containing the current global upper is returned.
+    ///
+    /// All times in `updates` must be greater or equal to the global upper and
+    /// not greater or equal to `new_upper`. A `new_upper` of the empty
+    /// antichain "finishes" this shard, promising that no more data is ever
+    /// incoming.
+    ///
+    /// `updates` may be empty, which allows for downgrading `upper` to
+    /// communicate progress. It is unexpected to call this with `new_upper`
+    /// equal to `self.upper()`, as it would mean `updates` must be empty
+    /// (making the entire call a no-op).
+    ///
+    /// This uses a bounded amount of memory, even when `updates` is very large.
+    /// Individual records, however, should be small enough that we can
+    /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
+    /// us.
+    ///
+    /// The clunky two-level Result is to enable more obvious error handling in
+    /// the caller. See <http://sled.rs/errors.html> for details.
+    pub async fn compare_and_append<'a, I: IntoIterator<Item = ((&'a K, &'a V), &'a T, &'a D)>>(
+        &mut self,
+        timeout: Duration,
+        updates: I,
+        expected_upper: Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, LocationError> {
+        trace!(
+            "WriteHandle::compare_and_append timeout={:?} new_upper={:?}",
+            timeout,
+            new_upper
+        );
+        let res = self
+            .shard
+            .compare_and_append(&self.writer_id, updates, expected_upper, new_upper)
+            .await;
+        let res = match res {
+            Ok(x) => x.map(|new_upper| {
+                self.upper = new_upper;
+                ()
+            }),
+            Err(err) => return Ok(Err(err)),
+        };
+        Ok(Ok(res))
+    }
+
+    /// Test helper for writing a slice of owned updates.
+    #[cfg(test)]
+    pub async fn compare_and_append_slice(
+        &mut self,
+        updates: &[((K, V), T, D)],
+        expected_upper: T,
+        new_upper: T,
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, LocationError> {
+        use crate::NO_TIMEOUT;
+
+        self.compare_and_append(
+            NO_TIMEOUT,
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(expected_upper),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+    }
 }
 
 impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
