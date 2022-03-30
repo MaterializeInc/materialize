@@ -454,8 +454,10 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
-                                                    operators: None,
-                                                    persist,
+                                                    arguments: SourceInstanceArguments {
+                                                        operators: None,
+                                                        persist,
+                                                    },
                                                 },
                                                 storage_state,
                                                 scope,
