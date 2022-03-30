@@ -218,7 +218,6 @@ Operator | Meaning | Example
 **Threshold** | Removes any rows with negative counts. | `Threshold`
 **Union** | Sums the rows counts of both inputs | `Union %2 %3`
 **ArrangeBy** | Indicates a point that will become an arrangement in the dataflow engine | `ArrangeBy (#0) (#3)`
-**DeclareKeys**  | Contains any manually declared primary keys.    | `DeclareKeys`
 **Let**  | Marks a branch of computation whose result is used later by other branches with `%0`. |  `%0 = Let 10 =`
 
 
@@ -271,4 +270,3 @@ Operator | Meaning | Example
 **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
 **Threshold** | Removes any rows with negative counts. | `Threshold`
 **Union** | Sums the rows counts of both inputs | `Union %2 %3`
-**DeclareKeys**  | Contains any manually declared primary keys.    | `DeclareKeys`

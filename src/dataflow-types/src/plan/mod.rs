@@ -812,7 +812,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input_keys,
                 )
             }
-            MirRelationExpr::DeclareKeys { input, keys: _ } => Self::from_mir(input, arrangements)?,
         };
 
         // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.

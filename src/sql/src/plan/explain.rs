@@ -142,7 +142,6 @@ impl<'a> Explanation<'a> {
                 | Distinct { input }
                 | TopK { input, .. }
                 | Negate { input, .. }
-                | DeclareKeys { input, .. }
                 | Threshold { input, .. } => walk(input, explanation, id_gen),
                 // For join and union, each input needs to go in its own chain.
                 Join { left, right, .. } => walk_many(
@@ -187,7 +186,6 @@ impl<'a> Explanation<'a> {
                 | Negate { .. }
                 | Threshold { .. }
                 | Union { .. }
-                | DeclareKeys { .. }
                 | TopK { .. } => (),
                 Map { scalars: exprs, .. }
                 | Filter {
@@ -413,15 +411,6 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
-            DeclareKeys { input: _, keys } => write!(
-                f,
-                "| Declare primary keys {}",
-                separated(
-                    " ",
-                    keys.iter()
-                        .map(|key| bracketed("(", ")", separated(", ", key)))
-                )
-            )?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",

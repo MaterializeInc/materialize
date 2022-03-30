@@ -279,7 +279,6 @@ impl NonNullRequirements {
                 }
                 MirRelationExpr::Negate { input } => self.action(input, columns, gets),
                 MirRelationExpr::Threshold { input } => self.action(input, columns, gets),
-                MirRelationExpr::DeclareKeys { input, .. } => self.action(input, columns, gets),
                 MirRelationExpr::Union { base, inputs } => {
                     self.action(base, columns.clone(), gets)?;
                     for input in inputs {
