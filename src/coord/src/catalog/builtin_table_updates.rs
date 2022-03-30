@@ -45,7 +45,7 @@ impl CatalogState {
     pub(super) fn pack_database_update(&self, id: &DatabaseId, diff: Diff) -> BuiltinTableUpdate {
         let database = &self.database_by_id[id];
         BuiltinTableUpdate {
-            id: MZ_DATABASES.id,
+            id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
                 Datum::Int64(id.0),
                 Datum::UInt32(database.oid),
@@ -69,7 +69,7 @@ impl CatalogState {
             ),
         };
         BuiltinTableUpdate {
-            id: MZ_SCHEMAS.id,
+            id: self.resolve_builtin_table(&MZ_SCHEMAS),
             row: Row::pack_slice(&[
                 Datum::Int64(schema_id.0),
                 Datum::UInt32(schema.oid),
@@ -83,7 +83,7 @@ impl CatalogState {
     pub(super) fn pack_role_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let role = &self.roles[name];
         BuiltinTableUpdate {
-            id: MZ_ROLES.id,
+            id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
                 Datum::Int64(role.id),
                 Datum::UInt32(role.oid),
@@ -100,7 +100,7 @@ impl CatalogState {
     ) -> BuiltinTableUpdate {
         let compute_instance_id = &self.compute_instances_by_name[name];
         BuiltinTableUpdate {
-            id: MZ_CLUSTERS.id,
+            id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[Datum::Int64(*compute_instance_id), Datum::String(&name)]),
             diff,
         }
@@ -147,7 +147,7 @@ impl CatalogState {
                     .unwrap_or(Datum::Null);
                 let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
                 updates.push(BuiltinTableUpdate {
-                    id: MZ_COLUMNS.id,
+                    id: self.resolve_builtin_table(&MZ_COLUMNS),
                     row: Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(column_name.as_str()),
@@ -175,7 +175,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
-            id: MZ_TABLES.id,
+            id: self.resolve_builtin_table(&MZ_TABLES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -201,7 +201,7 @@ impl CatalogState {
             .as_ref()
             .map(|persist| &*persist.primary_stream);
         vec![BuiltinTableUpdate {
-            id: MZ_SOURCES.id,
+            id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -224,7 +224,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
-            id: MZ_VIEWS.id,
+            id: self.resolve_builtin_table(&MZ_VIEWS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -261,7 +261,7 @@ impl CatalogState {
                         Datum::Null
                     };
                     updates.push(BuiltinTableUpdate {
-                        id: MZ_KAFKA_SINKS.id,
+                        id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
@@ -272,7 +272,7 @@ impl CatalogState {
                 }
                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                     updates.push(BuiltinTableUpdate {
-                        id: MZ_AVRO_OCF_SINKS.id,
+                        id: self.resolve_builtin_table(&MZ_AVRO_OCF_SINKS),
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::Bytes(&path.clone().into_os_string().into_vec()),
@@ -283,7 +283,7 @@ impl CatalogState {
                 _ => (),
             }
             updates.push(BuiltinTableUpdate {
-                id: MZ_SINKS.id,
+                id: self.resolve_builtin_table(&MZ_SINKS),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
@@ -318,7 +318,7 @@ impl CatalogState {
         };
 
         updates.push(BuiltinTableUpdate {
-            id: MZ_INDEXES.id,
+            id: self.resolve_builtin_table(&MZ_INDEXES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -354,7 +354,7 @@ impl CatalogState {
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
             updates.push(BuiltinTableUpdate {
-                id: MZ_INDEX_COLUMNS.id,
+                id: self.resolve_builtin_table(&MZ_INDEX_COLUMNS),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::Int64(seq_in_index),
@@ -379,7 +379,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let generic_update = BuiltinTableUpdate {
-            id: MZ_TYPES.id,
+            id: self.resolve_builtin_table(&MZ_TYPES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -391,19 +391,25 @@ impl CatalogState {
 
         let (index_id, update) = match typ.details.typ {
             CatalogType::Array { element_id } => (
-                MZ_ARRAY_TYPES.id,
+                self.resolve_builtin_table(&MZ_ARRAY_TYPES),
                 vec![id.to_string(), element_id.to_string()],
             ),
             CatalogType::List { element_id } => (
-                MZ_LIST_TYPES.id,
+                self.resolve_builtin_table(&MZ_LIST_TYPES),
                 vec![id.to_string(), element_id.to_string()],
             ),
             CatalogType::Map { key_id, value_id } => (
-                MZ_MAP_TYPES.id,
+                self.resolve_builtin_table(&MZ_MAP_TYPES),
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
-            CatalogType::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
-            _ => (MZ_BASE_TYPES.id, vec![id.to_string()]),
+            CatalogType::Pseudo => (
+                self.resolve_builtin_table(&MZ_PSEUDO_TYPES),
+                vec![id.to_string()],
+            ),
+            _ => (
+                self.resolve_builtin_table(&MZ_BASE_TYPES),
+                vec![id.to_string()],
+            ),
         };
         let specific_update = BuiltinTableUpdate {
             id: index_id,
@@ -450,7 +456,7 @@ impl CatalogState {
                 .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
 
             updates.push(BuiltinTableUpdate {
-                id: MZ_FUNCTIONS.id,
+                id: self.resolve_builtin_table(&MZ_FUNCTIONS),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
@@ -475,7 +481,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
-            id: MZ_SECRETS.id,
+            id: self.resolve_builtin_table(&MZ_SECRETS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::Int64(schema_id.into()),

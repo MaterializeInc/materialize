@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use rusqlite::params;
@@ -16,10 +16,12 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use crate::catalog::builtin::BuiltinLog;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
@@ -226,6 +228,31 @@ const MIGRATIONS: &[&dyn Migration] = &[
 
         Ok(())
     },
+    // Allows us to dynamically assign system IDs to all objects but funcs. Also allows us to
+    // track built-in object name to ID mapping.
+    //
+    // Introduced in v0.26.0
+    &"ALTER TABLE gid_alloc RENAME TO user_gid_alloc;
+
+    CREATE TABLE system_gid_alloc (
+        next_gid integer NOT NULL
+    );
+
+    -- Higher than all statically assigned Type IDs
+    INSERT INTO system_gid_alloc VALUES (2000);
+
+    CREATE TABLE system_gid_mapping (
+       name text NOT NULL UNIQUE PRIMARY KEY,
+       id integer NOT NULL
+    );
+
+    CREATE TABLE compute_introspection_source_indexes (
+        compute_id integer NOT NULL,
+        name text NOT NULL ,
+        index_id integer NOT NULL
+    );
+    CREATE INDEX compute_introspection_source_indexes_ind
+        ON compute_introspection_source_indexes(compute_id);",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -475,19 +502,109 @@ impl Connection {
             .collect()
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    pub fn load_system_gids(&self) -> Result<BTreeMap<String, GlobalId>, Error> {
+        self.inner
+            .prepare("SELECT name, id FROM system_gid_mapping")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let name: String = row.get(0)?;
+                let id: i64 = row.get(1)?;
+                Ok((name, GlobalId::System(id as u64)))
+            })?
+            .collect()
+    }
+
+    pub fn load_introspection_source_index_gids(
+        &self,
+        compute_id: i64,
+    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+        self.inner
+            .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
+            .query_and_then(params![compute_id], |row| -> Result<_, Error> {
+                let name: String = row.get(0)?;
+                let index_id: i64 = row.get(1)?;
+                Ok((name, GlobalId::System(index_id as u64)))
+            })?
+            .collect()
+    }
+
+    /// Panics if provided id is not a system id
+    pub fn set_system_gids(&mut self, mappings: Vec<(&str, GlobalId)>) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (name, id) in mappings {
+            let id = if let GlobalId::System(id) = id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO system_gid_mapping (name, id) VALUES (?, ?)",
+                params![name, id as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Panics if provided id is not a system id
+    pub fn set_introspection_source_index_gids(
+        &mut self,
+        mappings: Vec<(i64, &str, GlobalId)>,
+    ) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (compute_id, name, index_id) in mappings {
+            let index_id = if let GlobalId::System(id) = index_id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)",
+                params![compute_id, name, index_id as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        let id = self.allocate_global_id("system", amount)?;
+
+        Ok(id.into_iter().map(GlobalId::System).collect())
+    }
+
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.allocate_global_id("user", 1)?;
+        let id = id.into_element();
+        Ok(GlobalId::User(id))
+    }
+
+    fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
         // limited range of positive i64s.
-        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
-            row.get(0)
-        })?;
-        if id == i64::max_value() {
+        let id: i64 = tx.query_row(
+            format!("SELECT next_gid FROM {id_type}_gid_alloc").as_str(),
+            params![],
+            |row| row.get(0),
+        )?;
+        if id == i64::MAX {
             return Err(Error::new(ErrorKind::IdExhaustion));
         }
-        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
+        let id = id as u64;
+        tx.execute(
+            format!("UPDATE {id_type}_gid_alloc SET next_gid = ?").as_str(),
+            params![(id + amount) as i64],
+        )?;
         tx.commit()?;
-        Ok(GlobalId::User(id as u64))
+        Ok((id..id + amount).collect())
     }
 
     pub fn transaction(&mut self) -> Result<Transaction, Error> {
@@ -587,24 +704,43 @@ impl Transaction<'_> {
         }
     }
 
+    /// Panics if any introspection source id is not a system id
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
         config: &ComputeInstanceConfig,
+        introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<i64, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        match self
+        let id = match self
             .inner
             .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
             .execute(params![cluster_name, config])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+            Ok(_) => self.inner.last_insert_rowid(),
+            Err(err) if is_constraint_violation(&err) => {
+                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                    cluster_name.to_owned(),
+                )))
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        for (builtin, index_id) in introspection_sources {
+            let index_id = if let GlobalId::System(id) = index_id {
+                *id
+            } else {
+                panic!("non-system id provided")
+            };
+            self
+                .inner
+                .prepare_cached(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)")?
+                .execute(params![id, builtin.name, index_id as i64])?;
         }
+
+        Ok(id)
     }
 
     pub fn update_compute_instance_config(

@@ -369,6 +369,8 @@ impl fmt::Display for CatalogItemType {
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails {
+    //TODO(jkosh44) removing this would remove cyclic dependencies between types and make it
+    // easier to dynamically assign builtin type ids.
     /// The ID of the type with this type as the array element, if available.
     pub array_id: Option<GlobalId>,
     /// The description of this type.

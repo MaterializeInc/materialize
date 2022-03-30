@@ -165,6 +165,16 @@ pub enum ComputeInstanceConfig {
     },
 }
 
+impl ComputeInstanceConfig {
+    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
+        match self {
+            Self::Local => &None,
+            Self::Remote { introspection, .. } => introspection,
+            Self::Managed { introspection, .. } => introspection,
+        }
+    }
+}
+
 /// Configuration of introspection for a compute instance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeInstanceIntrospectionConfig {
