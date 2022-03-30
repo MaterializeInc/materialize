@@ -299,9 +299,6 @@ impl ColumnKnowledge {
                 MirRelationExpr::Threshold { input } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
-                MirRelationExpr::DeclareKeys { input, .. } => {
-                    self.harvest(input, knowledge, knowledge_stack)
-                }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut know = self.harvest(base, knowledge, knowledge_stack)?;
                     for input in inputs {

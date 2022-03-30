@@ -84,10 +84,7 @@ impl MonotonicFlag {
                     }
                     monotonic
                 }
-                MirRelationExpr::ArrangeBy { input, .. }
-                | MirRelationExpr::DeclareKeys { input, .. } => {
-                    self.apply(input, sources, locals)?
-                }
+                MirRelationExpr::ArrangeBy { input, .. } => self.apply(input, sources, locals)?,
                 MirRelationExpr::FlatMap { input, func, .. } => {
                     let is_monotonic = self.apply(input, sources, locals)?;
                     is_monotonic && func.preserves_monotonicity()
