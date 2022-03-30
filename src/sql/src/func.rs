@@ -64,6 +64,7 @@ impl<'a> fmt::Display for FuncSpec<'a> {
 pub enum TypeCategory {
     Array,
     Bool,
+    Composite,
     DateTime,
     List,
     Numeric,
@@ -110,7 +111,17 @@ impl TypeCategory {
             | ScalarType::String
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. } => Self::String,
-            ScalarType::Record { .. } => Self::Pseudo,
+            ScalarType::Record {
+                custom_name,
+                custom_oid,
+                ..
+            } => {
+                if custom_name.is_some() || custom_oid.is_some() {
+                    Self::Composite
+                } else {
+                    Self::Pseudo
+                }
+            }
             ScalarType::Map { .. } => Self::Pseudo,
         }
     }
@@ -138,7 +149,7 @@ impl TypeCategory {
     /// ```
     pub fn preferred_type(&self) -> Option<ScalarType> {
         match self {
-            Self::Array | Self::List | Self::Pseudo | Self::UserDefined => None,
+            Self::Array | Self::Composite | Self::List | Self::Pseudo | Self::UserDefined => None,
             Self::Bool => Some(ScalarType::Bool),
             Self::DateTime => Some(ScalarType::TimestampTz),
             Self::Numeric => Some(ScalarType::Float64),
