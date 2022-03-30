@@ -415,11 +415,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         StorageConfig::Local => {
             let (dataflow_server, storage_client, local_compute_client) =
                 mz_dataflow::serve(dataflow_config)?;
-            let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(
-                    Box::new(storage_client),
-                    config.data_directory,
-                );
+            let storage_controller = mz_storage::storage_controller::Controller::new(
+                Box::new(storage_client),
+                config.data_directory,
+            );
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
@@ -448,11 +447,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 client.connect().await;
                 client
             });
-            let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(
-                    storage_client,
-                    config.data_directory,
-                );
+            let storage_controller = mz_storage::storage_controller::Controller::new(
+                storage_client,
+                config.data_directory,
+            );
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,

@@ -15,6 +15,7 @@ pub mod boundary;
 pub(crate) mod decode;
 pub(crate) mod render;
 pub mod source;
+pub mod storage_controller;
 pub mod storage_state;
 
 pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
