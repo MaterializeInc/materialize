@@ -32,7 +32,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::{GlobalId, PartitionId};
-use mz_stash::{Stash, StashError};
+use mz_stash::{self, Stash, StashError};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
@@ -131,14 +131,14 @@ pub trait StorageController: Debug + Send {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T> {
+pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
     pub(super) client: Box<dyn StorageClient<T>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
-    pub(super) stash: Stash,
+    pub(super) stash: Stash<S>,
 }
 
 /// A storage controller for a storage instance.
@@ -200,12 +200,12 @@ impl From<StashError> for StorageError {
 
 impl<T> StorageControllerState<T> {
     pub(super) fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
-        let stash =
-            Stash::open(&state_dir.join("storage")).expect("unable to create storage stash");
+        let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
+            .expect("unable to create storage stash");
         Self {
             client,
             collections: BTreeMap::default(),
-            stash,
+            stash: Stash::new(stash),
         }
     }
 }
