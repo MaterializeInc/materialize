@@ -558,8 +558,10 @@ impl<T> Default for ComputeCommandHistory<T> {
 /// of a specific "linearized" read request
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
-    /// Timestamp bindings that are adequate for "linearized" reads
-    pub bindings: Vec<(GlobalId, PartitionId, T)>,
+    /// The _minimum_ viable timestamp that will produce a "linearized" read...
+    pub timestamp: T,
+    /// ... for this peek
+    pub peek_id: Uuid,
 }
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator

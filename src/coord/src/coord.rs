@@ -916,7 +916,10 @@ impl Coordinator {
                 }
             }
             DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
-                LinearizedTimestampBindingFeedback { bindings: _ },
+                LinearizedTimestampBindingFeedback {
+                    timestamp: _,
+                    peek_id: _,
+                },
             )) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
