@@ -295,7 +295,7 @@ pub fn create_statement(
             name,
             col_names: _,
             connector: _,
-            with_options: _,
+            with_options,
             format: _,
             include_metadata: _,
             envelope: _,
@@ -306,6 +306,14 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
+
+            for opt in with_options.iter_mut() {
+                if let SqlOption::ObjectName { name, object_name } = opt {
+                    if ident_ref(name) == "tx_metadata" {
+                        *object_name = allocate_name(object_name)?;
+                    }
+                }
+            }
         }
 
         Statement::CreateTable(CreateTableStatement {
