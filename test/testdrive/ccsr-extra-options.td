@@ -35,7 +35,7 @@ $ kafka-ingest format=avro key-format=avro topic=input schema=${schema} key-sche
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-    gus = "gus"
+    gus = "mz_objects"
   )
 exact:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
 
@@ -43,7 +43,7 @@ exact:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-    gus = "gus"
+    gus = "mz_objects"
   )
   ENVELOPE UPSERT
 exact:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
