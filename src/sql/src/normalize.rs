@@ -149,7 +149,7 @@ pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
 
 /// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
 /// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
-pub fn full_name(raw_name: &mut UnresolvedObjectName) -> Result<FullObjectName, anyhow::Error> {
+pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, anyhow::Error> {
     match raw_name.0.len() {
         3 => Ok(FullObjectName {
             item: ident(raw_name.0.pop().unwrap()),
