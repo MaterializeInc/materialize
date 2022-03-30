@@ -7,6 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE SECRET secret1 AS decode('base64-encoded secret', 'base64');
+> CREATE SECRET secret1 AS 'secret';
 
-> CREATE SECRET secret2 AS decode('base64-encoded secret', 'base64');
+> CREATE SECRET secret2 AS 'secret';

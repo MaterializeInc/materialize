@@ -2619,13 +2619,17 @@ pub fn plan_create_secret(
     let CreateSecretStatement {
         name,
         if_not_exists,
-        value: _,
+        value,
     } = &stmt;
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSecret(stmt.clone()))?;
+    let secret_as = query::plan_secret_as(scx, value.clone())?;
 
-    let secret = Secret { create_sql };
+    let secret = Secret {
+        create_sql,
+        secret_as,
+    };
 
     let full_name = scx.catalog.resolve_full_name(&name);
 
