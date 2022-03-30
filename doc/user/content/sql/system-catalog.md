@@ -626,7 +626,7 @@ Field       | Type       | Meaning
 Materialize has compatibility shims for the following relations from [PostgreSQL's
 system catalog](https://www.postgresql.org/docs/current/catalogs.html):
 
-  * [`pg_access_methods`](https://www.postgresql.org/docs/current/catalog-pg-access-methods.html)
+  * `pg_access_methods`
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_collation`](https://www.postgresql.org/docs/current/catalog-pg-collation.html)
@@ -640,11 +640,11 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_policy`](https://www.postgresql.org/docs/current/catalog-pg-policy.html)
   * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)
   * [`pg_range`](https://www.postgresql.org/docs/current/catalog-pg-range.html)
-  * [`pg_roles`](https://www.postgresql.org/docs/current/catalog-pg-roles.html)
-  * [`pg_settings`](https://www.postgresql.org/docs/current/catalog-pg-settings.html)
-  * [`pg_tables`](https://www.postgresql.org/docs/current/catalog-pg-tables.html)
+  * [`pg_roles`](https://www.postgresql.org/docs/current/view-pg-roles.html)
+  * [`pg_settings`](https://www.postgresql.org/docs/current/view-pg-settings.html)
+  * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
-  * [`pg_views`](https://www.postgresql.org/docs/current/catalog-pg-views.html)
+  * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set
