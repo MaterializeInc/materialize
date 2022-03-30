@@ -5438,9 +5438,9 @@ pub mod read_holds {
         ) {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
-            let mut storage = self.dataflow_client.storage_mut();
+            let storage = self.dataflow_client.storage_mut();
             for id in read_holds.id_bundle.storage_ids.iter() {
-                let collection = storage.as_ref().collection(*id).unwrap();
+                let collection = storage.collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
                     .frontier()

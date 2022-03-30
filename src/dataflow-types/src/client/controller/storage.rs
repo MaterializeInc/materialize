@@ -18,16 +18,89 @@
 //! is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
+use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{CreateSourceCommand, StorageClient, StorageCommand};
+use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
 use crate::sources::SourceDesc;
 use crate::Update;
 use mz_expr::GlobalId;
+
+#[async_trait]
+pub trait StorageController: Debug + Send {
+    type Timestamp: Timestamp;
+
+    /// Acquire an immutable reference to the collection state, should it exist.
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
+
+    /// Acquire a mutable reference to the collection state, should it exist.
+    fn collection_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+
+    /// Create the sources described in the individual CreateSourceCommand commands.
+    ///
+    /// Each command carries the source id, the  source description, an initial `since` read
+    /// validity frontier, and initial timestamp bindings.
+    ///
+    /// This command installs collection state for the indicated sources, and the are
+    /// now valid to use in queries at times beyond the initial `since` frontiers. Each
+    /// collection also acquires a read capability at this frontier, which will need to
+    /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
+    async fn create_sources(
+        &mut self,
+        mut bindings: Vec<CreateSourceCommand<Self::Timestamp>>,
+    ) -> Result<(), StorageError>;
+
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+
+    async fn table_insert(
+        &mut self,
+        id: GlobalId,
+        updates: Vec<Update<Self::Timestamp>>,
+    ) -> Result<(), StorageError>;
+
+    async fn update_durability_frontiers(
+        &mut self,
+        updates: Vec<(GlobalId, Antichain<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
+
+    async fn advance_all_table_timestamps(
+        &mut self,
+        advance_to: Self::Timestamp,
+    ) -> Result<(), StorageError>;
+
+    /// Assigns a read policy to specific identifiers.
+    ///
+    /// The policies are assigned in the order presented, and repeated identifiers should
+    /// conclude with the last policy. Changing a policy will immediately downgrade the read
+    /// capability if appropriate, but it will not "recover" the read capability if the prior
+    /// capability is already ahead of it.
+    ///
+    /// Identifiers not present in `policies` retain their existing read policies.
+    async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
+
+    /// Accept write frontier updates from the compute layer.
+    async fn update_write_frontiers(
+        &mut self,
+        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+    );
+
+    /// Applies `updates` and sends any appropriate compaction command.
+    async fn update_read_capabilities(
+        &mut self,
+        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
+    );
+
+    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
+}
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
@@ -40,14 +113,10 @@ pub struct StorageControllerState<T> {
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
-/// An immutable controller for a storage instance.
-pub struct StorageController<'a, T> {
-    pub(super) storage: &'a StorageControllerState<T>,
-}
-
-/// A mutable controller for a storage instance.
-pub struct StorageControllerMut<'a, T> {
-    pub(super) storage: &'a mut StorageControllerState<T>,
+/// A storage controller for a storage instance.
+#[derive(Debug)]
+pub struct Controller<T> {
+    state: StorageControllerState<T>,
 }
 
 #[derive(Debug)]
@@ -76,35 +145,25 @@ impl<T> StorageControllerState<T> {
     }
 }
 
-// Public interface
-impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
-    /// Acquire an immutable reference to the collection state, should it exist.
-    pub fn collection(&self, id: GlobalId) -> Result<&'a CollectionState<T>, StorageError> {
-        self.storage
+#[async_trait]
+impl<T: Timestamp + Lattice> StorageController for Controller<T> {
+    type Timestamp = T;
+
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError> {
+        self.state
             .collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
-}
 
-impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
-    /// Constructs an immutable handle from this mutable handle.
-    pub fn as_ref<'b>(&'b self) -> StorageController<'b, T> {
-        StorageController {
-            storage: &self.storage,
-        }
+    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, StorageError> {
+        self.state
+            .collections
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    /// Create the sources described in the individual CreateSourceCommand commands.
-    ///
-    /// Each command carries the source id, the  source description, an initial `since` read
-    /// validity frontier, and initial timestamp bindings.
-    ///
-    /// This command installs collection state for the indicated sources, and the are
-    /// now valid to use in queries at times beyond the initial `since` frontiers. Each
-    /// collection also acquires a read capability at this frontier, which will need to
-    /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
-    pub async fn create_sources(
+    async fn create_sources(
         &mut self,
         mut bindings: Vec<CreateSourceCommand<T>>,
     ) -> Result<(), StorageError> {
@@ -120,7 +179,7 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
             }
         }
         for binding in bindings.iter() {
-            if let Ok(collection) = self.as_ref().collection(binding.id) {
+            if let Ok(collection) = self.collection(binding.id) {
                 let (ref desc, ref since) = collection.description;
                 if (desc, since) != (&binding.desc, &binding.since) {
                     Err(StorageError::SourceIdReused(binding.id))?
@@ -130,10 +189,10 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
         // Install collection state for each bound source.
         for binding in bindings.iter() {
             let collection = CollectionState::new(binding.desc.clone(), binding.since.clone());
-            self.storage.collections.insert(binding.id, collection);
+            self.state.collections.insert(binding.id, collection);
         }
 
-        self.storage
+        self.state
             .client
             .send(StorageCommand::CreateSources(bindings))
             .await
@@ -141,74 +200,48 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
 
         Ok(())
     }
-    /// Drops the read capability for the sources and allows their resources to be reclaimed.
-    pub async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        self.as_ref().validate_ids(identifiers.iter().cloned())?;
+
+    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        self.validate_ids(identifiers.iter().cloned())?;
         let compaction_commands = identifiers
             .into_iter()
             .map(|id| (id, Antichain::new()))
             .collect();
         self.allow_compaction(compaction_commands).await
     }
-    pub async fn table_insert(
+
+    async fn table_insert(
         &mut self,
         id: GlobalId,
         updates: Vec<Update<T>>,
     ) -> Result<(), StorageError> {
-        self.storage
+        self.state
             .client
             .send(StorageCommand::Insert { id, updates })
             .await
             .map_err(StorageError::from)
     }
-    pub async fn update_durability_frontiers(
+
+    async fn update_durability_frontiers(
         &mut self,
         updates: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), StorageError> {
-        self.storage
+        self.state
             .client
             .send(StorageCommand::DurabilityFrontierUpdates(updates))
             .await
             .map_err(StorageError::from)
     }
-    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
-    ///
-    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    async fn allow_compaction(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), StorageError> {
-        // Validate that the ids exist.
-        self.as_ref()
-            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
 
-        let policies = frontiers
-            .into_iter()
-            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await;
-        Ok(())
-    }
-
-    pub async fn advance_all_table_timestamps(
-        &mut self,
-        advance_to: T,
-    ) -> Result<(), StorageError> {
-        self.storage
+    async fn advance_all_table_timestamps(&mut self, advance_to: T) -> Result<(), StorageError> {
+        self.state
             .client
             .send(StorageCommand::AdvanceAllLocalInputs { advance_to })
             .await
             .map_err(StorageError::from)
     }
 
-    /// Assigns a read policy to specific identifiers.
-    ///
-    /// The policies are assigned in the order presented, and repeated identifiers should
-    /// conclude with the last policy. Changing a policy will immediately downgrade the read
-    /// capability if appropriate, but it will not "recover" the read capability if the prior
-    /// capability is already ahead of it.
-    ///
-    /// Identifiers not present in `policies` retain their existing read policies.
-    pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+    async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
@@ -237,36 +270,8 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
                 .await;
         }
     }
-}
 
-// Internal interface
-impl<'a, T: Timestamp + Lattice> StorageController<'a, T> {
-    /// Validate that a collection exists for all identifiers, and error if any do not.
-    pub(super) fn validate_ids(
-        &self,
-        ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<(), StorageError> {
-        for id in ids {
-            self.collection(id)?;
-        }
-        Ok(())
-    }
-}
-
-impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
-    /// Acquire a mutable reference to the collection state, should it exist.
-    pub(super) fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<T>, StorageError> {
-        self.storage
-            .collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))
-    }
-
-    /// Accept write frontier updates from the compute layer.
-    pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
+    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
             let collection = self
@@ -300,11 +305,7 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
         }
     }
 
-    /// Applies `updates` and sends any appropriate compaction command.
-    pub(super) async fn update_read_capabilities(
-        &mut self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
-    ) {
+    async fn update_read_capabilities(&mut self, updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Location to record consequences that we need to act on.
         let mut storage_net = Vec::default();
         // Repeatedly extract the maximum id, and updates for it.
@@ -325,7 +326,6 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
-                    .as_ref()
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -335,7 +335,7 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
             }
         }
         if !compaction_commands.is_empty() {
-            self.storage
+            self.state
                 .client
                 .send(StorageCommand::AllowCompaction(compaction_commands))
                 .await
@@ -343,6 +343,40 @@ impl<'a, T: Timestamp + Lattice> StorageControllerMut<'a, T> {
                     "Failed to send storage command; aborting as compute instance state corrupted",
                 );
         }
+    }
+    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
+        self.state.client.recv().await
+    }
+}
+
+impl<T: Timestamp + Lattice> Controller<T> {
+    /// Create a new storage controller from a client it should wrap.
+    pub fn new(client: Box<dyn StorageClient<T>>) -> Self {
+        Self {
+            state: StorageControllerState::new(client),
+        }
+    }
+
+    /// Validate that a collection exists for all identifiers, and error if any do not.
+    fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
+        for id in ids {
+            self.collection(id)?;
+        }
+        Ok(())
+    }
+
+    async fn allow_compaction(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), StorageError> {
+        // Validate that the ids exist.
+        self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+
+        let policies = frontiers
+            .into_iter()
+            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
+        self.set_read_policy(policies.collect()).await;
+        Ok(())
     }
 }
 
