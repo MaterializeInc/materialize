@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from math import ceil
+from math import ceil, floor
 from typing import List
 
 from parameterized import parameterized_class  # type: ignore
@@ -516,6 +516,45 @@ class DifferentialJoin(Dataflow):
 {self.n()}
 """
         )
+
+
+class FullOuterJoin(Dataflow):
+    def benchmark(self) -> BenchmarkingSequence:
+        columns_select = ", ".join(
+            [f"a{i+1}.f1 AS f{i+1}" for i in range(0, floor(self.scale()))]
+        )
+        columns_using = ", ".join([f"f{i+1}" for i in range(0, floor(self.scale()))])
+        inserts = "\n".join([f"> INSERT INTO ten VALUES ({i+1})" for i in range(0, 10)])
+
+        return [
+            Td(
+                f"""
+> DROP VIEW IF EXISTS v2 CASCADE;
+
+> DROP VIEW IF EXISTS v1 CASCADE;
+
+> DROP TABLE IF EXISTS ten;
+
+> CREATE TABLE ten (f1 INTEGER);
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT {columns_select} FROM {self.join()}
+> SELECT 1;
+  /* A */
+1
+
+> CREATE MATERIALIZED VIEW v2 AS
+  SELECT COUNT(a1.f1) AS c1, COUNT(a2.f1) AS c2
+  FROM v1 AS a1
+  FULL OUTER JOIN v1 AS a2 USING ({columns_using});
+
+{inserts}
+
+> SELECT * FROM v2;
+  /* B */
+{self.n()} {self.n()}
+"""
+            )
+        ]
 
 
 class Finish(Scenario):
