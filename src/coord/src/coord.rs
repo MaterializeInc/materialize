@@ -104,8 +104,8 @@ use mz_dataflow_types::{
     Update,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, EvalError, ExprHumanizer, GlobalId,
+    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -2136,6 +2136,10 @@ impl Coordinator {
             },
         )?;
         let evaled = secret.secret_as.eval(&[], &temp_storage)?;
+
+        if evaled == Datum::Null {
+            return Err(CoordError::Eval(EvalError::NullCharacterNotPermitted));
+        }
 
         // TODO martin: hook the payload into a secrets backend
         let _payload = evaled.unwrap_bytes();
