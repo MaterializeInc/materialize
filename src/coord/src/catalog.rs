@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -31,8 +31,8 @@ use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersist
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, MzOffset, SourceConnector, Timeline,
 };
-use mz_expr::PartitionId;
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{PartitionId, SystemId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -137,7 +137,7 @@ impl CatalogState {
         }
         self.system_index_counter += 1;
         //TODO(jkosh44)
-        Ok(GlobalId::System { id, version: 1 })
+        Ok(GlobalId::System(SystemId { id, version: 1 }))
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -417,7 +417,7 @@ impl CatalogState {
                         oid,
                         index_name,
                         CatalogItem::Index(Index {
-                            on: log.id,
+                            on: log.global_id(),
                             keys: log
                                 .variant
                                 .index_by()
@@ -432,7 +432,7 @@ impl CatalogState {
                                 &log.variant.index_by(),
                             ),
                             conn_id: None,
-                            depends_on: vec![log.id],
+                            depends_on: vec![log.global_id()],
                             enabled: true,
                             compute_instance: id,
                         }),
@@ -1175,7 +1175,18 @@ impl Catalog {
         }
 
         let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
+        let builtin_versions = catalog.storage().load_system_object_versions()?;
+        let mut changed_builtins = BTreeSet::new();
         for builtin in BUILTINS.values() {
+            let id = builtin.id().id;
+            let version = builtin.id().version;
+            if let Some(persisted_version) = builtin_versions.get(&id) {
+                if version != *persisted_version {
+                    changed_builtins.insert(SystemId { id, version });
+                }
+            } else {
+                changed_builtins.insert(SystemId { id, version });
+            }
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
@@ -1193,7 +1204,7 @@ impl Catalog {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        log.id,
+                        log.global_id(),
                         oid,
                         name.clone(),
                         CatalogItem::Source(Source {
@@ -1213,12 +1224,12 @@ impl Catalog {
                     let persist_name = if table.persistent {
                         config
                             .persister
-                            .new_table_persist_name(table.id, &full_name.to_string())
+                            .new_table_persist_name(table.global_id(), &full_name.to_string())
                     } else {
                         None
                     };
                     catalog.state.insert_item(
-                        table.id,
+                        table.global_id(),
                         oid,
                         name.clone(),
                         CatalogItem::Table(Table {
@@ -1237,7 +1248,7 @@ impl Catalog {
                     let source_persist_details = None;
                     let item = catalog
                         .parse_item(
-                            view.id,
+                            view.global_id(),
                             view.sql.into(),
                             None,
                             table_persist_name,
@@ -1254,12 +1265,12 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(view.id, oid, name, item);
+                    catalog.state.insert_item(view.global_id(), oid, name, item);
                 }
 
                 Builtin::Type(typ) => {
                     catalog.state.insert_item(
-                        typ.id,
+                        typ.global_id(),
                         typ.oid,
                         QualifiedObjectName {
                             qualifiers: ObjectQualifiers {
@@ -1279,13 +1290,17 @@ impl Catalog {
                 Builtin::Func(func) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        func.id,
+                        func.global_id(),
                         oid,
                         name.clone(),
                         CatalogItem::Func(Func { inner: func.inner }),
                     );
                 }
             }
+        }
+        //TODO(jkosh44) Should really only happen after migration is complete
+        for system_id in changed_builtins {
+            catalog.storage().set_system_object_version(system_id)?;
         }
 
         let compute_instances = catalog.storage().load_compute_instances()?;

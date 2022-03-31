@@ -137,7 +137,7 @@ fn add_expiring_update(
     // NB: This makes sure to send both records in the same message so we can
     // persist them atomically. Otherwise, we may end up with permanent orphans
     // if a restart/crash happens at the wrong time.
-    let id = table.id;
+    let id = table.global_id();
     out.push(TimestampedUpdate {
         updates: updates
             .iter()
@@ -161,7 +161,7 @@ fn add_metadata_update<I: IntoIterator<Item = Row>>(
     diff: Diff,
     out: &mut Vec<TimestampedUpdate>,
 ) {
-    let id = MZ_PROMETHEUS_METRICS.id;
+    let id = MZ_PROMETHEUS_METRICS.global_id();
     out.push(TimestampedUpdate {
         updates: updates
             .into_iter()

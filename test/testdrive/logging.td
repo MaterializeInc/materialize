@@ -60,76 +60,76 @@ contains:cannot drop item mz_catalog.mz_peek_durations because it is required by
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_scheduling_elapsed'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5027   id          1           bigint
-s5027   worker      2           bigint
-s5027   elapsed_ns  3           bigint
+id        name        position    type
+----------------------------------------
+s5027.1   id          1           bigint
+s5027.1   worker      2           bigint
+s5027.1   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_scheduling_histogram'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5028   id          1           bigint
-s5028   worker      2           bigint
-s5028   duration_ns 3           bigint
-s5028   count       4           bigint
+id        name        position    type
+----------------------------------------
+s5028.1   id          1           bigint
+s5028.1   worker      2           bigint
+s5028.1   duration_ns 3           bigint
+s5028.1   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_scheduling_parks'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5029   worker      1           bigint
-s5029   slept_for   2           bigint
-s5029   requested   3           bigint
-s5029   count       4           bigint
+id        name        position    type
+----------------------------------------
+s5029.1   worker      1           bigint
+s5029.1   slept_for   2           bigint
+s5029.1   requested   3           bigint
+s5029.1   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_message_counts'
   ORDER BY position
-id      name            position    type
-------------------------------------------
-s5030   channel         1           bigint
-s5030   source_worker   2           bigint
-s5030   target_worker   3           bigint
-s5030   sent            4           bigint
-s5030   received        5           bigint
+id        name            position    type
+--------------------------------------------
+s5030.1   channel         1           bigint
+s5030.1   source_worker   2           bigint
+s5030.1   target_worker   3           bigint
+s5030.1   sent            4           bigint
+s5030.1   received        5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_dataflow_operator_reachability'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5031   address     1           list
-s5031   port        2           bigint
-s5031   worker      3           bigint
-s5031   update_type 4           text
-s5031   timestamp   5           bigint
-s5031   count       6           bigint
+id        name        position    type
+----------------------------------------
+s5031.1   address     1           list
+s5031.1   port        2           bigint
+s5031.1   worker      3           bigint
+s5031.1   update_type 4           text
+s5031.1   timestamp   5           bigint
+s5031.1   count       6           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_arrangement_sizes'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5032   operator    1           bigint
-s5032   worker      2           bigint
-s5032   records     3           bigint
-s5032   batches     4           bigint
+id        name        position    type
+----------------------------------------
+s5032.1   operator    1           bigint
+s5032.1   worker      2           bigint
+s5032.1   records     3           bigint
+s5032.1   batches     4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
   WHERE mz_views.name = 'mz_arrangement_sharing'
   ORDER BY position
-id      name        position    type
---------------------------------------
-s5033   operator    1           bigint
-s5033   worker      2           bigint
-s5033   count       3           bigint
+id        name        position    type
+----------------------------------------
+s5033.1   operator    1           bigint
+s5033.1   worker      2           bigint
+s5033.1   count       3           bigint

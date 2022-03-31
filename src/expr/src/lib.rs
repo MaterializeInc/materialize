@@ -28,7 +28,7 @@ pub mod explain;
 
 pub use relation::canonicalize;
 
-pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
+pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId, SystemId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},

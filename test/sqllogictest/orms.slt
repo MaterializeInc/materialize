@@ -60,4 +60,4 @@ JOIN pg_index ix ON t.oid = ix.indrelid
 WHERE t.oid = 't'::regclass
   AND ix.indexrelid = 'complex_index'::regclass
 ----
-{t::[s1039 AS pg_catalog.varchar]}, {i::[s1004 AS pg_catalog.text]}
+{t::[s1039.1 AS pg_catalog.varchar]}, {i::[s1004.1 AS pg_catalog.text]}

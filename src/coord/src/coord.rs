@@ -555,7 +555,7 @@ impl Coordinator {
                     .await;
                 }
                 CatalogItem::Index(idx) => {
-                    if BUILTINS.logs().any(|log| log.id == idx.on) {
+                    if BUILTINS.logs().any(|log| log.global_id() == idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
@@ -624,7 +624,7 @@ impl Coordinator {
                                     Datum::Int64(index as i64),
                                 ]);
                                 BuiltinTableUpdate {
-                                    id: MZ_VIEW_KEYS.id,
+                                    id: MZ_VIEW_KEYS.global_id(),
                                     row,
                                     diff: 1,
                                 }
@@ -655,7 +655,7 @@ impl Coordinator {
                                     Datum::Int64(index as i64),
                                 ]);
                                 BuiltinTableUpdate {
-                                    id: MZ_VIEW_FOREIGN_KEYS.id,
+                                    id: MZ_VIEW_FOREIGN_KEYS.global_id(),
                                     row,
                                     diff: 1,
                                 }

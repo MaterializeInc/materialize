@@ -15,7 +15,7 @@ u1
 resolve
 SELECT 1 FROM mz_catalog.mz_columns
 ----
-SELECT 1 FROM [s4013 AS mz_catalog.mz_columns]
+SELECT 1 FROM [s4013.1 AS mz_catalog.mz_columns]
 
 resolve
 SELECT 1 FROM foo

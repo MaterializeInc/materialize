@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use lazy_static::lazy_static;
 
 use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use mz_expr::GlobalId;
+use mz_expr::{GlobalId, SystemId};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails};
 
@@ -66,7 +66,7 @@ impl Builtin {
         }
     }
 
-    pub fn id(&self) -> GlobalId {
+    pub fn id(&self) -> SystemId {
         match self {
             Builtin::Log(log) => log.id,
             Builtin::Table(table) => table.id,
@@ -75,43 +75,83 @@ impl Builtin {
             Builtin::Func(func) => func.id,
         }
     }
+
+    pub fn global_id(&self) -> GlobalId {
+        match self {
+            Builtin::Log(log) => log.global_id(),
+            Builtin::Table(table) => table.global_id(),
+            Builtin::View(view) => view.global_id(),
+            Builtin::Type(typ) => typ.global_id(),
+            Builtin::Func(func) => func.global_id(),
+        }
+    }
 }
 
 pub struct BuiltinLog {
     pub variant: LogVariant,
     pub name: &'static str,
     pub schema: &'static str,
-    pub id: GlobalId,
+    pub id: SystemId,
+}
+
+impl BuiltinLog {
+    pub fn global_id(&self) -> GlobalId {
+        GlobalId::System(self.id)
+    }
 }
 
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
-    pub id: GlobalId,
+    pub id: SystemId,
     pub persistent: bool,
+}
+
+impl BuiltinTable {
+    pub fn global_id(&self) -> GlobalId {
+        GlobalId::System(self.id)
+    }
 }
 
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
     pub sql: &'static str,
-    pub id: GlobalId,
+    pub id: SystemId,
+}
+
+impl BuiltinView {
+    pub fn global_id(&self) -> GlobalId {
+        GlobalId::System(self.id)
+    }
 }
 
 pub struct BuiltinType {
     pub name: &'static str,
     pub schema: &'static str,
-    pub id: GlobalId,
+    pub id: SystemId,
     pub oid: u32,
     pub details: CatalogTypeDetails,
+}
+
+impl BuiltinType {
+    pub fn global_id(&self) -> GlobalId {
+        GlobalId::System(self.id)
+    }
 }
 
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
-    pub id: GlobalId,
+    pub id: SystemId,
     pub inner: &'static mz_sql::func::Func,
+}
+
+impl BuiltinFunc {
+    pub fn global_id(&self) -> GlobalId {
+        GlobalId::System(self.id)
+    }
 }
 
 pub struct BuiltinRole {
@@ -159,153 +199,153 @@ pub const FIRST_SYSTEM_INDEX_ID: u64 = 1000000;
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
     name: "bool",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1000,
         version: 1,
     },
     oid: 16,
     details: CatalogTypeDetails {
         typ: CatalogType::Bool,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1008,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_BYTEA: BuiltinType = BuiltinType {
     name: "bytea",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1001,
         version: 1,
     },
     oid: 17,
     details: CatalogTypeDetails {
         typ: CatalogType::Bytes,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1009,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INT8: BuiltinType = BuiltinType {
     name: "int8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1002,
         version: 1,
     },
     oid: 20,
     details: CatalogTypeDetails {
         typ: CatalogType::Int64,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1012,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INT4: BuiltinType = BuiltinType {
     name: "int4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1003,
         version: 1,
     },
     oid: 23,
     details: CatalogTypeDetails {
         typ: CatalogType::Int32,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1010,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_TEXT: BuiltinType = BuiltinType {
     name: "text",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1004,
         version: 1,
     },
     oid: 25,
     details: CatalogTypeDetails {
         typ: CatalogType::String,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1011,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_OID: BuiltinType = BuiltinType {
     name: "oid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1005,
         version: 1,
     },
     oid: 26,
     details: CatalogTypeDetails {
         typ: CatalogType::Oid,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1015,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
     name: "float4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1006,
         version: 1,
     },
     oid: 700,
     details: CatalogTypeDetails {
         typ: CatalogType::Float32,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1013,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
     name: "float8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1007,
         version: 1,
     },
     oid: 701,
     details: CatalogTypeDetails {
         typ: CatalogType::Float64,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1014,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
     name: "_bool",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1008,
         version: 1,
     },
     oid: 1000,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1000,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -314,17 +354,17 @@ pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
     name: "_bytea",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1009,
         version: 1,
     },
     oid: 1001,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1001,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -333,17 +373,17 @@ pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
     name: "_int4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1010,
         version: 1,
     },
     oid: 1007,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1003,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -352,17 +392,17 @@ pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
     name: "_text",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1011,
         version: 1,
     },
     oid: 1009,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1004,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -371,17 +411,17 @@ pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
     name: "_int8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1012,
         version: 1,
     },
     oid: 1016,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1002,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -390,17 +430,17 @@ pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
     name: "_float4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1013,
         version: 1,
     },
     oid: 1021,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1006,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -409,17 +449,17 @@ pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
     name: "_float8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1014,
         version: 1,
     },
     oid: 1022,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1007,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -428,17 +468,17 @@ pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
     name: "_oid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1015,
         version: 1,
     },
     oid: 1028,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1005,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -447,68 +487,68 @@ pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_DATE: BuiltinType = BuiltinType {
     name: "date",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1016,
         version: 1,
     },
     oid: 1082,
     details: CatalogTypeDetails {
         typ: CatalogType::Date,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1020,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_TIME: BuiltinType = BuiltinType {
     name: "time",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1017,
         version: 1,
     },
     oid: 1083,
     details: CatalogTypeDetails {
         typ: CatalogType::Time,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1021,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
     name: "timestamp",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1018,
         version: 1,
     },
     oid: 1114,
     details: CatalogTypeDetails {
         typ: CatalogType::Timestamp,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1019,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
     name: "_timestamp",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1019,
         version: 1,
     },
     oid: 1115,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1018,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -517,17 +557,17 @@ pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
     name: "_date",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1020,
         version: 1,
     },
     oid: 1182,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1016,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -536,17 +576,17 @@ pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
     name: "_time",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1021,
         version: 1,
     },
     oid: 1183,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1017,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -555,34 +595,34 @@ pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
     name: "timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1022,
         version: 1,
     },
     oid: 1184,
     details: CatalogTypeDetails {
         typ: CatalogType::TimestampTz,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1023,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
     name: "_timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1023,
         version: 1,
     },
     oid: 1185,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1022,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -591,34 +631,34 @@ pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
     name: "interval",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1024,
         version: 1,
     },
     oid: 1186,
     details: CatalogTypeDetails {
         typ: CatalogType::Interval,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1025,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
     name: "_interval",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1025,
         version: 1,
     },
     oid: 1187,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1024,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -627,34 +667,34 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1026,
         version: 1,
     },
     oid: 1700,
     details: CatalogTypeDetails {
         typ: CatalogType::Numeric,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1027,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
     name: "_numeric",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1027,
         version: 1,
     },
     oid: 1231,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1026,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -663,34 +703,34 @@ pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_RECORD: BuiltinType = BuiltinType {
     name: "record",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1028,
         version: 1,
     },
     oid: 2249,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1029,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
     name: "_record",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1029,
         version: 1,
     },
     oid: 2287,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1028,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -699,34 +739,34 @@ pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_UUID: BuiltinType = BuiltinType {
     name: "uuid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1030,
         version: 1,
     },
     oid: 2950,
     details: CatalogTypeDetails {
         typ: CatalogType::Uuid,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1031,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
     name: "_uuid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1031,
         version: 1,
     },
     oid: 2951,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1030,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -735,34 +775,34 @@ pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_JSONB: BuiltinType = BuiltinType {
     name: "jsonb",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1032,
         version: 1,
     },
     oid: 3802,
     details: CatalogTypeDetails {
         typ: CatalogType::Jsonb,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1033,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
     name: "_jsonb",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1033,
         version: 1,
     },
     oid: 3807,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1032,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -771,7 +811,7 @@ pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_ANY: BuiltinType = BuiltinType {
     name: "any",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1034,
         version: 1,
     },
@@ -785,7 +825,7 @@ pub const TYPE_ANY: BuiltinType = BuiltinType {
 pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
     name: "anyarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1035,
         version: 1,
     },
@@ -799,7 +839,7 @@ pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
 pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
     name: "anyelement",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1036,
         version: 1,
     },
@@ -813,7 +853,7 @@ pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
 pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
     name: "anynonarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1037,
         version: 1,
     },
@@ -827,68 +867,68 @@ pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
 pub const TYPE_CHAR: BuiltinType = BuiltinType {
     name: "char",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1038,
         version: 1,
     },
     oid: 18,
     details: CatalogTypeDetails {
         typ: CatalogType::PgLegacyChar,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1043,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
     name: "varchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1039,
         version: 1,
     },
     oid: 1043,
     details: CatalogTypeDetails {
         typ: CatalogType::VarChar,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1044,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INT2: BuiltinType = BuiltinType {
     name: "int2",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1040,
         version: 1,
     },
     oid: 21,
     details: CatalogTypeDetails {
         typ: CatalogType::Int16,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1041,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
     name: "_int2",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1041,
         version: 1,
     },
     oid: 1005,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1040,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -897,34 +937,34 @@ pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
     name: "bpchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1042,
         version: 1,
     },
     oid: 1042,
     details: CatalogTypeDetails {
         typ: CatalogType::Char,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1045,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
     name: "_char",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1043,
         version: 1,
     },
     oid: 1002,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1038,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -933,17 +973,17 @@ pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
     name: "_varchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1044,
         version: 1,
     },
     oid: 1015,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1039,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -952,17 +992,17 @@ pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
     name: "_bpchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1045,
         version: 1,
     },
     oid: 1014,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1042,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -971,34 +1011,34 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_REGPROC: BuiltinType = BuiltinType {
     name: "regproc",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1046,
         version: 1,
     },
     oid: 24,
     details: CatalogTypeDetails {
         typ: CatalogType::RegProc,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1047,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
     name: "_regproc",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1047,
         version: 1,
     },
     oid: 1008,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1046,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -1007,34 +1047,34 @@ pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_REGTYPE: BuiltinType = BuiltinType {
     name: "regtype",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1048,
         version: 1,
     },
     oid: 2206,
     details: CatalogTypeDetails {
         typ: CatalogType::RegType,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1049,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_REGTYPE_ARRAY: BuiltinType = BuiltinType {
     name: "_regtype",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1049,
         version: 1,
     },
     oid: 2211,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1048,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -1043,34 +1083,34 @@ pub const TYPE_REGTYPE_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_REGCLASS: BuiltinType = BuiltinType {
     name: "regclass",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1050,
         version: 1,
     },
     oid: 2205,
     details: CatalogTypeDetails {
         typ: CatalogType::RegClass,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1051,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
     name: "_regclass",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1051,
         version: 1,
     },
     oid: 2210,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1050,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -1079,34 +1119,34 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_INT2_VECTOR: BuiltinType = BuiltinType {
     name: "int2vector",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1052,
         version: 1,
     },
     oid: 22,
     details: CatalogTypeDetails {
         typ: CatalogType::Int2Vector,
-        array_id: Some(GlobalId::System {
+        array_id: Some(GlobalId::System(SystemId {
             id: 1053,
             version: 1,
-        }),
+        })),
     },
 };
 
 pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
     name: "_int2vector",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1053,
         version: 1,
     },
     oid: 1006,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System {
+            element_id: GlobalId::System(SystemId {
                 id: 1052,
                 version: 1,
-            },
+            }),
         },
         array_id: None,
     },
@@ -1148,7 +1188,7 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType = BuiltinType {
 pub const TYPE_LIST: BuiltinType = BuiltinType {
     name: "list",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1998,
         version: 1,
     },
@@ -1162,7 +1202,7 @@ pub const TYPE_LIST: BuiltinType = BuiltinType {
 pub const TYPE_MAP: BuiltinType = BuiltinType {
     name: "map",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System {
+    id: SystemId {
         id: 1999,
         version: 1,
     },
@@ -1201,7 +1241,7 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3000,
         version: 1,
     },
@@ -1211,7 +1251,7 @@ pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_addresses",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3002,
         version: 1,
     },
@@ -1221,7 +1261,7 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_channels",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3004,
         version: 1,
     },
@@ -1231,7 +1271,7 @@ pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_elapsed_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3006,
         version: 1,
     },
@@ -1241,7 +1281,7 @@ pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_histogram_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3008,
         version: 1,
     },
@@ -1251,7 +1291,7 @@ pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_parks_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3010,
         version: 1,
     },
@@ -1261,7 +1301,7 @@ pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3012,
         version: 1,
     },
@@ -1271,7 +1311,7 @@ pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_sharing_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3014,
         version: 1,
     },
@@ -1281,7 +1321,7 @@ pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     name: "mz_materializations",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowCurrent),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3016,
         version: 1,
     },
@@ -1291,7 +1331,7 @@ pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
     name: "mz_materialization_dependencies",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowDependency),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3018,
         version: 1,
     },
@@ -1301,7 +1341,7 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::FrontierCurrent),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3020,
         version: 1,
     },
@@ -1311,7 +1351,7 @@ pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     name: "mz_peek_active",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekCurrent),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3022,
         version: 1,
     },
@@ -1321,7 +1361,7 @@ pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     name: "mz_peek_durations",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3024,
         version: 1,
     },
@@ -1331,7 +1371,7 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     name: "mz_source_info",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3026,
         version: 1,
     },
@@ -1341,7 +1381,7 @@ pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3028,
         version: 1,
     },
@@ -1351,7 +1391,7 @@ pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_sent_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3036,
         version: 1,
     },
@@ -1361,7 +1401,7 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3034,
         version: 1,
     },
@@ -1371,7 +1411,7 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_records_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3038,
         version: 1,
     },
@@ -1381,7 +1421,7 @@ pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
     name: "mz_kafka_source_statistics",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
-    id: GlobalId::System {
+    id: SystemId {
         id: 3040,
         version: 1,
     },
@@ -1397,7 +1437,7 @@ lazy_static! {
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false)),
-        id: GlobalId::System{id:4001, version:1},
+        id: SystemId{id:4001, version:1},
         persistent: false,
     };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
@@ -1410,7 +1450,7 @@ lazy_static! {
             .with_column("parent_column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        id: GlobalId::System{id:4003, version:1},
+        id: SystemId{id:4003, version:1},
         persistent: false,
     };
     pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
@@ -1421,7 +1461,7 @@ lazy_static! {
             .with_column("topic", ScalarType::String.nullable(false))
             .with_column("consistency_topic", ScalarType::String.nullable(true))
             .with_key(vec![0]),
-        id: GlobalId::System{id:4005, version:1},
+        id: SystemId{id:4005, version:1},
         persistent: false,
     };
     pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
@@ -1431,7 +1471,7 @@ lazy_static! {
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
-        id: GlobalId::System{id:4007, version:1},
+        id: SystemId{id:4007, version:1},
         persistent: false,
     };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
@@ -1441,7 +1481,7 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4009, version:1},
+        id: SystemId{id:4009, version:1},
         persistent: false,
     };
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
@@ -1452,7 +1492,7 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4011, version:1},
+        id: SystemId{id:4011, version:1},
         persistent: false,
     };
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
@@ -1466,7 +1506,7 @@ lazy_static! {
             .with_column("type", ScalarType::String.nullable(false))
             .with_column("default", ScalarType::String.nullable(true))
             .with_column("type_oid", ScalarType::Oid.nullable(false)),
-        id: GlobalId::System{id:4013, version:1},
+        id: SystemId{id:4013, version:1},
         persistent: false,
     };
     pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
@@ -1480,7 +1520,7 @@ lazy_static! {
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("enabled", ScalarType::Bool.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
-        id: GlobalId::System{id:4015, version:1},
+        id: SystemId{id:4015, version:1},
         persistent: false,
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
@@ -1492,7 +1532,7 @@ lazy_static! {
             .with_column("on_position", ScalarType::Int64.nullable(true))
             .with_column("on_expression", ScalarType::String.nullable(true))
             .with_column("nullable", ScalarType::Bool.nullable(false)),
-        id: GlobalId::System{id:4017, version:1},
+        id: SystemId{id:4017, version:1},
         persistent: false,
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
@@ -1504,7 +1544,7 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("persisted_name", ScalarType::String.nullable(true)),
-        id: GlobalId::System{id:4019, version:1},
+        id: SystemId{id:4019, version:1},
         persistent: false,
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
@@ -1518,7 +1558,7 @@ lazy_static! {
             .with_column("connector_type", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("persisted_name", ScalarType::String.nullable(true)),
-        id: GlobalId::System{id:4021, version:1},
+        id: SystemId{id:4021, version:1},
         persistent: false,
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
@@ -1532,7 +1572,7 @@ lazy_static! {
             .with_column("connector_type", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
-        id: GlobalId::System{id:4023, version:1},
+        id: SystemId{id:4023, version:1},
         persistent: false,
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
@@ -1544,7 +1584,7 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4025, version:1},
+        id: SystemId{id:4025, version:1},
         persistent: false,
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
@@ -1555,7 +1595,7 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4027, version:1},
+        id: SystemId{id:4027, version:1},
         persistent: false,
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
@@ -1564,7 +1604,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-            id: GlobalId::System{id:4029, version:1},
+            id: SystemId{id:4029, version:1},
             persistent: false,
     };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
@@ -1572,7 +1612,7 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-            id: GlobalId::System{id:4031, version:1},
+            id: SystemId{id:4031, version:1},
             persistent: false,
     };
     pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
@@ -1581,7 +1621,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-            id: GlobalId::System{id:4033, version:1},
+            id: SystemId{id:4033, version:1},
             persistent: false,
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
@@ -1591,7 +1631,7 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
-            id: GlobalId::System{id:4035, version:1},
+            id: SystemId{id:4035, version:1},
             persistent: false,
     };
     pub static ref MZ_ROLES: BuiltinTable = BuiltinTable {
@@ -1601,7 +1641,7 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4037, version:1},
+        id: SystemId{id:4037, version:1},
         persistent: false,
     };
     pub static ref MZ_PSEUDO_TYPES: BuiltinTable = BuiltinTable {
@@ -1609,7 +1649,7 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4039, version:1},
+        id: SystemId{id:4039, version:1},
         persistent: false,
     };
     pub static ref MZ_FUNCTIONS: BuiltinTable = BuiltinTable {
@@ -1624,7 +1664,7 @@ lazy_static! {
             .with_column("variadic_id", ScalarType::String.nullable(true))
             .with_column("ret_id", ScalarType::String.nullable(true))
             .with_column("ret_set", ScalarType::Bool.nullable(false)),
-        id: GlobalId::System{id:4041, version:1},
+        id: SystemId{id:4041, version:1},
         persistent: false,
     };
     pub static ref MZ_PROMETHEUS_READINGS: BuiltinTable = BuiltinTable {
@@ -1638,7 +1678,7 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
-        id: GlobalId::System{id:4043, version:1},
+        id: SystemId{id:4043, version:1},
         // Note that the `system_table_enabled` field of PersistConfig (hooked
         // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
@@ -1652,7 +1692,7 @@ lazy_static! {
                 .with_column("type", ScalarType::String.nullable(false))
                 .with_column("help", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
-        id: GlobalId::System{id:4045, version:1},
+        id: SystemId{id:4045, version:1},
         persistent: false,
     };
     pub static ref MZ_PROMETHEUS_HISTOGRAMS: BuiltinTable = BuiltinTable {
@@ -1667,7 +1707,7 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         // NB: Until the end of our persisted system tables experiment, give
         // persist team a heads up if you change this id, please!
-        id: GlobalId::System{id:4047, version:1},
+        id: SystemId{id:4047, version:1},
         // Note that the `system_table_enabled` field of PersistConfig (hooked
         // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
@@ -1679,7 +1719,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4049, version:1},
+        id: SystemId{id:4049, version:1},
         persistent: false,
     };
     pub static ref MZ_SECRETS: BuiltinTable = BuiltinTable {
@@ -1689,7 +1729,7 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System{id:4050, version:1},
+        id: SystemId{id:4050, version:1},
         persistent: false,
     };
 
@@ -1702,7 +1742,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5000,
         version: 1,
     },
@@ -1719,7 +1759,7 @@ UNION
     SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5001,
         version: 1,
     },
@@ -1744,7 +1784,7 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5002,
         version: 1,
     },
@@ -1765,7 +1805,7 @@ WHERE
     mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
     mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
     mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5003,
         version: 1,
     },
@@ -1789,7 +1829,7 @@ WHERE
     mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
     mz_dataflow_names.local_id = mz_dataflow_operator_addresses.address[1] AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5004,
         version: 1,
     },
@@ -1802,7 +1842,7 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     global_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5005,
         version: 1,
     },
@@ -1834,7 +1874,7 @@ FROM
 WHERE
     mz_dataflow_operator_dataflows.id = records_cte.operator AND
     mz_dataflow_operator_dataflows.worker = records_cte.worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5006,
         version: 1,
     },
@@ -1858,7 +1898,7 @@ GROUP BY
     mz_records_per_dataflow_operator.dataflow_id,
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5007,
         version: 1,
     },
@@ -1876,7 +1916,7 @@ FROM
 GROUP BY
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5008,
         version: 1,
     },
@@ -1900,7 +1940,7 @@ SELECT mas.worker, name, records, operator
 FROM
     records_cte mas LEFT JOIN mz_catalog.mz_dataflow_operators mdo
         ON mdo.id = mas.operator AND mdo.worker = mas.worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5009,
         version: 1,
     },
@@ -1920,7 +1960,7 @@ WHERE
     d_upper.worker = d_summed.worker AND
     d_upper.duration_ns >= d_summed.duration_ns
 GROUP BY d_upper.worker, d_upper.duration_ns",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5010,
         version: 1,
     },
@@ -1936,7 +1976,7 @@ pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
     SELECT worker, '+Inf', pg_catalog.max(count) AS count FROM mz_catalog.mz_perf_peek_durations_core
     GROUP BY worker
 )",
-    id: GlobalId::System{id:5011, version:1},
+    id: SystemId{id:5011, version:2},
 };
 
 pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
@@ -1945,7 +1985,7 @@ pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_aggregates AS SELECT worker, pg_catalog.sum(duration_ns * count) AS sum, pg_catalog.sum(count) AS count
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
-    id: GlobalId::System{id:5012, version:1},
+    id: SystemId{id:5012, version:1},
 };
 
 pub const MZ_PERF_DEPENDENCY_FRONTIERS: BuiltinView = BuiltinView {
@@ -1970,7 +2010,7 @@ JOIN (SELECT source_id, pg_catalog.MAX(timestamp) time FROM mz_catalog.mz_source
 JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
 JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = source_info.source_id",
-    id: GlobalId::System{id:5013, version:1},
+    id: SystemId{id:5013, version:1},
 };
 
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
@@ -1983,7 +2023,7 @@ NULL::pg_catalog.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas s
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5014,
         version: 1,
     },
@@ -2035,7 +2075,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System{id:5015, version:1},
+    id: SystemId{id:5015, version:1},
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
@@ -2051,7 +2091,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as datacl
 FROM mz_catalog.mz_databases d
 WHERE (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5016,
         version: 1,
     },
@@ -2088,7 +2128,7 @@ JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
 GROUP BY mz_indexes.oid, mz_objects.oid",
-    id: GlobalId::System{id:5017, version:1},
+    id: SystemId{id:5017, version:1},
 };
 
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
@@ -2101,7 +2141,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     NULL::pg_catalog.text as description
 FROM pg_catalog.pg_class c
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5018,
         version: 1,
     },
@@ -2155,7 +2195,7 @@ FROM
         )
             AS t ON mz_types.id = t.type_id
     JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5019,
         version: 1,
     },
@@ -2185,7 +2225,7 @@ JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
-    id: GlobalId::System {
+    id: SystemId {
         id: 5020,
         version: 1,
     },
@@ -2202,7 +2242,7 @@ pub const PG_PROC: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5021,
         version: 1,
     },
@@ -2215,7 +2255,7 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5022,
         version: 1,
     },
@@ -2230,7 +2270,7 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     NULL::pg_catalog.float4 AS enumsortorder,
     NULL::pg_catalog.text AS enumlabel
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5023,
         version: 1,
     },
@@ -2249,7 +2289,7 @@ FROM mz_catalog.mz_columns
     JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
 WHERE default IS NOT NULL",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5025,
         version: 1,
     },
@@ -2263,7 +2303,7 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
 ) AS _ (name, setting)",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5026,
         version: 1,
     },
@@ -2278,7 +2318,7 @@ FROM
     mz_catalog.mz_scheduling_elapsed_internal
 GROUP BY
     id, worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5027,
         version: 1,
     },
@@ -2293,7 +2333,7 @@ FROM
     mz_catalog.mz_scheduling_histogram_internal
 GROUP BY
     id, worker, duration_ns",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5028,
         version: 1,
     },
@@ -2308,7 +2348,7 @@ FROM
     mz_catalog.mz_scheduling_parks_internal
 GROUP BY
     worker, slept_for, requested",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5029,
         version: 1,
     },
@@ -2347,7 +2387,7 @@ SELECT
     sent_cte.sent,
     received_cte.received
 FROM sent_cte JOIN received_cte USING (channel, source_worker, target_worker)",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5030,
         version: 1,
     },
@@ -2366,7 +2406,7 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
 FROM
     mz_catalog.mz_dataflow_operator_reachability_internal
 GROUP BY address, port, worker, update_type, timestamp",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5031,
         version: 1,
     },
@@ -2402,7 +2442,7 @@ SELECT
     records_cte.records,
     batches_cte.batches
 FROM batches_cte JOIN records_cte USING (operator, worker)",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5032,
         version: 1,
     },
@@ -2418,7 +2458,7 @@ SELECT
     pg_catalog.count(*) AS count
 FROM mz_catalog.mz_arrangement_sharing_internal
 GROUP BY operator, worker",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5033,
         version: 1,
     },
@@ -2456,7 +2496,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid[] as conexclop,
     NULL::pg_catalog.text as conbin
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5034,
         version: 1,
     },
@@ -2473,7 +2513,7 @@ FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
 WHERE c.relkind = ANY (ARRAY['r','p'])",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5035,
         version: 1,
     },
@@ -2488,7 +2528,7 @@ SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.regproc AS amhandler,
     NULL::pg_catalog.\"char\" AS amtype
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5036,
         version: 1,
     },
@@ -2503,7 +2543,7 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     r.oid AS oid
 FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5037,
         version: 1,
     },
@@ -2520,7 +2560,7 @@ FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE d.name = pg_catalog.current_database()",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5038,
         version: 1,
     },
@@ -2544,7 +2584,7 @@ FROM mz_catalog.mz_columns c
 JOIN mz_catalog.mz_objects o ON o.id = c.id
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 JOIN mz_catalog.mz_databases d on s.database_id = d.id",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5039,
         version: 1,
     },
@@ -2564,7 +2604,7 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 JOIN mz_catalog.mz_databases d on s.database_id = d.id",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5040,
         version: 1,
     },
@@ -2588,7 +2628,7 @@ AS SELECT
     NULL::pg_catalog.text AS collctype,
     NULL::pg_catalog.text AS collversion
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5041,
         version: 1,
     },
@@ -2609,7 +2649,7 @@ AS SELECT
     NULL::pg_catalog.text AS polqual,
     NULL::pg_catalog.text AS polwithcheck
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5042,
         version: 1,
     },
@@ -2626,7 +2666,7 @@ AS SELECT
     NULL::pg_catalog.int4 AS inhseqno,
     NULL::pg_catalog.bool AS inhdetachpending
 WHERE false",
-    id: GlobalId::System {
+    id: SystemId {
         id: 5043,
         version: 1,
     },
@@ -2640,7 +2680,7 @@ pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
 };
 
 lazy_static! {
-    pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
+    pub static ref BUILTINS: BTreeMap<SystemId, Builtin> = {
         let mut builtins = vec![
             Builtin::Type(&TYPE_ANY),
             Builtin::Type(&TYPE_ANYARRAY),
@@ -2807,7 +2847,7 @@ lazy_static! {
                     name,
                     schema,
                     //TODO(jkosh44): hardcode this
-                    id: GlobalId::System{id: func_global_id_counter, version: 1},
+                    id: SystemId{id: func_global_id_counter, version: 1},
                     inner: func,
                 }));
                 func_global_id_counter += 1;
@@ -2817,9 +2857,9 @@ lazy_static! {
         assert!(func_global_id_counter < 3000, "exhausted func global IDs");
 
         // Ensure the IDs we assign are all unique:
-        let mut encountered = BTreeSet::<GlobalId>::new();
+        let mut encountered = BTreeSet::<SystemId>::new();
         let mut encounter =
-            move |kind_name: &str, field_name: &str, identifier: &str, id: &GlobalId| {
+            move |kind_name: &str, field_name: &str, identifier: &str, id: &SystemId| {
                 assert!(
                     encountered.insert(id.to_owned()),
                     "{} for {} {:?} is already used as a global ID: {:?}",
@@ -2830,7 +2870,7 @@ lazy_static! {
                 );
                 assert!(
                 //TODO(jkosh44)
-                    *id < GlobalId::System{id: FIRST_SYSTEM_INDEX_ID, version: 1},
+                    *id < SystemId{id: FIRST_SYSTEM_INDEX_ID, version: 1},
                     "{field_name} for {kind_name} {identifier:?} is not less \
                      than FIRST_SYSTEM_INDEX_ID ({FIRST_SYSTEM_INDEX_ID}): {id}"
                 )
@@ -3006,15 +3046,19 @@ mod tests {
                     // Ensure the type matches.
                     match ty.details.typ {
                         CatalogType::Array { element_id } => {
-                            let elem_ty = match BUILTINS.get(&element_id) {
-                                Some(Builtin::Type(ty)) => ty,
-                                _ => panic!("{} is unexpectedly not a type", element_id),
-                            };
-                            assert_eq!(
-                                pg_ty.elem, elem_ty.oid,
-                                "type {} has mismatched element OIDs",
-                                ty.name
-                            )
+                            if let GlobalId::System(element_id) = element_id {
+                                let elem_ty = match BUILTINS.get(&element_id) {
+                                    Some(Builtin::Type(ty)) => ty,
+                                    _ => panic!("{} is unexpectedly not a type", element_id),
+                                };
+                                assert_eq!(
+                                    pg_ty.elem, elem_ty.oid,
+                                    "type {} has mismatched element OIDs",
+                                    ty.name
+                                )
+                            } else {
+                                panic!("unexpected non-system id: {element_id}");
+                            }
                         }
                         CatalogType::Pseudo => {
                             assert_eq!(
@@ -3035,15 +3079,19 @@ mod tests {
                     // Ensure the array type reference is correct.
                     match ty.details.array_id {
                         Some(array_id) => {
-                            let array_ty = match BUILTINS.get(&array_id) {
-                                Some(Builtin::Type(ty)) => ty,
-                                _ => panic!("{} is unexpectedly not a type", array_id),
-                            };
-                            assert_eq!(
-                                pg_ty.array, array_ty.oid,
-                                "type {} has mismatched array OIDs",
-                                ty.name,
-                            );
+                            if let GlobalId::System(array_id) = array_id {
+                                let array_ty = match BUILTINS.get(&array_id) {
+                                    Some(Builtin::Type(ty)) => ty,
+                                    _ => panic!("{} is unexpectedly not a type", array_id),
+                                };
+                                assert_eq!(
+                                    pg_ty.array, array_ty.oid,
+                                    "type {} has mismatched array OIDs",
+                                    ty.name,
+                                );
+                            } else {
+                                panic!("unexpected non-system id: {array_id}");
+                            }
                         }
                         None => assert_eq!(
                             pg_ty.array, 0,

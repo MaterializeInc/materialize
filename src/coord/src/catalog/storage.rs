@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use itertools::Itertools;
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
-use mz_expr::{GlobalId, PartitionId};
+use mz_expr::{GlobalId, PartitionId, SystemId};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_eq;
 use mz_repr::Timestamp;
@@ -396,6 +397,30 @@ impl Connection {
                 Ok((id, name, config))
             })?
             .collect()
+    }
+
+    pub fn load_system_object_versions(&self) -> Result<BTreeMap<u64, u64>, Error> {
+        self.inner
+            .prepare("SELECT id, version FROM system_object_version")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                // SQLite doesn't support u64s, so we constrain ourselves to the more
+                // limited range of positive i64s.
+                let id: i64 = row.get(0)?;
+                let version: i64 = row.get(1)?;
+                Ok((id as u64, version as u64))
+            })?
+            .collect()
+    }
+
+    pub fn set_system_object_version(&mut self, system_id: SystemId) -> Result<(), Error> {
+        let tx = self.inner.transaction()?;
+        tx.execute(
+            "INSERT INTO system_object_version (id, version) VALUES (?, ?)
+                    ON CONFLICT (id) DO UPDATE SET version=excluded.version;",
+            params![system_id.id as i64, system_id.version as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {

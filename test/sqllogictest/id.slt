@@ -52,7 +52,7 @@ statement error invalid id
 SELECT y.a FROM [u6 AS materialize.public.y]
 
 statement error invalid digit
-SELECT y.a FROM [xx AS materialize.public.y]
+SELECT y.a FROM [ux AS materialize.public.y]
 
 statement ok
 CREATE VIEW foo AS SELECT * FROM x

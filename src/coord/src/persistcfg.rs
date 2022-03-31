@@ -32,7 +32,7 @@ use serde::Serialize;
 use tokio::runtime::Runtime as TokioRuntime;
 use url::Url;
 
-use mz_expr::GlobalId;
+use mz_expr::{GlobalId, SystemId};
 use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 use mz_persist::file::FileBlob;
 use mz_persist::runtime::{self, RuntimeConfig};
@@ -244,7 +244,7 @@ impl PersisterWithConfig {
                 // Catalog::deserialize_item.
                 Some(format!("user-table-{:?}-{}", id, pretty))
             }
-            GlobalId::System { id, version } if self.config.system_table_enabled => {
+            GlobalId::System(SystemId { id, version }) if self.config.system_table_enabled => {
                 // NB: Until the end of our persisted system tables experiment, give
                 // persist team a heads up if you change this, please!
                 Some(format!("system-table-{:?}.{:?}-{}", id, version, pretty))

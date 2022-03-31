@@ -3427,10 +3427,16 @@ impl<'a> Parser<'a> {
 
     fn parse_raw_name(&mut self) -> Result<RawObjectName, ParserError> {
         if self.consume_token(&Token::LBracket) {
-            let id = match self.next_token() {
+            let mut id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
+            // system Ids have a version component which is separated by a '.'
+            match self.next_token() {
+                Some(Token::Number(tok)) => id.push_str(&tok),
+                None => return parser_err!(self, self.peek_prev_pos(), "expected AS"),
+                _ => self.prev_token(),
+            }
             self.expect_keyword(AS)?;
             let name = self.parse_object_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?

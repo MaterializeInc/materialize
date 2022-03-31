@@ -50,11 +50,48 @@ impl fmt::Display for LocalId {
     }
 }
 
+/// The identifier for a system global dataflow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct SystemId {
+    pub id: u64,
+    pub version: u64,
+}
+
+impl FromStr for SystemId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains('.') {
+            let parts: Vec<_> = s.split('.').collect();
+            if parts.len() != 2 {
+                return Err(anyhow!("couldn't parse id {}", s));
+            }
+            Ok(SystemId {
+                id: parts[0].parse()?,
+                version: parts[1].parse()?,
+            })
+        } else {
+            // For backwards compatibility on non-versioned system ids.
+            let val: u64 = s.parse()?;
+            Ok(SystemId {
+                id: val,
+                version: 1,
+            })
+        }
+    }
+}
+
+impl fmt::Display for SystemId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{}", self.id, self.version)
+    }
+}
+
 /// The identifier for a global dataflow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum GlobalId {
     /// System namespace.
-    System { id: u64, version: u64 },
+    System(SystemId),
     /// User namespace.
     User(u64),
     /// Transient namespace.
@@ -66,7 +103,7 @@ pub enum GlobalId {
 impl GlobalId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        matches!(self, GlobalId::System { id: _, version: _ })
+        matches!(self, GlobalId::System(_))
     }
 
     /// Reports whether this ID is in the user namespace.
@@ -87,15 +124,10 @@ impl FromStr for GlobalId {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));
         }
-        let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
-            //TODO
-            's' => Ok(GlobalId::System {
-                id: val,
-                version: 1,
-            }),
-            'u' => Ok(GlobalId::User(val)),
-            't' => Ok(GlobalId::Transient(val)),
+            's' => Ok(GlobalId::System(SystemId::from_str(&s[1..])?)),
+            'u' => Ok(GlobalId::User(s[1..].parse()?)),
+            't' => Ok(GlobalId::Transient(s[1..].parse()?)),
             _ => Err(anyhow!("couldn't parse id {}", s)),
         }
     }
@@ -104,7 +136,7 @@ impl FromStr for GlobalId {
 impl fmt::Display for GlobalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GlobalId::System { id, version } => write!(f, "s{}.{}", id, version),
+            GlobalId::System(system_id) => write!(f, "s{system_id}"),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
