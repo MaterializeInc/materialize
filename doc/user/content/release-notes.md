@@ -21,7 +21,7 @@ process by the release notes team.
 
 {{% version-header v0.25.0 %}}
 
-- Improve `base64` decoding to support numerals in encoded strings. Previously, if the encoded string contained a numeral, decoding would fail.
+- Fix `base64` decoding to support numerals in encoded strings. Previously, if the encoded string contained a numeral, decoding would fail.
 
 - Fix a panic that would occur if an object or type was over-qualified (i.e., the fully qualified object name consisted of more than three identifiers separated by a `.`).
 
