@@ -80,7 +80,7 @@ def workflow_default(c: Composition) -> None:
 
     created_roles: List[CreatedRole] = []
     try:
-        bucket = create_bucket()
+        create_bucket(session)
         allowed = create_role(iam, "Allow", current_user, created_roles)
         denied = create_role(iam, "Deny", current_user, created_roles)
         requires_eid = create_role(
@@ -90,8 +90,10 @@ def workflow_default(c: Composition) -> None:
             session, allowed.arn, requires_eid.arn, denied.arn
         )
 
-        wait_for_role(sts, denied.arn, wait_for_bucket(bucket, False))
-        wait_for_role(sts, allowed.arn, wait_for_bucket(bucket, True))
+        wait_for_role(sts, denied.arn)
+        wait_for_bucket(sts, denied.arn, False)
+        wait_for_role(sts, allowed.arn)
+        wait_for_bucket(sts, allowed.arn, True)
 
         
 
@@ -180,15 +182,11 @@ def workflow_default(c: Composition) -> None:
         if errored:
             raise UIError("Unable to completely clean up AWS resources")
 
-@dataclass
-class CreatedBucket:
-    location: str
-
-def create_bucket() -> CreatedBucket:
+def create_bucket(session: boto3.Session) -> None:
     try:
-        client = boto3.client('s3')
-        resp = client.create_bucket(Bucket=BUCKET_NAME, CreateBucketConfiguration={'LocationConstraint': 'us-east-1'})
-        return CreatedBucket(location=resp['Location'])
+        s3 = session.resource('s3')
+        bucket = s3.create_bucket(Bucket=BUCKET_NAME)
+        bucket.wait_until_exists()
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
 
@@ -308,7 +306,7 @@ region = {region}
 """
 
 
-def wait_for_role(sts: STSClient, role_arn: str, resource_callback: Callable[[CreatedBucket, bool], None]) -> None:
+def wait_for_role(sts: STSClient, role_arn: str) -> None:
     """
     Verify that it is possible to assume the given role
 
@@ -322,18 +320,14 @@ def wait_for_role(sts: STSClient, role_arn: str, resource_callback: Callable[[Cr
         )
     try:
         assume()
-    except Exception as e:
+    finally:
         raise UIError("Never able to assume role")
 
-    print(f"Successfully assumed role {role_arn}")
-    try:
-            resource_callback()
-    except Exception as e:
-        print(f"Unable to perform bucket list check: {e}")
+    
         
 
 @retry(Exception, tries=30, delay=1)
-def wait_for_bucket(bucket: CreatedBucket, has_access: bool) -> None:
+def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     """
     Verify that with the currently assumed role we can or cannot
     list objects in the specified S3 bucket. 
@@ -341,6 +335,9 @@ def wait_for_bucket(bucket: CreatedBucket, has_access: bool) -> None:
     Much like wait_for_role this is not expected to take long but
     it does require waiting to eliminate flakes
     """
+    sts.assume_role(
+            RoleArn=role_arn, RoleSessionName="mzcomposevalidates3access"
+        )
     client = boto3.client('s3')
     # This is slightly ugly but allows using the retry decorator more cleanly
     if not has_access:
