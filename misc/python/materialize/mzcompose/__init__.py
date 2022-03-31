@@ -575,6 +575,27 @@ class Composition:
             capture=capture,
         )
 
+    def exec(
+        self, service: str, *args: str, detach: bool = False
+    ) -> subprocess.CompletedProcess:
+        """Execute a one-off command in a service's running container
+
+        Delegates to `docker-compose exec`.
+
+        Args:
+            service: The service whose container will be used
+            command: The command to run
+            args: Arguments to pass to the command
+        """
+
+        return self.invoke(
+            "exec",
+            *(["--detach"] if detach else []),
+            service,
+            *self.compose["services"][service]["entrypoint"],
+            *args,
+        )
+
     def pull_if_variable(self, services: List[str]) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
@@ -589,7 +610,7 @@ class Composition:
             ):
                 self.invoke("pull", service)
 
-    def up(self, *services: str, detach: bool = True) -> None:
+    def up(self, *services: str, detach: bool = True, persistent: bool = False) -> None:
         """Build, (re)create, and start the named services.
 
         Delegates to `docker-compose up`. See that command's help for details.
@@ -597,8 +618,22 @@ class Composition:
         Args:
             services: The names of services in the composition.
             detach: Run containers in the background.
+            persistent: Replace the container's entrypoint and command with
+                `sleep infinity` so that additional commands can be scheduled
+                on the container with `Composition.exec`.
         """
+        if persistent:
+            old_compose = copy.deepcopy(self.compose)
+            for service in self.compose["services"].values():
+                service["entrypoint"] = ["sleep", "infinity"]
+                service["command"] = []
+            self._write_compose()
+
         self.invoke("up", *(["--detach"] if detach else []), *services)
+
+        if persistent:
+            self.compose = old_compose
+            self._write_compose()
 
     def down(self, destroy_volumes: bool = True) -> None:
         """Stop and remove resources.
