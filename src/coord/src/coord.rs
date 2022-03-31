@@ -145,7 +145,6 @@ use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
-    SYSTEM_CONN_ID,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -1679,10 +1678,11 @@ impl Coordinator {
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: from_entry
-                        .desc(&builder.catalog.resolve_full_name(
-                            from_entry.name(),
-                            from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
-                        ))
+                        .desc(
+                            &builder
+                                .catalog
+                                .resolve_full_name(from_entry.name(), from_entry.conn_id()),
+                        )
                         .unwrap()
                         .clone(),
                     connector: connector.clone(),
@@ -2294,7 +2294,7 @@ impl Coordinator {
             let index_id = self.catalog.allocate_user_id()?;
             let full_name = self
                 .catalog
-                .resolve_full_name(&plan.name, session.conn_id());
+                .resolve_full_name(&plan.name, Some(session.conn_id()));
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
@@ -2446,10 +2446,10 @@ impl Coordinator {
                         mz_dataflow_types::sinks::SinkDesc {
                             from: sink.from,
                             from_desc: from_entry
-                                .desc(&txn.catalog.resolve_full_name(
-                                    from_entry.name(),
-                                    from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
-                                ))
+                                .desc(
+                                    &txn.catalog
+                                        .resolve_full_name(from_entry.name(), from_entry.conn_id()),
+                                )
                                 .unwrap()
                                 .clone(),
                             connector: SinkConnector::Tail(TailSinkConnector {}),
@@ -2547,7 +2547,9 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_user_id()?;
-            let full_name = self.catalog.resolve_full_name(&name, session.conn_id());
+            let full_name = self
+                .catalog
+                .resolve_full_name(&name, Some(session.conn_id()));
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
@@ -3138,7 +3140,7 @@ impl Coordinator {
                 if indexes.peek().is_none() {
                     unmaterialized.push(
                         catalog
-                            .resolve_full_name(entry.name(), session.conn_id())
+                            .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                     );
                 } else {
@@ -3147,13 +3149,13 @@ impl Coordinator {
                         .map(|(id, _idx)| catalog.get_entry(&id).name())
                         .map(|name| {
                             catalog
-                                .resolve_full_name(name, session.conn_id())
+                                .resolve_full_name(name, Some(session.conn_id()))
                                 .to_string()
                         })
                         .collect();
                     disabled_indexes.push((
                         catalog
-                            .resolve_full_name(entry.name(), session.conn_id())
+                            .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                         disabled_index_names,
                     ));
@@ -3259,7 +3261,7 @@ impl Coordinator {
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog
-                            .resolve_full_name(name, session.conn_id())
+                            .resolve_full_name(name, Some(session.conn_id()))
                             .to_string()
                     })
                     .collect();
@@ -3269,7 +3271,7 @@ impl Coordinator {
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog
-                            .resolve_full_name(name, session.conn_id())
+                            .resolve_full_name(name, Some(session.conn_id()))
                             .to_string()
                     })
                     .collect();
@@ -3433,7 +3435,7 @@ impl Coordinator {
                     .desc(
                         &self
                             .catalog
-                            .resolve_full_name(from.name(), session.conn_id()),
+                            .resolve_full_name(from.name(), Some(session.conn_id())),
                     )
                     .unwrap()
                     .clone();
@@ -3887,7 +3889,7 @@ impl Coordinator {
                             .map(|item| item.name())
                             .map(|name| {
                                 self.catalog
-                                    .resolve_full_name(name, session.conn_id())
+                                    .resolve_full_name(name, Some(session.conn_id()))
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
@@ -3913,7 +3915,7 @@ impl Coordinator {
                             .map(|item| item.name())
                             .map(|name| {
                                 self.catalog
-                                    .resolve_full_name(name, session.conn_id())
+                                    .resolve_full_name(name, Some(session.conn_id()))
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
@@ -4050,7 +4052,7 @@ impl Coordinator {
                         .desc(
                             &self
                                 .catalog
-                                .resolve_full_name(table.name(), session.conn_id()),
+                                .resolve_full_name(table.name(), Some(session.conn_id())),
                         )
                         .expect("desc called on table")
                         .arity(),
@@ -4107,7 +4109,7 @@ impl Coordinator {
             Some(table) => table.desc(
                 &self
                     .catalog
-                    .resolve_full_name(table.name(), session.conn_id()),
+                    .resolve_full_name(table.name(), Some(session.conn_id())),
             )?,
             None => {
                 return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
@@ -4178,7 +4180,7 @@ impl Coordinator {
                 .desc(
                     &self
                         .catalog
-                        .resolve_full_name(table.name(), session.conn_id()),
+                        .resolve_full_name(table.name(), Some(session.conn_id())),
                 )
                 .expect("desc called on table")
                 .clone(),
@@ -4613,7 +4615,7 @@ impl Coordinator {
                         self.catalog
                             .resolve_full_name(
                                 self.catalog.get_entry(&id).name(),
-                                session.conn_id(),
+                                Some(session.conn_id()),
                             )
                             .to_string(),
                     ));
