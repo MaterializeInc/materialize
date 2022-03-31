@@ -320,7 +320,7 @@ def wait_for_role(sts: STSClient, role_arn: str) -> None:
         )
     try:
         assume()
-    finally:
+    except Exception as e:
         raise UIError("Never able to assume role")
 
     
