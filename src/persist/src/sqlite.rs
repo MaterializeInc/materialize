@@ -60,6 +60,22 @@ impl SqliteConsensus {
             shard,
         })
     }
+
+    /// Remove all versions of data inserted at sequence numbers < `sequence_number`.
+    ///
+    /// TODO: We probably are going to move this function directly into the [Consensus]
+    /// trait itself.
+    async fn truncate(&mut self, sequence_number: SeqNo) -> Result<(), Error> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "DELETE FROM consensus
+             WHERE shard = $shard AND sequence_number < $sequence_number",
+        )?;
+
+        stmt.execute(named_params! {"$shard": self.shard, "$sequence_number": sequence_number.0})?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -141,6 +157,15 @@ impl Consensus for SqliteConsensus {
         };
 
         if result == 1 {
+            // Truncate everything strictly less than the row we just inserted.
+            // We're doing this as a best-effort measure to avoid unbounded
+            // memory growth while using this API, so don't take the result into
+            // account.
+            //
+            // TODO: remove this call once truncate becomes a full featured member
+            // of [Consensus] or, restructure this implementation to not keep historical
+            // data around if we don't need it.
+            let _ = self.truncate(new.seqno).await;
             Ok(Ok(()))
         } else {
             // It's safe to call head in a subsequent transaction rather than doing
