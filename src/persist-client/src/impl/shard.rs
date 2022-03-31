@@ -206,6 +206,50 @@ where
         Ok(new_upper)
     }
 
+    pub async fn compare_and_append<'i, I: IntoIterator<Item = ((&'i K, &'i V), &'i T, &'i D)>>(
+        &self,
+        writer_id: &WriterId,
+        updates: I,
+        expected_upper: Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<Result<Antichain<T>, Antichain<T>>, InvalidUsage> {
+        let mut state = self.state.lock().await;
+
+        match state.writers.get(writer_id) {
+            Some(_) => (), // The writer is known
+            // TODO: This is more likely an expired lease.
+            None => return Err(InvalidUsage(anyhow!("unknown writer: {:?}", writer_id))),
+        };
+
+        let shard_upper = Self::decode_antichain(&state.upper);
+
+        if PartialOrder::less_than(&new_upper, &expected_upper) {
+            return Err(InvalidUsage(anyhow!(
+                "new upper {:?} not in advance of expected upper {:?}",
+                new_upper,
+                expected_upper,
+            )));
+        }
+
+        if expected_upper != shard_upper {
+            return Ok(Err(shard_upper));
+        }
+
+        let lower = shard_upper;
+        for ((k, v), t, d) in updates {
+            debug_assert!(lower.less_equal(t));
+            debug_assert!(!new_upper.less_equal(t));
+            let (mut key_buf, mut val_buf) = (Vec::new(), Vec::new());
+            K::encode(k, &mut key_buf);
+            V::encode(v, &mut val_buf);
+            state
+                .contents
+                .push((key_buf, val_buf, T::encode(t), D::encode(d)));
+        }
+        state.upper = new_upper.elements().iter().map(|x| T::encode(x)).collect();
+        Ok(Ok(new_upper))
+    }
+
     pub async fn clone_reader(&self, reader_id: &ReaderId) -> Result<ReaderId, InvalidUsage> {
         let mut state = self.state.lock().await;
         let since = match state.readers.get(reader_id) {
