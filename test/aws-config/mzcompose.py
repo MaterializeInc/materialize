@@ -187,7 +187,7 @@ class CreatedBucket:
 def create_bucket() -> CreatedBucket:
     try:
         client = boto3.client('s3')
-        resp = client.create_bucket(Bucket=BUCKET_NAME)
+        resp = client.create_bucket(Bucket=BUCKET_NAME, CreateBucketConfiguration={'LocationConstraint': 'us-east-1'})
         return CreatedBucket(location=resp['Location'])
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
