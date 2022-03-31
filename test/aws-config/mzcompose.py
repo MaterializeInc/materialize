@@ -338,10 +338,16 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     Much like wait_for_role this is not expected to take long but
     it does require waiting to eliminate flakes
     """
-    sts.assume_role(
+    resp = sts.assume_role(
             RoleArn=role_arn, RoleSessionName="mzcomposevalidates3access"
         )
-    client = boto3.client('s3')
+    
+    client = boto3.client(
+        's3',
+        aws_access_key_id=resp["Credentials"]["AccessKeyId"],
+        aws_secret_access_key=resp["Credentials"]["SecretAccessKey"],
+        aws_session_token=resp["Credentials"]["SessionToken"]
+    )
     for i in range(30, 0, -1):
         try:
             client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
