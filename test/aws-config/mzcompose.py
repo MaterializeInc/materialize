@@ -9,6 +9,7 @@
 
 """Test loading AWS credentials from various credential sources."""
 
+from email import policy
 import json
 import random
 import time
@@ -183,6 +184,7 @@ def workflow_default(c: Composition) -> None:
             raise UIError("Unable to completely clean up AWS resources")
 
 def create_bucket(session: boto3.Session) -> None:
+    print(f"Creating bucket {BUCKET_NAME}")
     try:
         s3 = session.resource('s3')
         constraint = {'LocationConstraint': session.region_name } if session.region_name != "us-east-1" else None
@@ -228,6 +230,7 @@ def create_role(
         AssumeRolePolicyDocument=json.dumps(assume_role_policy),
     )
     role_arn = create_response["Role"]["Arn"]
+    print(f"Created {role_arn} to {effect_name}, creating {policy_name} for {BUCKET_ARN}")
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName=policy_name,
@@ -238,12 +241,12 @@ def create_role(
                     {
                         "Effect": effect,
                         "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": BUCKET_ARN,
+                        "Resource": f"{BUCKET_ARN}",
                     },
                     {
                         "Effect": effect,
                         "Action": ["s3:GetObject", "s3:GetObjectAcl"],
-                        "Resource": f"{BUCKET_ARN}*/*",
+                        "Resource": f"{BUCKET_ARN}/*",
                     },
                 ],
             }
@@ -313,20 +316,20 @@ def wait_for_role(sts: STSClient, role_arn: str) -> None:
     In practice this always seems to take less than 10 seconds, but give it up
     to 90 to reduce any chance of flakiness.
     """
-    @retry(Exception, tries=14, delay=1, backoff=2, max_delay=8)
-    def assume():
-        sts.assume_role(
-            RoleArn=role_arn, RoleSessionName="mzcomposevalidatecreated"
-        )
-    try:
-        assume()
-    except Exception as e:
-        raise UIError("Never able to assume role")
+    for i in range(90, 0, -1):
+        try:
+            sts.assume_role(
+                RoleArn=role_arn, RoleSessionName="mzcomposevalidatecreated"
+            )
+        except Exception as e:
+            if i % 10 == 0:
+                print(f"Unable to assume role {role_arn}, {i} seconds remaining: {e}")
+            time.sleep(1)
+            continue
+        print(f"Successfully assumed role {role_arn}")
+        return
+    raise UIError("Never able to assume role")
 
-    
-        
-
-@retry(Exception, tries=30, delay=1)
 def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     """
     Verify that with the currently assumed role we can or cannot
@@ -339,14 +342,21 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
             RoleArn=role_arn, RoleSessionName="mzcomposevalidates3access"
         )
     client = boto3.client('s3')
-    # This is slightly ugly but allows using the retry decorator more cleanly
-    if not has_access:
+    for i in range(30, 0, -1):
         try:
             client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
         except botocore.exceptions.AccessDeniedException:
-            print("Deny permission successfully enforced")
-            return
-    client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
+            if not has_access:
+                print("Deny permission successfully enforced")
+                return
+            time.sleep(1)
+            continue
+        except Exception as e:
+            if i % 10 == 0:
+                print(f"Bucket verification failing, {i} seconds remaining: {e}")
+            time.sleep(1)
+            continue
+    raise UIError("Unable to verify bucket access is correct")
 
 def write_aws_config(local_dir: Path, text: str) -> None:
     config_file = local_dir / "config"
