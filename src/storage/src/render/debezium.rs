@@ -10,13 +10,10 @@
 use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
 use std::str::FromStr;
-use std::time::Duration;
 
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{OkErr, Operator};
@@ -195,22 +192,35 @@ where
                 let mut data = vec![];
                 let mut data_buffer = VecDeque::new();
                 let mut dedup_state = HashMap::new();
+
+                // Keep mapping of `transaction_id`s to the timestamp at which that transaction END record was read from
+                // the transaction metadata stream.  That stored timestamp will be the timestamp for all data records
+                // with the corresponding `transaction_id`.
                 let mut tx_mapping = HashMap::new();
-                let mut tx_event_count = HashMap::new();
+                // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
+                // matched data rows.  This will be dropped when we've matched the indicated number of events.
                 let mut tx_cap_map = HashMap::new();
-                move |mut binary_cap, op_info| {
-                    let activator = input.scope().activator_for(&op_info.address[..]);
+                let mut tx_event_count = HashMap::new();
+                move |_, _| {
                     move |tx_metadata_input, data_input, output| {
                         while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
                             refmut_data.swap(&mut tx_data);
-                            let tx_metadata_cap = Rc::new(tx_metadata_cap.retain());
+                            let tx_metadata_cap = tx_metadata_cap.retain();
                             for (row, time, diff) in tx_data.drain(..) {
-                                assert_eq!(diff, 1);
-                                let mut i = row.iter();
-                                let status = i.next().expect("status field validated to exist").unwrap_str();
-                                let tx_id = i.next().expect("tx_id field validated exist").unwrap_str().to_owned();
+                                if diff != 1 {
+                                    output.session(&tx_metadata_cap).give((
+                                        Err(DataflowError::EvalError(EvalError::Internal(
+                                            String::from(format!("Transaction metadata supplied diff value {:?}", diff)),
+                                        ))),
+                                        time,
+                                        1,
+                                    ));
+                                }
+                                let mut datums = row.iter();
+                                let status = datums.next().expect("status field validated to exist").unwrap_str();
+                                let tx_id = datums.next().expect("tx_id field validated exist").unwrap_str().to_owned();
                                 let event_count: Option<i64> =
-                                    match i.next().expect("event_count field validated exist") {
+                                    match datums.next().expect("event_count field validated exist") {
                                         Datum::Int16(i) => Some(i.into()),
                                         Datum::Int32(i) => Some(i.into()),
                                         Datum::Int64(i) => Some(i),
@@ -223,10 +233,9 @@ where
                                 let event_count = match event_count {
                                     Some(c) => c,
                                     None => {
-                                        // XXX(chae): maybe a panic??
-                                        output.session(&*tx_metadata_cap).give((
+                                        output.session(&tx_metadata_cap).give((
                                             Err(DataflowError::EvalError(EvalError::Internal(
-                                                String::from("Need events_remaining in END record"),
+                                                String::from("Need event_count in END record"),
                                             ))),
                                             time,
                                             1,
@@ -238,7 +247,7 @@ where
                                     None => {
                                         tx_event_count.insert(tx_id.clone(), event_count);
                                         tx_cap_map
-                                            .insert(tx_id.clone(), Rc::clone(&tx_metadata_cap));
+                                            .insert(tx_id.clone(), tx_metadata_cap.clone());
                                     }
                                     Some(val) if val == time => {},
                                     Some(val) => panic!("unexpected mismatch in duplicate END record for {:?}: {:?} vs {:?}", tx_id, time, val),
@@ -246,19 +255,19 @@ where
                             }
                         }
 
-                        while let Some((_data_cap, refmut_data)) = data_input.next() {
+                        while let Some((data_cap, refmut_data)) = data_input.next() {
                             // RefOrMut doesn't let us drain directly into iterator
                             refmut_data.swap(&mut data);
-                            data_buffer.extend(data.drain(..));
+                            let data_cap = data_cap.retain();
+                            data_buffer.extend(data.drain(..).map(|r| (r, data_cap.clone())));
                         }
-                        while let Some(result) = data_buffer.get(0) {
-                            let result = result.clone();
+                        while let Some((result, data_cap)) = data_buffer.get(0).cloned() {
                             let key = match result.key.transpose() {
                                 Ok(key) => key,
                                 Err(err) => {
-                                    output.session(&binary_cap).give((
+                                    output.session(&data_cap).give((
                                         Err(err.into()),
-                                        *binary_cap.time(),
+                                        *data_cap.time(),
                                         1,
                                     ));
                                     let _ = data_buffer.pop_front();
@@ -268,9 +277,9 @@ where
                             let value = match result.value {
                                 Some(Ok(value)) => value,
                                 Some(Err(err)) => {
-                                    output.session(&binary_cap).give((
+                                    output.session(&data_cap).give((
                                         Err(err.into()),
-                                        *binary_cap.time(),
+                                        *data_cap.time(),
                                         1,
                                     ));
                                     let _ = data_buffer.pop_front();
@@ -309,20 +318,13 @@ where
                                     match res {
                                         Ok(b) => b,
                                         Err(err) => {
-                                            // XXX(chae): is it worth trying to use `tx_cap` if it exists or should just use `binary_cap`?
-                                            // If we would dedup the message below, we might not have a cap
-                                            match tx_cap_map.get(tx_id) {
-                                                Some(c) => output.session(&**c).give((
-                                                    Err(err),
-                                                    *c.time(),
-                                                    1,
-                                                )),
-                                                None => output.session(&binary_cap).give((
-                                                    Err(err),
-                                                    *binary_cap.time(),
-                                                    1,
-                                                )),
-                                            }
+                                            // We could theoretically use tx_cap_map.get(tx_id) here but for sake of
+                                            // consistency, we output all errors at the data_cap time.
+                                            output.session(&data_cap).give((
+                                                Err(err),
+                                                *data_cap.time(),
+                                                1,
+                                            ));
                                             continue;
                                         }
                                     }
@@ -336,7 +338,7 @@ where
                                     Entry::Vacant(_) => panic!("Must have cap if using record"),
                                 };
 
-                                let mut session = output.session(&**tx_cap_entry.get());
+                                let mut session = output.session(tx_cap_entry.get());
                                 match value.iter().nth(before_idx).unwrap() {
                                     Datum::List(l) => {
                                         session.give((Ok(Row::pack(&l)), tx_time, -1));
@@ -355,31 +357,19 @@ where
                                         panic!("type error: expected record, found {:?}", d)
                                     }
                                 }
-                                match tx_event_count.get_mut(tx_id) {
-                                    Some(count) => {
+                                match tx_event_count.entry(tx_id.to_string()) {
+                                    Entry::Occupied(mut e) => {
+                                        let count = e.get_mut();
                                         *count -= 1;
                                         if *count == 0 {
-                                            let (_, tx_cap) = tx_cap_entry.remove_entry();
-                                            binary_cap.downgrade(&tx_cap.time());
+                                            // Must drop the capability to allow the output frontier to progress
+                                            let _ = tx_cap_entry.remove_entry();
+                                            let _ = e.remove_entry();
                                         }
                                     }
-                                    None => panic!("need event count for tx_id {:?}", tx_id),
+                                    Entry::Vacant(_) => panic!("need event count for tx_id {:?}", tx_id),
                                 }
                             }
-                        }
-
-                        if !data_buffer.is_empty() || !tx_cap_map.is_empty() {
-                            activator.activate_after(Duration::from_secs(1));
-                        } else {
-                            let tx_frontier = tx_metadata_input.frontier().frontier().to_owned();
-                            let data_frontier = data_input.frontier().frontier().to_owned();
-                            let meet = data_frontier.meet(&tx_frontier);
-                            // Having binary_cap be Capability<u64> rather than Capability<Antichain<u64>>
-                            // means we can't just clear it. Other choice is wrapping it in an `Option` and
-                            // then `take`ing it if `meet` is the empty Antichain. But then we'd have a
-                            // bunch of unwraps everywhere.
-                            let meet_u64 = meet.into_iter().next().unwrap_or(u64::MAX);
-                            let _ = binary_cap.try_downgrade(&meet_u64);
                         }
                     }
                 }

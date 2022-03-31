@@ -697,7 +697,7 @@ pub fn plan_create_source(
 
                             Some(item.id())
                         }
-                        Some(v) => bail!("tx_metadata must be a Object found {:?}", v),
+                        Some(v) => bail!("tx_metadata must be an Object but found {:?}", v),
                         None => None,
                     };
 

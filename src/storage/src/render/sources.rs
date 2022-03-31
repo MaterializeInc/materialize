@@ -447,6 +447,7 @@ where
                                             // N.B. tx_id is validated when constructing dbz_envelope
                                             .expect("bad tx metadata spec")
                                             .clone();
+                                        // TODO(chae): reuse the existing arrangement if it exists
                                         let ((tx_source_ok, tx_source_err), tx_token) =
                                             import_source(
                                                 dataflow_debug_name,
