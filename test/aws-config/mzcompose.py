@@ -18,6 +18,7 @@ from retry import retry
 from typing import Any, Callable, Dict, List, Optional
 
 import boto3
+import botocore.exceptions
 from mypy_boto3_iam import IAMClient
 from mypy_boto3_sts import STSClient
 from mypy_boto3_s3 import S3Client
@@ -184,14 +185,12 @@ class CreatedBucket:
     location: str
 
 def create_bucket() -> CreatedBucket:
-    bucket = CreatedBucket()
     try:
         client = boto3.client('s3')
         resp = client.create_bucket(Bucket=BUCKET_NAME)
-        bucket.location = resp['Location']
+        return CreatedBucket(location=resp['Location'])
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
-    return bucket
 
 @dataclass
 class CreatedRole:
@@ -335,7 +334,21 @@ def wait_for_role(sts: STSClient, role_arn: str, resource_callback: Callable[[Cr
 
 @retry(Exception, tries=30, delay=1)
 def wait_for_bucket(bucket: CreatedBucket, has_access: bool) -> None:
+    """
+    Verify that with the currently assumed role we can or cannot
+    list objects in the specified S3 bucket. 
+
+    Much like wait_for_role this is not expected to take long but
+    it does require waiting to eliminate flakes
+    """
     client = boto3.client('s3')
+    # This is slightly ugly but allows using the retry decorator more cleanly
+    if not has_access:
+        try:
+            client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
+        except botocore.exceptions.AccessDeniedException:
+            print("Deny permission successfully enforced")
+            return
     client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
 
 def write_aws_config(local_dir: Path, text: str) -> None:
