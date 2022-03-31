@@ -185,7 +185,8 @@ def workflow_default(c: Composition) -> None:
 def create_bucket(session: boto3.Session) -> None:
     try:
         s3 = session.resource('s3')
-        bucket = s3.create_bucket(Bucket=BUCKET_NAME)
+        constraint = {'LocationConstraint': session.region_name } if session.region_name != "us-east-1" else None
+        bucket = s3.create_bucket(Bucket=BUCKET_NAME, CreateBucketConfiguration=constraint)
         bucket.wait_until_exists()
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
