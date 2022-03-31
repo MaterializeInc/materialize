@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use uuid::Uuid;
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
@@ -98,6 +99,13 @@ pub trait StorageController: Debug + Send {
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     );
+
+    /// Send a request to obtain "linearized" timestamps for the given sources.
+    async fn linearize_sources(
+        &mut self,
+        peek_id: Uuid,
+        source_ids: Vec<GlobalId>,
+    ) -> Result<(), anyhow::Error>;
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
 }
@@ -344,8 +352,26 @@ impl<T: Timestamp + Lattice> StorageController for Controller<T> {
                 );
         }
     }
+
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
         self.state.client.recv().await
+    }
+
+    /// "Linearize" the listed sources.
+    ///
+    /// If these sources are valid and "linearizable", then the response
+    /// will respond with timestamps that are guaranteed to be up-to-date
+    /// with the max offset found at the time of the command issuance.
+    ///
+    /// Note: "linearizable" in this context may not represent
+    /// true linearizability in all cases.
+    async fn linearize_sources(
+        &mut self,
+        _peek_id: Uuid,
+        _source_ids: Vec<GlobalId>,
+    ) -> Result<(), anyhow::Error> {
+        // TODO(guswynn): implement this function
+        Ok(())
     }
 }
 
