@@ -202,7 +202,6 @@ def create_role(
     iam: IAMClient,
     effect: str,
     current_user: str,
-    bucket_location: str,
     created: List[CreatedRole],
     external_id: Optional[str] = None,
 ) -> CreatedRole:
@@ -239,12 +238,12 @@ def create_role(
                     {
                         "Effect": effect,
                         "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": bucket_location,
+                        "Resource": BUCKET_ARN,
                     },
                     {
                         "Effect": effect,
                         "Action": ["s3:GetObject", "s3:GetObjectAcl"],
-                        "Resource": f"{bucket_location}*/*",
+                        "Resource": f"{BUCKET_ARN}*/*",
                     },
                 ],
             }
