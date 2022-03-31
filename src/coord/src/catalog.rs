@@ -80,7 +80,7 @@ pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
 
-const SYSTEM_CONN_ID: u32 = 0;
+pub const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
