@@ -90,16 +90,6 @@ $ set-sql-timeout duration=1m
   FORMAT TEXT;
 contains: Unable to validate AWS credentials
 
-> CREATE MATERIALIZED SOURCE s3_profile_denied
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${td-bucket}'
-  WITH (
-    profile = 'denied'
-  )
-  FORMAT TEXT;
-
-! SELECT text FROM s3_profile_denied
-regex: Unable to list S3 bucket.*Access Denied
-
 # check credentials from profile, but using a role that denies access
 > CREATE MATERIALIZED SOURCE s3_role_denied
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${td-bucket}'
@@ -112,3 +102,15 @@ regex: Unable to list S3 bucket.*Access Denied
 
 ! SELECT text FROM s3_role_denied
 regex: Unable to list S3 bucket.*Access Denied
+
+
+> CREATE MATERIALIZED SOURCE s3_profile_denied
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${td-bucket}'
+  WITH (
+    profile = 'denied'
+  )
+  FORMAT TEXT;
+
+! SELECT text FROM s3_profile_denied
+regex: Unable to list S3 bucket.*Access Denied
+
