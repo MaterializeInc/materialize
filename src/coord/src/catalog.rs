@@ -132,16 +132,17 @@ pub struct CatalogState {
 impl CatalogState {
     fn allocate_system_index_id(&mut self) -> Result<GlobalId, Error> {
         let id = self.system_index_counter;
-        if id == u64::max_value() {
+        if id == u64::MAX {
             return Err(Error::new(ErrorKind::IdExhaustion));
         }
         self.system_index_counter += 1;
-        Ok(GlobalId::System(id))
+        //TODO(jkosh44)
+        Ok(GlobalId::System { id, version: 1 })
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         let oid = self.oid_counter;
-        if oid == u32::max_value() {
+        if oid == u32::MAX {
             return Err(Error::new(ErrorKind::OidExhaustion));
         }
         self.oid_counter += 1;

@@ -244,10 +244,10 @@ impl PersisterWithConfig {
                 // Catalog::deserialize_item.
                 Some(format!("user-table-{:?}-{}", id, pretty))
             }
-            GlobalId::System(id) if self.config.system_table_enabled => {
+            GlobalId::System { id, version } if self.config.system_table_enabled => {
                 // NB: Until the end of our persisted system tables experiment, give
                 // persist team a heads up if you change this, please!
-                Some(format!("system-table-{:?}-{}", id, pretty))
+                Some(format!("system-table-{:?}.{:?}-{}", id, version, pretty))
             }
             _ => None,
         }

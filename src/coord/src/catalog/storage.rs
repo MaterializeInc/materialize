@@ -147,6 +147,11 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO compute_instances VALUES (1, 'default');",
     // Introduced in v0.24.0.
     "ALTER TABLE compute_instances ADD COLUMN config text",
+    // TODO
+    "CREATE TABLE system_object_version (
+        id      integer PRIMARY KEY,
+        version integer NOT NULL
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

@@ -54,7 +54,7 @@ impl fmt::Display for LocalId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum GlobalId {
     /// System namespace.
-    System(u64),
+    System { id: u64, version: u64 },
     /// User namespace.
     User(u64),
     /// Transient namespace.
@@ -66,7 +66,7 @@ pub enum GlobalId {
 impl GlobalId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        matches!(self, GlobalId::System(_))
+        matches!(self, GlobalId::System { id: _, version: _ })
     }
 
     /// Reports whether this ID is in the user namespace.
@@ -89,7 +89,11 @@ impl FromStr for GlobalId {
         }
         let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
-            's' => Ok(GlobalId::System(val)),
+            //TODO
+            's' => Ok(GlobalId::System {
+                id: val,
+                version: 1,
+            }),
             'u' => Ok(GlobalId::User(val)),
             't' => Ok(GlobalId::Transient(val)),
             _ => Err(anyhow!("couldn't parse id {}", s)),
@@ -100,7 +104,7 @@ impl FromStr for GlobalId {
 impl fmt::Display for GlobalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GlobalId::System(id) => write!(f, "s{}", id),
+            GlobalId::System { id, version } => write!(f, "s{}.{}", id, version),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
