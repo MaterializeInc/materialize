@@ -351,6 +351,8 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     for i in range(30, 0, -1):
         try:
             client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
+            print("Allow access permission successfully tested")
+            return
         except botocore.exceptions.ClientError:
             if not has_access:
                 print("Deny permission successfully enforced")
