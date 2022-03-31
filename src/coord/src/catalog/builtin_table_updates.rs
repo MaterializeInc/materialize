@@ -134,9 +134,7 @@ impl CatalogState {
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
         };
 
-        if let Ok(desc) = entry
-            .desc(&self.resolve_full_name(entry.name(), entry.conn_id().unwrap_or(SYSTEM_CONN_ID)))
-        {
+        if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {
                 CatalogItem::Table(table) => Some(&table.defaults),
                 _ => None,
@@ -338,10 +336,7 @@ impl CatalogState {
             let nullable = key
                 .typ(
                     on_entry
-                        .desc(&self.resolve_full_name(
-                            on_entry.name(),
-                            on_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
-                        ))
+                        .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
                         .unwrap()
                         .typ(),
                 )
