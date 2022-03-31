@@ -14,28 +14,17 @@
 -- limitations under the License.
 
 {% materialization index, adapter='materialize' %}
-  {%- set identifier = model['alias'] -%}
-  {%- set target_relation = api.Relation.create(identifier=identifier,
-                                                schema=schema,
-                                                database=database,
-                                                type='index') -%}
+   -- TL;DR: dbt-materialize does not support incremental models, use materializedview
 
-  {% set index_name %}
-      {{ mz_generate_name(identifier) }}
-  {% endset %}
-  {{ materialize__drop_index(index_name) }}
+    {{ exceptions.raise_compiler_error(
+        """
+        The dbt-materialize index custom materialization has been deprecated in favor
+        of native support on view, materializedview, and source creation.
 
-  {{ run_hooks(pre_hooks, inside_transaction=False) }}
-  {{ run_hooks(pre_hooks, inside_transaction=True) }}
-
-  {% call statement('main') -%}
-    {{ materialize__create_arbitrary_object(sql) }}
-  {%- endcall %}
-
-  {% do persist_docs(target_relation, model) %}
-
-  {{ run_hooks(post_hooks, inside_transaction=False) }}
-  {{ run_hooks(post_hooks, inside_transaction=True) }}
-
-  {{ return({'relations': [target_relation]}) }}
+        See: https://materialize.com/docs/sql/create-index for more information about creating indexes
+        with materialize.
+        See: TODO: https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#materializations
+        See: TODO: https://docs.getdbt.com/reference/resource-configs/postgres-configs but for Materialize.
+        """
+    )}}
 {% endmaterialization %}

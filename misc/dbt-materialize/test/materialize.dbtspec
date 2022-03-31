@@ -75,7 +75,7 @@ sequences:
       - type: dbt
         cmd: run
       - type: relations_equal
-        relations: [test_materialized_view, test_source]
+        relations: [test_materialized_view, test_source_index]
       # TODO(benesch): figure out how to test that the sink emits the correct
       # data. Ideally we'd just ingest the sink back into Materialize with a
       # source and then use a `relations_equal` step, but that's hard to do
@@ -112,6 +112,22 @@ projects:
 
             SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 
+        models/test_materialized_view_index.sql: |
+            {{ config(
+                materialized='materializedview',
+                indexes=[{'columns': ['a']}]
+            ) }}
+
+            SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+
+        models/test_view_index.sql: |
+            {{ config(
+                materialized='view',
+                indexes=[{'columns': ['a']}]
+            ) }}
+
+            SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+
         models/test_source.sql: |
             {{ config(materialized='source') }}
 
@@ -120,11 +136,15 @@ projects:
             FROM FILE '{{ flags.os.getcwd() }}/testdata/test_csv.csv'
             FORMAT CSV WITH HEADER
 
-        models/test_index.sql: |
-            {{ config(materialized='index') }}
+        models/test_source_index.sql: |
+            {{ config(
+                materialized='source',
+                indexes=[{'columns': ['a']}]
+            ) }}
 
-            CREATE DEFAULT INDEX test_index
-            ON {{ ref('test_source') }}
+            CREATE SOURCE {{ mz_generate_name('test_source_index') }}
+            FROM FILE '{{ flags.os.getcwd() }}/testdata/test_csv.csv'
+            FORMAT CSV WITH HEADER
 
         models/test_sink.sql: |
             {{ config(materialized='sink') }}
