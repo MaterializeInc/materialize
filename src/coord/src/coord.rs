@@ -4068,7 +4068,7 @@ impl Coordinator {
                 if selection.contains_temporal() {
                     tx.send(
                         Err(CoordError::Unsupported(
-                            "calls to mz_logical_timestamp in write statements are not supported",
+                            "calls to mz_logical_timestamp in write statements",
                         )),
                         session,
                     );
