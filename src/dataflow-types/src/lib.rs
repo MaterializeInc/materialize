@@ -16,6 +16,7 @@
 pub mod client;
 pub mod logging;
 pub mod plan;
+pub mod reconciliation;
 
 mod errors;
 mod explain;

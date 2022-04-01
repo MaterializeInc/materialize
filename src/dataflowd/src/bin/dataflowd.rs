@@ -20,7 +20,7 @@ use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use mz_dataflow_types::client::Client;
+use mz_dataflow_types::client::{Command, GenericClient, Response};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -94,6 +94,9 @@ struct Args {
     storage_workers: usize,
     #[clap(long)]
     linger: bool,
+    /// Enable command reconciliation.
+    #[clap(long, requires = "linger")]
+    reconcile: bool,
 }
 
 #[tokio::main]
@@ -196,7 +199,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .unwrap_or(AwsExternalId::NotProvided),
     };
 
-    let (_server, mut client): (_, Box<dyn Client + Send>) = match args.runtime {
+    let (_server, client): (
+        _,
+        Box<dyn GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>> + 'static>,
+    ) = match args.runtime {
         RuntimeType::Compute => {
             assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
             let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
@@ -231,6 +237,19 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 })?;
             (server, Box::new(client))
         }
+    };
+
+    let mut client: Box<
+        dyn GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>> + 'static,
+    > = if args.reconcile {
+        match args.runtime {
+            RuntimeType::Compute => Box::new(
+                mz_dataflow_types::reconciliation::command::ComputeCommandReconcile::new(client),
+            ),
+            RuntimeType::Storage => Box::new(client),
+        }
+    } else {
+        Box::new(client)
     };
 
     loop {
