@@ -30,10 +30,7 @@ from materialize.mzcompose.services import Materialized, Testdrive
 EXTERNAL_ID = str(random.randrange(0, 2**64))
 SEED = random.randrange(0, 2**32)
 DISCARD = "http://127.0.0.1:9"
-BUCKET_NAME = f"testdrive-test-{SEED}"
-BUCKET_ARN = f"arn:aws:s3:::{BUCKET_NAME}"
-RESTART_BUCKET = f"testdrive-testrestart-{SEED}"
-RESTART_ARN = f"arn:aws:s3:::{RESTART_BUCKET}"
+BUCKET_NAMES = [f"testdrive-{n}-{SEED}" for n in ["test", "testrestart", "witheid", "noeid"]]
 
 # == Services ==
 
@@ -83,7 +80,7 @@ def workflow_default(c: Composition) -> None:
 
     created_roles: List[CreatedRole] = []
     try:
-        create_bucket(session)
+        create_buckets(session)
         allowed = create_role(iam, "Allow", current_user, created_roles)
         denied = create_role(iam, "Deny", current_user, created_roles)
         requires_eid = create_role(
@@ -185,15 +182,16 @@ def workflow_default(c: Composition) -> None:
         if errored:
             raise UIError("Unable to completely clean up AWS resources")
 
-def create_bucket(session: boto3.Session) -> None:
-    print(f"Creating bucket {BUCKET_NAME}")
+def create_buckets(session: boto3.Session) -> None:
+    test_names = ["test", "testrestart", "witheid", "noeid"]
+    print(f"Creating bucket S3 buckets for: {test_names}")
     try:
         s3 = session.resource('s3')
         constraint = {'LocationConstraint': session.region_name } if session.region_name != "us-east-1" else None
-        bucket = s3.create_bucket(Bucket=BUCKET_NAME, CreateBucketConfiguration=constraint)
-        bucket.wait_until_exists()
-        restart_bucket = s3.create_bucket(Bucket=RESTART_BUCKET, CreateBucketConfiguration=constraint)
-        restart_bucket.wait_until_exists()
+        for name in [f"testdrive-{n}-{SEED}" for n in test_names]:
+            bucket = s3.create_bucket(Bucket=name, CreateBucketConfiguration=constraint)
+            bucket.wait_until_exists()
+
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
 
@@ -234,7 +232,7 @@ def create_role(
         AssumeRolePolicyDocument=json.dumps(assume_role_policy),
     )
     role_arn = create_response["Role"]["Arn"]
-    print(f"Created {role_arn} to {effect_name}, creating {policy_name} for {BUCKET_ARN}")
+    print(f"Created {role_arn} to {effect_name}, creating {policy_name} for {BUCKET_NAMES}")
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName=policy_name,
@@ -245,22 +243,12 @@ def create_role(
                     {
                         "Effect": effect,
                         "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": f"{BUCKET_ARN}",
+                        "Resource": [f"arn:aws:s3:::{name}" for name in BUCKET_NAMES],
                     },
                     {
                         "Effect": effect,
                         "Action": ["s3:GetObject", "s3:GetObjectAcl"],
-                        "Resource": f"{BUCKET_ARN}/*",
-                    },
-                    {
-                        "Effect": effect,
-                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": f"{RESTART_ARN}",
-                    },
-                    {
-                        "Effect": effect,
-                        "Action": ["s3:GetObject", "s3:GetObjectAcl"],
-                        "Resource": f"{RESTART_ARN}/*",
+                        "Resource": [f"arn:aws:s3:::{name}/*" for name in BUCKET_NAMES],
                     },
                 ],
             }
@@ -364,9 +352,9 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     )
     for i in range(30, 0, -1):
         try:
-            client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
-            client.list_objects_v2(Bucket=RESTART_BUCKET, MaxKeys=1)
-            print("Allow access permission successfully tested")
+            for name in BUCKET_NAMES:
+                client.list_objects_v2(Bucket=name, MaxKeys=1)
+            print("Allow access permission successfully tested for all buckets")
             return
         except botocore.exceptions.ClientError:
             if not has_access:

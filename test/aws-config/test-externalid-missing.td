@@ -11,8 +11,6 @@
 
 $ set td-bucket=testdrive-noeid-${testdrive.seed}
 
-$ s3-create-bucket bucket=noeid
-
 $ s3-put-object bucket=noeid key=a
 a1
 
