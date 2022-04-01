@@ -176,15 +176,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
-    fn find_available_name(&self, mut name: QualifiedObjectName) -> QualifiedObjectName {
-        let mut i = 0;
-        let orig_item_name = name.item.clone();
-        while self.item_exists(&name) {
-            i += 1;
-            name.item = format!("{}{}", orig_item_name, i);
-        }
-        name
-    }
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
@@ -598,6 +590,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn now(&self) -> EpochMillis {
         (self.config().now)()
+    }
+
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+        name
     }
 }
 

@@ -243,6 +243,48 @@ impl CatalogState {
         &self.entry_by_id[id]
     }
 
+    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
+        let id = &self.entry_by_oid[oid];
+        &self.entry_by_id[id]
+    }
+
+    pub fn try_get_entry_in_schema(
+        &self,
+        name: &QualifiedObjectName,
+        conn_id: u32,
+    ) -> Option<&CatalogEntry> {
+        self.get_schema(
+            &name.qualifiers.database_spec,
+            &name.qualifiers.schema_spec,
+            conn_id,
+        )
+        .items
+        .get(&name.item)
+        .and_then(|id| self.try_get_entry(id))
+    }
+
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+        self.try_get_entry_in_schema(name, conn_id).is_some()
+    }
+
+    fn find_available_name(
+        &self,
+        mut name: QualifiedObjectName,
+        conn_id: u32,
+    ) -> QualifiedObjectName {
+        let mut i = 0;
+        let orig_item_name = name.item.clone();
+        while self.item_exists(&name, conn_id) {
+            i += 1;
+            name.item = format!("{}{}", orig_item_name, i);
+        }
+        name
+    }
+
+    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        self.entry_by_id.get(id)
+    }
+
     /// Returns all indexes on this object known in the catalog.
     pub fn get_indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
         self.get_entry(&id)
@@ -345,7 +387,18 @@ impl CatalogState {
                         schema: log.schema.into(),
                         item: log.name.into(),
                     };
-                    let index_name = format!("{}_primary_idx", log.name);
+                    let index_name = format!("{}_{}_primary_idx", log.name, id);
+                    let mut index_name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                self.get_mz_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: index_name.clone(),
+                    };
+                    index_name = self.find_available_name(index_name, SYSTEM_CONN_ID);
+                    let index_item_name = index_name.item.clone();
                     // TODO(clusters): Avoid panicking here on ID exhaustion
                     // before stabilization.
                     //
@@ -361,15 +414,7 @@ impl CatalogState {
                     self.insert_item(
                         index_id,
                         oid,
-                        QualifiedObjectName {
-                            qualifiers: ObjectQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Ambient,
-                                schema_spec: SchemaSpecifier::Id(
-                                    self.get_mz_catalog_schema_id().clone(),
-                                ),
-                            },
-                            item: index_name.clone(),
-                        },
+                        index_name,
                         CatalogItem::Index(Index {
                             on: log.id,
                             keys: log
@@ -379,7 +424,7 @@ impl CatalogState {
                                 .map(MirScalarExpr::Column)
                                 .collect(),
                             create_sql: super::coord::index_sql(
-                                index_name,
+                                index_item_name,
                                 id,
                                 source_name,
                                 &log.variant.desc(),
@@ -556,11 +601,6 @@ impl CatalogState {
             CatalogItem::Func(_) => Unknown,
             CatalogItem::Secret(_) => Nonvolatile,
         }
-    }
-
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        let id = &self.entry_by_oid[oid];
-        &self.entry_by_id[id]
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -1640,18 +1680,19 @@ impl Catalog {
         name: &QualifiedObjectName,
         conn_id: u32,
     ) -> Option<&CatalogEntry> {
-        self.get_schema(
-            &name.qualifiers.database_spec,
-            &name.qualifiers.schema_spec,
-            conn_id,
-        )
-        .items
-        .get(&name.item)
-        .and_then(|id| self.try_get_entry(id))
+        self.state.try_get_entry_in_schema(name, conn_id)
+    }
+
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+        self.state.item_exists(name, conn_id)
+    }
+
+    fn find_available_name(&self, name: QualifiedObjectName, conn_id: u32) -> QualifiedObjectName {
+        self.state.find_available_name(name, conn_id)
     }
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
-        self.state.entry_by_id.get(id)
+        self.state.try_get_entry(id)
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
@@ -3086,9 +3127,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {
-        self.catalog
-            .try_get_entry_in_schema(name, self.conn_id)
-            .is_some()
+        self.catalog.item_exists(name, self.conn_id)
+    }
+
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+        self.catalog.find_available_name(name, self.conn_id)
     }
 
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
