@@ -9,6 +9,7 @@
 
 //! Generated protobuf code and companion impls.
 
+pub mod adt;
 pub mod row;
 
 use std::num::TryFromIntError;
