@@ -17,8 +17,6 @@ use mz_sql::catalog::CatalogError as SqlCatalogError;
 pub struct Error {
     #[from]
     pub(crate) kind: ErrorKind,
-    // #[backtrace] TODO(guswynn): when its stable
-    // pub(crate) _backtrace: Backtrace,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,7 +62,7 @@ pub enum ErrorKind {
     #[error("persistence error: {0}")]
     Persistence(#[from] mz_persist::error::Error),
     #[error(transparent)]
-    AmbiguousRenamed(#[from] AmbiguousRename),
+    AmbiguousRename(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
     TypeRename(String),
     #[error(
@@ -91,10 +89,7 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
 
 impl Error {
     pub(crate) fn new(kind: ErrorKind) -> Error {
-        Error {
-            kind,
-            // _backtrace: Backtrace::new_unresolved(),
-        }
+        Error { kind }
     }
 
     /// Reports additional details about the error, if any are available.
