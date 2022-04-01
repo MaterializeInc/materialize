@@ -290,6 +290,7 @@ async fn scan_bucket_task(
     let mut continuation_token = None;
     loop {
         let response = Retry::default()
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| {
                 client
                     .list_objects_v2()

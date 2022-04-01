@@ -595,7 +595,6 @@ impl KafkaSinkState {
                         let self_self_producer = self_producer.clone();
                         // Only actually used for retriable errors.
                         let should_shutdown = Retry::default()
-                            .max_tries(usize::MAX)
                             .clamp_backoff(Duration::from_secs(60 * 10))
                             .retry_async(|_| async {
                                 match self_self_producer.abort_transaction().await {
@@ -708,7 +707,6 @@ impl KafkaSinkState {
         let self_producer = self.producer.clone();
         // Only actually used for retriable errors.
         Retry::default()
-            .max_tries(usize::MAX)
             // Because we only expect to receive timeout errors, we should clamp fairly low.
             .clamp_backoff(Duration::from_secs(60))
             .retry_async(|_| self_producer.flush())
@@ -874,7 +872,6 @@ impl KafkaSinkState {
         {
             // Only actually used for retriable errors.
             return Retry::default()
-                .max_tries(usize::MAX)
                 .clamp_backoff(Duration::from_secs(60 * 10))
                 .retry_async(|_| async {
                     let topic = topic.clone();
