@@ -89,8 +89,7 @@ use crate::plan::{
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source,
-    Table, Type, View,
+    Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
