@@ -1148,7 +1148,7 @@ impl<T> CollectionPlan for Plan<T> {
                 Id::Global(id) => {
                     out.insert(*id);
                 }
-                Id::Local(_) | Id::LocalBareSource => (),
+                Id::Local(_) => (),
             },
             Plan::Let { id: _, value, body } => {
                 value.depends_on_into(out);

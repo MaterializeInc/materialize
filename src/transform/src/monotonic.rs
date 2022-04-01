@@ -47,7 +47,6 @@ impl MonotonicFlag {
                 MirRelationExpr::Get { id, .. } => match id {
                     Id::Global(id) => sources.contains(id),
                     Id::Local(id) => locals.contains(id),
-                    _ => false,
                 },
                 MirRelationExpr::Project { input, .. } => self.apply(input, sources, locals)?,
                 MirRelationExpr::Filter { input, predicates } => {
