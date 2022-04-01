@@ -143,7 +143,7 @@ impl<T> SourceInstanceRequest<T> {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
@@ -1644,7 +1644,7 @@ pub mod sinks {
     use mz_repr::RelationDesc;
 
     /// A sink for updates to a relational collection.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SinkDesc<T = mz_repr::Timestamp> {
         pub from: GlobalId,
         pub from_desc: RelationDesc,
@@ -1665,7 +1665,7 @@ pub mod sinks {
         pub strict: bool,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
@@ -1753,7 +1753,7 @@ pub mod sinks {
         }
     }
 
-    #[derive(Default, Clone, Debug, Serialize, Deserialize)]
+    #[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct TailSinkConnector {}
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

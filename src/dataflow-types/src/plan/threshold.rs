@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::AvailableCollections;
 
 /// A plan describing how to compute a threshold operation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
@@ -56,7 +56,7 @@ impl ThresholdPlan {
 }
 
 /// A plan to maintain all inputs with positive counts.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
@@ -64,7 +64,7 @@ pub struct BasicThresholdPlan {
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
