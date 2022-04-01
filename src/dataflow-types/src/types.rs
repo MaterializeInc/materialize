@@ -898,7 +898,15 @@ pub mod sources {
         /// The column index containing the `after` row
         pub after_idx: usize,
         pub mode: DebeziumMode,
-        pub tx_metadata: Option<GlobalId>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct DebeziumTransactionMetadata {
+        pub tx_metadata_global_id: GlobalId,
+        pub tx_status_idx: usize,
+        pub tx_transaction_id_idx: usize,
+        pub tx_event_count_idx: usize,
+        pub data_transaction_id_idx: usize,
     }
 
     /// Ordered means we can trust Debezium high water marks
@@ -945,6 +953,20 @@ pub mod sources {
         },
     }
 
+    impl DebeziumMode {
+        pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
+            match self {
+                DebeziumMode::Ordered(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::Full(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::FullInRange {
+                    projection: DebeziumDedupProjection { tx_metadata, .. },
+                    ..
+                } => tx_metadata.as_ref(),
+                DebeziumMode::None => None,
+            }
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumDedupProjection {
         /// The column index containing the debezium source metadata
@@ -958,7 +980,7 @@ pub mod sources {
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
         /// The record index of the `transaction.id` field
-        pub tx_id_idx: Option<usize>,
+        pub tx_metadata: Option<DebeziumTransactionMetadata>,
     }
 
     /// Debezium generates records that contain metadata about the upstream database. The structure of

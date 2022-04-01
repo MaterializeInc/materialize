@@ -439,11 +439,11 @@ where
                         // render envelopes
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
-                                let (stream, errors) = match dbz_envelope.tx_metadata {
-                                    Some(tx_id) => {
+                                let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
+                                    Some(tx_metadata) => {
                                         let tx_src_desc = storage_state
                                             .source_descriptions
-                                            .get(&tx_id)
+                                            .get(&tx_metadata.tx_metadata_global_id)
                                             // N.B. tx_id is validated when constructing dbz_envelope
                                             .expect("bad tx metadata spec")
                                             .clone();
@@ -463,7 +463,7 @@ where
                                                 storage_state,
                                                 scope,
                                                 materialized_logging,
-                                                tx_id,
+                                                tx_metadata.tx_metadata_global_id,
                                             );
                                         needed_tokens.push(tx_token);
                                         error_collections.push(tx_source_err);

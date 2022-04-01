@@ -137,12 +137,12 @@ where
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     let hashed_id = data_id.hashed();
 
-    let (transaction_idx, tx_id_idx) = match envelope {
+    let (transaction_idx, tx_metadata_description) = match envelope {
         DebeziumEnvelope {
             mode:
                 DebeziumMode::Full(DebeziumDedupProjection {
                     transaction_idx,
-                    tx_id_idx,
+                    tx_metadata,
                     ..
                 }),
             ..
@@ -151,7 +151,7 @@ where
             mode:
                 DebeziumMode::Ordered(DebeziumDedupProjection {
                     transaction_idx,
-                    tx_id_idx,
+                    tx_metadata,
                     ..
                 }),
             ..
@@ -162,7 +162,7 @@ where
                     projection:
                         DebeziumDedupProjection {
                             transaction_idx,
-                            tx_id_idx,
+                            tx_metadata,
                             ..
                         },
                     ..
@@ -170,7 +170,9 @@ where
             ..
         } => (
             *transaction_idx,
-            tx_id_idx.expect("render_tx should only be called when there's a transaction"),
+            tx_metadata
+                .clone()
+                .expect("render_tx should only be called when there's a transaction"),
         ),
         DebeziumEnvelope {
             mode: DebeziumMode::None,
@@ -210,39 +212,36 @@ where
                                 if diff != 1 {
                                     output.session(&tx_metadata_cap).give((
                                         Err(DataflowError::EvalError(EvalError::Internal(
-                                            String::from(format!("Transaction metadata supplied diff value {:?}", diff)),
+                                            format!("Transaction metadata supplied diff value {:?}", diff),
                                         ))),
                                         time,
                                         1,
                                     ));
                                 }
-                                let mut datums = row.iter();
-                                let status = datums.next().expect("status field validated to exist").unwrap_str();
-                                let tx_id = datums.next().expect("tx_id field validated exist").unwrap_str().to_owned();
-                                let event_count: Option<i64> =
-                                    match datums.next().expect("event_count field validated exist") {
-                                        Datum::Int16(i) => Some(i.into()),
-                                        Datum::Int32(i) => Some(i.into()),
-                                        Datum::Int64(i) => Some(i),
-                                        Datum::Null => None,
-                                        d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
-                                    };
+
+                                let status = row.iter().nth(tx_metadata_description.tx_status_idx).unwrap().unwrap_str();
                                 if status != "END" {
                                     continue;
                                 }
-                                let event_count = match event_count {
-                                    Some(c) => c,
-                                    None => {
-                                        output.session(&tx_metadata_cap).give((
-                                            Err(DataflowError::EvalError(EvalError::Internal(
-                                                String::from("Need event_count in END record"),
-                                            ))),
-                                            time,
-                                            1,
-                                        ));
-                                        continue;
-                                    }
+
+                                let tx_id = row.iter().nth(tx_metadata_description.tx_transaction_id_idx).unwrap().unwrap_str().to_owned();
+                                let event_count = match row.iter().nth(tx_metadata_description.tx_event_count_idx).unwrap() {
+                                        Datum::Int16(i) => i.into(),
+                                        Datum::Int32(i) => i.into(),
+                                        Datum::Int64(i) => i,
+                                        Datum::Null => {
+                                            output.session(&tx_metadata_cap).give((
+                                                Err(DataflowError::EvalError(EvalError::Internal(
+                                                    String::from("Need event_count in END record"),
+                                                ))),
+                                                time,
+                                                1,
+                                            ));
+                                            continue;
+                                        },
+                                        d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
                                 };
+
                                 match tx_mapping.insert(tx_id.clone(), time) {
                                     None => {
                                         tx_event_count.insert(tx_id.clone(), event_count);
@@ -291,9 +290,9 @@ where
                                 }
                             };
 
-                            let tx_id = value.iter().nth(transaction_idx).unwrap().unwrap_list().iter().nth(tx_id_idx).unwrap().unwrap_str();
+                            let tx_id = value.iter().nth(transaction_idx).unwrap().unwrap_list().iter().nth(tx_metadata_description.data_transaction_id_idx).unwrap().unwrap_str().to_owned();
 
-                            let tx_time: Timestamp = match tx_mapping.get(tx_id) {
+                            let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
                                 Some(time) => *time,
                                 None => break,
                             };
@@ -333,7 +332,7 @@ where
                             };
 
                             if should_use {
-                                let tx_cap_entry = match tx_cap_map.entry(tx_id.to_string()) {
+                                let tx_cap_entry = match tx_cap_map.entry(tx_id.clone()) {
                                     Entry::Occupied(e) => e,
                                     Entry::Vacant(_) => panic!("Must have cap if using record"),
                                 };
@@ -357,7 +356,7 @@ where
                                         panic!("type error: expected record, found {:?}", d)
                                     }
                                 }
-                                match tx_event_count.entry(tx_id.to_string()) {
+                                match tx_event_count.entry(tx_id.clone()) {
                                     Entry::Occupied(mut e) => {
                                         let count = e.get_mut();
                                         *count -= 1;
