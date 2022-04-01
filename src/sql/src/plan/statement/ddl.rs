@@ -89,8 +89,7 @@ use crate::plan::{
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source,
-    Table, Type, View,
+    Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -834,12 +833,6 @@ pub fn plan_create_source(
         }
     };
 
-    let expr = HirRelationExpr::Get {
-        id: mz_expr::Id::LocalBareSource,
-        typ: desc.typ().clone(),
-    }
-    .lower();
-
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
@@ -850,7 +843,6 @@ pub fn plan_create_source(
             ts_frequency,
             timeline,
         },
-        expr,
         desc,
     };
 

@@ -319,7 +319,6 @@ impl<'a> Explanation<'a> {
                         get_info.map_or_else(|| "?".to_owned(), |i| i.1.to_string()),
                     )?
                 }
-                Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",

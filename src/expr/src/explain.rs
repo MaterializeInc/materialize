@@ -232,7 +232,6 @@ impl<'a> ViewExplanation<'a> {
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
                 )?,
-                Id::LocalBareSource => writeln!(f, "| Get Bare Source for This Source")?,
             },
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),

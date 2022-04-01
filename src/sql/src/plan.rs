@@ -436,7 +436,6 @@ pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
-    pub expr: mz_expr::MirRelationExpr,
 }
 
 #[derive(Clone, Debug)]

@@ -205,7 +205,6 @@ impl JoinImplementation {
 
 mod index_map {
     use std::collections::HashMap;
-    use std::iter;
 
     use mz_expr::{Id, LocalId, MirScalarExpr};
 
@@ -250,7 +249,6 @@ mod index_map {
                         .flatten()
                         .map(|x| x.as_slice()),
                 ),
-                Id::LocalBareSource => Box::new(iter::empty()),
             }
         }
     }
