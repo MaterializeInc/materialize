@@ -800,6 +800,39 @@ pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
     },
 };
 
+pub const TYPE_ANYCOMPATIBLE: BuiltinType = BuiltinType {
+    name: "anycompatible",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1054),
+    oid: 5077,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType = BuiltinType {
+    name: "anycompatiblearray",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1055),
+    oid: 5078,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType = BuiltinType {
+    name: "anycompatiblenonarray",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1056),
+    oid: 5079,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
 pub const TYPE_LIST: BuiltinType = BuiltinType {
     name: "list",
     schema: PG_CATALOG_SCHEMA,
@@ -821,6 +854,30 @@ pub const TYPE_MAP: BuiltinType = BuiltinType {
         array_id: None,
     },
 };
+
+pub const TYPE_ANYCOMPATIBLELIST: BuiltinType = BuiltinType {
+    name: "anycompatiblelist",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1997),
+    oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLELIST_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType = BuiltinType {
+    name: "anycompatiblemap",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1996),
+    oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLEMAP_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+// Type IDs decrement
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
@@ -2152,6 +2209,11 @@ lazy_static! {
             Builtin::Type(&TYPE_VARCHAR_ARRAY),
             Builtin::Type(&TYPE_INT2_VECTOR),
             Builtin::Type(&TYPE_INT2_VECTOR_ARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLE),
+            Builtin::Type(&TYPE_ANYCOMPATIBLEARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
+            Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
             Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),

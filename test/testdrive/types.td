@@ -42,6 +42,11 @@ _uuid
 _varchar
 any
 anyarray
+anycompatible
+anycompatiblearray
+anycompatiblelist
+anycompatiblemap
+anycompatiblenonarray
 anyelement
 anynonarray
 bool
@@ -75,62 +80,67 @@ varchar
 > SHOW EXTENDED FULL TYPES
 name             type
 ----------------------
-_bool            system
-_bpchar          system
-_bytea           system
-_char            system
-_date            system
-_float4          system
-_float8          system
-_int2            system
-_int2vector      system
-_int4            system
-_int8            system
-_interval        system
-_jsonb           system
-_numeric         system
-_oid             system
-_record          system
-_regclass         system
-_regproc         system
-_regtype         system
-_text            system
-_time            system
-_timestamp       system
-_timestamptz     system
-_uuid            system
-_varchar         system
-any              system
-anyarray         system
-anyelement       system
-anynonarray      system
-bool             system
-bpchar           system
-bytea            system
-char             system
-date             system
-float4           system
-float8           system
-int2             system
-int2vector       system
-int4             system
-int8             system
-interval         system
-jsonb            system
-list             system
-map              system
-numeric          system
-oid              system
-regclass         system
-regproc          system
-regtype          system
-record           system
-text             system
-time             system
-timestamp        system
-timestamptz      system
-uuid             system
-varchar          system
+_bool                       system
+_bpchar                     system
+_bytea                      system
+_char                       system
+_date                       system
+_float4                     system
+_float8                     system
+_int2                       system
+_int2vector                 system
+_int4                       system
+_int8                       system
+_interval                   system
+_jsonb                      system
+_numeric                    system
+_oid                        system
+_record                     system
+_regclass                   system
+_regproc                    system
+_regtype                    system
+_text                       system
+_time                       system
+_timestamp                  system
+_timestamptz                system
+_uuid                       system
+_varchar                    system
+any                         system
+anyarray                    system
+anycompatible               system
+anycompatiblearray          system
+anycompatiblelist           system
+anycompatiblemap            system
+anycompatiblenonarray       system
+anyelement                  system
+anynonarray                 system
+bool                        system
+bpchar                      system
+bytea                       system
+char                        system
+date                        system
+float4                      system
+float8                      system
+int2                        system
+int2vector                  system
+int4                        system
+int8                        system
+interval                    system
+jsonb                       system
+list                        system
+map                         system
+numeric                     system
+oid                         system
+regclass                    system
+regproc                     system
+regtype                     system
+record                      system
+text                        system
+time                        system
+timestamp                   system
+timestamptz                 system
+uuid                        system
+varchar                     system
 
 # Support creating tables with catalog types and their aliases
 > CREATE TABLE bool_t (a bool);

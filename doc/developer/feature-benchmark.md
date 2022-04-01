@@ -113,7 +113,7 @@ The code currently assumes that the data follows a normal distribution, which is
 techniques for massaging the numbers may be required in the future. In particular, there is some evidence that the distribution of values is multi-modal with: A) one peak for all operations that completed
 within some "tick" (either the kernel rescheduling some thread, or e.g. the timestamper thread kicking in): B) one peak for operations that completed immediately after the "tick" and C) extreme outliers that were particularily unlucky.
 
-To limit the maximum number of executions at the expense of accuracy, use the `--max-runs N` option.
+To limit the maximum number of measurements at the expense of accuracy, use the `--max-measurements N` option.
 
 ## Aggregation policy
 
@@ -137,6 +137,11 @@ Failed! giving up: testdrive_this --no-reset --seed=1639555967 --initial-backoff
 
 This indicates that testdrive could not run the queries from the benchmark definition. To understand what went wrong, use `docker ps -a` to see the ID
 of the `feature-benchmark_testdrive_*` container that exited most recently and then `docker logs <id_of_the_container>` to obtain the output from testdrive.
+
+## Dealing with false positives
+
+The feature benchmark will retry any regressed scenarios up to `--max-cycles=3` times in order to weed out false positives. mzcompose.py will exit with a non-zero
+exit code only if there are scenarios that reported a regression every time they were tried.
 
 # Writing benchmark scenarios
 

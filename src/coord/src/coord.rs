@@ -92,8 +92,8 @@ use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
-    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
+    LinearizedTimestampBindingFeedback, Response as DataflowResponse, StorageResponse,
+    TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -104,8 +104,8 @@ use mz_dataflow_types::{
     Update,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, EvalError, ExprHumanizer, GlobalId,
+    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -145,13 +145,12 @@ use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
-    SYSTEM_CONN_ID,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
-use crate::coord::dataflow_builder::ExprPrepStyle;
+use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
@@ -915,6 +914,14 @@ impl Coordinator {
                     self.persisted_table_allow_compaction(&source_since_updates);
                 }
             }
+            DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
+                LinearizedTimestampBindingFeedback {
+                    timestamp: _,
+                    peek_id: _,
+                },
+            )) => {
+                // TODO(guswynn): communicate `bindings` to `sequence_peek`
+            }
         }
     }
 
@@ -1671,10 +1678,11 @@ impl Coordinator {
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: from_entry
-                        .desc(&builder.catalog.resolve_full_name(
-                            from_entry.name(),
-                            from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
-                        ))
+                        .desc(
+                            &builder
+                                .catalog
+                                .resolve_full_name(from_entry.name(), from_entry.conn_id()),
+                        )
                         .unwrap()
                         .clone(),
                     connector: connector.clone(),
@@ -1711,7 +1719,7 @@ impl Coordinator {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
             Plan::CreateSecret(plan) => {
-                tx.send(self.sequence_create_secret(plan).await, session);
+                tx.send(self.sequence_create_secret(&session, plan).await, session);
             }
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
@@ -2116,14 +2124,33 @@ impl Coordinator {
 
     async fn sequence_create_secret(
         &mut self,
+        session: &Session,
         plan: CreateSecretPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateSecretPlan {
             name,
-            secret: _,
+            secret,
             full_name,
             if_not_exists,
         } = plan;
+
+        let temp_storage = RowArena::new();
+        prep_scalar_expr(
+            self.catalog.state(),
+            &mut secret.secret_as.clone(),
+            ExprPrepStyle::OneShot {
+                logical_time: None,
+                session,
+            },
+        )?;
+        let evaled = secret.secret_as.eval(&[], &temp_storage)?;
+
+        if evaled == Datum::Null {
+            return Err(CoordError::Eval(EvalError::NullCharacterNotPermitted));
+        }
+
+        // TODO martin: hook the payload into a secrets backend
+        let _payload = evaled.unwrap_bytes();
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2267,7 +2294,7 @@ impl Coordinator {
             let index_id = self.catalog.allocate_user_id()?;
             let full_name = self
                 .catalog
-                .resolve_full_name(&plan.name, session.conn_id());
+                .resolve_full_name(&plan.name, Some(session.conn_id()));
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
@@ -2419,10 +2446,10 @@ impl Coordinator {
                         mz_dataflow_types::sinks::SinkDesc {
                             from: sink.from,
                             from_desc: from_entry
-                                .desc(&txn.catalog.resolve_full_name(
-                                    from_entry.name(),
-                                    from_entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
-                                ))
+                                .desc(
+                                    &txn.catalog
+                                        .resolve_full_name(from_entry.name(), from_entry.conn_id()),
+                                )
                                 .unwrap()
                                 .clone(),
                             connector: SinkConnector::Tail(TailSinkConnector {}),
@@ -2520,7 +2547,9 @@ impl Coordinator {
                 .for_session(session)
                 .find_available_name(index_name);
             let index_id = self.catalog.allocate_user_id()?;
-            let full_name = self.catalog.resolve_full_name(&name, session.conn_id());
+            let full_name = self
+                .catalog
+                .resolve_full_name(&name, Some(session.conn_id()));
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 compute_instance,
@@ -3111,7 +3140,7 @@ impl Coordinator {
                 if indexes.peek().is_none() {
                     unmaterialized.push(
                         catalog
-                            .resolve_full_name(entry.name(), session.conn_id())
+                            .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                     );
                 } else {
@@ -3120,13 +3149,13 @@ impl Coordinator {
                         .map(|(id, _idx)| catalog.get_entry(&id).name())
                         .map(|name| {
                             catalog
-                                .resolve_full_name(name, session.conn_id())
+                                .resolve_full_name(name, Some(session.conn_id()))
                                 .to_string()
                         })
                         .collect();
                     disabled_indexes.push((
                         catalog
-                            .resolve_full_name(entry.name(), session.conn_id())
+                            .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                         disabled_index_names,
                     ));
@@ -3155,6 +3184,7 @@ impl Coordinator {
             .id;
 
         let source_ids = source.depends_on();
+
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         let in_transaction = matches!(
@@ -3231,7 +3261,7 @@ impl Coordinator {
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog
-                            .resolve_full_name(name, session.conn_id())
+                            .resolve_full_name(name, Some(session.conn_id()))
                             .to_string()
                     })
                     .collect();
@@ -3241,7 +3271,7 @@ impl Coordinator {
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog
-                            .resolve_full_name(name, session.conn_id())
+                            .resolve_full_name(name, Some(session.conn_id()))
                             .to_string()
                     })
                     .collect();
@@ -3256,6 +3286,7 @@ impl Coordinator {
 
             timestamp
         } else {
+            // TODO(guswynn): acquire_read_holds for linearized reads
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
@@ -3264,6 +3295,12 @@ impl Coordinator {
             }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
+
+        // before we have the corrected timestamp ^
+        // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
+        // `linearize_sources(source_ids.iter().collect()).await`
+        // ------------------------------
+        // after we have the timestamp \/
 
         let source = self.view_optimizer.optimize(source)?;
 
@@ -3287,7 +3324,8 @@ impl Coordinator {
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            builder.prep_relation_expr(
+            prep_relation_expr(
+                self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
                     logical_time: Some(timestamp),
@@ -3397,7 +3435,7 @@ impl Coordinator {
                     .desc(
                         &self
                             .catalog
-                            .resolve_full_name(from.name(), session.conn_id()),
+                            .resolve_full_name(from.name(), Some(session.conn_id())),
                     )
                     .unwrap()
                     .clone();
@@ -3540,7 +3578,8 @@ impl Coordinator {
             // Explicitly requested timestamps should be respected.
             QueryWhen::AtTimestamp(mut timestamp) => {
                 let temp_storage = RowArena::new();
-                self.dataflow_builder(compute_instance).prep_scalar_expr(
+                prep_scalar_expr(
+                    self.catalog.state(),
                     &mut timestamp,
                     ExprPrepStyle::OneShot {
                         logical_time: None,
@@ -3850,7 +3889,7 @@ impl Coordinator {
                             .map(|item| item.name())
                             .map(|name| {
                                 self.catalog
-                                    .resolve_full_name(name, session.conn_id())
+                                    .resolve_full_name(name, Some(session.conn_id()))
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
@@ -3876,7 +3915,7 @@ impl Coordinator {
                             .map(|item| item.name())
                             .map(|name| {
                                 self.catalog
-                                    .resolve_full_name(name, session.conn_id())
+                                    .resolve_full_name(name, Some(session.conn_id()))
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
@@ -4013,7 +4052,7 @@ impl Coordinator {
                         .desc(
                             &self
                                 .catalog
-                                .resolve_full_name(table.name(), session.conn_id()),
+                                .resolve_full_name(table.name(), Some(session.conn_id())),
                         )
                         .expect("desc called on table")
                         .arity(),
@@ -4031,7 +4070,7 @@ impl Coordinator {
                 if selection.contains_temporal() {
                     tx.send(
                         Err(CoordError::Unsupported(
-                            "calls to mz_logical_timestamp in write statements are not supported",
+                            "calls to mz_logical_timestamp in write statements",
                         )),
                         session,
                     );
@@ -4070,7 +4109,7 @@ impl Coordinator {
             Some(table) => table.desc(
                 &self
                     .catalog
-                    .resolve_full_name(table.name(), session.conn_id()),
+                    .resolve_full_name(table.name(), Some(session.conn_id())),
             )?,
             None => {
                 return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
@@ -4141,7 +4180,7 @@ impl Coordinator {
                 .desc(
                     &self
                         .catalog
-                        .resolve_full_name(table.name(), session.conn_id()),
+                        .resolve_full_name(table.name(), Some(session.conn_id())),
                 )
                 .expect("desc called on table")
                 .clone(),
@@ -4576,7 +4615,7 @@ impl Coordinator {
                         self.catalog
                             .resolve_full_name(
                                 self.catalog.get_entry(&id).name(),
-                                session.conn_id(),
+                                Some(session.conn_id()),
                             )
                             .to_string(),
                     ));
@@ -4624,8 +4663,7 @@ impl Coordinator {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
-            output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
+            output_ids.extend(dataflow.export_ids());
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.dataflow_client
@@ -4669,13 +4707,13 @@ impl Coordinator {
 
         let storage_ids = dataflow
             .source_imports
-            .iter()
-            .map(|(id, _)| *id)
+            .keys()
+            .copied()
             .collect::<BTreeSet<_>>();
         let compute_ids = dataflow
             .index_imports
-            .iter()
-            .map(|(id, _)| *id)
+            .keys()
+            .copied()
             .collect::<BTreeSet<_>>();
 
         let since = self.least_valid_read(
@@ -5284,9 +5322,7 @@ pub mod fast_path_peek {
                     permutation: index_permutation,
                     thinned_arity: index_thinned_arity,
                 }) => {
-                    let mut output_ids = Vec::new();
-                    output_ids.extend(dataflow.index_exports.iter().map(|(id, _)| *id));
-                    output_ids.extend(dataflow.sink_exports.iter().map(|(id, _)| *id));
+                    let output_ids = dataflow.export_ids().collect();
 
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client
@@ -5438,9 +5474,9 @@ pub mod read_holds {
         ) {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
-            let mut storage = self.dataflow_client.storage_mut();
+            let storage = self.dataflow_client.storage_mut();
             for id in read_holds.id_bundle.storage_ids.iter() {
-                let collection = storage.as_ref().collection(*id).unwrap();
+                let collection = storage.collection(*id).unwrap();
                 assert!(collection
                     .read_capabilities
                     .frontier()

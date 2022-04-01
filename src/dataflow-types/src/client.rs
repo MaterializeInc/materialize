@@ -78,6 +78,36 @@ pub enum InstanceConfig {
     },
 }
 
+/// Peek at an arrangement.
+///
+/// This request elicits data from the worker, by naming an
+/// arrangement and some actions to apply to the results before
+/// returning them.
+///
+/// The `timestamp` member must be valid for the arrangement that
+/// is referenced by `id`. This means that `AllowCompaction` for
+/// this arrangement should not pass `timestamp` before this command.
+/// Subsequent commands may arbitrarily compact the arrangements;
+/// the dataflow runners are responsible for ensuring that they can
+/// correctly answer the `Peek`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Peek<T = mz_repr::Timestamp> {
+    /// The identifier of the arrangement.
+    pub id: GlobalId,
+    /// An optional key that should be used for the arrangement.
+    pub key: Option<Row>,
+    /// The identifier of this peek request.
+    ///
+    /// Used in responses and cancellation requests.
+    pub uuid: Uuid,
+    /// The logical timestamp at which the arrangement is queried.
+    pub timestamp: T,
+    /// Actions to apply to the result set before returning them.
+    pub finishing: RowSetFinishing,
+    /// Linear operation to apply in-line on each result.
+    pub map_filter_project: mz_expr::SafeMfpPlan,
+}
+
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
 #[enum_kind(
@@ -110,33 +140,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
     /// Peek at an arrangement.
-    ///
-    /// This request elicits data from the worker, by naming an
-    /// arrangement and some actions to apply to the results before
-    /// returning them.
-    ///
-    /// The `timestamp` member must be valid for the arrangement that
-    /// is referenced by `id`. This means that `AllowCompaction` for
-    /// this arrangement should not pass `timestamp` before this command.
-    /// Subsequent commands may arbitrarily compact the arrangements;
-    /// the dataflow runners are responsible for ensuring that they can
-    /// correctly answer the `Peek`.
-    Peek {
-        /// The identifier of the arrangement.
-        id: GlobalId,
-        /// An optional key that should be used for the arrangement.
-        key: Option<Row>,
-        /// The identifier of this peek request.
-        ///
-        /// Used in responses and cancellation requests.
-        uuid: Uuid,
-        /// The logical timestamp at which the arrangement is queried.
-        timestamp: T,
-        /// Actions to apply to the result set before returning them.
-        finishing: RowSetFinishing,
-        /// Linear operation to apply in-line on each result.
-        map_filter_project: mz_expr::SafeMfpPlan,
-    },
+    Peek(Peek<T>),
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
@@ -429,7 +433,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                         final_frontiers.insert(id, frontier.clone());
                     }
                 }
-                peek @ ComputeCommand::Peek { .. } => {
+                ComputeCommand::Peek(peek) => {
                     // We could pre-filter here, but seems hard to access `uuid`
                     // and take ownership of `peek` at the same time.
                     live_peeks.push(peek);
@@ -441,67 +445,35 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             }
         }
 
-        // Discard dataflows whose outputs have all been allowed to compact away.
-        live_dataflows.retain(|dataflow| {
-            // If any index or sink has not been compacted to the empty frontier, it remains active.
-            // Importantly, an `id` may have not been compacted, and not appear in `final_frontiers`;
-            // this is fine and normal, and is not evidence that the collection is not in use.
-            let index_active = dataflow
-                .index_exports
-                .iter()
-                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-            let sink_active = dataflow
-                .sink_exports
-                .iter()
-                .any(|(id, _)| final_frontiers.get(id) != Some(Antichain::new()).as_ref());
-
-            let retain = index_active || sink_active;
-
-            // If we are going to drop the dataflow, we should remove the frontier information so that we
-            // do not instruct anyone to compact a frontier they have not heard of.
-            if !retain {
-                for (id, _) in dataflow.index_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-                for (id, _) in dataflow.sink_exports.iter() {
-                    final_frontiers.remove(id);
-                }
-            }
-
-            retain
-        });
-
         // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
         for dataflow in live_dataflows.iter_mut() {
-            let mut same_as_of = false;
             let mut as_of = Antichain::new();
-            for (id, _) in dataflow.index_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
                     as_of.extend(frontier.clone());
                 } else {
-                    same_as_of = true;
+                    as_of.extend(dataflow.as_of.clone().unwrap());
                 }
             }
-            for (id, _) in dataflow.sink_exports.iter() {
-                if let Some(frontier) = final_frontiers.get(id) {
-                    as_of.extend(frontier.clone());
-                } else {
-                    same_as_of = true;
+
+            // Remove compaction for any collection that brought us to `as_of`.
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    if frontier == &as_of {
+                        final_frontiers.remove(&id);
+                    }
                 }
             }
-            if !same_as_of {
-                dataflow.as_of = Some(as_of);
-            }
+
+            dataflow.as_of = Some(as_of);
         }
 
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
+
         // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| {
-            if let ComputeCommand::Peek { uuid, .. } = peek {
-                peeks.contains(uuid)
-            } else {
-                unreachable!()
-            }
-        });
+        live_peeks.retain(|peek| peeks.contains(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -517,15 +489,22 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_command) = create_command {
             self.commands.push(create_command);
         }
+        if !live_dataflows.is_empty() {
+            self.commands
+                .push(ComputeCommand::CreateDataflows(live_dataflows));
+        }
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
+        }
         self.commands
-            .push(ComputeCommand::CreateDataflows(live_dataflows));
-        self.commands.push(ComputeCommand::AllowCompaction(
-            final_frontiers.into_iter().collect(),
-        ));
-        self.commands.extend(live_peeks);
-        self.commands.push(ComputeCommand::CancelPeeks {
-            uuids: live_cancels,
-        });
+            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
+        if !live_cancels.is_empty() {
+            self.commands.push(ComputeCommand::CancelPeeks {
+                uuids: live_cancels,
+            });
+        }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
         }
@@ -552,6 +531,16 @@ impl<T> Default for ComputeCommandHistory<T> {
             commands: Vec::new(),
         }
     }
+}
+
+/// Data about timestamp bindings, sent to the coordinator, in service
+/// of a specific "linearized" read request
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
+    /// The _minimum_ viable timestamp that will produce a "linearized" read...
+    pub timestamp: T,
+    /// ... for this peek
+    pub peek_id: Uuid,
 }
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator
@@ -599,6 +588,10 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback<T>),
+
+    /// Data about timestamp bindings, sent to the coordinator, in service
+    /// of a specific "linearized" read request
+    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
 }
 
 /// A client to a running dataflow server.
@@ -1111,6 +1104,10 @@ pub mod partitioned {
                         feedback,
                     ))))
                 }
+                // TODO(guswynn): is this the correct implementation?
+                Response::Storage(StorageResponse::LinearizedTimestamps(feedback)) => Some(Ok(
+                    Response::Storage(StorageResponse::LinearizedTimestamps(feedback)),
+                )),
                 Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self

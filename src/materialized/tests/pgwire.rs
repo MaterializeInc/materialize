@@ -45,6 +45,13 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
     match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => {
+            assert!(format!("{:?}", err.source()).contains("WrongType"));
+        }
+    }
+
+    match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(err.to_string().contains("no overload")),
     }
 
@@ -393,6 +400,16 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), "{{1},{NULL},{2}}");
+        }
+        _ => panic!("unexpected simple query message"),
+    }
+
+    let message = client
+        .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")?
+        .into_first();
+    match message {
+        SimpleQueryMessage::Row(row) => {
+            assert_eq!(row.get(0).unwrap(), r#"{"(1,2)","(3,4)","(5,6)"}"#);
         }
         _ => panic!("unexpected simple query message"),
     }

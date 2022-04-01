@@ -210,7 +210,13 @@ impl CatalogState {
         }
     }
 
-    pub fn resolve_full_name(&self, name: &QualifiedObjectName, conn_id: u32) -> FullObjectName {
+    pub fn resolve_full_name(
+        &self,
+        name: &QualifiedObjectName,
+        conn_id: Option<u32>,
+    ) -> FullObjectName {
+        let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
+
         let database = match &name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
             ResolvedDatabaseSpecifier::Id(id) => {
@@ -292,7 +298,8 @@ impl CatalogState {
                 Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    &u, entry.name
+                    &u,
+                    self.resolve_full_name(&entry.name, entry.conn_id())
                 ),
             }
         }
@@ -1619,7 +1626,11 @@ impl Catalog {
         &self.state
     }
 
-    pub fn resolve_full_name(&self, name: &QualifiedObjectName, conn_id: u32) -> FullObjectName {
+    pub fn resolve_full_name(
+        &self,
+        name: &QualifiedObjectName,
+        conn_id: Option<u32>,
+    ) -> FullObjectName {
         self.state.resolve_full_name(name, conn_id)
     }
 
@@ -2165,8 +2176,12 @@ impl Catalog {
                         )
                         .map_err(|e| {
                             Error::new(ErrorKind::AmbiguousRename {
-                                depender: entry.name.to_string(),
-                                dependee: entry.name.to_string(),
+                                depender: self
+                                    .resolve_full_name(&entry.name, entry.conn_id())
+                                    .to_string(),
+                                dependee: self
+                                    .resolve_full_name(&entry.name, entry.conn_id())
+                                    .to_string(),
                                 message: e,
                             })
                         })?;
@@ -2183,8 +2198,15 @@ impl Catalog {
                             )
                             .map_err(|e| {
                                 Error::new(ErrorKind::AmbiguousRename {
-                                    depender: dependent_item.name.to_string(),
-                                    dependee: entry.name.to_string(),
+                                    depender: self
+                                        .resolve_full_name(
+                                            &dependent_item.name,
+                                            dependent_item.conn_id(),
+                                        )
+                                        .to_string(),
+                                    dependee: self
+                                        .resolve_full_name(&entry.name, entry.conn_id())
+                                        .to_string(),
                                     message: e,
                                 })
                             })?;
@@ -2381,7 +2403,12 @@ impl Catalog {
                 Action::DropItem(id) => {
                     let metadata = state.entry_by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
-                        info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
+                        info!(
+                            "drop {} {} ({})",
+                            metadata.item_type(),
+                            state.resolve_full_name(&metadata.name, metadata.conn_id()),
+                            id
+                        );
                     }
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = state.entry_by_id.get_mut(&u) {
@@ -2428,7 +2455,7 @@ impl Catalog {
                     info!(
                         "update {} {} ({})",
                         old_entry.item_type(),
-                        old_entry.name,
+                        state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
                         id
                     );
                     assert_eq!(old_entry.uses(), to_item.uses());
@@ -3065,7 +3092,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
-        self.catalog.resolve_full_name(name, self.conn_id)
+        self.catalog.resolve_full_name(name, Some(self.conn_id))
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {

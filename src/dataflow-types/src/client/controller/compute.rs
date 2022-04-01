@@ -29,9 +29,10 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
+use crate::client::controller::storage::StorageController;
 use crate::client::replicated::ActiveReplication;
-use crate::client::GenericClient;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::GlobalId;
@@ -55,7 +56,7 @@ pub(super) struct ComputeControllerState<T> {
 pub struct ComputeController<'a, T> {
     pub(super) _instance: ComputeInstanceId, // likely to be needed soon
     pub(super) compute: &'a ComputeControllerState<T>,
-    pub(super) storage: &'a super::StorageControllerState<T>,
+    pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
 
 /// A mutable controller for a compute instance.
@@ -63,7 +64,7 @@ pub struct ComputeController<'a, T> {
 pub struct ComputeControllerMut<'a, T> {
     pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a mut ComputeControllerState<T>,
-    pub(super) storage: &'a mut super::StorageControllerState<T>,
+    pub(super) storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
 
 /// Errors arising from compute commands.
@@ -130,10 +131,8 @@ where
 {
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&self) -> crate::client::controller::StorageController<T> {
-        crate::client::controller::StorageController {
-            storage: &self.storage,
-        }
+    pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
+        self.storage_controller
     }
 
     /// Acquire a handle to the collection state associated with `id`.
@@ -153,17 +152,17 @@ where
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
             _instance: self.instance,
-            storage: &self.storage,
+            storage_controller: self.storage_controller,
             compute: &self.compute,
         }
     }
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(&mut self) -> crate::client::controller::StorageControllerMut<T> {
-        crate::client::controller::StorageControllerMut {
-            storage: &mut self.storage,
-        }
+    pub fn storage_mut(
+        &mut self,
+    ) -> &mut dyn crate::client::controller::StorageController<Timestamp = T> {
+        self.storage_controller
     }
 
     /// Adds a new instance replica, by name.
@@ -199,12 +198,11 @@ where
             let mut compute_dependencies = Vec::new();
 
             // Validate sources have `since.less_equal(as_of)`.
-            for (source_id, _) in dataflow.source_imports.iter() {
+            for source_id in dataflow.source_imports.keys() {
                 let since = &self
-                    .storage
-                    .collections
-                    .get(source_id)
-                    .ok_or(ComputeError::IdentifierMissing(*source_id))?
+                    .storage_controller
+                    .collection(*source_id)
+                    .or(Err(ComputeError::IdentifierMissing(*source_id)))?
                     .read_capabilities
                     .frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
@@ -216,7 +214,7 @@ where
 
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
-            for (index_id, _) in dataflow.index_imports.iter() {
+            for index_id in dataflow.index_imports.keys() {
                 let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
@@ -244,7 +242,7 @@ where
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
-            self.storage_mut()
+            self.storage_controller
                 .update_read_capabilities(&mut storage_read_updates)
                 .await;
             // Update compute read capabilities for inputs.
@@ -256,7 +254,7 @@ where
                 .await;
 
             // Install collection state for each of the exports.
-            for (sink_id, _) in dataflow.sink_exports.iter() {
+            for sink_id in dataflow.sink_exports.keys() {
                 self.compute.collections.insert(
                     *sink_id,
                     CollectionState::new(
@@ -266,7 +264,7 @@ where
                     ),
                 );
             }
-            for (index_id, _) in dataflow.index_exports.iter() {
+            for index_id in dataflow.index_exports.keys() {
                 self.compute.collections.insert(
                     *index_id,
                     CollectionState::new(
@@ -334,14 +332,14 @@ where
 
         self.compute
             .client
-            .send(ComputeCommand::Peek {
+            .send(ComputeCommand::Peek(Peek {
                 id,
                 key,
                 uuid,
                 timestamp,
                 finishing,
                 map_filter_project,
-            })
+            }))
             .await
             .map_err(ComputeError::from)
     }
@@ -537,7 +535,7 @@ where
 
         // We may have storage consequences to process.
         if !storage_todo.is_empty() {
-            self.storage_mut()
+            self.storage_controller
                 .update_read_capabilities(&mut storage_todo)
                 .await;
         }

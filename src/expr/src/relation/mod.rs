@@ -237,18 +237,6 @@ pub enum MirRelationExpr {
         /// Columns to arrange `input` by, in order of decreasing primacy
         keys: Vec<Vec<MirScalarExpr>>,
     },
-    /// Declares that `keys` are primary keys for `input`.
-    /// Should be used *very* sparingly, and only if there's no plausible
-    /// way to derive the key information from the underlying expression.
-    /// The result of declaring a key that isn't actually a key for the underlying expression is undefined.
-    ///
-    /// There is no operator rendered for this IR node; thus, its runtime memory footprint is zero.
-    DeclareKeys {
-        /// The source collection
-        input: Box<MirRelationExpr>,
-        /// The set of columns in the source collection that form a key.
-        keys: Vec<Vec<usize>>,
-    },
 }
 
 impl MirRelationExpr {
@@ -735,9 +723,6 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { .. } => input_types[0].clone(),
-            MirRelationExpr::DeclareKeys { keys, .. } => {
-                input_types[0].clone().with_keys(keys.clone())
-            }
         }
     }
 
@@ -768,7 +753,6 @@ impl MirRelationExpr {
             MirRelationExpr::Threshold { input } => input.arity(),
             MirRelationExpr::Union { base, inputs: _ } => base.arity(),
             MirRelationExpr::ArrangeBy { input, .. } => input.arity(),
-            MirRelationExpr::DeclareKeys { input, .. } => input.arity(),
         }
     }
 
@@ -1199,14 +1183,6 @@ impl MirRelationExpr {
         })
     }
 
-    /// Passes the collection through unchanged, but informs the optimizer that `keys` are primary keys.
-    pub fn declare_keys(self, keys: Vec<Vec<usize>>) -> Self {
-        Self::DeclareKeys {
-            input: Box::new(self),
-            keys,
-        }
-    }
-
     /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
     pub fn contains_temporal(&mut self) -> bool {
         let mut contains = false;
@@ -1437,9 +1413,6 @@ impl MirRelationExprVisitor {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
             }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input)?;
-            }
         }
         Ok(())
     }
@@ -1493,9 +1466,6 @@ impl MirRelationExprVisitor {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
             }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input)?;
-            }
         }
         Ok(())
     }
@@ -1545,9 +1515,6 @@ impl MirRelationExprVisitor {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input);
             }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input);
-            }
         }
     }
 
@@ -1594,9 +1561,6 @@ impl MirRelationExprVisitor {
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
-                f(input);
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
                 f(input);
             }
         }
@@ -1823,7 +1787,6 @@ impl MirRelationExprVisitor {
             }
             | MirRelationExpr::Negate { input: _ }
             | MirRelationExpr::Threshold { input: _ }
-            | MirRelationExpr::DeclareKeys { input: _, keys: _ }
             | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
         }
     }

@@ -252,7 +252,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     /// Returns true iff `id` is already imported.
     pub fn is_imported(&self, id: &GlobalId) -> bool {
         self.objects_to_build.iter().any(|bd| &bd.id == id)
-            || self.source_imports.iter().any(|(i, _)| i == id)
+            || self.source_imports.keys().any(|i| i == id)
     }
 
     /// Assigns the `as_of` frontier to the supplied argument.
@@ -289,7 +289,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
                 return source.description.desc.arity();
             }
         }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+        for (desc, typ) in self.index_imports.values() {
             if &desc.on_id == id {
                 return typ.arity();
             }
@@ -307,6 +307,14 @@ impl<P, T> DataflowDescription<P, T>
 where
     P: CollectionPlan,
 {
+    /// Identifiers of exported objects (indexes and sinks).
+    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.index_exports
+            .keys()
+            .chain(self.sink_exports.keys())
+            .cloned()
+    }
+
     /// Returns the description of the object to build with the specified
     /// identifier.
     ///

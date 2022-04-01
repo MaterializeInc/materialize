@@ -332,7 +332,7 @@ impl fmt::Display for NumericConstraints {
 }
 
 lazy_static! {
-    /// An anonymous [`Type::List`].
+    /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYARRAY`].
     pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "list".to_owned(),
         // OID chosen to be the first OID not considered stable by
@@ -344,11 +344,27 @@ lazy_static! {
         "mz_catalog".to_owned(),
     );
 
-    /// An anonymous [`Type::Map`].
+    /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYARRAY`].
     pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
         "map".to_owned(),
         // OID chosen to follow our "LIST" type.
         oid::TYPE_MAP_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    );
+
+    /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
+    pub static ref ANYCOMPATIBLELIST: postgres_types::Type = postgres_types::Type::new(
+        "anycompatiblelist".to_owned(),
+        oid::TYPE_ANYCOMPATIBLELIST_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    );
+
+    /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
+    pub static ref ANYCOMPATIBLEMAP: postgres_types::Type = postgres_types::Type::new(
+        "anycompatiblemap".to_owned(),
+        oid::TYPE_ANYCOMPATIBLEMAP_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );

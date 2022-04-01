@@ -161,17 +161,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 }
             }
 
-            ComputeCommand::Peek {
-                id,
-                key,
-                timestamp,
-                uuid,
-                finishing,
-                map_filter_project,
-            } => {
+            ComputeCommand::Peek(peek) => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
-                let timestamp_frontier = Antichain::from_elem(timestamp);
+                let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
+                let timestamp_frontier = Antichain::from_elem(peek.timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle
                     .oks_mut()
@@ -186,15 +179,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     .errs_mut()
                     .set_physical_compaction(empty_frontier.borrow());
                 // Prepare a description of the peek work to do.
-                let mut peek = PendingPeek {
-                    id,
-                    key,
-                    uuid,
-                    timestamp,
-                    finishing,
-                    trace_bundle,
-                    map_filter_project,
-                };
+                let mut peek = PendingPeek { peek, trace_bundle };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
@@ -213,7 +198,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                     Vec::with_capacity(pending_peeks_len),
                 );
                 for peek in pending_peeks.drain(..) {
-                    if uuids.contains(&peek.uuid) {
+                    if uuids.contains(&peek.peek.uuid) {
                         self.send_peek_response(peek, PeekResponse::Canceled);
                     } else {
                         self.compute_state.pending_peeks.push(peek);
@@ -580,7 +565,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(peek.uuid, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(peek.peek.uuid, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {

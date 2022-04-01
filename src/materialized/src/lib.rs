@@ -382,9 +382,11 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             let (dataflow_server, dataflow_client) = mz_dataflow::serve(dataflow_config)?;
             let (storage_client, virtual_compute_host) =
                 mz_dataflow_types::client::split_client(dataflow_client);
+            let storage_controller =
+                mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
-                storage_client,
+                storage_controller,
                 virtual_compute_host,
             );
             (dataflow_server, dataflow_controller)
@@ -413,9 +415,11 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 client.connect().await;
                 client
             }));
+            let storage_controller =
+                mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
-                storage_client,
+                storage_controller,
                 virtual_compute_host,
             );
             (compute_server, dataflow_controller)

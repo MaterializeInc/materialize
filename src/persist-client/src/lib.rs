@@ -166,16 +166,24 @@ mod tests {
         Client::new(NO_TIMEOUT, location, None).await
     }
 
-    fn all_ok<'a, K, V, T, D, I>(iter: I) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+    fn all_ok<'a, K, V, T, D, I>(
+        iter: I,
+        as_of: T,
+    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
     where
         K: Clone + 'a,
         V: Clone + 'a,
-        T: Clone + 'a,
+        T: Lattice + Clone + 'a,
         D: Clone + 'a,
         I: IntoIterator<Item = &'a ((K, V), T, D)>,
     {
+        let as_of = Antichain::from_elem(as_of);
         iter.into_iter()
-            .map(|((k, v), t, d)| ((Ok(k.clone()), Ok(v.clone())), t.clone(), d.clone()))
+            .map(|((k, v), t, d)| {
+                let mut t = t.clone();
+                t.advance_by(as_of.borrow());
+                ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
+            })
             .collect()
     }
 
@@ -205,7 +213,7 @@ mod tests {
         let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(1)).await??;
 
         // Snapshot should only have part of what we wrote.
-        assert_eq!(snap.read_all().await?, all_ok(&data[..1]));
+        assert_eq!(snap.read_all().await?, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
         write.write_batch_slice(&data[2..], 4).await??;
@@ -213,7 +221,7 @@ mod tests {
 
         // Listen should have part of the initial write plus the new one.
         let expected_events = vec![
-            ListenEvent::Updates(all_ok(&data[1..])),
+            ListenEvent::Updates(all_ok(&data[1..], 2)),
             ListenEvent::Progress(Antichain::from_elem(4)),
         ];
         assert_eq!(listen.poll_next(NO_TIMEOUT).await?, expected_events);
@@ -222,6 +230,62 @@ mod tests {
         read.downgrade_since(NO_TIMEOUT, Antichain::from_elem(2))
             .await??;
         assert_eq!(read.since(), &Antichain::from_elem(2));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn compare_and_append() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging_default("warn");
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let id = Id::new();
+        let client = new_test_client().await?;
+        let (mut write1, read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+
+        let (mut write2, _read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+
+        assert_eq!(write1.upper(), &Antichain::from_elem(u64::minimum()));
+        assert_eq!(write2.upper(), &Antichain::from_elem(u64::minimum()));
+        assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
+
+        // Write a [0,3) batch.
+        let res = write1
+            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .await??;
+        assert_eq!(res, Ok(()));
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        let mut snap = read.snapshot_one(2).await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data[..2], 2));
+
+        // Try and write with the expected upper.
+        let res = write2
+            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .await??;
+        assert_eq!(res, Err(Antichain::from_elem(3)));
+
+        // TODO(aljoscha): Should a writer forward its upper to the global upper on a failed
+        // compare_and_append?
+        assert_eq!(write2.upper(), &Antichain::from_elem(0));
+
+        // Try again with a good expected upper.
+        let res = write2.compare_and_append_slice(&data[2..], 3, 4).await??;
+        assert_eq!(res, Ok(()));
+
+        assert_eq!(write2.upper(), &Antichain::from_elem(4));
+
+        let mut snap = read.snapshot_one(3).await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data, 3));
 
         Ok(())
     }
