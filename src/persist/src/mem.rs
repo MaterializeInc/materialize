@@ -609,19 +609,18 @@ impl Consensus for MemConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, Error> {
+        if let Some(expected) = expected {
+            if new.seqno <= expected {
+                return Err(Error::from(
+                        format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
+                                 new.seqno, expected)));
+            }
+        }
         let mut data = self.data.lock().await;
         let seqno = data.as_ref().map(|data| data.seqno);
 
         if seqno != expected {
             return Ok(Err(data.clone()));
-        }
-
-        // Only apply the update if the new sequence number is strictly greater
-        // than the current sequence number.
-        if let Some(seqno) = seqno {
-            if new.seqno <= seqno {
-                return Ok(Err(data.clone()));
-            }
         }
 
         *data = Some(new);

@@ -242,7 +242,8 @@ pub trait Consensus: std::fmt::Debug {
     ///
     /// Returns a recent version and data from this location iff the current sequence
     /// number does not equal `expected` or if `new`'s sequence number is less than or
-    /// equal to the current sequence number.
+    /// equal to the current sequence number. It is invalid to call this function with
+    /// a `new` and `expected` such that `new`'s sequence number is <= `expected`.
     ///
     /// This data is initialized to None, and the first call to compare_and_set needs to
     /// happen with None as the expected value to set the state.
@@ -733,7 +734,7 @@ pub mod tests {
             consensus
                 .compare_and_set(deadline, Some(state.seqno), invalid_constant_seqno)
                 .await,
-            Ok(Err(Some(state.clone())))
+            Err(Error::from("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)"))
         );
 
         let invalid_regressing_seqno = VersionedData {
@@ -747,7 +748,7 @@ pub mod tests {
             consensus
                 .compare_and_set(deadline, Some(state.seqno), invalid_regressing_seqno)
                 .await,
-            Ok(Err(Some(state.clone())))
+            Err(Error::from("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)"))
         );
 
         // Can correctly update to a new state if we provide the right expected seqno
