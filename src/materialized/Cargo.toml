@@ -57,7 +57,6 @@ mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
 mz-dataflow-types = { path = "../dataflow-types" }
-mz-dataflowd = { path = "../dataflowd" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-ore = { path = "../ore", features = ["task"] }
