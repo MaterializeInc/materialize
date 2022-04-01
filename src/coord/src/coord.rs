@@ -4707,13 +4707,13 @@ impl Coordinator {
 
         let storage_ids = dataflow
             .source_imports
-            .iter()
-            .map(|(id, _)| *id)
+            .keys()
+            .copied()
             .collect::<BTreeSet<_>>();
         let compute_ids = dataflow
             .index_imports
-            .iter()
-            .map(|(id, _)| *id)
+            .keys()
+            .copied()
             .collect::<BTreeSet<_>>();
 
         let since = self.least_valid_read(
