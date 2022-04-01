@@ -486,10 +486,10 @@ SELECT information_schema._pg_expandarray(ARRAY[])
 query error cannot determine type of empty array
 SELECT * FROM information_schema._pg_expandarray(ARRAY[])
 
-query error arguments cannot be implicitly cast
+query error could not determine polymorphic type because input has type unknown
 SELECT * FROM information_schema._pg_expandarray(NULL)
 
-query error arguments cannot be implicitly cast
+query error could not determine polymorphic type because input has type unknown
 SELECT information_schema._pg_expandarray(NULL)
 
 query T colnames
@@ -1322,6 +1322,9 @@ select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
 1
 2
 3
+
+query error could not determine polymorphic type because input has type unknown
+SELECT generate_subscripts(NULL, 1)
 
 # Regression test for #9653: LATERAL column references in ROWS FROM
 

@@ -50,6 +50,11 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => assert!(err.to_string().contains("no overload")),
+    }
+
     assert!(client
         .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])?
         .get::<_, bool>(0));

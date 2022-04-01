@@ -1740,7 +1740,6 @@ impl<'a> ScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
-            (s, o) if structure_only => s == o,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }

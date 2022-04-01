@@ -122,9 +122,7 @@ SELECT jsonb_agg(NULL)
 ----
 [null]
 
-# This should ideally return {NULL}, but this is a pathological case, and
-# Postgres has the same behavior, so it's sufficient for now.
-statement error arguments cannot be implicitly cast
+query error unable to determine which implementation to use
 SELECT array_agg(NULL)
 
 # With an explicit cast, this works as expected.
@@ -1089,7 +1087,7 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 1
 
 # Regression test for distsql aggregator crash when using hash aggregation.
-query error arguments cannot be implicitly cast
+query error unable to determine which implementation to use
 SELECT v, array_agg('a') FROM kv GROUP BY v
 
 query I

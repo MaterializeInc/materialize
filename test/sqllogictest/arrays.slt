@@ -63,7 +63,7 @@ SELECT array_to_string(NULL::text[], ','), array_to_string(NULL::text[], 'foo', 
 ----
 NULL  NULL
 
-query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function array_to_string\(unknown, unknown\): could not determine polymorphic type because input has type unknown
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
 # Handle empty arrays as an input
@@ -173,7 +173,7 @@ query T rowsort
 SELECT unnest::text FROM unnest(NULL::int[])
 ----
 
-query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function unnest\(unknown\): unable to determine which implementation to use; try providing explicit casts to match parameter types
 SELECT * FROM unnest(NULL)
 
 # array_agg

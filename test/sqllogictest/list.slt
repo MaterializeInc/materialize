@@ -590,6 +590,18 @@ SELECT (list_append(LIST[[1], [2]], LIST[3]))::text
 ----
 {{1},{2},{3}}
 
+# 🔬🔬🔬🔬 polymorphism
+
+query T
+SELECT pg_typeof(list_append(LIST[1::int2], 1::int8))
+----
+bigint list
+
+query T
+SELECT pg_typeof(list_append(LIST[1::int8], 1::int2))
+----
+bigint list
+
 # 🔬🔬🔬 NULL elements
 
 # 🔬🔬🔬🔬 list + element
@@ -643,16 +655,18 @@ SELECT (list_append(NULL, NULL::INT LIST))::text
 
 # 🔬🔬🔬 errors
 
-query error Cannot call function list_append\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
-SELECT list_append(NULL, NULL)
+query T
+SELECT list_append(NULL, NULL)::text
+----
+{NULL}
 
-query error
-SELECT list_append(LIST[1], 'a')
+query error invalid input syntax for type integer
+SELECT list_append(LIST[1], 'a')::text
 
-query error
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT list_append(LIST[1], LIST[2])
 
-query error
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT list_append(1, LIST[1])
 
 # 🔬🔬 list_cat
@@ -697,6 +711,18 @@ query T
 SELECT (list_cat(NULL, NULL::INT LIST))::text
 ----
 NULL
+
+# 🔬🔬🔬🔬 polymorphism
+
+query T
+SELECT pg_typeof(list_cat(LIST[1::int2], LIST[1::int8]))
+----
+bigint list
+
+query T
+SELECT pg_typeof(list_cat(LIST[1::int8], LIST[1::int2]))
+----
+bigint list
 
 # 🔬🔬🔬 errors
 
@@ -782,6 +808,9 @@ SELECT list_n_layers((LIST[[1],NULL]::INT LIST LIST)[2])
 ----
 1
 
+query error could not determine polymorphic type because input has type unknown
+SELECT list_n_layers(NULL)
+
 # 🔬🔬 list_length
 
 query R
@@ -849,6 +878,9 @@ query R
 SELECT list_length((LIST[[1],NULL]::INT LIST LIST)[2])
 ----
 NULL
+
+query error could not determine polymorphic type because input has type unknown
+SELECT list_length(NULL)
 
 # 🔬🔬 list_length_max
 
@@ -983,6 +1015,9 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 query error invalid layer: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 
+query error could not determine polymorphic type because input has type unknown
+SELECT list_length_max(NULL, 1)
+
 # 🔬🔬 list_prepend
 
 # 🔬🔬🔬 element + list
@@ -998,6 +1033,18 @@ query T
 SELECT (list_prepend(LIST[1], LIST[[2], [3]]))::text
 ----
 {{1},{2},{3}}
+
+# 🔬🔬🔬🔬 polymorphism
+
+query T
+SELECT pg_typeof(list_prepend(1::int2, LIST[1::int8]))
+----
+bigint list
+
+query T
+SELECT pg_typeof(list_prepend(1::int8, LIST[1::int2]))
+----
+bigint list
 
 # 🔬🔬🔬 NULL elements
 
@@ -1089,7 +1136,7 @@ query T
 SELECT unnest::text FROM unnest(NULL::int list)
 ----
 
-query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function unnest\(unknown\): unable to determine which implementation to use; try providing explicit casts to match parameter types
 SELECT * FROM unnest(NULL)
 
 # 🔬 List casts
@@ -1654,6 +1701,18 @@ SELECT LIST[1.234::numeric(39,2), 2.345]::numeric(39, 2) list::text;
 ----
 {1.23,2.35}
 
+# 🔬🔬🔬🔬 polymorphic
+
+query T
+SELECT pg_typeof(LIST[1::int2] || LIST[2::int8])
+----
+bigint list
+
+query T
+SELECT pg_typeof(LIST[1::int8] || LIST[2::int2])
+----
+bigint list
+
 # 🔬🔬🔬 list + element
 
 query T
@@ -1666,6 +1725,18 @@ SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
 ----
 {1.2,2}
 
+# 🔬🔬🔬🔬 polymorphic
+
+query T
+SELECT pg_typeof(LIST[1::int2] || 2::int8)
+----
+bigint list
+
+query T
+SELECT pg_typeof(LIST[1::int8] || 2::int2)
+----
+bigint list
+
 # 🔬🔬🔬 element + list
 
 query T
@@ -1677,6 +1748,18 @@ query T
 SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
 ----
 {1.2,2}
+
+# 🔬🔬🔬🔬 polymorphic
+
+query T
+SELECT pg_typeof(1::int2 || LIST[2::int8])
+----
+bigint list
+
+query T
+SELECT pg_typeof(1::int8 || LIST[2::int2])
+----
+bigint list
 
 # 🔬🔬🔬 list list + list (list + element)
 
@@ -2424,6 +2507,18 @@ query T
 SELECT list_remove(LIST[[1,2],[1],[1,2,3],LIST[1]], LIST[1,2,3])::text
 ----
 {{1,2},{1},{1}}
+
+## polymorphism
+
+query T
+SELECT pg_typeof(list_remove(LIST[1::int8,2,3,2], 2::int2))
+----
+bigint list
+
+query T
+SELECT pg_typeof(list_remove(LIST[1::int2,2,3,2], 2::int8))
+----
+bigint list
 
 # array to list
 query T
