@@ -41,7 +41,7 @@ pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
 /// A complete enumeration of possible join plans to render.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum JoinPlan {
     /// A join implemented by a linear join.
     Linear(LinearJoinPlan),
@@ -55,7 +55,7 @@ pub enum JoinPlan {
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: mz_expr::SafeMfpPlan,

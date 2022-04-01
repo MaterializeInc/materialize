@@ -1244,7 +1244,7 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
         mfp: MapFilterProject,
     }

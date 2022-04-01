@@ -133,7 +133,7 @@ impl AvailableCollections {
 }
 
 /// A rendering plan with as much conditional logic as possible removed.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum Plan<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
     Constant {
