@@ -2182,11 +2182,16 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
-fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::List(list) => Datum::Int64(list.iter().count() as i64),
+fn jsonb_array_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    Ok(match a {
+        Datum::List(list) => Datum::Int32(
+            list.iter()
+                .count()
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+        ),
         _ => Datum::Null,
-    }
+    })
 }
 
 fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -2602,11 +2607,11 @@ impl BinaryFunc {
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
             BinaryFunc::ListLengthMax { max_layer } => eager!(list_length_max, *max_layer),
-            BinaryFunc::ArrayLength => Ok(eager!(array_length)),
+            BinaryFunc::ArrayLength => eager!(array_length),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
             BinaryFunc::ArrayRemove => eager!(array_remove, temp_storage),
-            BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
+            BinaryFunc::ArrayUpper => eager!(array_upper),
             BinaryFunc::ArrayArrayConcat => eager!(array_array_concat, temp_storage),
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
@@ -2733,7 +2738,7 @@ impl BinaryFunc {
             ))
             .nullable(true),
 
-            ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
+            ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int32.nullable(true),
 
             ListLengthMax { .. } => ScalarType::Int32.nullable(true),
 
@@ -3879,7 +3884,7 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
             TimezoneTimestampTz(tz) => Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz())),
             TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
-            JsonbArrayLength => Ok(jsonb_array_length(a)),
+            JsonbArrayLength => jsonb_array_length(a),
             JsonbTypeof => Ok(jsonb_typeof(a)),
             JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
             JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
@@ -4126,7 +4131,7 @@ impl UnaryFunc {
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
 
-            JsonbArrayLength => ScalarType::Int64.nullable(nullable),
+            JsonbArrayLength => ScalarType::Int32.nullable(nullable),
             JsonbTypeof => ScalarType::String.nullable(nullable),
             JsonbStripNulls => ScalarType::Jsonb.nullable(nullable),
             JsonbPretty => ScalarType::String.nullable(nullable),
@@ -5540,15 +5545,19 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
-fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let i = match usize::try_from(b.unwrap_int64()) {
-        Ok(0) | Err(_) => return Datum::Null,
+        Ok(0) | Err(_) => return Ok(Datum::Null),
         Ok(n) => n - 1,
     };
-    match a.unwrap_array().dims().into_iter().nth(i) {
+    Ok(match a.unwrap_array().dims().into_iter().nth(i) {
         None => Datum::Null,
-        Some(dim) => Datum::Int64(dim.length as i64),
-    }
+        Some(dim) => Datum::Int32(
+            dim.length
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+        ),
+    })
 }
 
 fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -5557,7 +5566,7 @@ fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         return Datum::Null;
     }
     match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Datum::Int64(1),
+        Some(_) => Datum::Int32(1),
         None => Datum::Null,
     }
 }
@@ -5594,15 +5603,21 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
 }
 
-fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let i = b.unwrap_int64();
     if i < 1 {
-        return Datum::Null;
+        return Ok(Datum::Null);
     }
-    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(dim) => Datum::Int64(dim.length as i64),
-        None => Datum::Null,
-    }
+    Ok(
+        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+            Some(dim) => Datum::Int32(
+                dim.length
+                    .try_into()
+                    .map_err(|_| EvalError::Int32OutOfRange)?,
+            ),
+            None => Datum::Null,
+        },
+    )
 }
 
 fn list_length_max<'a>(

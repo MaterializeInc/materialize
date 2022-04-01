@@ -1877,7 +1877,7 @@ lazy_static! {
                 params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
             },
             "jsonb_array_length" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbArrayLength, 3207;
+                params!(Jsonb) => UnaryFunc::JsonbArrayLength => Int32, 3207;
             },
             "jsonb_build_array" => Scalar {
                 params!() => VariadicFunc::JsonbBuildArray, 3272;
