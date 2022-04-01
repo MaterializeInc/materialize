@@ -31,8 +31,8 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::StorageController;
 use crate::client::replicated::ActiveReplication;
-use crate::client::GenericClient;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::GlobalId;
@@ -332,14 +332,14 @@ where
 
         self.compute
             .client
-            .send(ComputeCommand::Peek {
+            .send(ComputeCommand::Peek(Peek {
                 id,
                 key,
                 uuid,
                 timestamp,
                 finishing,
                 map_filter_project,
-            })
+            }))
             .await
             .map_err(ComputeError::from)
     }
