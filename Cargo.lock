@@ -3364,6 +3364,7 @@ dependencies = [
  "mz-dataflow",
  "mz-dataflow-types",
  "mz-ore",
+ "mz-repr",
  "timely",
  "tokio",
  "tokio-serde",
