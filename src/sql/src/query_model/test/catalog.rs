@@ -294,6 +294,10 @@ impl SessionCatalog for TestCatalog {
     fn now(&self) -> EpochMillis {
         (self.config().now)()
     }
+
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+        name
+    }
 }
 
 impl ExprHumanizer for TestCatalog {
