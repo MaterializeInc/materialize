@@ -198,7 +198,7 @@ where
             let mut compute_dependencies = Vec::new();
 
             // Validate sources have `since.less_equal(as_of)`.
-            for (source_id, _) in dataflow.source_imports.iter() {
+            for source_id in dataflow.source_imports.keys() {
                 let since = &self
                     .storage_controller
                     .collection(*source_id)
@@ -214,7 +214,7 @@ where
 
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
-            for (index_id, _) in dataflow.index_imports.iter() {
+            for index_id in dataflow.index_imports.keys() {
                 let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
@@ -254,7 +254,7 @@ where
                 .await;
 
             // Install collection state for each of the exports.
-            for (sink_id, _) in dataflow.sink_exports.iter() {
+            for sink_id in dataflow.sink_exports.keys() {
                 self.compute.collections.insert(
                     *sink_id,
                     CollectionState::new(
@@ -264,7 +264,7 @@ where
                     ),
                 );
             }
-            for (index_id, _) in dataflow.index_exports.iter() {
+            for index_id in dataflow.index_exports.keys() {
                 self.compute.collections.insert(
                     *index_id,
                     CollectionState::new(
