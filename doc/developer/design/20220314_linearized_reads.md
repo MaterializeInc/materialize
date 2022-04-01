@@ -59,11 +59,44 @@ They still consult `since` for their inputs, and may elect to choose any timesta
 
 This behavior applies equally well to matarialized and unmaterialized sources.
 
-## Alternatives
+### Contraints on sources
 
-- Change the default experience of using `materialized` to be `LINEARIZABLE`
+_The following section describes the contraints on linearizable reads as we will explain them to users_
 
-## Open questions
+_Truly_ Linearizable reads can only be offered if and only if, the view or query being read from has the following:
+
+- Involves only sources whose upstream can offer adequate apis
+  - As far as we understand it, all our current source offerings, minus `kinesis` and `pubnub` can offer such apis.
+    - why: sources need a way to get the max "offset" for the source, that is linearizable.
+    - TODO: confirm multi-partition kafka works
+  - Cannot involve multiple different sources
+    - CAVEAT: arbitrarily many tables can be used with any other sources.
+    - CAVEAT: Any number of Postgres sources for the same postgres database can be used.
+    - CAVEAT: Only one individual kafka source (that is, sources that involves a specific topic) can be used, not multiple kafka sources
+    that involve multiple topics.
+    - why: sources can have a causal relationship with each other, and in general, disparate systems (or disparate "shards" within one system) do not
+    offer apis that totally order those causal relationships, a requirement for _linearizability_.
+
+### Design question:
+If these contraints are not met, what kind of consistency guarantees do we offer? It is probably not _sequential_ or _causal_, but
+we may still want to offer this as an option. We don't get _ordering guarantees_ between source-types or topics, as they have no
+managed relationship upstream.
+
+While the constraints for **true** _linearizability_ are still desirable (and should work for tests against the entire materialize stack
+(like Jepsen tests), there are other advantages to weaker guarantees:
+
+- Queries can be guaranteed to give "current" data, where "current" is defined as:
+"as of a real time moment at least the real time moment the command was issued, and no later than the response returns"
+  - This includes unmaterialized sources, allowing us to unlock queries against those.
+  - and can improve the experience of using materialized sources, as some users may prefer
+  "current" or "eventual".
+- Queries that involve sources that have no _causal_ relationship will have a stronger guarantee (TODO: what guarantee).
+  - Its perfectly possible that this is a common case for some users.
+
+(Additionally, we could imagine a scheme where we write special markers into the sources themselves to get ordering guarantees,
+but that is out of scope for this document.)
+
+## Other open questions
 
 - How much of a latency hit will fetching the max offset incur?
 - How feasible is it for ALL sources to offer a "max offset" API?
@@ -71,3 +104,4 @@ This behavior applies equally well to matarialized and unmaterialized sources.
   - Will we require a heartbeat mechanism for those sources?
 - Will linearized reads negatively impact sequentially consistent reads (are they forced to advance similarly)?
 - What syntax is best to express linearizable (or non) reads? For example, as part of `BEGIN`?
+- Should be eventually change the default experience of using `materialized` to be `LINEARIZABLE`?
