@@ -9,20 +9,20 @@
 
 """Test loading AWS credentials from various credential sources."""
 
-from email import policy
 import json
 import random
 import time
 from dataclasses import dataclass
+from email import policy
 from pathlib import Path
-from retry import retry
 from typing import Any, Callable, Dict, List, Optional
 
 import boto3
 import botocore.exceptions
 from mypy_boto3_iam import IAMClient
-from mypy_boto3_sts import STSClient
 from mypy_boto3_s3 import S3Client
+from mypy_boto3_sts import STSClient
+from retry import retry
 
 from materialize.mzcompose import Composition, UIError
 from materialize.mzcompose.services import Materialized, Testdrive
@@ -30,7 +30,9 @@ from materialize.mzcompose.services import Materialized, Testdrive
 EXTERNAL_ID = str(random.randrange(0, 2**64))
 SEED = random.randrange(0, 2**32)
 DISCARD = "http://127.0.0.1:9"
-BUCKET_NAMES = [f"testdrive-{n}-{SEED}" for n in ["test", "testrestart", "witheid", "noeid"]]
+BUCKET_NAMES = [
+    f"testdrive-{n}-{SEED}" for n in ["test", "testrestart", "witheid", "noeid"]
+]
 
 # == Services ==
 
@@ -94,8 +96,6 @@ def workflow_default(c: Composition) -> None:
         wait_for_bucket(sts, denied.arn, False)
         wait_for_role(sts, allowed.arn)
         wait_for_bucket(sts, allowed.arn, True)
-
-        
 
         td_args = [
             f"--aws-region={aws_region}",
@@ -182,18 +182,24 @@ def workflow_default(c: Composition) -> None:
         if errored:
             raise UIError("Unable to completely clean up AWS resources")
 
+
 def create_buckets(session: boto3.Session) -> None:
     test_names = ["test", "testrestart", "witheid", "noeid"]
     print(f"Creating bucket S3 buckets for: {test_names}")
     try:
-        s3 = session.resource('s3')
-        constraint = {'LocationConstraint': session.region_name } if session.region_name != "us-east-1" else None
+        s3 = session.resource("s3")
+        constraint = (
+            {"LocationConstraint": session.region_name}
+            if session.region_name != "us-east-1"
+            else None
+        )
         for name in [f"testdrive-{n}-{SEED}" for n in test_names]:
             bucket = s3.create_bucket(Bucket=name, CreateBucketConfiguration=constraint)
             bucket.wait_until_exists()
 
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
+
 
 @dataclass
 class CreatedRole:
@@ -232,7 +238,9 @@ def create_role(
         AssumeRolePolicyDocument=json.dumps(assume_role_policy),
     )
     role_arn = create_response["Role"]["Arn"]
-    print(f"Created {role_arn} to {effect_name}, creating {policy_name} for {BUCKET_NAMES}")
+    print(
+        f"Created {role_arn} to {effect_name}, creating {policy_name} for {BUCKET_NAMES}"
+    )
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName=policy_name,
@@ -332,23 +340,24 @@ def wait_for_role(sts: STSClient, role_arn: str) -> None:
         return
     raise UIError("Never able to assume role")
 
+
 def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     """
     Verify that with the currently assumed role we can or cannot
-    list objects in the specified S3 bucket. 
+    list objects in the specified S3 bucket.
 
     Much like wait_for_role this is not expected to take long but
     it does require waiting to eliminate flakes
     """
     resp = sts.assume_role(
-            RoleArn=role_arn, RoleSessionName="mzcomposevalidates3access"
-        )
-    
+        RoleArn=role_arn, RoleSessionName="mzcomposevalidates3access"
+    )
+
     client = boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=resp["Credentials"]["AccessKeyId"],
         aws_secret_access_key=resp["Credentials"]["SecretAccessKey"],
-        aws_session_token=resp["Credentials"]["SessionToken"]
+        aws_session_token=resp["Credentials"]["SessionToken"],
     )
     for i in range(30, 0, -1):
         try:
@@ -368,6 +377,7 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
             time.sleep(1)
             continue
     raise UIError("Unable to verify bucket access is correct")
+
 
 def write_aws_config(local_dir: Path, text: str) -> None:
     config_file = local_dir / "config"
