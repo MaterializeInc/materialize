@@ -28,13 +28,11 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
-use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
+use mz_dataflow_types::client::{ComputeInstanceId, Peek};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::PeekResponse;
-use mz_expr::{GlobalId, RowSetFinishing};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::result::ResultExt;
@@ -409,19 +407,7 @@ pub struct LocalInput {
 /// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
 /// as each `PendingPeek` is meant to be dropped after it's responded to.
 pub(crate) struct PendingPeek {
-    /// The identifier of the dataflow to peek.
-    id: GlobalId,
-    /// An optional key to use for the arrangement.
-    key: Option<Row>,
-    /// The ID of the peek.
-    uuid: Uuid,
-    /// Time at which the collection should be materialized.
-    timestamp: Timestamp,
-    /// Finishing operations to perform on the peek, like an ordering and a
-    /// limit.
-    finishing: RowSetFinishing,
-    /// Linear operators to apply in-line to all results.
-    map_filter_project: mz_expr::SafeMfpPlan,
+    peek: Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
 }
@@ -429,7 +415,7 @@ pub(crate) struct PendingPeek {
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.uuid)
+        crate::logging::materialized::Peek::new(self.peek.id, self.peek.timestamp, self.peek.uuid)
     }
 
     /// Attempts to fulfill the peek and reports success.
@@ -446,11 +432,11 @@ impl PendingPeek {
     /// and so the result cannot further evolve.
     fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
-        if upper.less_equal(&self.timestamp) {
+        if upper.less_equal(&self.peek.timestamp) {
             return None;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
-        if upper.less_equal(&self.timestamp) {
+        if upper.less_equal(&self.peek.timestamp) {
             return None;
         }
         let response = match self.collect_finished_data() {
@@ -468,7 +454,7 @@ impl PendingPeek {
         while cursor.key_valid(&storage) {
             let mut copies = 0;
             cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.timestamp) {
+                if time.less_equal(&self.peek.timestamp) {
                     copies += diff;
                 }
             });
@@ -495,9 +481,13 @@ impl PendingPeek {
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
         // just at least those results that would have been returned.
-        let max_results = self.finishing.limit.map(|l| l + self.finishing.offset);
+        let max_results = self
+            .peek
+            .finishing
+            .limit
+            .map(|l| l + self.peek.finishing.offset);
 
-        if let Some(literal) = &self.key {
+        if let Some(literal) = &self.peek.key {
             cursor.seek_key(&storage, literal);
         }
 
@@ -521,13 +511,14 @@ impl PendingPeek {
                 // to outlive the arena above, from which it might borrow).
                 let mut borrow = datum_vec.borrow_with_many(&[key, row]);
                 if let Some(result) = self
+                    .peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
                     .map_err_to_string()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
-                        if time.less_equal(&self.timestamp) {
+                        if time.less_equal(&self.peek.timestamp) {
                             copies += diff;
                         }
                     });
@@ -552,7 +543,7 @@ impl PendingPeek {
                         // across all of the insertions. We could tighten this, but it
                         // works for the moment.
                         if results.len() >= 2 * max_results {
-                            if self.finishing.order_by.is_empty() {
+                            if self.peek.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
                                 return Ok(results);
                             } else {
@@ -568,7 +559,7 @@ impl PendingPeek {
                                     let left_datums = l_datum_vec.borrow_with(&left.0);
                                     let right_datums = r_datum_vec.borrow_with(&right.0);
                                     mz_expr::compare_columns(
-                                        &self.finishing.order_by,
+                                        &self.peek.finishing.order_by,
                                         &left_datums,
                                         &right_datums,
                                         || left.0.cmp(&right.0),
@@ -582,7 +573,7 @@ impl PendingPeek {
                 cursor.step_val(&storage);
             }
             // If we had a key, we are now done and can return.
-            if self.key.is_some() {
+            if self.peek.key.is_some() {
                 return Ok(results);
             } else {
                 cursor.step_key(&storage);

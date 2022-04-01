@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
 
+use crate::client::Peek;
 use mz_expr::GlobalId;
 
 use super::{ComputeClient, GenericClient};
@@ -126,7 +127,7 @@ where
 {
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Register an interest in the peek.
-        if let ComputeCommand::Peek { uuid, .. } = &cmd {
+        if let ComputeCommand::Peek(Peek { uuid, .. }) = &cmd {
             self.peeks.insert(*uuid);
         }
 

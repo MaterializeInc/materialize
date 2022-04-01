@@ -78,6 +78,36 @@ pub enum InstanceConfig {
     },
 }
 
+/// Peek at an arrangement.
+///
+/// This request elicits data from the worker, by naming an
+/// arrangement and some actions to apply to the results before
+/// returning them.
+///
+/// The `timestamp` member must be valid for the arrangement that
+/// is referenced by `id`. This means that `AllowCompaction` for
+/// this arrangement should not pass `timestamp` before this command.
+/// Subsequent commands may arbitrarily compact the arrangements;
+/// the dataflow runners are responsible for ensuring that they can
+/// correctly answer the `Peek`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Peek<T = mz_repr::Timestamp> {
+    /// The identifier of the arrangement.
+    pub id: GlobalId,
+    /// An optional key that should be used for the arrangement.
+    pub key: Option<Row>,
+    /// The identifier of this peek request.
+    ///
+    /// Used in responses and cancellation requests.
+    pub uuid: Uuid,
+    /// The logical timestamp at which the arrangement is queried.
+    pub timestamp: T,
+    /// Actions to apply to the result set before returning them.
+    pub finishing: RowSetFinishing,
+    /// Linear operation to apply in-line on each result.
+    pub map_filter_project: mz_expr::SafeMfpPlan,
+}
+
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
 #[enum_kind(
@@ -110,33 +140,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
     /// Peek at an arrangement.
-    ///
-    /// This request elicits data from the worker, by naming an
-    /// arrangement and some actions to apply to the results before
-    /// returning them.
-    ///
-    /// The `timestamp` member must be valid for the arrangement that
-    /// is referenced by `id`. This means that `AllowCompaction` for
-    /// this arrangement should not pass `timestamp` before this command.
-    /// Subsequent commands may arbitrarily compact the arrangements;
-    /// the dataflow runners are responsible for ensuring that they can
-    /// correctly answer the `Peek`.
-    Peek {
-        /// The identifier of the arrangement.
-        id: GlobalId,
-        /// An optional key that should be used for the arrangement.
-        key: Option<Row>,
-        /// The identifier of this peek request.
-        ///
-        /// Used in responses and cancellation requests.
-        uuid: Uuid,
-        /// The logical timestamp at which the arrangement is queried.
-        timestamp: T,
-        /// Actions to apply to the result set before returning them.
-        finishing: RowSetFinishing,
-        /// Linear operation to apply in-line on each result.
-        map_filter_project: mz_expr::SafeMfpPlan,
-    },
+    Peek(Peek<T>),
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
@@ -429,7 +433,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                         final_frontiers.insert(id, frontier.clone());
                     }
                 }
-                peek @ ComputeCommand::Peek { .. } => {
+                ComputeCommand::Peek(peek) => {
                     // We could pre-filter here, but seems hard to access `uuid`
                     // and take ownership of `peek` at the same time.
                     live_peeks.push(peek);
@@ -469,13 +473,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
         // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| {
-            if let ComputeCommand::Peek { uuid, .. } = peek {
-                peeks.contains(uuid)
-            } else {
-                unreachable!()
-            }
-        });
+        live_peeks.retain(|peek| peeks.contains(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -500,7 +498,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 final_frontiers.into_iter().collect(),
             ));
         }
-        self.commands.extend(live_peeks);
+        self.commands
+            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
         if !live_cancels.is_empty() {
             self.commands.push(ComputeCommand::CancelPeeks {
                 uuids: live_cancels,
