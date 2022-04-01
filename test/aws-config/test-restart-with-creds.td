@@ -12,7 +12,6 @@
 
 $ set td-bucket=testdrive-testrestart-${testdrive.seed}
 
-$ s3-create-bucket bucket=testrestart
 
 $ s3-put-object bucket=testrestart key=a
 a1

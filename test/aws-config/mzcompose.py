@@ -32,6 +32,8 @@ SEED = random.randrange(0, 2**32)
 DISCARD = "http://127.0.0.1:9"
 BUCKET_NAME = f"testdrive-test-{SEED}"
 BUCKET_ARN = f"arn:aws:s3:::{BUCKET_NAME}"
+RESTART_BUCKET = f"testdrive-testrestart-{SEED}"
+RESTART_ARN = f"arn:aws:s3:::{RESTART_BUCKET}"
 
 # == Services ==
 
@@ -190,6 +192,8 @@ def create_bucket(session: boto3.Session) -> None:
         constraint = {'LocationConstraint': session.region_name } if session.region_name != "us-east-1" else None
         bucket = s3.create_bucket(Bucket=BUCKET_NAME, CreateBucketConfiguration=constraint)
         bucket.wait_until_exists()
+        restart_bucket = s3.create_bucket(Bucket=RESTART_BUCKET, CreateBucketConfiguration=constraint)
+        restart_bucket.wait_until_exists()
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
 
@@ -247,6 +251,16 @@ def create_role(
                         "Effect": effect,
                         "Action": ["s3:GetObject", "s3:GetObjectAcl"],
                         "Resource": f"{BUCKET_ARN}/*",
+                    },
+                    {
+                        "Effect": effect,
+                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                        "Resource": f"{RESTART_ARN}",
+                    },
+                    {
+                        "Effect": effect,
+                        "Action": ["s3:GetObject", "s3:GetObjectAcl"],
+                        "Resource": f"{RESTART_ARN}/*",
                     },
                 ],
             }
@@ -351,6 +365,7 @@ def wait_for_bucket(sts: STSClient, role_arn: str, has_access: bool) -> None:
     for i in range(30, 0, -1):
         try:
             client.list_objects_v2(Bucket=BUCKET_NAME, MaxKeys=1)
+            client.list_objects_v2(Bucket=RESTART_BUCKET, MaxKeys=1)
             print("Allow access permission successfully tested")
             return
         except botocore.exceptions.ClientError:
