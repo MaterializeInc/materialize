@@ -135,7 +135,7 @@ class Dataflowd(Service):
 
         if environment is None:
             environment = [
-                "MZ_LOG_FILTER",
+                "DATAFLOWD_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
             ]
 
