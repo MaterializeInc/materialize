@@ -6,6 +6,8 @@ menu:
     parent: 'demos'
 ---
 
+{{% demos-warning %}}
+
 **tl;dr** Using Materialize, you can easily create transformation-oriented
 microservices.
 

@@ -6,6 +6,8 @@ menu:
     parent: 'demos'
 ---
 
+{{% demos-warning %}}
+
 **tl;dr** Materialize can extract meaningful data from logs in real time.
 
 Servers, especially busy ones, can emit a vast amount of logging data. Given
