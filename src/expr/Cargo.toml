@@ -12,7 +12,7 @@ harness = false
 
 [dependencies]
 aho-corasick = "0.7.18"
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
 dec = "0.4.8"

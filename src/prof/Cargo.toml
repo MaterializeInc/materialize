@@ -7,7 +7,7 @@ rust-version = "1.59.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 backtrace = "0.3.64"
 lazy_static = "1.4.0"
 pprof = "0.7.0"

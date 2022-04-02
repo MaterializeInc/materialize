@@ -602,7 +602,7 @@ impl Interval {
 
         let months = months
             .checked_add(whole_month)
-            .ok_or(anyhow!(&*MONTH_OVERFLOW_ERROR))?;
+            .ok_or_else(|| anyhow!(&*MONTH_OVERFLOW_ERROR))?;
 
         Ok((months, days))
     }
@@ -625,7 +625,7 @@ impl Interval {
         let days = i32::try_from(micros / &*USECS_PER_DAY)
             .ok()
             .and_then(|d| days.checked_add(d))
-            .ok_or(anyhow!(&*DAY_OVERFLOW_ERROR))?;
+            .ok_or_else(|| anyhow!(&*DAY_OVERFLOW_ERROR))?;
         let micros = micros % &*USECS_PER_DAY;
 
         Ok((days, micros))

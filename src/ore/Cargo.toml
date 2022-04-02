@@ -8,7 +8,7 @@ rust-version = "1.59.0"
 publish = false
 
 [dependencies]
-anyhow = { version = "1.0.55", optional = true }
+anyhow = { version = "1.0.56", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
