@@ -5376,9 +5376,9 @@ dependencies = [
 
 [[package]]
 name = "rlimit"
-version = "0.7.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "347703a5ae47adf1e693144157be231dde38c72bd485925cae7407ad3e52480b"
+checksum = "0fbcc6f9672090a4060a6de8d0fb2d4acd381363cda5b7049a26e2b32464f8ad"
 dependencies = [
  "libc",
 ]
@@ -6059,7 +6059,7 @@ checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#c4145f0ab5c3830f08d1fd8158a441503554de7b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6077,12 +6077,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#c4145f0ab5c3830f08d1fd8158a441503554de7b"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#c4145f0ab5c3830f08d1fd8158a441503554de7b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6098,7 +6098,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#c4145f0ab5c3830f08d1fd8158a441503554de7b"
 dependencies = [
  "columnation",
  "serde",
@@ -6107,7 +6107,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6f5057355305e54a36774aa805ec1c625cf8532e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#c4145f0ab5c3830f08d1fd8158a441503554de7b"
 
 [[package]]
 name = "tinytemplate"
