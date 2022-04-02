@@ -158,7 +158,7 @@ impl TailProtocol {
             self.prev_upper = upper;
             if input_exhausted {
                 // The dataflow's input has been exhausted; clear the channel,
-                // to avoid sending `TailResponse::Dropped`.
+                // to avoid sending `TailResponse::DroppedAt`.
                 self.tail_response_buffer = None;
             }
         }
@@ -168,9 +168,10 @@ impl TailProtocol {
 impl Drop for TailProtocol {
     fn drop(&mut self) {
         if let Some(buffer) = self.tail_response_buffer.take() {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Dropped));
+            buffer.borrow_mut().push((
+                self.sink_id,
+                TailResponse::DroppedAt(self.prev_upper.clone()),
+            ));
         }
     }
 }

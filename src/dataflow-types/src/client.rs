@@ -1201,10 +1201,13 @@ pub mod partitioned {
                                 None
                             }
                         }
-                        TailResponse::Dropped => {
+                        TailResponse::DroppedAt(frontier) => {
                             *maybe_entry = None;
                             Some(Ok(Response::Compute(
-                                ComputeResponse::TailResponse(id, TailResponse::Dropped),
+                                ComputeResponse::TailResponse(
+                                    id,
+                                    TailResponse::DroppedAt(frontier),
+                                ),
                                 instance,
                             )))
                         }
