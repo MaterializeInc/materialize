@@ -1155,7 +1155,10 @@ pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
 pub const TYPE_ANYCOMPATIBLE: BuiltinType = BuiltinType {
     name: "anycompatible",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1054),
+    id: SystemId {
+        id: 1054,
+        version: 1,
+    },
     oid: 5077,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1166,7 +1169,10 @@ pub const TYPE_ANYCOMPATIBLE: BuiltinType = BuiltinType {
 pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType = BuiltinType {
     name: "anycompatiblearray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1055),
+    id: SystemId {
+        id: 1055,
+        version: 1,
+    },
     oid: 5078,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1177,7 +1183,10 @@ pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType = BuiltinType {
 pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType = BuiltinType {
     name: "anycompatiblenonarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1056),
+    id: SystemId {
+        id: 1056,
+        version: 1,
+    },
     oid: 5079,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1216,7 +1225,10 @@ pub const TYPE_MAP: BuiltinType = BuiltinType {
 pub const TYPE_ANYCOMPATIBLELIST: BuiltinType = BuiltinType {
     name: "anycompatiblelist",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1997),
+    id: SystemId {
+        id: 1997,
+        version: 1,
+    },
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLELIST_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1227,7 +1239,10 @@ pub const TYPE_ANYCOMPATIBLELIST: BuiltinType = BuiltinType {
 pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType = BuiltinType {
     name: "anycompatiblemap",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1996),
+    id: SystemId {
+        id: 1996,
+        version: 1,
+    },
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLEMAP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,

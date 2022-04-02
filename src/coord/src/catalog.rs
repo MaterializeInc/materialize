@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -1067,7 +1067,9 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn open(
+        mut config: Config<'_>,
+    ) -> Result<(Catalog, Vec<BuiltinTableUpdate>, Vec<SystemId>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1176,16 +1178,15 @@ impl Catalog {
 
         let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
         let builtin_versions = catalog.storage().load_system_object_versions()?;
-        let mut changed_builtins = BTreeSet::new();
+        let mut changed_builtins = Vec::new();
         for builtin in BUILTINS.values() {
-            let id = builtin.id().id;
-            let version = builtin.id().version;
-            if let Some(persisted_version) = builtin_versions.get(&id) {
-                if version != *persisted_version {
-                    changed_builtins.insert(SystemId { id, version });
+            if let Some(persisted_version) = builtin_versions.get(&builtin.id().id) {
+                if builtin.id().version != *persisted_version {
+                    changed_builtins.push(builtin.id());
                 }
             } else {
-                changed_builtins.insert(SystemId { id, version });
+                // New system object
+                catalog.storage().set_system_object_version(builtin.id())?;
             }
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
@@ -1298,10 +1299,6 @@ impl Catalog {
                 }
             }
         }
-        //TODO(jkosh44) Should really only happen after migration is complete
-        for system_id in changed_builtins {
-            catalog.storage().set_system_object_version(system_id)?;
-        }
 
         let compute_instances = catalog.storage().load_compute_instances()?;
         for (id, name, conf) in compute_instances {
@@ -1372,7 +1369,7 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
         }
 
-        Ok((catalog, builtin_table_updates))
+        Ok((catalog, builtin_table_updates, changed_builtins))
     }
 
     /// Retuns the catalog's transient revision, which starts at 1 and is
@@ -1440,7 +1437,7 @@ impl Catalog {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
         let storage = storage::Connection::open(path, experimental_mode)?;
-        let (catalog, _) = Self::open(Config {
+        let (catalog, _, _) = Self::open(Config {
             storage,
             virtual_compute_host_introspection: Some(ComputeInstanceIntrospectionConfig {
                 granularity: Duration::from_secs(1),
@@ -1519,6 +1516,10 @@ impl Catalog {
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
+    }
+
+    pub fn set_system_object_version(&mut self, system_id: SystemId) -> Result<(), Error> {
+        self.storage().set_system_object_version(system_id)
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {

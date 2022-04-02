@@ -105,7 +105,7 @@ use mz_dataflow_types::{
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, ExprHumanizer, GlobalId,
-    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing, SystemId,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -461,6 +461,7 @@ impl Coordinator {
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
+        changed_builtins: Vec<SystemId>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -471,6 +472,11 @@ impl Coordinator {
                 )
                 .await
                 .unwrap();
+        }
+
+        //TODO(jkosh44) Migrate builtin schemas
+        for system_id in changed_builtins {
+            self.catalog.set_system_object_version(system_id)?;
         }
 
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
@@ -4883,7 +4889,7 @@ pub async fn serve(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
-    let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
+    let (catalog, builtin_table_updates, changed_builtins) = Catalog::open(catalog::Config {
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
@@ -4938,7 +4944,8 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
-            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let bootstrap =
+                handle.block_on(coord.bootstrap(builtin_table_updates, changed_builtins));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
