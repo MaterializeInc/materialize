@@ -11,16 +11,19 @@
 
 mode cockroach
 
-# Creating a cluster without any options works.
-statement ok
+# Creating a cluster without any options does not work.
+statement error one of REMOTE or SIZE must be specified
 CREATE CLUSTER foo
+
+# Creating a remote cluster works.
+statement ok
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
 
-# Creating a virtual cluster works.
 statement ok
-CREATE CLUSTER bar VIRTUAL
+CREATE CLUSTER bar REMOTE r1 ('localhost:1235'), REMOTE r2 ('localhost:1236')
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -48,14 +51,11 @@ default
 
 # Test invalid option combinations.
 
-statement error VIRTUAL specified more than once
-CREATE CLUSTER baz VIRTUAL, VIRTUAL
-
 statement error SIZE specified more than once
 CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 
-statement error only one of VIRTUAL, REMOTE, and SIZE may be specified
-CREATE CLUSTER baz VIRTUAL, SIZE 'small'
+statement error only one of REMOTE or SIZE may be specified
+CREATE CLUSTER baz REMOTE r1 ('localhost:1234'), SIZE 'small'
 
 # Test `cluster` session variable.
 
@@ -74,6 +74,9 @@ bar
 
 statement ok
 CREATE MATERIALIZED VIEW v AS SELECT 1
+
+statement ok
+SET cluster = 'default'
 
 query T
 SELECT * FROM v
@@ -147,6 +150,9 @@ DROP CLUSTER baz
 statement error cannot drop cluster with active indexes or sinks
 DROP CLUSTER bar
 
+statement error cannot drop the default cluster
+DROP CLUSTER default CASCADE
+
 query TTTTTTTT
 SHOW INDEXES IN CLUSTER bar;
 ----
@@ -168,7 +174,7 @@ statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER baz
+CREATE CLUSTER baz REMOTE r1 ('localhost:1234')
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v

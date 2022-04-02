@@ -877,8 +877,6 @@ impl_display!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption {
-    /// The `VIRTUAL` option.
-    Virtual,
     /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
     Remote {
         /// The name.
@@ -897,7 +895,6 @@ pub enum ClusterOption {
 impl AstDisplay for ClusterOption {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::Virtual => f.write_str("VIRTUAL"),
             ClusterOption::Remote { name, hosts } => {
                 f.write_str("REMOTE ");
                 f.write_node(name);

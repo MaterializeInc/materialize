@@ -384,7 +384,7 @@ impl Connection {
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
                 let config: ComputeInstanceConfig = match config {
-                    None => ComputeInstanceConfig::Virtual,
+                    None => ComputeInstanceConfig::Local,
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
                 };

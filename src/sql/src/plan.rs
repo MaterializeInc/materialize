@@ -153,7 +153,7 @@ pub struct CreateComputeInstancePlan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeInstanceConfig {
-    Virtual,
+    Local,
     Remote {
         /// A map from replica name to hostnames.
         replicas: BTreeMap<String, BTreeSet<String>>,

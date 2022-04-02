@@ -370,12 +370,18 @@ impl CatalogState {
         id: ComputeInstanceId,
         name: String,
         config: ComputeInstanceConfig,
-        virtual_compute_host_introspection: Option<ComputeInstanceIntrospectionConfig>,
+        local_compute_introspection: Option<ComputeInstanceIntrospectionConfig>,
     ) {
-        let introspection = match &config {
-            ComputeInstanceConfig::Virtual => &virtual_compute_host_introspection,
-            ComputeInstanceConfig::Remote { introspection, .. } => introspection,
-            ComputeInstanceConfig::Managed { introspection, .. } => introspection,
+        let (config, introspection) = match config {
+            ComputeInstanceConfig::Local => (InstanceConfig::Local, local_compute_introspection),
+            ComputeInstanceConfig::Remote {
+                replicas,
+                introspection,
+            } => (InstanceConfig::Remote { replicas }, introspection),
+            ComputeInstanceConfig::Managed {
+                size,
+                introspection,
+            } => (InstanceConfig::Managed { size }, introspection),
         };
         let logging = match introspection {
             None => None,
@@ -444,17 +450,6 @@ impl CatalogState {
                     active_logs,
                 })
             }
-        };
-        let config = match config {
-            ComputeInstanceConfig::Virtual => InstanceConfig::Virtual,
-            ComputeInstanceConfig::Remote {
-                replicas,
-                introspection: _,
-            } => InstanceConfig::Remote { replicas },
-            ComputeInstanceConfig::Managed {
-                size,
-                introspection: _,
-            } => InstanceConfig::Managed { size },
         };
         self.compute_instances_by_id.insert(
             id,
@@ -1301,7 +1296,7 @@ impl Catalog {
                 // it preserves the existing behavior of the binary without
                 // inventing a bunch of new concepts just to support virtual
                 // clusters.
-                config.virtual_compute_host_introspection.take(),
+                config.local_compute_introspection.take(),
             );
         }
 
@@ -1426,7 +1421,7 @@ impl Catalog {
         let storage = storage::Connection::open(path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
-            virtual_compute_host_introspection: Some(ComputeInstanceIntrospectionConfig {
+            local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
                 granularity: Duration::from_secs(1),
                 debugging: false,
             }),
@@ -2169,6 +2164,9 @@ impl Catalog {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
+                    if name == "default" {
+                        coord_bail!("cannot drop the default cluster");
+                    }
                     tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     vec![Action::DropComputeInstance { name }]
@@ -2294,7 +2292,7 @@ impl Catalog {
                 Op::UpdateComputeInstanceConfig { id, config } => {
                     tx.update_compute_instance_config(id, &config)?;
                     let config = match config {
-                        ComputeInstanceConfig::Virtual => InstanceConfig::Virtual,
+                        ComputeInstanceConfig::Local => InstanceConfig::Local,
                         ComputeInstanceConfig::Remote {
                             replicas,
                             introspection,

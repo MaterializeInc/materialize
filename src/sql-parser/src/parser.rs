@@ -2476,8 +2476,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
-        match self.expect_one_of_keywords(&[VIRTUAL, REMOTE, SIZE, INTROSPECTION])? {
-            VIRTUAL => Ok(ClusterOption::Virtual),
+        match self.expect_one_of_keywords(&[REMOTE, SIZE, INTROSPECTION])? {
             REMOTE => {
                 let name = self.parse_identifier()?;
                 self.expect_token(&Token::LParen)?;

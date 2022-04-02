@@ -13,7 +13,7 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::pin::Pin;
 
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use tokio::sync::mpsc;
-use tracing::{error, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
@@ -47,7 +47,7 @@ pub mod replicated;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command<T = mz_repr::Timestamp> {
     /// A compute command.
-    Compute(ComputeCommand<T>, ComputeInstanceId),
+    Compute(ComputeCommand<T>),
     /// A storage command.
     Storage(StorageCommand<T>),
 }
@@ -64,8 +64,8 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 /// Instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
-    /// In-process virtual instance, likely the default instance
-    Virtual,
+    /// In-process instance.
+    Local,
     /// Out-of-process named instance
     Remote {
         /// A map from replica name to hostnames.
@@ -255,7 +255,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
             vec![self]
         } else {
             match self {
-                Command::Compute(ComputeCommand::CreateDataflows(dataflows), instance) => {
+                Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
                     let mut dataflows_parts = vec![Vec::new(); parts];
 
                     for dataflow in dataflows {
@@ -291,7 +291,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     }
                     dataflows_parts
                         .into_iter()
-                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x), instance))
+                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x)))
                         .collect()
                 }
                 Command::Storage(StorageCommand::Insert { id, updates }) => {
@@ -321,7 +321,7 @@ impl<T: timely::progress::Timestamp> Command<T> {
                     start.push(source.id);
                 }
             }
-            Command::Compute(command, _instance) => command.frontier_tracking(start, cease),
+            Command::Compute(command) => command.frontier_tracking(start, cease),
             _ => {
                 // Other commands have no known impact on frontier tracking.
             }
@@ -332,16 +332,8 @@ impl<T: timely::progress::Timestamp> Command<T> {
     /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            Command::Compute(command, _instance) => ComputeCommandKind::from(command).metric_name(),
+            Command::Compute(command) => ComputeCommandKind::from(command).metric_name(),
             Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
-        }
-    }
-
-    /// Obtain the instance for this command, or `None` to indicate a storage command.
-    pub fn instance(&self) -> Option<ComputeInstanceId> {
-        match self {
-            Command::Compute(_, instance) => Some(*instance),
-            Command::Storage(_) => None,
         }
     }
 }
@@ -556,19 +548,9 @@ pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response<T = mz_repr::Timestamp> {
     /// A compute response.
-    Compute(ComputeResponse<T>, ComputeInstanceId),
+    Compute(ComputeResponse<T>),
     /// A storage response.
     Storage(StorageResponse<T>),
-}
-
-impl<T> Response<T> {
-    /// Obtain the instance this response comes from, or `None` to indicate a storage response.
-    pub fn instance(&self) -> Option<ComputeInstanceId> {
-        match self {
-            Response::Compute(_, instance) => Some(*instance),
-            Response::Storage(_) => None,
-        }
-    }
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
@@ -768,14 +750,13 @@ where
 #[derive(Debug)]
 pub struct ComputeWrapperClient<C> {
     client: C,
-    instance: ComputeInstanceId,
 }
 
 impl<C> ComputeWrapperClient<C> {
     /// Constructs a new compute wrapper client for the specified compute
     /// instance ID.
-    pub fn new(client: C, instance: ComputeInstanceId) -> ComputeWrapperClient<C> {
-        ComputeWrapperClient { instance, client }
+    pub fn new(client: C) -> ComputeWrapperClient<C> {
+        ComputeWrapperClient { client }
     }
 }
 
@@ -786,15 +767,12 @@ where
     T: fmt::Debug + Send + 'static,
 {
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        self.client.send(Command::Compute(cmd, self.instance)).await
+        self.client.send(Command::Compute(cmd)).await
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
         match self.client.recv().await? {
-            Some(Response::Compute(res, instance)) => {
-                assert_eq!(self.instance, instance);
-                Ok(Some(res))
-            }
+            Some(Response::Compute(res)) => Ok(Some(res)),
             res @ Some(Response::Storage(_)) => {
                 panic!(
                     "ComputeWrapperClient unexpectedly received storage response: {:?}",
@@ -856,7 +834,7 @@ pub mod partitioned {
     use tokio_stream::StreamMap;
     use tracing::debug;
 
-    use crate::client::{ComputeInstanceId, GenericClient};
+    use crate::client::GenericClient;
     use crate::TailResponse;
 
     use super::{Client, ComputeResponse, StorageResponse};
@@ -872,8 +850,11 @@ pub mod partitioned {
         pub shards: Vec<C>,
         /// The number of errors observed from underlying clients.
         seen_errors: usize,
-        /// The state per compute instance. `None` represents Storage.
-        state: HashMap<Option<ComputeInstanceId>, PartitionedClientState<T>>,
+        /// The state of the client.
+        ///
+        /// May be reset for compute instances when a `CreateInstance`
+        /// command is observed.
+        state: PartitionedClientState<T>,
     }
 
     impl<C, T> Partitioned<C, T>
@@ -882,13 +863,10 @@ pub mod partitioned {
     {
         /// Create a client partitioned across multiple client shards.
         pub fn new(shards: Vec<C>) -> Self {
-            // TODO: Have Storage announce its creation like compute.
-            let mut state: HashMap<_, _> = Default::default();
-            state.insert(None, PartitionedClientState::new(shards.len()));
-
             Self {
+                // TODO: Have Storage announce its creation like compute.
+                state: PartitionedClientState::new(shards.len()),
                 shards,
-                state,
                 seen_errors: 0,
             }
         }
@@ -901,18 +879,13 @@ pub mod partitioned {
         T: timely::progress::Timestamp + Copy,
     {
         async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            let instance = cmd.instance();
             // A `CreateInstance` command indicates re-initialization.
-            if let Command::Compute(ComputeCommand::CreateInstance(_), _instance) = &cmd {
-                self.state
-                    .insert(instance, PartitionedClientState::new(self.shards.len()));
+            if let Command::Compute(ComputeCommand::CreateInstance(_)) = &cmd {
+                self.state = PartitionedClientState::new(self.shards.len());
             }
-            self.state
-                .get_mut(&instance)
-                .expect("command for non-existing instance")
-                .observe_command(&cmd);
-            if let Command::Compute(ComputeCommand::DropInstance, _instance) = &cmd {
-                self.state.remove(&instance);
+            self.state.observe_command(&cmd);
+            if let Command::Compute(ComputeCommand::DropInstance) = &cmd {
+                self.state = PartitionedClientState::new(self.shards.len());
             }
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
@@ -942,19 +915,11 @@ pub mod partitioned {
                             return Ok(None);
                         }
                     }
-                    Ok(response) => match self.state.get_mut(&response.instance()) {
-                        Some(state) => {
-                            if let Some(response) = state.absorb_response(index, response) {
-                                return response.map(Some);
-                            }
+                    Ok(response) => {
+                        if let Some(response) = self.state.absorb_response(index, response) {
+                            return response.map(Some);
                         }
-                        None => {
-                            debug!(
-                                "Response for missing instance {instance:?}",
-                                instance = response.instance()
-                            );
-                        }
-                    },
+                    }
                 }
             }
             // Indicate completion of the communication.
@@ -971,19 +936,14 @@ pub mod partitioned {
     /// workers in order to present as a single worker.
     pub struct PartitionedClientState<T = mz_repr::Timestamp> {
         /// Upper frontiers for indexes, sources, and sinks.
-        ///
-        /// The `Option<ComputeInstanceId>` uses `None` to represent Storage.
-        uppers: HashMap<(GlobalId, Option<ComputeInstanceId>), MutableAntichain<T>>,
+        uppers: HashMap<GlobalId, MutableAntichain<T>>,
         /// Pending responses for a peek; returnable once all are available.
         peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
         /// Number of parts the state machine represents.
         parts: usize,
         /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
         /// back until their timestamps are complete.
-        pending_tails: HashMap<
-            (GlobalId, Option<ComputeInstanceId>),
-            Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>,
-        >,
+        pending_tails: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
     }
 
     // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
@@ -1019,21 +979,16 @@ pub mod partitioned {
             // Temporary storage for identifiers to add to and remove from frontier tracking.
             let mut start = Vec::new();
             let mut cease = Vec::new();
-            let instance = if let Command::Compute(_, instance) = command {
-                Some(*instance)
-            } else {
-                None
-            };
             command.frontier_tracking(&mut start, &mut cease);
             // Apply the determined effects of the command to `self.uppers`.
             for id in start.into_iter() {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
                 frontier.update_iter(Some((T::minimum(), self.parts as i64)));
-                let previous = self.uppers.insert((id, instance), frontier);
+                let previous = self.uppers.insert(id, frontier);
                 assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
             }
             for id in cease.into_iter() {
-                let previous = self.uppers.remove(&(id, instance));
+                let previous = self.uppers.remove(&id);
                 if previous.is_none() {
                     debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
                 }
@@ -1047,9 +1002,9 @@ pub mod partitioned {
             message: Response<T>,
         ) -> Option<Result<Response<T>, anyhow::Error>> {
             match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
+                Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
                     for (id, changes) in list.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(&(*id, Some(instance))) {
+                        if let Some(frontier) = self.uppers.get_mut(id) {
                             let iter = frontier.update_iter(changes.drain());
                             changes.extend(iter);
                         } else {
@@ -1072,16 +1027,13 @@ pub mod partitioned {
                     if list.is_empty() {
                         None
                     } else {
-                        Some(Ok(Response::Compute(
-                            ComputeResponse::FrontierUppers(list),
-                            instance,
-                        )))
+                        Some(Ok(Response::Compute(ComputeResponse::FrontierUppers(list))))
                     }
                 }
                 // Avoid multiple retractions of minimum time, to present as updates from one worker.
                 Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
                     for (id, changes) in feedback.changes.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(&(*id, None)) {
+                        if let Some(frontier) = self.uppers.get_mut(id) {
                             let iter = frontier.update_iter(changes.drain());
                             changes.extend(iter);
                         } else {
@@ -1108,7 +1060,7 @@ pub mod partitioned {
                 Response::Storage(StorageResponse::LinearizedTimestamps(feedback)) => Some(Ok(
                     Response::Storage(StorageResponse::LinearizedTimestamps(feedback)),
                 )),
-                Response::Compute(ComputeResponse::PeekResponse(uuid, response), instance) => {
+                Response::Compute(ComputeResponse::PeekResponse(uuid, response)) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
@@ -1132,24 +1084,19 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&uuid);
-                        Some(Ok(Response::Compute(
-                            ComputeResponse::PeekResponse(uuid, response),
-                            instance,
-                        )))
+                        Some(Ok(Response::Compute(ComputeResponse::PeekResponse(
+                            uuid, response,
+                        ))))
                     } else {
                         None
                     }
                 }
-                Response::Compute(ComputeResponse::TailResponse(id, response), instance) => {
-                    let maybe_entry = self
-                        .pending_tails
-                        .entry((id, Some(instance)))
-                        .or_insert_with(|| {
-                            let mut frontier = MutableAntichain::new();
-                            frontier
-                                .update_iter(std::iter::once((T::minimum(), self.parts as i64)));
-                            Some((frontier, Vec::new()))
-                        });
+                Response::Compute(ComputeResponse::TailResponse(id, response)) => {
+                    let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
+                        let mut frontier = MutableAntichain::new();
+                        frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
+                        Some((frontier, Vec::new()))
+                    });
 
                     let entry = match maybe_entry {
                         None => {
@@ -1186,30 +1133,24 @@ pub mod partitioned {
                                     }
                                 }
                                 entry.1 = keep;
-                                Some(Ok(Response::Compute(
-                                    ComputeResponse::TailResponse(
-                                        id,
-                                        TailResponse::Batch(TailBatch {
-                                            lower: old_frontier,
-                                            upper: new_frontier,
-                                            updates: ship,
-                                        }),
-                                    ),
-                                    instance,
-                                )))
+                                Some(Ok(Response::Compute(ComputeResponse::TailResponse(
+                                    id,
+                                    TailResponse::Batch(TailBatch {
+                                        lower: old_frontier,
+                                        upper: new_frontier,
+                                        updates: ship,
+                                    }),
+                                ))))
                             } else {
                                 None
                             }
                         }
                         TailResponse::DroppedAt(frontier) => {
                             *maybe_entry = None;
-                            Some(Ok(Response::Compute(
-                                ComputeResponse::TailResponse(
-                                    id,
-                                    TailResponse::DroppedAt(frontier),
-                                ),
-                                instance,
-                            )))
+                            Some(Ok(Response::Compute(ComputeResponse::TailResponse(
+                                id,
+                                TailResponse::DroppedAt(frontier),
+                            ))))
                         }
                     }
                 }
@@ -1515,111 +1456,50 @@ mod channel {
     }
 }
 
-/// A handle to a compute host for virtual compute instances.
-pub struct VirtualComputeHost<T> {
-    command_tx: mpsc::UnboundedSender<Command<T>>,
-    compute_host_tx: mpsc::UnboundedSender<ComputeHostCommand<T>>,
-}
-
-impl<T> VirtualComputeHost<T>
-where
-    T: fmt::Debug + Send + Sync + 'static,
-{
-    /// Creates a new instance in the virtual compute host.
-    ///
-    /// The behavior is undefined if a compute instance with the same ID already
-    /// exists on the host.
-    pub fn create_instance(&self, instance: ComputeInstanceId) -> Box<dyn ComputeClient<T>> {
-        let (client, response_tx) = channel::ChannelClient::new(
-            self.command_tx.clone(),
-            Box::new(move |command| Command::Compute(command, instance)),
-        );
-        self.compute_host_tx
-            .send(ComputeHostCommand::CreateInstance(instance, response_tx))
-            .unwrap();
-        Box::new(client)
-    }
-
-    /// Drops an existing instance on the virtual compute host.
-    pub fn drop_instance(&self, instance: ComputeInstanceId) {
-        self.compute_host_tx
-            .send(ComputeHostCommand::DropInstance(instance))
-            .unwrap();
-    }
-}
-
-#[derive(Debug)]
-enum ComputeHostCommand<T> {
-    CreateInstance(ComputeInstanceId, mpsc::UnboundedSender<ComputeResponse<T>>),
-    DropInstance(ComputeInstanceId),
-}
-
 /// Splits a dataflow client into a storage half and a compute half.
-///
-/// The compute half is a `VirtualComputeHost` which can be used to create
-/// and destroy virtual clusters dynamically.
 ///
 /// If the underlying dataflow server is not running both a storage and compute
 /// runtime, it is the caller's responsibility to ignore the inactive half.
-pub fn split_client<C, T>(mut client: C) -> (Box<dyn StorageClient<T>>, VirtualComputeHost<T>)
+pub fn split_client<C, T>(mut client: C) -> (Box<dyn StorageClient<T>>, Box<dyn ComputeClient<T>>)
 where
     C: Client<T> + Send + 'static,
     T: fmt::Debug + Send + Sync + 'static,
 {
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
-    let (compute_host_tx, mut compute_host_rx) = mpsc::unbounded_channel();
     let (storage_client, storage_response_tx) = channel::ChannelClient::new(
         command_tx.clone(),
         Box::new(|command| Command::Storage(command)),
     );
-    let virtual_compute_host = VirtualComputeHost {
-        command_tx,
-        compute_host_tx,
-    };
+    let (compute_client, compute_response_tx) =
+        channel::ChannelClient::new(command_tx, Box::new(|command| Command::Compute(command)));
     mz_ore::task::spawn(|| "split_client", async move {
-        let mut instances = HashMap::new();
-        let mut compute_host_alive = true;
-        let mut clients_alive = true;
-        while compute_host_alive && clients_alive {
+        let mut alive = true;
+        while alive {
             tokio::select! {
                 biased;
 
-                cmd = compute_host_rx.recv() => match cmd {
-                    Some(ComputeHostCommand::CreateInstance(instance, response_tx)) => {
-                        instances.insert(instance, response_tx);
+                cmd = command_rx.recv() => match cmd {
+                    None => alive = false,
+                    Some(cmd) => match client.send(cmd).await {
+                        Ok(_) => (),
+                        Err(_) => alive = false,
                     }
-                    Some(ComputeHostCommand::DropInstance(instance)) => {
-                        instances.remove(&instance);
-                    }
-                    None => compute_host_alive = false,
-                },
-
-                Some(cmd) = command_rx.recv() => match client.send(cmd).await {
-                    Ok(_) => (),
-                    Err(_) => clients_alive = false,
                 },
 
                 response = client.recv() => match response {
                     Ok(Some(Response::Storage(res))) => {
                         let _ = storage_response_tx.send(res);
                     }
-                    Ok(Some(Response::Compute(res, instance))) => match instances.get(&instance) {
-                        None => {
-                            error!("received response {res:?} for non-existent compute instance {instance:?}");
-                        }
-                        Some(response_tx) => {
-                            let _ = response_tx.send(res);
-                        }
+                    Ok(Some(Response::Compute(res))) => {
+                        let _ = compute_response_tx.send(res);
                     },
                     error @ Err(_) => {
                         error.unwrap();
                     },
-                    Ok(None) => {
-                        // Nothing, is what the prior code did.
-                    }
+                    Ok(None) => alive = false,
                 },
             }
         }
     });
-    (Box::new(storage_client), virtual_compute_host)
+    (Box::new(storage_client), Box::new(compute_client))
 }

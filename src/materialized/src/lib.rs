@@ -380,14 +380,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let (dataflow_server, dataflow_controller) = match &config.storage {
         StorageConfig::Local => {
             let (dataflow_server, dataflow_client) = mz_dataflow::serve(dataflow_config)?;
-            let (storage_client, virtual_compute_host) =
+            let (storage_client, local_compute) =
                 mz_dataflow_types::client::split_client(dataflow_client);
             let storage_controller =
                 mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
-                virtual_compute_host,
+                local_compute,
             );
             (dataflow_server, dataflow_controller)
         }
@@ -409,7 +409,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 mz_dataflow::serve_boundary(dataflow_config, move |index| {
                     boundary.lock().unwrap()[index % workers].take().unwrap()
                 })?;
-            let (_, virtual_compute_host) = mz_dataflow_types::client::split_client(compute_client);
+            let (_, local_compute) = mz_dataflow_types::client::split_client(compute_client);
             let storage_client = Box::new(StorageWrapperClient::new({
                 let mut client = RemoteClient::new(&[controller_addr]);
                 client.connect().await;
@@ -420,7 +420,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
-                virtual_compute_host,
+                local_compute,
             );
             (compute_server, dataflow_controller)
         }
