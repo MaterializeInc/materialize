@@ -6,6 +6,8 @@ menu:
         parent: "demos"
 ---
 
+{{% demos-warning %}}
+
 **tl;dr** Materialize can enable real-time monitoring within business
 intelligence tools, and we have a [demo](#run-the-demo) showing you that it's
 feasible.
