@@ -125,6 +125,7 @@ steps:
   - id: persistence
     label: Persistence tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -133,6 +134,7 @@ steps:
   - id: persistence-failpoints
     label: Persistence failpoints
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -279,6 +281,7 @@ steps:
   - id: debezium-postgres
     label: Debezium Postgres tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -289,6 +292,7 @@ steps:
   - id: debezium-sql-server
     label: Debezium SQL Server tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -299,6 +303,7 @@ steps:
   - id: debezium-mysql
     label: Debezium MySQL tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -309,6 +314,7 @@ steps:
   - id: pg-cdc
     label: Postgres CDC tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/pg-cdc]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -318,6 +324,7 @@ steps:
   - id: pg-cdc-resumption
     label: Postgres CDC resumption tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/pg-cdc-resumption]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -327,6 +334,7 @@ steps:
   - id: s3-resumption
     label: S3 resumption tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     inputs: [test/s3-resumption]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
@@ -336,6 +344,7 @@ steps:
   - id: kafka-resumption
     label: Kafka resumption tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -344,6 +353,7 @@ steps:
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -352,6 +362,7 @@ steps:
   - id: metrics
     label: mz_metrics tests
     depends_on: build-x86_64
+    timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
