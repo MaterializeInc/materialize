@@ -64,8 +64,8 @@ impl PeekResponse {
 pub enum TailResponse<T = mz_repr::Timestamp> {
     /// A batch of updates over a non-empty interval of time.
     Batch(TailBatch<T>),
-    /// The TAIL dataflow was dropped before completing. Indicates the end.
-    Dropped,
+    /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
+    DroppedAt(Antichain<T>),
 }
 
 /// A batch of updates for the interval `[lower, upper)`.

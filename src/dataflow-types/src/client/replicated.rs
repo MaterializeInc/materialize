@@ -272,7 +272,7 @@ where
                                         )));
                                     }
                                 }
-                                TailResponse::Dropped => {
+                                TailResponse::DroppedAt(frontier) => {
                                     // Introduce a new terminal frontier to suppress all future responses.
                                     // We cannot simply remove the entry, as we currently create new entries in response
                                     // to observed responses; if we pre-load the entries in response to commands we can
@@ -280,7 +280,7 @@ where
                                     self.tails.insert(id, Antichain::new());
                                     return Ok(Some(ComputeResponse::TailResponse(
                                         id,
-                                        TailResponse::Dropped,
+                                        TailResponse::DroppedAt(frontier),
                                     )));
                                 }
                             }

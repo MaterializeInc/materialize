@@ -110,7 +110,7 @@ impl PendingTail {
                 }
                 upper.is_empty()
             }
-            TailResponse::Dropped => {
+            TailResponse::DroppedAt(_frontier) => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
                 true
             }

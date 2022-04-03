@@ -247,12 +247,33 @@ where
                         .remove_peeks(std::iter::once(*uuid))
                         .await;
                 }
+                Response::Compute(ComputeResponse::TailResponse(global_id, response), instance) => {
+                    use crate::{TailBatch, TailResponse};
+                    let mut changes = timely::progress::ChangeBatch::new();
+                    match response {
+                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                            changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                            changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                        }
+                        TailResponse::DroppedAt(frontier) => {
+                            // The tail will not be written to again, but we should not confuse that
+                            // with the source of the TAIL being complete through this time.
+                            changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                        }
+                    }
+                    self.compute_mut(*instance)
+                        .expect("Reference to absent instance")
+                        .update_write_frontiers(&[(*global_id, changes)])
+                        .await;
+                }
                 Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
                     self.storage_controller
                         .update_write_frontiers(&feedback.changes)
                         .await;
                 }
-                _ => {}
+                Response::Storage(StorageResponse::LinearizedTimestamps(_)) => {
+                    // Nothing to do here.
+                }
             }
         }
         Ok(response)
