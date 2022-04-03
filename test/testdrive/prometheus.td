@@ -37,13 +37,6 @@ $ set-sql-timeout duration=60s
   ORDER BY time DESC LIMIT 1
 true
 
-> SELECT value FROM mz_metrics WHERE metric = 'mz_worker_pending_peeks_queue_size'
-  ORDER BY time DESC LIMIT 1
-0
-
-> SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_worker_command_queue_size'
-true
-
 > SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_arrangement_maintenance_active_info'
 true
 

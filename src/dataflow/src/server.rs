@@ -31,8 +31,8 @@ use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::Peek;
 use mz_dataflow_types::client::{
-    ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient, LocalStorageClient,
-    StorageCommand, StorageResponse,
+    Command, ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient, LocalStorageClient,
+    Sender, StorageResponse,
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::PeekResponse;
@@ -158,33 +158,21 @@ pub fn serve_boundary<
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
+    let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| crossbeam_channel::unbounded())
+        .unzip();
     let (storage_response_txs, storage_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| mpsc::unbounded_channel())
-        .unzip();
-    let (storage_command_txs, storage_command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| crossbeam_channel::unbounded())
         .unzip();
     let (compute_response_txs, compute_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| mpsc::unbounded_channel())
         .unzip();
-    let (compute_command_txs, compute_command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| crossbeam_channel::unbounded())
-        .unzip();
     // Mutexes around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
-    let storage_channels: Mutex<Vec<_>> = Mutex::new(
-        storage_response_txs
-            .into_iter()
-            .zip(storage_command_rxs)
-            .map(Some)
-            .collect(),
-    );
-    let compute_channels: Mutex<Vec<_>> = Mutex::new(
-        compute_response_txs
-            .into_iter()
-            .zip(compute_command_rxs)
-            .map(Some)
-            .collect(),
-    );
+    let command_channels: Mutex<Vec<_>> = Mutex::new(command_rxs.into_iter().map(Some).collect());
+    let storage_response_channels: Mutex<Vec<_>> =
+        Mutex::new(storage_response_txs.into_iter().map(Some).collect());
+    let compute_response_channels: Mutex<Vec<_>> =
+        Mutex::new(compute_response_txs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
@@ -195,11 +183,14 @@ pub fn serve_boundary<
         let timely_worker_peers = timely_worker.peers();
         let (storage_boundary, compute_boundary) = create_boundary(timely_worker_index);
         let _tokio_guard = tokio_executor.enter();
-        let (storage_response_tx, storage_command_rx) = storage_channels.lock().unwrap()
+        let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
+            .take()
+            .unwrap();
+        let storage_response_tx = storage_response_channels.lock().unwrap()
             [timely_worker_index % config.workers]
             .take()
             .unwrap();
-        let (compute_response_tx, compute_command_rx) = compute_channels.lock().unwrap()
+        let compute_response_tx = compute_response_channels.lock().unwrap()
             [timely_worker_index % config.workers]
             .take()
             .unwrap();
@@ -207,6 +198,7 @@ pub fn serve_boundary<
             metrics_bundle.clone();
         Worker {
             timely_worker,
+            command_rx,
             compute_state: None,
             storage_state: StorageState {
                 table_state: HashMap::new(),
@@ -226,10 +218,8 @@ pub fn serve_boundary<
                 timely_worker_peers,
             },
             storage_boundary,
-            storage_command_rx,
             storage_response_tx,
             compute_boundary,
-            compute_command_rx,
             compute_response_tx,
             metrics_bundle: metrics_bundle.clone(),
         }
@@ -243,11 +233,31 @@ pub fn serve_boundary<
         .collect::<Vec<_>>();
     let storage_client = LocalClient::new(
         storage_response_rxs,
-        storage_command_txs,
+        command_txs
+            .iter()
+            .map(|tx| {
+                let tx = tx.clone();
+                Sender::new(move |cmd| {
+                    tx.send(Command::Storage(cmd))
+                        .expect("worker command receiver should not drop first")
+                })
+            })
+            .collect(),
         worker_threads.clone(),
     );
-    let compute_client =
-        LocalClient::new(compute_response_rxs, compute_command_txs, worker_threads);
+    let compute_client = LocalClient::new(
+        compute_response_rxs,
+        command_txs
+            .into_iter()
+            .map(|tx| {
+                Sender::new(move |cmd| {
+                    tx.send(Command::Compute(cmd))
+                        .expect("worker command receiver should not drop first")
+                })
+            })
+            .collect(),
+        worker_threads,
+    );
     let server = Server {
         _worker_guards: worker_guards,
     };
@@ -266,20 +276,18 @@ where
 {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
+    /// The channel from which commands are drawn.
+    command_rx: crossbeam_channel::Receiver<Command>,
     /// The state associated with rendering dataflows.
     compute_state: Option<ComputeState>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
     /// The boundary between storage and compute layers, storage side.
     storage_boundary: SC,
-    /// The channel from which storage commands are drawn.
-    storage_command_rx: crossbeam_channel::Receiver<StorageCommand>,
     /// The channel over which storage responses are reported.
     storage_response_tx: mpsc::UnboundedSender<StorageResponse>,
     /// The boundary between storage and compute layers, compute side.
     compute_boundary: CR,
-    /// The channel from which compute commands are drawn.
-    compute_command_rx: crossbeam_channel::Receiver<ComputeCommand>,
     /// The channel over which compute responses are reported.
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
@@ -294,9 +302,8 @@ where
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
-        let mut storage_shutdown = false;
-        let mut compute_shutdown = false;
-        while !storage_shutdown || !compute_shutdown {
+        let mut shutdown = false;
+        while !shutdown {
             // Enable trace compaction.
             if let Some(compute_state) = &mut self.compute_state {
                 compute_state.traces.maintenance();
@@ -316,20 +323,23 @@ where
             self.activate_storage()
                 .report_conditional_frontier_progress();
 
-            // Handle any received storage commands.
-            let mut storage_cmds = vec![];
-            storage_shutdown = drain_channel(&self.storage_command_rx, &mut storage_cmds);
-            for cmd in storage_cmds {
-                self.activate_storage().handle_storage_command(cmd);
+            // Handle any received commands.
+            let mut cmds = vec![];
+            let mut empty = false;
+            while !empty {
+                match self.command_rx.try_recv() {
+                    Ok(cmd) => cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        shutdown = true;
+                    }
+                }
             }
-
-            // Handle any received compute commands.
-            let mut compute_cmds = vec![];
-            compute_shutdown = drain_channel(&self.compute_command_rx, &mut compute_cmds);
-            for cmd in compute_cmds {
-                let mut should_drop = false;
+            for cmd in cmds {
+                let mut should_drop_compute = false;
                 match &cmd {
-                    ComputeCommand::CreateInstance(_logging) => {
+                    Command::Compute(ComputeCommand::CreateInstance(_logging)) => {
                         self.compute_state = Some(ComputeState {
                             traces: TraceManager::new(
                                 self.metrics_bundle.3.clone(),
@@ -346,13 +356,15 @@ where
                             materialized_logger: None,
                         });
                     }
-                    ComputeCommand::DropInstance => should_drop = true,
+                    Command::Compute(ComputeCommand::DropInstance) => {
+                        should_drop_compute = true;
+                    }
                     _ => (),
                 }
 
-                self.activate_compute().unwrap().handle_compute_command(cmd);
+                self.handle_command(cmd);
 
-                if should_drop {
+                if should_drop_compute {
                     self.compute_state = None;
                 }
             }
@@ -386,6 +398,13 @@ where
             storage_state: &mut self.storage_state,
             response_tx: &mut self.storage_response_tx,
             boundary: &mut self.storage_boundary,
+        }
+    }
+
+    fn handle_command(&mut self, cmd: Command) {
+        match cmd {
+            Command::Compute(cmd) => self.activate_compute().unwrap().handle_compute_command(cmd),
+            Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }
     }
 }
@@ -575,15 +594,5 @@ impl PendingPeek {
         }
 
         Ok(results)
-    }
-}
-
-fn drain_channel<T>(rx: &crossbeam_channel::Receiver<T>, out: &mut Vec<T>) -> bool {
-    loop {
-        match rx.try_recv() {
-            Ok(msg) => out.push(msg),
-            Err(TryRecvError::Empty) => break false,
-            Err(TryRecvError::Disconnected) => break true,
-        }
     }
 }
