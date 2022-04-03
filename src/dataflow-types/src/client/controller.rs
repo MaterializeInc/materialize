@@ -35,8 +35,8 @@ use mz_orchestrator::{Orchestrator, ServiceConfig};
 
 use crate::client::GenericClient;
 use crate::client::{
-    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
-    InstanceConfig, RemoteClient, Response, StorageResponse,
+    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, InstanceConfig,
+    RemoteClient, Response, StorageResponse,
 };
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
@@ -108,7 +108,6 @@ where
                 let mut compute_instance = self.compute_mut(instance).unwrap();
                 for (name, hosts) in replicas {
                     let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-                    let client = ComputeWrapperClient::new(client);
                     let client: Box<dyn ComputeClient<T>> = Box::new(client);
                     compute_instance.add_replica(name, client).await;
                 }
@@ -153,7 +152,6 @@ where
                     .map(|h| format!("{h}:6876"))
                     .collect();
                 let client = RemoteClient::new(&addrs);
-                let client = ComputeWrapperClient::new(client);
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance)
                     .unwrap()

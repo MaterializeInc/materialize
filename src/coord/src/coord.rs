@@ -2110,9 +2110,8 @@ impl Coordinator {
             compute_instance.remove_replica(&name);
         }
         for (name, hosts) in replicas_to_add {
-            use mz_dataflow_types::client::{ComputeClient, ComputeWrapperClient, RemoteClient};
+            use mz_dataflow_types::client::{ComputeClient, RemoteClient};
             let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-            let client = ComputeWrapperClient::new(client);
             let client: Box<dyn ComputeClient<_>> = Box::new(client);
             compute_instance.add_replica(name, client).await;
         }

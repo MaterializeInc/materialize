@@ -24,7 +24,7 @@ use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_coord::PersistConfig;
-use mz_dataflow_types::client::{RemoteClient, StorageWrapperClient};
+use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig};
@@ -379,15 +379,16 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     };
     let (dataflow_server, dataflow_controller) = match &config.storage {
         StorageConfig::Local => {
-            let (dataflow_server, dataflow_client) = mz_dataflow::serve(dataflow_config)?;
-            let (storage_client, local_compute) =
-                mz_dataflow_types::client::split_client(dataflow_client);
+            let (dataflow_server, storage_client, local_compute_client) =
+                mz_dataflow::serve(dataflow_config)?;
             let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
+                mz_dataflow_types::client::controller::storage::Controller::new(Box::new(
+                    storage_client,
+                ));
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
-                local_compute,
+                Box::new(local_compute_client),
             );
             (dataflow_server, dataflow_controller)
         }
@@ -405,22 +406,21 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            let (compute_server, compute_client) =
+            let (compute_server, _inactive_storage_client, local_compute_client) =
                 mz_dataflow::serve_boundary(dataflow_config, move |index| {
                     boundary.lock().unwrap()[index % workers].take().unwrap()
                 })?;
-            let (_, local_compute) = mz_dataflow_types::client::split_client(compute_client);
-            let storage_client = Box::new(StorageWrapperClient::new({
+            let storage_client = Box::new({
                 let mut client = RemoteClient::new(&[controller_addr]);
                 client.connect().await;
                 client
-            }));
+            });
             let storage_controller =
                 mz_dataflow_types::client::controller::storage::Controller::new(storage_client);
             let dataflow_controller = mz_dataflow_types::client::Controller::new(
                 orchestrator,
                 storage_controller,
-                local_compute,
+                Box::new(local_compute_client),
             );
             (compute_server, dataflow_controller)
         }

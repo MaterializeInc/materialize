@@ -117,7 +117,7 @@ mod boundary_hook {
 
     use async_trait::async_trait;
 
-    use mz_dataflow_types::client::{Command, GenericClient, Response, StorageCommand};
+    use mz_dataflow_types::client::{GenericClient, StorageCommand, StorageResponse};
     use mz_dataflow_types::sources::SourceDesc;
     use mz_dataflow_types::{SourceInstanceDesc, SourceInstanceId, SourceInstanceRequest};
     use mz_expr::GlobalId;
@@ -157,14 +157,14 @@ mod boundary_hook {
     }
 
     #[async_trait]
-    impl<C, T> GenericClient<Command<T>, Response<T>> for BoundaryHook<C, T>
+    impl<C, T> GenericClient<StorageCommand<T>, StorageResponse<T>> for BoundaryHook<C, T>
     where
-        C: GenericClient<Command<T>, Response<T>>,
+        C: GenericClient<StorageCommand<T>, StorageResponse<T>>,
         T: fmt::Debug + Clone + Send,
     {
-        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+        async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
             let mut render_requests = Vec::new();
-            if let Command::Storage(StorageCommand::CreateSources(sources)) = &cmd {
+            if let StorageCommand::CreateSources(sources) = &cmd {
                 for source in sources.iter() {
                     if let Some(requests) = self.pending.remove(&source.id) {
                         render_requests.extend(requests.into_iter().map(|request| {
@@ -194,14 +194,12 @@ mod boundary_hook {
             self.client.send(cmd).await?;
             if !render_requests.is_empty() {
                 self.client
-                    .send(Command::Storage(StorageCommand::RenderSources(
-                        render_requests,
-                    )))
+                    .send(StorageCommand::RenderSources(render_requests))
                     .await?;
             }
             Ok(())
         }
-        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+        async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
             // The receive logic draws from either the responses of the client, or requests for source instantiation.
             let mut response = None;
             while response.is_none() {
@@ -221,7 +219,7 @@ mod boundary_hook {
                                             arguments: request.arguments,
                                         })).into_iter().collect(),
                                     )]);
-                                    self.client.send(Command::Storage(command)).await.unwrap()
+                                    self.client.send(command).await.unwrap()
                                 } else {
                                     self.pending.entry(request.source_id).or_insert(Vec::new()).push(request);
                                 }
