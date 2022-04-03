@@ -29,7 +29,7 @@ types-prettytable==2.1.2
 types-psutil==5.8.20
 types-PyMYSQL==1.0.14
 types-PyYAML==6.0.5
-types-requests==2.27.15
+types-requests==2.27.16
 types-setuptools==57.4.11
 types-toml==0.10.4
 types-pkg-resources==0.1.3
