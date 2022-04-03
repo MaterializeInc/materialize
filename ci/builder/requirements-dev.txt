@@ -6,7 +6,7 @@
 # variety of platforms, including M1 Macs.
 
 black==22.1.0
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.21.27
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.21.32
 boto3==1.21.27
 docker==5.0.3
 ec2instanceconnectcli==1.0.2
