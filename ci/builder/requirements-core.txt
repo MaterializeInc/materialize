@@ -4,4 +4,4 @@
 # add to this list without consulting with @benesch!
 
 pip==22.0.4
-setuptools==61.2.0
+setuptools==61.3.1
