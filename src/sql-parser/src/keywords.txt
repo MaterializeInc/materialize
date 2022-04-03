@@ -305,7 +305,6 @@ Varchar
 Varying
 View
 Views
-Virtual
 Warning
 When
 Where

@@ -233,7 +233,7 @@ default    sink10      user  nonvolatile
   WITH (partition_count=-1, replication_factor=-1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE CLUSTER clstr
+> CREATE CLUSTER clstr REMOTE r1 ('localhost:1234')
 
 > CREATE SINK clstr_sink
   IN CLUSTER clstr FROM src

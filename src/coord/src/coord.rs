@@ -818,7 +818,7 @@ impl Coordinator {
 
     async fn message_worker(&mut self, message: DataflowResponse) {
         match message {
-            DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response), _instance) => {
+            DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response)) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
                 if let Some(PendingPeek {
@@ -841,10 +841,7 @@ impl Coordinator {
                     warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
-            DataflowResponse::Compute(
-                ComputeResponse::TailResponse(sink_id, response),
-                _instance,
-            ) => {
+            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -855,7 +852,7 @@ impl Coordinator {
                     }
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::FrontierUppers(_updates), _instance) => {}
+            DataflowResponse::Compute(ComputeResponse::FrontierUppers(_updates)) => {}
             DataflowResponse::Storage(StorageResponse::TimestampBindings(
                 TimestampBindingFeedback { bindings, changes },
             )) => {
@@ -2068,7 +2065,7 @@ impl Coordinator {
         self.catalog_transact(ops, |tx| {
             let new_config = &tx.catalog.get_compute_instance(plan.id).config;
             match (old_config, new_config) {
-                (InstanceConfig::Virtual, InstanceConfig::Virtual) => Ok(()),
+                (InstanceConfig::Local, InstanceConfig::Local) => Ok(()),
                 (
                     InstanceConfig::Remote {
                         replicas: old_replicas,
@@ -2115,7 +2112,7 @@ impl Coordinator {
         for (name, hosts) in replicas_to_add {
             use mz_dataflow_types::client::{ComputeClient, ComputeWrapperClient, RemoteClient};
             let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-            let client = ComputeWrapperClient::new(client, plan.id);
+            let client = ComputeWrapperClient::new(client);
             let client: Box<dyn ComputeClient<_>> = Box::new(client);
             compute_instance.add_replica(name, client).await;
         }
@@ -4887,7 +4884,7 @@ pub async fn serve(
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
-        virtual_compute_host_introspection: logging.as_ref().map(|logging| {
+        local_compute_introspection: logging.as_ref().map(|logging| {
             ComputeInstanceIntrospectionConfig {
                 granularity: logging.granularity,
                 debugging: logging.log_logging,

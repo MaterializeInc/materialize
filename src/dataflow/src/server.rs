@@ -10,7 +10,7 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -29,8 +29,8 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
+use mz_dataflow_types::client::Peek;
 use mz_dataflow_types::client::{Command, ComputeCommand, LocalClient, Response};
-use mz_dataflow_types::client::{ComputeInstanceId, Peek};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::PeekResponse;
 use mz_ore::metrics::MetricsRegistry;
@@ -185,7 +185,7 @@ pub fn serve_boundary<
             metrics_bundle.clone();
         Worker {
             timely_worker,
-            compute_state: BTreeMap::default(),
+            compute_state: None,
             storage_state: StorageState {
                 table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
@@ -243,7 +243,7 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
-    compute_state: BTreeMap<ComputeInstanceId, ComputeState>,
+    compute_state: Option<ComputeState>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
     /// The boundary between storage and compute layers, storage side.
@@ -269,17 +269,11 @@ where
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
-        let mut compute_instances = Vec::new();
-
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            for instance in compute_instances.iter() {
-                self.compute_state
-                    .get_mut(&instance)
-                    .unwrap()
-                    .traces
-                    .maintenance();
+            if let Some(compute_state) = &mut self.compute_state {
+                compute_state.traces.maintenance();
             }
 
             // Ask Timely to execute a unit of work. If Timely decides there's
@@ -289,9 +283,8 @@ where
             self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
-            for instance_id in compute_instances.iter() {
-                self.activate_compute(*instance_id)
-                    .report_compute_frontiers();
+            if let Some(mut compute_state) = self.activate_compute() {
+                compute_state.report_compute_frontiers();
             }
             self.activate_storage().update_rt_timestamps();
             self.activate_storage()
@@ -314,10 +307,10 @@ where
             for cmd in cmds {
                 self.metrics_bundle.0.observe_command(&cmd);
 
-                let mut should_drop = None;
+                let mut should_drop_compute = false;
                 match &cmd {
-                    Command::Compute(ComputeCommand::CreateInstance(_logging), instance_id) => {
-                        let compute_instance = ComputeState {
+                    Command::Compute(ComputeCommand::CreateInstance(_logging)) => {
+                        self.compute_state = Some(ComputeState {
                             traces: TraceManager::new(
                                 (self.metrics_bundle.1).3.clone(),
                                 self.timely_worker.index(),
@@ -331,50 +324,48 @@ where
                             reported_frontiers: HashMap::new(),
                             sink_metrics: (self.metrics_bundle.1).1.clone(),
                             materialized_logger: None,
-                        };
-                        self.compute_state.insert(*instance_id, compute_instance);
-                        compute_instances.push(*instance_id);
+                        });
                     }
-                    Command::Compute(ComputeCommand::DropInstance, instance_id) => {
-                        should_drop = Some(*instance_id);
+                    Command::Compute(ComputeCommand::DropInstance) => {
+                        should_drop_compute = true;
                     }
                     _ => (),
                 }
 
                 self.handle_command(cmd);
 
-                if let Some(instance_id) = should_drop {
-                    self.compute_state.remove(&instance_id);
-                    compute_instances.retain(|id| *id != instance_id);
+                if should_drop_compute {
+                    self.compute_state = None;
                 }
             }
 
             self.metrics_bundle.0.observe_command_finish();
-            for instance_id in compute_instances.iter() {
+            if let Some(compute_state) = &self.compute_state {
                 self.metrics_bundle
                     .0
-                    .observe_pending_peeks(&self.compute_state[instance_id].pending_peeks);
-                self.activate_compute(*instance_id).process_peeks();
-                self.activate_compute(*instance_id).process_tails();
+                    .observe_pending_peeks(&compute_state.pending_peeks);
+            }
+            if let Some(mut compute_state) = self.activate_compute() {
+                compute_state.process_peeks();
+                compute_state.process_tails();
             }
         }
-        for instance_id in compute_instances.iter() {
-            self.compute_state
-                .get_mut(instance_id)
-                .unwrap()
-                .traces
-                .del_all_traces();
-            self.activate_compute(*instance_id).shutdown_logging();
+        if let Some(mut compute_state) = self.activate_compute() {
+            compute_state.compute_state.traces.del_all_traces();
+            compute_state.shutdown_logging();
         }
     }
 
-    fn activate_compute(&mut self, instance_id: ComputeInstanceId) -> ActiveComputeState<A, CR> {
-        ActiveComputeState {
-            timely_worker: &mut *self.timely_worker,
-            compute_state: self.compute_state.get_mut(&instance_id).unwrap(),
-            instance_id,
-            response_tx: &mut self.response_tx,
-            boundary: &mut self.compute_boundary,
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<A, CR>> {
+        if let Some(compute_state) = &mut self.compute_state {
+            Some(ActiveComputeState {
+                timely_worker: &mut *self.timely_worker,
+                compute_state,
+                response_tx: &mut self.response_tx,
+                boundary: &mut self.compute_boundary,
+            })
+        } else {
+            None
         }
     }
     fn activate_storage(&mut self) -> ActiveStorageState<A, SC> {
@@ -388,9 +379,7 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Compute(cmd, instance) => {
-                self.activate_compute(instance).handle_compute_command(cmd)
-            }
+            Command::Compute(cmd) => self.activate_compute().unwrap().handle_compute_command(cmd),
             Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }
     }

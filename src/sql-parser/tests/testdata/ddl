@@ -1285,9 +1285,9 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: fa
 parse-statement
 CREATE CLUSTER cluster VIRTUAL
 ----
+error: Expected one of REMOTE or SIZE or INTROSPECTION, found identifier "virtual"
 CREATE CLUSTER cluster VIRTUAL
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual] })
+                       ^
 
 parse-statement
 CREATE CLUSTER cluster SIZE 'small'
@@ -1304,11 +1304,11 @@ CREATE CLUSTER cluster SIZE 'small'
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small")))] })
 
 parse-statement
-CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
 ----
-CREATE CLUSTER cluster VIRTUAL, VIRTUAL, SIZE 'small', VIRTUAL, SIZE 'medium'
+CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Virtual, Virtual, Size(Value(String("small"))), Virtual, Size(Value(String("medium")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small"))), Remote { name: Ident("replica1"), hosts: [Value(String("host1"))] }, Size(Value(String("medium"))), Remote { name: Ident("replica2"), hosts: [Value(String("host2"))] }] })
 
 parse-statement
 CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
@@ -1334,7 +1334,7 @@ AlterCluster(AlterClusterStatement { name: Ident("cluster"), if_exists: false, o
 parse-statement
 ALTER CLUSTER cluster RENAME TO cluster2
 ----
-error: Expected one of VIRTUAL or REMOTE or SIZE or INTROSPECTION, found RENAME
+error: Expected one of REMOTE or SIZE or INTROSPECTION, found RENAME
 ALTER CLUSTER cluster RENAME TO cluster2
                       ^
 

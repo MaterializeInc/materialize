@@ -2518,7 +2518,6 @@ pub fn plan_create_cluster(
 fn plan_cluster_options(
     options: Vec<ClusterOption>,
 ) -> Result<ComputeInstanceConfig, anyhow::Error> {
-    let mut is_virtual = false;
     let mut remote_replicas = BTreeMap::new();
     let mut size = None;
     let mut introspection_debugging = None;
@@ -2526,12 +2525,6 @@ fn plan_cluster_options(
 
     for option in options {
         match option {
-            ClusterOption::Virtual => {
-                if is_virtual {
-                    bail!("VIRTUAL specified more than once");
-                }
-                is_virtual = true;
-            }
             ClusterOption::Remote { name, hosts } => {
                 let name = normalize::ident(name);
                 let mut hosts_out = BTreeSet::new();
@@ -2574,23 +2567,20 @@ fn plan_cluster_options(
         }
     };
 
-    match (is_virtual, remote_replicas.len() > 0, size) {
-        (false, true, None) => Ok(ComputeInstanceConfig::Remote {
+    match (remote_replicas.len() > 0, size) {
+        (true, None) => Ok(ComputeInstanceConfig::Remote {
             replicas: remote_replicas,
             introspection,
         }),
-        (false, false, None) | (true, false, None) => {
-            if introspection.is_some() {
-                bail!("VIRTUAL clusters do not support configurable introspection");
-            }
-            Ok(ComputeInstanceConfig::Virtual)
-        }
-        (false, false, Some(size)) => Ok(ComputeInstanceConfig::Managed {
+        (false, Some(size)) => Ok(ComputeInstanceConfig::Managed {
             size,
             introspection,
         }),
-        (true, true, _) | (true, _, Some(_)) | (_, true, Some(_)) => {
-            bail!("only one of VIRTUAL, REMOTE, and SIZE may be specified")
+        (false, None) => {
+            bail!("one of REMOTE or SIZE must be specified")
+        }
+        (true, Some(_)) => {
+            bail!("only one of REMOTE or SIZE may be specified")
         }
     }
 }

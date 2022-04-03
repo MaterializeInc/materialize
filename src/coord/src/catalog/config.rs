@@ -26,8 +26,8 @@ pub struct Config<'a> {
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.
     pub safe_mode: bool,
-    /// Whether to enable introspection for the virtual compute host.
-    pub virtual_compute_host_introspection: Option<ComputeInstanceIntrospectionConfig>,
+    /// Whether to enable introspection for the local compute instance.
+    pub local_compute_introspection: Option<ComputeInstanceIntrospectionConfig>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An [External ID][] to use for all AWS AssumeRole operations.

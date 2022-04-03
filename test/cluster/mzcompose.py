@@ -59,6 +59,7 @@ SERVICES = [
             ".:/workdir/smoke",
             "../testdrive:/workdir/testdrive",
         ],
+        materialized_params={"cluster": "c"},
     ),
 ]
 
@@ -87,15 +88,11 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
 
-    # Dropping the `default` cluster lightly tests that `materialized` can run
-    # and restart without any virtual clusters in the virtual cluster host.
-    c.sql("DROP CLUSTER default CASCADE")
-
     # Create a remote cluster and verify that tests pass.
     c.up("dataflowd_compute_1")
     c.up("dataflowd_compute_2")
     c.sql(
-        "CREATE CLUSTER default REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
+        "CREATE CLUSTER c REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
     )
     c.run("testdrive-svc", *glob)
 
@@ -104,7 +101,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_compute_4")
     c.sql(
         """
-        ALTER CLUSTER default
+        ALTER CLUSTER c
             REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876'),
             REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
         """
@@ -120,13 +117,13 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # verify that tests still pass.
     c.sql(
         """
-        ALTER CLUSTER default
+        ALTER CLUSTER c
             REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876')
         """
     )
     c.sql(
         """
-        ALTER CLUSTER default
+        ALTER CLUSTER c
             REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
         """
     )

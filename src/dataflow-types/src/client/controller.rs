@@ -36,9 +36,10 @@ use mz_orchestrator::{Orchestrator, ServiceConfig};
 use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
-    InstanceConfig, RemoteClient, Response, StorageResponse, VirtualComputeHost,
+    InstanceConfig, RemoteClient, Response, StorageResponse,
 };
 use crate::logging::LoggingConfig;
+use crate::{TailBatch, TailResponse};
 
 pub use storage::{StorageController, StorageControllerState};
 pub mod storage;
@@ -69,7 +70,10 @@ pub struct Controller<T = mz_repr::Timestamp> {
     orchestrator: Option<OrchestratorConfig>,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
-    virtual_compute_host: VirtualComputeHost<T>,
+    /// A stashed local compute client to service the first call to
+    /// `Controller::create_instance` with `InstanceConfig::Local`. Only
+    /// one local compute client can be created.
+    local_compute: Option<Box<dyn ComputeClient<T>>>,
 }
 
 impl<T> Controller<T>
@@ -90,8 +94,11 @@ where
 
         // Add replicas backing that instance.
         match config {
-            InstanceConfig::Virtual => {
-                let client = self.virtual_compute_host.create_instance(instance);
+            InstanceConfig::Local => {
+                let client = self
+                    .local_compute
+                    .take()
+                    .expect("cannot create more than one local compute instance");
                 self.compute_mut(instance)
                     .unwrap()
                     .add_replica("default".into(), client)
@@ -101,7 +108,7 @@ where
                 let mut compute_instance = self.compute_mut(instance).unwrap();
                 for (name, hosts) in replicas {
                     let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-                    let client = ComputeWrapperClient::new(client, instance);
+                    let client = ComputeWrapperClient::new(client);
                     let client: Box<dyn ComputeClient<T>> = Box::new(client);
                     compute_instance.add_replica(name, client).await;
                 }
@@ -146,7 +153,7 @@ where
                     .map(|h| format!("{h}:6876"))
                     .collect();
                 let client = RemoteClient::new(&addrs);
-                let client = ComputeWrapperClient::new(client, instance);
+                let client = ComputeWrapperClient::new(client);
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance)
                     .unwrap()
@@ -169,7 +176,6 @@ where
                     .await?;
             }
             compute.client.send(ComputeCommand::DropInstance).await?;
-            self.virtual_compute_host.drop_instance(instance);
         }
         Ok(())
     }
@@ -221,62 +227,63 @@ where
             .iter_mut()
             .map(|(id, compute)| (*id, compute.client.as_stream()))
             .collect();
-        let response: Option<Response<T>> = tokio::select! {
+        tokio::select! {
             Some((instance, response)) = compute_stream.next() => {
-                Some(Response::Compute(response?, instance))
+                drop(compute_stream);
+                let response = response?;
+                match &response {
+                    ComputeResponse::FrontierUppers(updates) => {
+                        self.compute_mut(instance)
+                            // TODO: determine if this is an error, or perhaps just a late
+                            // response about a terminated instance.
+                            .expect("Reference to absent instance")
+                            .update_write_frontiers(updates)
+                            .await;
+                    }
+                    ComputeResponse::PeekResponse(uuid, _response) => {
+                        self.compute_mut(instance)
+                            .expect("Reference to absent instance")
+                            .remove_peeks(std::iter::once(*uuid))
+                            .await;
+                    }
+                    ComputeResponse::TailResponse(global_id, response) => {
+                        let mut changes = timely::progress::ChangeBatch::new();
+                        match response {
+                            TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                                changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                                changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                            }
+                            TailResponse::DroppedAt(frontier) => {
+                                // The tail will not be written to again, but we should not confuse that
+                                // with the source of the TAIL being complete through this time.
+                                changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                            }
+                        }
+                        self.compute_mut(instance)
+                            .expect("Reference to absent instance")
+                            .update_write_frontiers(&[(*global_id, changes)])
+                            .await;
+                    }
+                }
+                Ok(Some(Response::Compute(response)))
             }
             response = self.storage_controller.recv() => {
-                response?.map(Response::Storage)
-            }
-            else => None,
-        };
-        drop(compute_stream);
-        if let Some(response) = response.as_ref() {
-            match response {
-                Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
-                    self.compute_mut(*instance)
-                        // TODO: determine if this is an error, or perhaps just a late
-                        // response about a terminated instance.
-                        .expect("Reference to absent instance")
-                        .update_write_frontiers(updates)
-                        .await;
-                }
-                Response::Compute(ComputeResponse::PeekResponse(uuid, _response), instance) => {
-                    self.compute_mut(*instance)
-                        .expect("Reference to absent instance")
-                        .remove_peeks(std::iter::once(*uuid))
-                        .await;
-                }
-                Response::Compute(ComputeResponse::TailResponse(global_id, response), instance) => {
-                    use crate::{TailBatch, TailResponse};
-                    let mut changes = timely::progress::ChangeBatch::new();
-                    match response {
-                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                            changes.extend(upper.iter().map(|time| (time.clone(), 1)));
-                            changes.extend(lower.iter().map(|time| (time.clone(), -1)));
-                        }
-                        TailResponse::DroppedAt(frontier) => {
-                            // The tail will not be written to again, but we should not confuse that
-                            // with the source of the TAIL being complete through this time.
-                            changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                        }
+                let response = response?;
+                match &response {
+                    Some(StorageResponse::TimestampBindings(feedback)) => {
+                        self.storage_controller
+                            .update_write_frontiers(&feedback.changes)
+                            .await;
                     }
-                    self.compute_mut(*instance)
-                        .expect("Reference to absent instance")
-                        .update_write_frontiers(&[(*global_id, changes)])
-                        .await;
+                    Some(StorageResponse::LinearizedTimestamps(_)) => {
+                        // Nothing to do here.
+                    }
+                    None => (),
                 }
-                Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
-                    self.storage_controller
-                        .update_write_frontiers(&feedback.changes)
-                        .await;
-                }
-                Response::Storage(StorageResponse::LinearizedTimestamps(_)) => {
-                    // Nothing to do here.
-                }
+                Ok(response.map(Response::Storage))
             }
+            else => Ok(None),
         }
-        Ok(response)
     }
 }
 
@@ -285,13 +292,13 @@ impl<T> Controller<T> {
     pub fn new<S: StorageController<Timestamp = T> + 'static>(
         orchestrator: Option<OrchestratorConfig>,
         storage_controller: S,
-        virtual_compute_host: VirtualComputeHost<T>,
+        local_compute: Box<dyn ComputeClient<T>>,
     ) -> Self {
         Self {
             orchestrator,
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
-            virtual_compute_host,
+            local_compute: Some(local_compute),
         }
     }
 }
