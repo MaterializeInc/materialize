@@ -46,7 +46,7 @@ mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
 mz-persist-types = { path = "../persist-types" }
 parquet2 = { version = "0.10.3", default-features = false }
-prost = "0.9.0"
+prost = "0.10.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rusqlite = { version = "0.27.0", features = ["bundled"] }
 semver = "1.0.7"
@@ -65,4 +65,4 @@ serde_json = "1.0.79"
 tempfile = "3.2.0"
 
 [build-dependencies]
-prost-build = "0.9.1"
+prost-build = "0.10.1"

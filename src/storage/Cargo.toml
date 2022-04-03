@@ -45,7 +45,7 @@ mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { version = "0.13.0", default-features = false }
-prost = "0.9.0"
+prost = "0.10.1"
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
@@ -66,7 +66,7 @@ url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-prost-build = "0.9.1"
+prost-build = "0.10.1"
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

@@ -32,7 +32,7 @@ mz-persist-types = { path = "../persist-types" }
 num-traits = "0.2.14"
 num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-prost = "0.9.0"
+prost = "0.10.1"
 regex = "1.5.4"
 ryu = "1.0.9"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -49,7 +49,7 @@ mz-repr = { path = ".", features = ["test-utils"] }
 rand = "0.8.5"
 
 [build-dependencies]
-prost-build = "0.9.1"
+prost-build = "0.10.1"
 
 [features]
 test-utils = ["proptest", "proptest-derive"]

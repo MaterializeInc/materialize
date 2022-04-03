@@ -18,8 +18,8 @@ hex = "0.4.3"
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../../test/test-util" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-prost = "0.9.0"
-prost-types = "0.9.0"
+prost = "0.10.1"
+prost-types = "0.10.0"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 tokio = "1.17.0"
@@ -29,4 +29,4 @@ tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
-prost-build = "0.9.1"
+prost-build = "0.10.0"
