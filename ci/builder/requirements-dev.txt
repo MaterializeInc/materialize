@@ -24,7 +24,7 @@ pytest==7.1.1
 scipy==1.7.3
 shtab==1.5.3
 sqlparse==0.4.2
-twine==3.8.0
+twine==4.0.0
 types-prettytable==2.1.2
 types-psutil==5.8.20
 types-PyMYSQL==1.0.14
