@@ -14,7 +14,7 @@ flake8==4.0.1
 isort==5.10.1
 mypy==0.942
 numpy==1.22.3
-pandas==1.4.1
+pandas==1.4.2
 parameterized==0.8.1
 pdoc3==0.10.0
 psutil==5.9.0
