@@ -25,15 +25,18 @@
 //! for the previous instance. The implementation currently does not distinguish between buffering
 //! messages for a disconnected controller and talking to a live controller.
 
-use crate::client::{Command, ComputeCommand, ComputeResponse, GenericClient, Response};
-use crate::{DataflowDescription, Plan};
-use async_trait::async_trait;
-use mz_expr::GlobalId;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
+
+use async_trait::async_trait;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::ChangeBatch;
 use tracing::warn;
+
+use mz_expr::GlobalId;
+
+use crate::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
+use crate::{DataflowDescription, Plan};
 
 /// Reconcile commands targeted at a COMPUTE instance.
 ///
@@ -46,25 +49,26 @@ pub struct ComputeCommandReconcile<T, C> {
     /// `DropInstance` command.
     created: bool,
     /// Dataflows by ID.
-    dataflows: HashMap<GlobalId, DataflowDescription<Plan>>,
+    dataflows: HashMap<GlobalId, DataflowDescription<Plan<T>, T>>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Stash of responses to send back to the controller.
-    responses: VecDeque<Response>,
+    responses: VecDeque<ComputeResponse<T>>,
     /// Upper frontiers for indexes, sources, and sinks.
     uppers: HashMap<GlobalId, MutableAntichain<T>>,
 }
 
 #[async_trait]
-impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>> + 'static>
-    GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
-    for ComputeCommandReconcile<mz_repr::Timestamp, C>
+impl<T, C> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
+where
+    C: ComputeClient<T>,
+    T: timely::progress::Timestamp + Copy,
 {
-    async fn send(&mut self, cmd: Command<mz_repr::Timestamp>) -> Result<(), anyhow::Error> {
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         self.absorb_command(cmd).await
     }
 
-    async fn recv(&mut self) -> Result<Option<Response<mz_repr::Timestamp>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
         if let Some(response) = self.responses.pop_front() {
             Ok(Some(response))
         } else {
@@ -77,8 +81,10 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
     }
 }
 
-impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>>
-    ComputeCommandReconcile<mz_repr::Timestamp, C>
+impl<T, C> ComputeCommandReconcile<T, C>
+where
+    C: ComputeClient<T>,
+    T: timely::progress::Timestamp + Copy,
 {
     /// Construct a new [ComputeCommandReconcile].
     ///
@@ -99,23 +105,15 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
     /// If we're already tracking this ID, it means that the controller lost connection and
     /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
     fn start_tracking(&mut self, id: GlobalId) {
-        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(
-            <mz_repr::Timestamp as timely::progress::Timestamp>::minimum(),
-        );
+        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
         match self.uppers.entry(id) {
             Entry::Occupied(entry) => {
                 // We're about to start tracking an already-bound ID. This means that the controller
                 // needs to be informed about the `upper`.
-                let mut change_batch = ChangeBatch::new_from(
-                    <mz_repr::Timestamp as timely::progress::Timestamp>::minimum(),
-                    -1,
-                );
+                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
                 change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
                 self.responses
-                    .push_back(Response::Compute(ComputeResponse::FrontierUppers(vec![(
-                        id,
-                        change_batch,
-                    )])));
+                    .push_back(ComputeResponse::FrontierUppers(vec![(id, change_batch)]));
             }
             Entry::Vacant(entry) => {
                 entry.insert(frontier);
@@ -133,18 +131,10 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
         self.dataflows.remove(&id);
     }
 
-    async fn absorb_command(&mut self, command: Command) -> Result<(), anyhow::Error> {
-        use Command::*;
-        match command {
-            Compute(command) => self.absorb_compute_command(command).await,
-            Storage(_) => panic!("ComputeCommandReconcile cannot handle Storage commands"),
-        }
-    }
-
     /// Absorbs a response, and produces response that should be emitted.
-    pub fn absorb_response(&mut self, message: Response) {
+    pub fn absorb_response(&mut self, message: ComputeResponse<T>) {
         match message {
-            Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
+            ComputeResponse::FrontierUppers(mut list) => {
                 for (id, changes) in list.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
                         let iter = frontier.update_iter(changes.drain());
@@ -155,33 +145,22 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
                 }
 
                 self.responses
-                    .push_back(Response::Compute(ComputeResponse::FrontierUppers(list)));
+                    .push_back(ComputeResponse::FrontierUppers(list));
             }
-            Response::Compute(ComputeResponse::PeekResponse(uuid, response)) => {
+            ComputeResponse::PeekResponse(uuid, response) => {
                 if self.peeks.remove(&uuid) {
                     self.responses
-                        .push_back(Response::Compute(ComputeResponse::PeekResponse(
-                            uuid, response,
-                        )));
+                        .push_back(ComputeResponse::PeekResponse(uuid, response));
                 }
             }
-            Response::Compute(ComputeResponse::TailResponse(id, response)) => {
+            ComputeResponse::TailResponse(id, response) => {
                 self.responses
-                    .push_back(Response::Compute(ComputeResponse::TailResponse(
-                        id, response,
-                    )));
-            }
-            Response::Storage(_) => {
-                panic!("ComputeCommandReconcile cannot handle Storage responses")
+                    .push_back(ComputeResponse::TailResponse(id, response));
             }
         }
     }
 
-    async fn absorb_compute_command(
-        &mut self,
-        command: ComputeCommand,
-    ) -> Result<(), anyhow::Error> {
-        use Command::Compute;
+    async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
         match command {
             CreateInstance(config) => {
@@ -195,7 +174,7 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
                             }
                         }
                     }
-                    self.client.send(Compute(CreateInstance(config))).await?;
+                    self.client.send(CreateInstance(config)).await?;
                     self.created = true;
                 }
                 Ok(())
@@ -204,7 +183,7 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
                 if self.created {
                     self.created = false;
                     self.uppers.clear();
-                    self.client.send(Compute(cmd)).await
+                    self.client.send(cmd).await
                 } else {
                     Ok(())
                 }
@@ -230,7 +209,7 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
                     }
                 }
                 if !create.is_empty() {
-                    self.client.send(Compute(CreateDataflows(create))).await?
+                    self.client.send(CreateDataflows(create)).await?
                 }
                 Ok(())
             }
@@ -240,17 +219,17 @@ impl<C: GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>>
                         self.stop_tracking(*id);
                     }
                 }
-                self.client.send(Compute(AllowCompaction(frontiers))).await
+                self.client.send(AllowCompaction(frontiers)).await
             }
             Peek(peek) => {
                 self.peeks.insert(peek.uuid);
-                self.client.send(Compute(ComputeCommand::Peek(peek))).await
+                self.client.send(ComputeCommand::Peek(peek)).await
             }
             CancelPeeks { uuids } => {
                 for uuid in &uuids {
                     self.peeks.remove(uuid);
                 }
-                self.client.send(Compute(CancelPeeks { uuids })).await
+                self.client.send(CancelPeeks { uuids }).await
             }
         }
     }

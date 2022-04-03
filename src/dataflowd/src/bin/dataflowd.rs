@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
 use std::process;
 use std::sync::{Arc, Mutex};
 
@@ -15,12 +16,16 @@ use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use mz_dataflow::DummyBoundary;
 use mz_dataflow_types::sources::AwsExternalId;
+use serde::de::DeserializeOwned;
+use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use mz_dataflow_types::client::{Command, GenericClient, Response};
+use mz_dataflow::Server;
+use mz_dataflow_types::client::{ComputeClient, GenericClient, StorageClient};
+use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -199,10 +204,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .unwrap_or(AwsExternalId::NotProvided),
     };
 
-    let (_server, client): (
-        _,
-        Box<dyn GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>> + 'static>,
-    ) = match args.runtime {
+    let serve_config = ServeConfig {
+        listener,
+        linger: args.linger,
+    };
+
+    match args.runtime {
         RuntimeType::Compute => {
             assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
             let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
@@ -217,10 +224,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
             let workers = config.workers;
-            let (server, client) = mz_dataflow::serve_boundary(config, move |index| {
+            let (server, _, client) = mz_dataflow::serve_boundary(config, move |index| {
                 boundary.lock().unwrap()[index % workers].take().unwrap()
             })?;
-            (server, Box::new(client))
+            let mut client: Box<dyn ComputeClient> = Box::new(client);
+            if args.reconcile {
+                client = Box::new(ComputeCommandReconcile::new(client))
+            }
+            serve(serve_config, server, client).await
         }
         RuntimeType::Storage => {
             let (storage_server, request_rx, _thread) =
@@ -235,25 +246,29 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 mz_dataflow::serve_boundary_requests(config, request_rx, move |index| {
                     boundary.lock().unwrap()[index % workers].take().unwrap()
                 })?;
-            (server, Box::new(client))
+            let client: Box<dyn StorageClient> = Box::new(client);
+            serve(serve_config, server, client).await
         }
-    };
+    }
+}
 
-    let mut client: Box<
-        dyn GenericClient<Command<mz_repr::Timestamp>, Response<mz_repr::Timestamp>> + 'static,
-    > = if args.reconcile {
-        match args.runtime {
-            RuntimeType::Compute => Box::new(
-                mz_dataflow_types::reconciliation::command::ComputeCommandReconcile::new(client),
-            ),
-            RuntimeType::Storage => Box::new(client),
-        }
-    } else {
-        Box::new(client)
-    };
+struct ServeConfig {
+    listener: TcpListener,
+    linger: bool,
+}
 
+async fn serve<G, C, R>(
+    config: ServeConfig,
+    _server: Server,
+    mut client: G,
+) -> Result<(), anyhow::Error>
+where
+    G: GenericClient<C, R>,
+    C: DeserializeOwned + fmt::Debug + Send + Unpin,
+    R: Serialize + fmt::Debug + Send + Unpin,
+{
     loop {
-        let (conn, _addr) = listener.accept().await?;
+        let (conn, _addr) = config.listener.accept().await?;
         info!("coordinator connection accepted");
 
         let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
@@ -271,7 +286,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 }
             }
         }
-        if !args.linger {
+        if !config.linger {
             break;
         } else {
             info!("coordinator connection gone; lingering");

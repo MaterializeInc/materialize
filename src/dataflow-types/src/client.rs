@@ -18,14 +18,11 @@ use std::fmt;
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use differential_dataflow::Hashable;
-use enum_iterator::IntoEnumIterator;
-use enum_kinds::EnumKind;
 use futures::Stream;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
-use tokio::sync::mpsc;
 use tracing::trace;
 use uuid::Uuid;
 
@@ -35,12 +32,12 @@ use crate::{
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
-use mz_ore::cast::CastFrom;
 use mz_repr::Row;
 
 pub mod controller;
 pub use controller::Controller;
 
+pub mod partitioned;
 pub mod replicated;
 
 /// Explicit instructions for timely dataflow workers.
@@ -109,12 +106,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
 }
 
 /// Commands related to the computation and maintenance of views.
-#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
-#[enum_kind(
-    ComputeCommandKind,
-    derive(IntoEnumIterator),
-    doc = "The kind of compute command that was received"
-)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
@@ -148,23 +140,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
-impl ComputeCommandKind {
-    /// Returns the name of this kind of command.
-    ///
-    /// Must remain unique over all variants of `Command`.
-    pub fn metric_name(&self) -> &'static str {
-        match self {
-            // TODO: This breaks metrics. Not sure that's a problem.
-            ComputeCommandKind::CreateInstance => "create_instance",
-            ComputeCommandKind::DropInstance => "drop_instance",
-            ComputeCommandKind::AllowCompaction => "allow_compute_compaction",
-            ComputeCommandKind::CancelPeeks => "cancel_peeks",
-            ComputeCommandKind::CreateDataflows => "create_dataflows",
-            ComputeCommandKind::Peek => "peek",
-        }
-    }
-}
-
 /// A command creating a single source
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSourceCommand<T> {
@@ -179,12 +154,7 @@ pub struct CreateSourceCommand<T> {
 }
 
 /// Commands related to the ingress and egress of collections.
-#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
-#[enum_kind(
-    StorageCommandKind,
-    derive(IntoEnumIterator),
-    doc = "the kind of storage command that was received"
-)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
@@ -224,118 +194,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
         /// The timestamp to advance to.
         advance_to: T,
     },
-}
-
-impl StorageCommandKind {
-    /// Returns the same of this kind of command.
-    ///
-    /// Must remain unique over all variants of `Command`.
-    pub fn metric_name(&self) -> &'static str {
-        match self {
-            StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            StorageCommandKind::AllowCompaction => "allow_storage_compaction",
-            StorageCommandKind::CreateSources => "create_sources",
-            StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
-            StorageCommandKind::Insert => "insert",
-            StorageCommandKind::RenderSources => "render_sources",
-        }
-    }
-}
-
-impl<T: timely::progress::Timestamp> Command<T> {
-    /// Partitions the command into `parts` many disjoint pieces.
-    ///
-    /// This is used to subdivide commands that can be sharded across workers,
-    /// for example the `plan::Constant` stages of dataflow plans, and the
-    /// `Command::Insert` commands that may contain multiple updates.
-    pub fn partition_among(self, parts: usize) -> Vec<Self> {
-        if parts == 0 {
-            Vec::new()
-        } else if parts == 1 {
-            vec![self]
-        } else {
-            match self {
-                Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
-                    let mut dataflows_parts = vec![Vec::new(); parts];
-
-                    for dataflow in dataflows {
-                        // A list of descriptions of objects for each part to build.
-                        let mut builds_parts = vec![Vec::new(); parts];
-                        // Partition each build description among `parts`.
-                        for build_desc in dataflow.objects_to_build {
-                            let build_part = build_desc.plan.partition_among(parts);
-                            for (plan, objects_to_build) in
-                                build_part.into_iter().zip(builds_parts.iter_mut())
-                            {
-                                objects_to_build.push(crate::BuildDesc {
-                                    id: build_desc.id,
-                                    plan,
-                                });
-                            }
-                        }
-                        // Each list of build descriptions results in a dataflow description.
-                        for (dataflows_part, objects_to_build) in
-                            dataflows_parts.iter_mut().zip(builds_parts)
-                        {
-                            dataflows_part.push(DataflowDescription {
-                                source_imports: dataflow.source_imports.clone(),
-                                index_imports: dataflow.index_imports.clone(),
-                                objects_to_build,
-                                index_exports: dataflow.index_exports.clone(),
-                                sink_exports: dataflow.sink_exports.clone(),
-                                as_of: dataflow.as_of.clone(),
-                                debug_name: dataflow.debug_name.clone(),
-                                id: dataflow.id,
-                            });
-                        }
-                    }
-                    dataflows_parts
-                        .into_iter()
-                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x)))
-                        .collect()
-                }
-                Command::Storage(StorageCommand::Insert { id, updates }) => {
-                    let mut updates_parts = vec![Vec::new(); parts];
-                    for update in updates {
-                        let part = usize::cast_from(update.row.hashed()) % parts;
-                        updates_parts[part].push(update);
-                    }
-                    updates_parts
-                        .into_iter()
-                        .map(|updates| Command::Storage(StorageCommand::Insert { id, updates }))
-                        .collect()
-                }
-                command => vec![command; parts],
-            }
-        }
-    }
-
-    /// Indicates which global ids should start and cease frontier tracking.
-    ///
-    /// Identifiers added to `start` will install frontier tracking, and indentifiers
-    /// added to `cease` will uninstall frontier tracking.
-    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
-        match self {
-            Command::Storage(StorageCommand::CreateSources(sources)) => {
-                for source in sources.iter() {
-                    start.push(source.id);
-                }
-            }
-            Command::Compute(command) => command.frontier_tracking(start, cease),
-            _ => {
-                // Other commands have no known impact on frontier tracking.
-            }
-        }
-    }
-    /// Returns the same of this kind of command.
-    ///
-    /// Must remain unique over all variants of `Command`.
-    pub fn metric_name(&self) -> &'static str {
-        match self {
-            Command::Compute(command) => ComputeCommandKind::from(command).metric_name(),
-            Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
-        }
-    }
 }
 
 impl<T> ComputeCommand<T> {
@@ -612,11 +470,6 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     }
 }
 
-/// A client to a combined storage and compute server.
-pub trait Client<T = mz_repr::Timestamp>: GenericClient<Command<T>, Response<T>> {}
-
-impl<C, T> Client<T> for C where C: GenericClient<Command<T>, Response<T>> {}
-
 /// A client to a storage server.
 pub trait StorageClient<T = mz_repr::Timestamp>:
     GenericClient<StorageCommand<T>, StorageResponse<T>>
@@ -656,19 +509,62 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-/// A convenience type for compatibility.
-#[derive(Debug)]
-pub struct LocalClient<T = mz_repr::Timestamp> {
-    client: partitioned::Partitioned<process_local::ProcessLocal<T>, T>,
+#[async_trait]
+impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn StorageClient<T>> {
+    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+        (**self).recv().await
+    }
 }
 
-impl<T> LocalClient<T>
+/// An generic command sender.
+pub struct Sender<C> {
+    inner: Box<dyn FnMut(C) + Send>,
+}
+
+impl<C> Sender<C> {
+    /// Construct a new command sender from a function.
+    pub fn new<F>(f: F) -> Sender<C>
+    where
+        F: FnMut(C) + Send + 'static,
+    {
+        Sender { inner: Box::new(f) }
+    }
+
+    /// Sends a command to the destination.
+    pub fn send(&mut self, command: C) {
+        (self.inner)(command)
+    }
+}
+
+impl<C> fmt::Debug for Sender<C> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Sender").finish()
+    }
+}
+
+/// A convenience type for compatibility.
+#[derive(Debug)]
+pub struct LocalClient<C, R>
 where
-    T: timely::progress::Timestamp + Copy,
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug,
+    R: fmt::Debug,
+{
+    client: partitioned::Partitioned<process_local::ProcessLocal<C, R>, C, R>,
+}
+
+impl<C, R> LocalClient<C, R>
+where
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug,
+    R: fmt::Debug,
 {
     pub fn new(
-        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<Response<T>>>,
-        worker_txs: Vec<crossbeam_channel::Sender<Command<T>>>,
+        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<R>>,
+        worker_txs: Vec<Sender<C>>,
         worker_threads: Vec<std::thread::Thread>,
     ) -> Self {
         assert_eq!(feedback_rxs.len(), worker_threads.len());
@@ -685,30 +581,45 @@ where
 }
 
 #[async_trait]
-impl<T> GenericClient<Command<T>, Response<T>> for LocalClient<T>
+impl<C, R> GenericClient<C, R> for LocalClient<C, R>
 where
-    T: timely::progress::Timestamp + Copy,
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
 {
-    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         let response = self.client.recv().await;
         trace!("RECV dataflow response: {:?}", response);
         response
     }
 }
 
+/// A [`LocalClient`] for the storage layer.
+pub type LocalStorageClient = LocalClient<StorageCommand, StorageResponse>;
+
+/// A [`LocalClient`] for the compute layer.
+pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
+
 /// A convenience type for compatibility.
 #[derive(Debug)]
-pub struct RemoteClient<T> {
-    client: partitioned::Partitioned<tcp::TcpClient<T>, T>,
+pub struct RemoteClient<C, R>
+where
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
+{
+    client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
 }
 
-impl<T> RemoteClient<T>
+impl<C, R> RemoteClient<C, R>
 where
-    T: timely::progress::Timestamp + Copy,
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
 {
     /// Construct a client backed by multiple tcp connections
     pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
@@ -724,438 +635,27 @@ where
     /// Construct a client backed by multiple tcp connections
     pub async fn connect(&mut self) {
         // TODO: initiate connections concurrently.
-        for remote in self.client.shards.iter_mut() {
+        for remote in self.client.parts.iter_mut() {
             remote.connect().await;
         }
     }
 }
 
 #[async_trait]
-impl<T> GenericClient<Command<T>, Response<T>> for RemoteClient<T>
+impl<C, R> GenericClient<C, R> for RemoteClient<C, R>
 where
-    T: timely::progress::Timestamp + Copy + Unpin,
+    (C, R): partitioned::Partitionable<C, R>,
+    C: Serialize + fmt::Debug + Unpin + Send,
+    R: DeserializeOwned + fmt::Debug + Unpin + Send,
 {
-    async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("Sending dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
-    async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         let response = self.client.recv().await;
         trace!("Receiving dataflow response: {:?}", response);
         response
-    }
-}
-
-/// An adapter that converts a client to a compute client.
-#[derive(Debug)]
-pub struct ComputeWrapperClient<C> {
-    client: C,
-}
-
-impl<C> ComputeWrapperClient<C> {
-    /// Constructs a new compute wrapper client for the specified compute
-    /// instance ID.
-    pub fn new(client: C) -> ComputeWrapperClient<C> {
-        ComputeWrapperClient { client }
-    }
-}
-
-#[async_trait]
-impl<C, T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeWrapperClient<C>
-where
-    C: GenericClient<Command<T>, Response<T>>,
-    T: fmt::Debug + Send + 'static,
-{
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        self.client.send(Command::Compute(cmd)).await
-    }
-
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        match self.client.recv().await? {
-            Some(Response::Compute(res)) => Ok(Some(res)),
-            res @ Some(Response::Storage(_)) => {
-                panic!(
-                    "ComputeWrapperClient unexpectedly received storage response: {:?}",
-                    res
-                );
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-/// An adapter that converts a client to a storage client.
-#[derive(Debug)]
-pub struct StorageWrapperClient<C> {
-    client: C,
-}
-
-impl<C> StorageWrapperClient<C> {
-    /// Constructs a new storage wrapper client.
-    pub fn new(client: C) -> StorageWrapperClient<C> {
-        StorageWrapperClient { client }
-    }
-}
-
-#[async_trait]
-impl<C, T> GenericClient<StorageCommand<T>, StorageResponse<T>> for StorageWrapperClient<C>
-where
-    C: GenericClient<Command<T>, Response<T>>,
-    T: fmt::Debug + Send + 'static,
-{
-    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
-        self.client.send(Command::Storage(cmd)).await
-    }
-
-    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
-        match self.client.recv().await? {
-            Some(Response::Storage(res)) => Ok(Some(res)),
-            res @ Some(Response::Compute(..)) => {
-                panic!(
-                    "StorageWrapperClient unexpectedly received compute response: {:?}",
-                    res
-                );
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-/// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
-pub mod partitioned {
-
-    use std::collections::HashMap;
-
-    use async_trait::async_trait;
-    use futures::StreamExt;
-
-    use mz_expr::GlobalId;
-    use mz_repr::{Diff, Row};
-    use tokio_stream::StreamMap;
-    use tracing::debug;
-
-    use crate::client::GenericClient;
-    use crate::TailResponse;
-
-    use super::{Client, ComputeResponse, StorageResponse};
-    use super::{Command, ComputeCommand, PeekResponse, Response};
-
-    /// A client whose implementation is sharded across a number of other clients.
-    ///
-    /// Such a client needs to broadcast (partitioned) commands to all of its clients,
-    /// and await responses from each of the client shards before it can respond.
-    #[derive(Debug)]
-    pub struct Partitioned<C, T> {
-        /// The individual shards representing per-worker clients.
-        pub shards: Vec<C>,
-        /// The number of errors observed from underlying clients.
-        seen_errors: usize,
-        /// The state of the client.
-        ///
-        /// May be reset for compute instances when a `CreateInstance`
-        /// command is observed.
-        state: PartitionedClientState<T>,
-    }
-
-    impl<C, T> Partitioned<C, T>
-    where
-        T: timely::progress::Timestamp + Copy,
-    {
-        /// Create a client partitioned across multiple client shards.
-        pub fn new(shards: Vec<C>) -> Self {
-            Self {
-                // TODO: Have Storage announce its creation like compute.
-                state: PartitionedClientState::new(shards.len()),
-                shards,
-                seen_errors: 0,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<C, T> GenericClient<Command<T>, Response<T>> for Partitioned<C, T>
-    where
-        C: Client<T>,
-        T: timely::progress::Timestamp + Copy,
-    {
-        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            // A `CreateInstance` command indicates re-initialization.
-            if let Command::Compute(ComputeCommand::CreateInstance(_)) = &cmd {
-                self.state = PartitionedClientState::new(self.shards.len());
-            }
-            self.state.observe_command(&cmd);
-            if let Command::Compute(ComputeCommand::DropInstance) = &cmd {
-                self.state = PartitionedClientState::new(self.shards.len());
-            }
-            let cmd_parts = cmd.partition_among(self.shards.len());
-            for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
-                shard.send(cmd_part).await?;
-            }
-            Ok(())
-        }
-
-        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-            let parts = self.shards.len();
-            let mut stream: StreamMap<_, _> = self
-                .shards
-                .iter_mut()
-                .map(|shard| shard.as_stream())
-                .enumerate()
-                .collect();
-            while let Some((index, response)) = stream.next().await {
-                match response {
-                    Err(e) => {
-                        // Only emit one out of every `parts` errors. (If one
-                        // underlying client observes an error, we expect all of
-                        // the other clients to observe the same error.)
-                        self.seen_errors += 1;
-                        if (self.seen_errors % parts) == 0 {
-                            return Err(e);
-                        } else {
-                            return Ok(None);
-                        }
-                    }
-                    Ok(response) => {
-                        if let Some(response) = self.state.absorb_response(index, response) {
-                            return response.map(Some);
-                        }
-                    }
-                }
-            }
-            // Indicate completion of the communication.
-            Ok(None)
-        }
-    }
-
-    use timely::progress::frontier::MutableAntichain;
-    use uuid::Uuid;
-
-    /// Maintained state for sharded dataflow clients.
-    ///
-    /// This helper type unifies the responses of multiple partitioned
-    /// workers in order to present as a single worker.
-    pub struct PartitionedClientState<T = mz_repr::Timestamp> {
-        /// Upper frontiers for indexes, sources, and sinks.
-        uppers: HashMap<GlobalId, MutableAntichain<T>>,
-        /// Pending responses for a peek; returnable once all are available.
-        peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
-        /// Number of parts the state machine represents.
-        parts: usize,
-        /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
-        /// back until their timestamps are complete.
-        pending_tails: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
-    }
-
-    // Custom Debug implementation to account for `Box<dyn Iterator>>` not being `Debug`.
-    impl<T: std::fmt::Debug> std::fmt::Debug for PartitionedClientState<T> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("PartitionedClientState<T>")
-                .field("uppers", &self.uppers)
-                .field("peek_responses", &self.peek_responses)
-                .field("parts", &self.parts)
-                .field("pending_tails", &self.pending_tails)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl<T> PartitionedClientState<T>
-    where
-        T: timely::progress::Timestamp + Copy,
-    {
-        /// Instantiates a new client state machine wrapping a number of parts.
-        pub fn new(parts: usize) -> Self {
-            Self {
-                uppers: Default::default(),
-                peek_responses: Default::default(),
-                parts,
-                pending_tails: Default::default(),
-            }
-        }
-
-        /// Observes commands that move past, and prepares state for responses.
-        ///
-        /// In particular, this method installs and removes upper frontier maintenance.
-        pub fn observe_command(&mut self, command: &Command<T>) {
-            // Temporary storage for identifiers to add to and remove from frontier tracking.
-            let mut start = Vec::new();
-            let mut cease = Vec::new();
-            command.frontier_tracking(&mut start, &mut cease);
-            // Apply the determined effects of the command to `self.uppers`.
-            for id in start.into_iter() {
-                let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                frontier.update_iter(Some((T::minimum(), self.parts as i64)));
-                let previous = self.uppers.insert(id, frontier);
-                assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
-            }
-            for id in cease.into_iter() {
-                let previous = self.uppers.remove(&id);
-                if previous.is_none() {
-                    debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
-                }
-            }
-        }
-
-        /// Absorbs a response, and produces response that should be emitted.
-        pub fn absorb_response(
-            &mut self,
-            shard_id: usize,
-            message: Response<T>,
-        ) -> Option<Result<Response<T>, anyhow::Error>> {
-            match message {
-                Response::Compute(ComputeResponse::FrontierUppers(mut list)) => {
-                    for (id, changes) in list.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(id) {
-                            let iter = frontier.update_iter(changes.drain());
-                            changes.extend(iter);
-                        } else {
-                            changes.clear();
-                        }
-                    }
-
-                    // The following block implements a `list.retain()` of non-empty change batches.
-                    // This is more verbose than `list.retain()` because that method cannot mutate
-                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                    let mut cursor = 0;
-                    while let Some((_id, changes)) = list.get_mut(cursor) {
-                        if changes.is_empty() {
-                            list.swap_remove(cursor);
-                        } else {
-                            cursor += 1;
-                        }
-                    }
-
-                    if list.is_empty() {
-                        None
-                    } else {
-                        Some(Ok(Response::Compute(ComputeResponse::FrontierUppers(list))))
-                    }
-                }
-                // Avoid multiple retractions of minimum time, to present as updates from one worker.
-                Response::Storage(StorageResponse::TimestampBindings(mut feedback)) => {
-                    for (id, changes) in feedback.changes.iter_mut() {
-                        if let Some(frontier) = self.uppers.get_mut(id) {
-                            let iter = frontier.update_iter(changes.drain());
-                            changes.extend(iter);
-                        } else {
-                            changes.clear();
-                        }
-                    }
-                    // The following block implements a `list.retain()` of non-empty change batches.
-                    // This is more verbose than `list.retain()` because that method cannot mutate
-                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                    let mut cursor = 0;
-                    while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
-                        if changes.is_empty() {
-                            feedback.changes.swap_remove(cursor);
-                        } else {
-                            cursor += 1;
-                        }
-                    }
-
-                    Some(Ok(Response::Storage(StorageResponse::TimestampBindings(
-                        feedback,
-                    ))))
-                }
-                // TODO(guswynn): is this the correct implementation?
-                Response::Storage(StorageResponse::LinearizedTimestamps(feedback)) => Some(Ok(
-                    Response::Storage(StorageResponse::LinearizedTimestamps(feedback)),
-                )),
-                Response::Compute(ComputeResponse::PeekResponse(uuid, response)) => {
-                    // Incorporate new peek responses; awaiting all responses.
-                    let entry = self
-                        .peek_responses
-                        .entry(uuid)
-                        .or_insert_with(Default::default);
-                    let novel = entry.insert(shard_id, response);
-                    assert!(novel.is_none(), "Duplicate peek response");
-                    // We may be ready to respond.
-                    if entry.len() == self.parts {
-                        let mut response = PeekResponse::Rows(Vec::new());
-                        for (_part, r) in std::mem::take(entry).into_iter() {
-                            response = match (response, r) {
-                                (_, PeekResponse::Canceled) => PeekResponse::Canceled,
-                                (PeekResponse::Canceled, _) => PeekResponse::Canceled,
-                                (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
-                                (PeekResponse::Error(e), _) => PeekResponse::Error(e),
-                                (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
-                                    rows.extend(r.into_iter());
-                                    PeekResponse::Rows(rows)
-                                }
-                            };
-                        }
-                        self.peek_responses.remove(&uuid);
-                        Some(Ok(Response::Compute(ComputeResponse::PeekResponse(
-                            uuid, response,
-                        ))))
-                    } else {
-                        None
-                    }
-                }
-                Response::Compute(ComputeResponse::TailResponse(id, response)) => {
-                    let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
-                        let mut frontier = MutableAntichain::new();
-                        frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
-                        Some((frontier, Vec::new()))
-                    });
-
-                    let entry = match maybe_entry {
-                        None => {
-                            // This tail has been dropped;
-                            // we should permanently block
-                            // any messages from it
-                            return None;
-                        }
-                        Some(entry) => entry,
-                    };
-
-                    use crate::TailBatch;
-                    use differential_dataflow::consolidation::consolidate_updates;
-                    match response {
-                        TailResponse::Batch(TailBatch {
-                            lower,
-                            upper,
-                            mut updates,
-                        }) => {
-                            let old_frontier = entry.0.frontier().to_owned();
-                            entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
-                            entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
-                            entry.1.append(&mut updates);
-                            let new_frontier = entry.0.frontier().to_owned();
-                            if old_frontier != new_frontier {
-                                consolidate_updates(&mut entry.1);
-                                let mut ship = Vec::new();
-                                let mut keep = Vec::new();
-                                for (time, data, diff) in entry.1.drain(..) {
-                                    if new_frontier.less_equal(&time) {
-                                        keep.push((time, data, diff));
-                                    } else {
-                                        ship.push((time, data, diff));
-                                    }
-                                }
-                                entry.1 = keep;
-                                Some(Ok(Response::Compute(ComputeResponse::TailResponse(
-                                    id,
-                                    TailResponse::Batch(TailBatch {
-                                        lower: old_frontier,
-                                        upper: new_frontier,
-                                        updates: ship,
-                                    }),
-                                ))))
-                            } else {
-                                None
-                            }
-                        }
-                        TailResponse::DroppedAt(frontier) => {
-                            *maybe_entry = None;
-                            Some(Ok(Response::Compute(ComputeResponse::TailResponse(
-                                id,
-                                TailResponse::DroppedAt(frontier),
-                            ))))
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1165,39 +665,38 @@ pub mod process_local {
 
     use async_trait::async_trait;
 
-    use super::{Command, GenericClient, Response};
+    use super::{GenericClient, Sender};
 
     /// A client to a dataflow server running in the current process.
     #[derive(Debug)]
-    pub struct ProcessLocal<T> {
-        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response<T>>,
-        worker_tx: crossbeam_channel::Sender<Command<T>>,
+    pub struct ProcessLocal<C, R> {
+        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
+        worker_tx: Sender<C>,
         worker_thread: std::thread::Thread,
     }
 
     #[async_trait]
-    impl<T> GenericClient<Command<T>, Response<T>> for ProcessLocal<T>
+    impl<C, R> GenericClient<C, R> for ProcessLocal<C, R>
     where
-        T: fmt::Debug + Send,
+        C: fmt::Debug + Send,
+        R: fmt::Debug + Send,
     {
-        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
-            self.worker_tx
-                .send(cmd)
-                .expect("worker command receiver should not drop first");
+        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+            self.worker_tx.send(cmd);
             self.worker_thread.unpark();
             Ok(())
         }
 
-        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
             Ok(self.feedback_rx.recv().await)
         }
     }
 
-    impl<T> ProcessLocal<T> {
+    impl<C, R> ProcessLocal<C, R> {
         /// Create a new instance of [ProcessLocal] from its parts.
         pub fn new(
-            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response<T>>,
-            worker_tx: crossbeam_channel::Sender<Command<T>>,
+            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
+            worker_tx: Sender<C>,
             worker_thread: std::thread::Thread,
         ) -> Self {
             Self {
@@ -1209,11 +708,10 @@ pub mod process_local {
     }
 
     // We implement `Drop` so that we can wake each of the workers and have them notice the drop.
-    impl<T> Drop for ProcessLocal<T> {
+    impl<C, R> Drop for ProcessLocal<C, R> {
         fn drop(&mut self) {
             // Drop the worker handle.
-            let (tx, _rx) = crossbeam_channel::unbounded();
-            self.worker_tx = tx;
+            self.worker_tx = Sender::new(|_| ());
             // Unpark the thread once the handle is dropped, so that it can observe the emptiness.
             self.worker_thread.unpark();
         }
@@ -1230,22 +728,24 @@ pub mod tcp {
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
+    use serde::de::DeserializeOwned;
+    use serde::ser::Serialize;
     use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
     use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
 
-    use crate::client::{Command, GenericClient, Response};
+    use crate::client::GenericClient;
 
-    enum TcpConn<T> {
+    enum TcpConn<C, R> {
         Disconnected,
         Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
         Backoff(Instant),
-        Connected(FramedClient<TcpStream, T>),
+        Connected(FramedClient<TcpStream, C, R>),
     }
 
-    impl<T> fmt::Debug for TcpConn<T> {
+    impl<C, R> fmt::Debug for TcpConn<C, R> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             f.write_str("TcpConn")
         }
@@ -1258,16 +758,16 @@ pub mod tcp {
     /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
     /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     #[derive(Debug)]
-    pub struct TcpClient<T> {
-        connection: TcpConn<T>,
+    pub struct TcpClient<C, R> {
+        connection: TcpConn<C, R>,
         addr: String,
     }
 
-    impl<T> TcpClient<T> {
+    impl<C, R> TcpClient<C, R> {
         /// Creates a new `TcpClient` initially in a disconnected state.
         ///
         /// Use the `connect()` method to put the client into a connected state.
-        pub fn new(addr: String) -> TcpClient<T> {
+        pub fn new(addr: String) -> TcpClient<C, R> {
             Self {
                 connection: TcpConn::Disconnected,
                 addr,
@@ -1313,11 +813,12 @@ pub mod tcp {
     }
 
     #[async_trait]
-    impl<T> GenericClient<Command<T>, Response<T>> for TcpClient<T>
+    impl<C, R> GenericClient<C, R> for TcpClient<C, R>
     where
-        T: timely::progress::Timestamp + Copy + Unpin,
+        C: Serialize + fmt::Debug + Send + Unpin,
+        R: DeserializeOwned + fmt::Debug + Send + Unpin,
     {
-        async fn send(&mut self, cmd: Command<T>) -> Result<(), anyhow::Error> {
+        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
             if let TcpConn::Connected(connection) = &mut self.connection {
                 let result = connection.send(cmd).await;
                 if result.is_err() {
@@ -1329,7 +830,7 @@ pub mod tcp {
             }
         }
 
-        async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
             if let TcpConn::Connected(connection) = &mut self.connection {
                 match connection.next().await {
                     Some(Ok(response)) => Ok(Some(response)),
@@ -1355,10 +856,10 @@ pub mod tcp {
     >;
 
     /// A framed connection from the server's perspective.
-    pub type FramedServer<C, T> = Framed<C, Command<T>, Response<T>>;
+    pub type FramedServer<A, C, R> = Framed<A, C, R>;
 
     /// A framed connection from the client's perspective.
-    pub type FramedClient<C, T> = Framed<C, Response<T>, Command<T>>;
+    pub type FramedClient<A, C, R> = Framed<A, R, C>;
 
     fn length_delimited_codec() -> LengthDelimitedCodec {
         // NOTE(benesch): using an unlimited maximum frame length is problematic
@@ -1372,9 +873,9 @@ pub mod tcp {
     }
 
     /// Constructs a framed connection for the server.
-    pub fn framed_server<C, T>(conn: C) -> FramedServer<C, T>
+    pub fn framed_server<A, C, R>(conn: A) -> FramedServer<A, C, R>
     where
-        C: AsyncRead + AsyncWrite,
+        A: AsyncRead + AsyncWrite,
     {
         tokio_serde::Framed::new(
             tokio_util::codec::Framed::new(conn, length_delimited_codec()),
@@ -1383,123 +884,13 @@ pub mod tcp {
     }
 
     /// Constructs a framed connection for the client.
-    pub fn framed_client<C, T>(conn: C) -> FramedClient<C, T>
+    pub fn framed_client<A, C, R>(conn: A) -> FramedClient<A, C, R>
     where
-        C: AsyncRead + AsyncWrite,
+        A: AsyncRead + AsyncWrite,
     {
         tokio_serde::Framed::new(
             tokio_util::codec::Framed::new(conn, length_delimited_codec()),
             Bincode::default(),
         )
     }
-}
-
-/// A client composed of channels.
-mod channel {
-    use std::fmt;
-
-    use async_trait::async_trait;
-    use derivative::Derivative;
-
-    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-
-    use crate::client::GenericClient;
-
-    /// A client composed of channels.
-    #[derive(Derivative)]
-    #[derivative(Debug)]
-    pub struct ChannelClient<C1, C2, R> {
-        tx: UnboundedSender<C2>,
-        rx: UnboundedReceiver<R>,
-        #[derivative(Debug = "ignore")]
-        command_map: Box<dyn Fn(C1) -> C2 + Send>,
-    }
-
-    /// Create a new channel client.
-    ///
-    /// Commands sent to the client are transformed via `command_map` and then
-    /// sent over `tx`.
-    ///
-    /// Returns the channel client and a channel transmitter that sends
-    /// responses to the client.
-    impl<C1, C2, R> ChannelClient<C1, C2, R> {
-        pub fn new(
-            tx: UnboundedSender<C2>,
-            command_map: Box<dyn Fn(C1) -> C2 + Send>,
-        ) -> (ChannelClient<C1, C2, R>, UnboundedSender<R>) {
-            let (response_tx, response_rx) = mpsc::unbounded_channel();
-            let client = ChannelClient {
-                tx,
-                rx: response_rx,
-                command_map,
-            };
-            (client, response_tx)
-        }
-    }
-
-    #[async_trait]
-    impl<C1, C2, R> GenericClient<C1, R> for ChannelClient<C1, C2, R>
-    where
-        C1: fmt::Debug + Send + 'static,
-        C2: fmt::Debug + Send + Sync + 'static,
-        R: fmt::Debug + Send,
-    {
-        async fn send(&mut self, cmd: C1) -> Result<(), anyhow::Error> {
-            let cmd = (self.command_map)(cmd);
-            self.tx.send(cmd)?;
-            Ok(())
-        }
-
-        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-            Ok(self.rx.recv().await)
-        }
-    }
-}
-
-/// Splits a dataflow client into a storage half and a compute half.
-///
-/// If the underlying dataflow server is not running both a storage and compute
-/// runtime, it is the caller's responsibility to ignore the inactive half.
-pub fn split_client<C, T>(mut client: C) -> (Box<dyn StorageClient<T>>, Box<dyn ComputeClient<T>>)
-where
-    C: Client<T> + Send + 'static,
-    T: fmt::Debug + Send + Sync + 'static,
-{
-    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
-    let (storage_client, storage_response_tx) = channel::ChannelClient::new(
-        command_tx.clone(),
-        Box::new(|command| Command::Storage(command)),
-    );
-    let (compute_client, compute_response_tx) =
-        channel::ChannelClient::new(command_tx, Box::new(|command| Command::Compute(command)));
-    mz_ore::task::spawn(|| "split_client", async move {
-        let mut alive = true;
-        while alive {
-            tokio::select! {
-                biased;
-
-                cmd = command_rx.recv() => match cmd {
-                    None => alive = false,
-                    Some(cmd) => match client.send(cmd).await {
-                        Ok(_) => (),
-                        Err(_) => alive = false,
-                    }
-                },
-
-                response = client.recv() => match response {
-                    Ok(Some(Response::Storage(res))) => {
-                        let _ = storage_response_tx.send(res);
-                    }
-                    Ok(Some(Response::Compute(res))) => {
-                        let _ = compute_response_tx.send(res);
-                    },
-                    error @ Err(_) => {
-                        error.unwrap();
-                    },
-                    Ok(None) => alive = false,
-                },
-            }
-        }
-    });
-    (Box::new(storage_client), Box::new(compute_client))
 }

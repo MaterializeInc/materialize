@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 use mz_dataflow_types::client::{
-    CreateSourceCommand, Response, StorageCommand, StorageResponse, TimestampBindingFeedback,
+    CreateSourceCommand, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
@@ -107,7 +107,7 @@ pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
     /// The storage state itself.
     pub storage_state: &'a mut StorageState,
     /// The channel over which frontier information is reported.
-    pub response_tx: &'a mut mpsc::UnboundedSender<Response>,
+    pub response_tx: &'a mut mpsc::UnboundedSender<StorageResponse>,
     /// The boundary with the Compute layer.
     pub boundary: &'a mut B,
 }
@@ -477,6 +477,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     fn send_storage_response(&self, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(Response::Storage(response));
+        let _ = self.response_tx.send(response);
     }
 }
