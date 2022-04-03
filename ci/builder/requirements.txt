@@ -4,7 +4,7 @@
 # Strictly no packages that require compiling native code. Do not add to this
 # list without consulting with @benesch!
 
-click==8.0.4
+click==8.1.2
 colored==1.4.3
 humanize==4.0.0
 junit-xml==1.9
