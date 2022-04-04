@@ -79,12 +79,14 @@ All Sources in the catalog will have a reference to their connector which will a
 
 ## Implementation Phases 
 
-1. Support implicit and explicit connectors using otherwise identical syntax to now (`WITH` options, etc)
-2. Restructure syntax to remove as many `WITH` options as is reasonable, limiting them to client implementation details such as `librdkafka` options which are not generic Kafka options.
-3. Enable `ALTER CONNECTOR` with transactional consistency in the catalog but eventual consistency for existing Sources
+1. Connectors marked `experimental` with support for implicit and explicit connectors using otherwise identical syntax to now (`WITH` options, etc) in `CREATE SOURCE` statements when enabled and when reading from the catalog in all cases
+2. During `experimental` phase evaluate restructuring the syntax to remove as many `WITH` options as is reasonable, limiting them to client implementation details such as `librdkafka` options which are not generic Kafka options.
+3. Finalize syntax and determine necessary migrations, if any, to allow for removing `experimental` status.
+4. Enable `ALTER CONNECTOR` with transactional consistency in the catalog but eventual consistency for existing Sources as `experimental` feature
   - A `CREATE` which follows an `ALTER` will be created at the STORAGE layer with the values set in the `ALTER`
   - An `ALTER` which follows a `CREATE` will take non-zero time to propagate to the STORAGE layer
   - TBD exact semantics of assuring convergence
+5. Make `ALTER CONNECTOR` stable once semantics and implementation are stable
 
 ## Reference
 The longer term syntax for `CREATE CONNECTOR` is expected to look similar to these examples.
@@ -103,7 +105,7 @@ security_options ::=
 | SASL (
     MECHANISMS <value>
     USERNAME [[=] <value> ]
-    PASSOWRD [[=] <value> ]
+    PASSWORD [[=] <value> ]
     PASSWORD ENV [[=] <value> ] )
 | GSSAPI (
     KEYTAB [=] <value>
