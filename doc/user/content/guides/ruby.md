@@ -24,7 +24,7 @@ You can connect to a local Materialize instance just as you would connect to a P
 ```ruby
 require 'pg'
 
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 ```
 
 ### Materialize Cloud Instance
