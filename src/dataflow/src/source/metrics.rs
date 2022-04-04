@@ -15,19 +15,18 @@
 //! appropriate source.
 
 use mz_ore::metric;
-use mz_ore::metrics::{
-    IntCounterVec, IntGaugeVec, MetricsRegistry, UIntCounter, UIntCounterVec, UIntGaugeVec,
-};
+use mz_ore::metrics::{IntCounter, IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use prometheus::core::{AtomicI64, GenericCounterVec};
 
 /// The base metrics set for the s3 module.
 #[derive(Clone, Debug)]
 pub(crate) struct S3Metrics {
-    pub(crate) objects_downloaded: UIntCounterVec,
-    pub(crate) objects_duplicate: UIntCounterVec,
-    pub(crate) bytes_downloaded: UIntCounterVec,
-    pub(crate) messages_ingested: UIntCounterVec,
+    pub(crate) objects_downloaded: IntCounterVec,
+    pub(crate) objects_duplicate: IntCounterVec,
+    pub(crate) bytes_downloaded: IntCounterVec,
+    pub(crate) messages_ingested: IntCounterVec,
 
-    pub(crate) objects_discovered: UIntCounterVec,
+    pub(crate) objects_discovered: IntCounterVec,
 }
 
 impl S3Metrics {
@@ -109,7 +108,7 @@ pub(super) struct PartitionSpecificMetrics {
     pub(super) offset_ingested: IntGaugeVec,
     pub(super) offset_received: IntGaugeVec,
     pub(super) closed_ts: UIntGaugeVec,
-    pub(super) messages_ingested: IntCounterVec,
+    pub(super) messages_ingested: GenericCounterVec<AtomicI64>,
     pub(super) partition_offset_max: IntGaugeVec,
 }
 
@@ -148,12 +147,12 @@ impl PartitionSpecificMetrics {
 
 #[derive(Clone, Debug)]
 pub(super) struct PostgresSourceSpecificMetrics {
-    pub(super) total_messages: UIntCounterVec,
-    pub(super) transactions: UIntCounterVec,
-    pub(super) ignored_messages: UIntCounterVec,
-    pub(super) insert_messages: UIntCounterVec,
-    pub(super) update_messages: UIntCounterVec,
-    pub(super) delete_messages: UIntCounterVec,
+    pub(super) total_messages: IntCounterVec,
+    pub(super) transactions: IntCounterVec,
+    pub(super) ignored_messages: IntCounterVec,
+    pub(super) insert_messages: IntCounterVec,
+    pub(super) update_messages: IntCounterVec,
+    pub(super) delete_messages: IntCounterVec,
     pub(super) tables_in_publication: UIntGaugeVec,
     pub(super) wal_lsn: UIntGaugeVec,
 }
@@ -216,7 +215,7 @@ pub struct SourceBaseMetrics {
     pub(crate) s3: S3Metrics,
     pub(crate) kinesis: KinesisMetrics,
 
-    pub(crate) bytes_read: UIntCounter,
+    pub(crate) bytes_read: IntCounter,
 }
 
 impl SourceBaseMetrics {
