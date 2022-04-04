@@ -127,7 +127,7 @@ conn.commit()
 cur.close()
 
 with conn.cursor() as cur:
-    cur.execute("SELECT COUNT(*) FROM countries")
+    cur.execute("SELECT COUNT(*) FROM countries;")
     print(cur.fetchone())
 
 conn.close()
