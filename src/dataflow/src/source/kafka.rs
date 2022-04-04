@@ -232,7 +232,7 @@ impl SourceReader for KafkaSourceReader {
                     self.source_name, self.topic_name, e
                 ),
                 Ok(message) => {
-                    let source_message = construct_source_message(&message, self.include_headers)?;
+                    let source_message = construct_source_message(&message, self.include_headers);
                     next_message = self.handle_message(source_message);
                 }
             }
@@ -250,7 +250,7 @@ impl SourceReader for KafkaSourceReader {
                 break;
             }
 
-            let message = self.poll_from_next_queue()?;
+            let message = self.poll_from_next_queue();
             attempts += 1;
 
             if let Some(message) = message {
@@ -437,12 +437,10 @@ impl KafkaSourceReader {
     /// We maintain the list of partition queues in a queue, and add queues that we polled from to
     /// the end of the queue. We thus swing through all available partition queues in a somewhat
     /// fair manner.
-    fn poll_from_next_queue(
-        &mut self,
-    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, anyhow::Error> {
+    fn poll_from_next_queue(&mut self) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>> {
         let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
-        let message = match partition_queue.get_next_message()? {
+        let message = match partition_queue.get_next_message() {
             Err(e) => {
                 let pid = partition_queue.pid();
                 let last_offset = self
@@ -465,7 +463,7 @@ impl KafkaSourceReader {
 
         self.partition_consumers.push_back(partition_queue);
 
-        Ok(message)
+        message
     }
 
     /// Checks if the given message is viable for emission. This checks if the message offset is
@@ -612,9 +610,7 @@ fn create_kafka_config(
     kafka_config
 }
 
-fn construct_headers(
-    headers: Option<&BorrowedHeaders>,
-) -> Result<Vec<(String, MessagePayload)>, anyhow::Error> {
+fn construct_headers(headers: Option<&BorrowedHeaders>) -> Vec<(String, MessagePayload)> {
     let mut out = Vec::new();
     use rdkafka::message::Headers;
 
@@ -631,29 +627,29 @@ fn construct_headers(
             out.push((k, v));
         }
     }
-    Ok(out)
+    out
 }
 
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
-) -> Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, anyhow::Error> {
+) -> SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
     let kafka_offset = KafkaOffset {
         offset: msg.offset(),
     };
     let headers = if include_headers {
-        Some(construct_headers(msg.headers())?)
+        Some(construct_headers(msg.headers()))
     } else {
         None
     };
-    Ok(SourceMessage {
+    SourceMessage {
         partition: PartitionId::Kafka(msg.partition()),
         offset: kafka_offset.into(),
         upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
         headers,
-    })
+    }
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -685,18 +681,15 @@ impl PartitionConsumer {
     /// be transformed into empty values
     fn get_next_message(
         &mut self,
-    ) -> Result<
-        Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError>,
-        anyhow::Error,
-    > {
+    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let result = construct_source_message(&msg, self.include_headers)?;
+                let result = construct_source_message(&msg, self.include_headers);
                 assert_eq!(result.partition, PartitionId::Kafka(self.pid));
-                Ok(Ok(Some(result)))
+                Ok(Some(result))
             }
-            Some(Err(err)) => Ok(Err(err)),
-            _ => Ok(Ok(None)),
+            Some(Err(err)) => Err(err),
+            _ => Ok(None),
         }
     }
 
