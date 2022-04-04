@@ -21,7 +21,7 @@ datadriven = "0.6.0"
 unicode-width = "0.1.9"
 
 [build-dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 mz-ore = { path = "../ore", default-features = false }
 mz-walkabout = { path = "../walkabout" }
 phf = { version = "0.10.1", features = ["uncased"] }

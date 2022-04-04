@@ -7,7 +7,7 @@ rust-version = "1.59.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 fstrings = "0.2.3"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false }

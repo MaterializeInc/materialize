@@ -28,7 +28,7 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.53"
 atty = "0.2.14"
@@ -136,7 +136,7 @@ serde_json = "1.0.79"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 askama_shared = { version = "0.12.2", features = ["json"] }
 cc = "1.0.73"
 flate2 = "1.0.22"
