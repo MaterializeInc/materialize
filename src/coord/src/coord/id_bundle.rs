@@ -26,12 +26,6 @@ impl CollectionIdBundle {
         self.storage_ids.is_empty() && self.compute_ids.is_empty()
     }
 
-    /// Extends the bundle with the identifiers from `other`.
-    pub fn extend(&mut self, other: &CollectionIdBundle) {
-        self.storage_ids.extend(&other.storage_ids);
-        self.compute_ids.extend(&other.compute_ids);
-    }
-
     /// Returns a new bundle without the identifiers from `other`.
     pub fn difference(&self, other: &CollectionIdBundle) -> CollectionIdBundle {
         CollectionIdBundle {
