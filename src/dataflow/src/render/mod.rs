@@ -163,45 +163,78 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
 
             // Import declared sources into the rendering context.
             for (src_id, source) in &source_imports {
-                let ((ok, err), token) = crate::render::sources::import_source(
-                    &debug_name,
-                    source_dataflow_id,
-                    &as_of,
-                    source.clone(),
-                    storage_state,
-                    region,
-                    materialized_logging.clone(),
-                    src_id.clone(),
-                );
+                // If `as_of` is `None`, the rendering request is invalid. We still need to satisfy it,
+                // but we will do this with an empty source.
+                let valid = storage_state.source_uppers.contains_key(src_id);
+                let ((ok, err), token) = if valid {
+                    let ((ok, err), token) = crate::render::sources::import_source(
+                        &debug_name,
+                        source_dataflow_id,
+                        &as_of,
+                        source.clone(),
+                        storage_state,
+                        region,
+                        materialized_logging.clone(),
+                        src_id.clone(),
+                    );
 
-                // Capture the frontier of `ok` to present as the "source upper".
-                // TODO: remove this code when storage has a better holistic take on source progress.
-                // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
-                let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
-                let weak_token = Rc::downgrade(&token);
-                use timely::dataflow::operators::Operator;
-                ok.inner.sink(
-                    timely::dataflow::channels::pact::Pipeline,
-                    "frontier monitor",
-                    move |input| {
-                        // Drain the input; we don't need it.
-                        input.for_each(|_, _| {});
+                    // Capture the frontier of `ok` to present as the "source upper".
+                    // TODO: remove this code when storage has a better holistic take on source progress.
+                    // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
+                    let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
+                    let weak_token = Rc::downgrade(&token);
+                    use timely::dataflow::operators::Operator;
+                    ok.inner.sink(
+                        timely::dataflow::channels::pact::Pipeline,
+                        "frontier monitor",
+                        move |input| {
+                            // Drain the input; we don't need it.
+                            input.for_each(|_, _| {});
 
-                        // Only attempt the frontier update if the source is still live.
-                        // If it is shutting down, we shouldn't treat the frontier as correct.
-                        if let Some(_) = weak_token.upgrade() {
-                            // Read the input frontier, and join with the shared frontier.
-                            let mut joined_frontier = Antichain::new();
-                            let mut borrow = shared_frontier.borrow_mut();
-                            for time1 in borrow.iter() {
-                                for time2 in &input.frontier.frontier() {
-                                    joined_frontier.insert(time1.join(time2));
+                            // Only attempt the frontier update if the source is still live.
+                            // If it is shutting down, we shouldn't treat the frontier as correct.
+                            if let Some(_) = weak_token.upgrade() {
+                                // Read the input frontier, and join with the shared frontier.
+                                let mut joined_frontier = Antichain::new();
+                                let mut borrow = shared_frontier.borrow_mut();
+                                for time1 in borrow.iter() {
+                                    for time2 in &input.frontier.frontier() {
+                                        joined_frontier.insert(time1.join(time2));
+                                    }
                                 }
+                                *borrow = joined_frontier;
                             }
-                            *borrow = joined_frontier;
-                        }
-                    },
-                );
+                        },
+                    );
+
+                    ((ok, err), token)
+                } else {
+                    // This branch exists only to set up a non-source that can be captured and replayed.
+                    use timely::dataflow::operators::generic::operator::source;
+                    use timely::dataflow::operators::ActivateCapability;
+                    use timely::scheduling::Scheduler;
+
+                    let mut tokens = Vec::new();
+                    let ok = source(region, "InvalidSource", |cap, info| {
+                        tokens.push(ActivateCapability::new(
+                            cap,
+                            &info.address,
+                            region.activations(),
+                        ));
+                        |_handle| {}
+                    })
+                    .as_collection();
+                    let err = source(region, "InvalidSource", |cap, info| {
+                        tokens.push(ActivateCapability::new(
+                            cap,
+                            &info.address,
+                            region.activations(),
+                        ));
+                        |_handle| {}
+                    })
+                    .as_collection();
+                    ((ok, err), Rc::new(tokens) as Rc<dyn std::any::Any>)
+                };
 
                 boundary.capture(*src_id, ok, err, token, &debug_name, dataflow_id);
             }
