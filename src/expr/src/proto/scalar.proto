@@ -7,13 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    prost_build::Config::new()
-        .extern_path(".adt.array", "::mz_repr::proto::adt::array")
-        .extern_path(".strconv", "::mz_repr::proto::strconv")
-        .compile_protos(
-            &["id.proto", "scalar.proto"],
-            &["src/proto", "../repr/src/proto"],
-        )
-        .unwrap();
+// See https://developers.google.com/protocol-buffers for what's going on here.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package scalar;
+
+message ProtoDomainLimit {
+    oneof kind {
+        google.protobuf.Empty none = 1;
+        int64 inclusive = 2;
+        int64 exclusive = 3;
+    }
 }
