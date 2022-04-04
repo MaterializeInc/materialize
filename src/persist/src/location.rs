@@ -134,6 +134,14 @@ impl From<Error> for ExternalError {
     }
 }
 
+impl From<std::io::Error> for ExternalError {
+    fn from(x: std::io::Error) -> Self {
+        ExternalError {
+            inner: anyhow::Error::new(x),
+        }
+    }
+}
+
 impl From<rusqlite::Error> for ExternalError {
     fn from(x: rusqlite::Error) -> Self {
         ExternalError {
@@ -875,9 +883,9 @@ pub mod tests {
         Ok(())
     }
 
-    pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, Error>>(
+    pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, ExternalError>>(
         mut new_fn: F,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ExternalError> {
         let consensus = new_fn()?;
 
         let key = "heyo!";

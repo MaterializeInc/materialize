@@ -39,9 +39,8 @@ pub struct SqliteConsensus {
 }
 
 impl SqliteConsensus {
-    /// Open a sqlite-backed [Consensus] instance at `path`, for the collection
-    /// named `shard`.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+    /// Open a sqlite-backed [Consensus] instance at `path`.
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
         let mut conn = Connection::open(path)?;
         let tx = conn.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
@@ -52,7 +51,10 @@ impl SqliteConsensus {
             ))?;
             tx.execute_batch(SCHEMA)?;
         } else if app_id != APPLICATION_ID {
-            return Err(Error::from(format!("invalid application id: {}", app_id)));
+            return Err(ExternalError::from(anyhow!(
+                "invalid application id: {}",
+                app_id
+            )));
         }
         tx.commit()?;
         Ok(SqliteConsensus {
@@ -191,7 +193,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn sqlite_consensus() -> Result<(), Error> {
+    async fn sqlite_consensus() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir()?;
         consensus_impl_test(|| {
             let path = temp_dir.path().join("sqlite_consensus");

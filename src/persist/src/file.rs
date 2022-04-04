@@ -532,10 +532,7 @@ pub struct FileBlobMulti {
 
 impl FileBlobMulti {
     /// Opens the given location for non-exclusive read-write access.
-    pub async fn open_multi(
-        _deadline: Instant,
-        config: FileBlobConfig,
-    ) -> Result<Self, ExternalError> {
+    pub async fn open(_deadline: Instant, config: FileBlobConfig) -> Result<Self, ExternalError> {
         let base_dir = config.base_dir;
         fs::create_dir_all(&base_dir).map_err(Error::from)?;
         let core = FileBlobCore {
@@ -638,7 +635,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().map_err(Error::from)?;
         blob_multi_impl_test(move |path| {
             let instance_dir = temp_dir.path().join(path);
-            FileBlobMulti::open_multi(no_timeout, instance_dir.into())
+            FileBlobMulti::open(no_timeout, instance_dir.into())
         })
         .await
     }
