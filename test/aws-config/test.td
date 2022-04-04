@@ -113,4 +113,3 @@ regex: Unable to list S3 bucket.*Access Denied
 
 ! SELECT text FROM s3_profile_denied
 regex: Unable to list S3 bucket.*Access Denied
-
