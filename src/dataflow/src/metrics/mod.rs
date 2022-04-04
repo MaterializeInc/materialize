@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::{metric, metrics::raw::UIntCounterVec};
+use mz_ore::{metric, metrics::raw::IntCounterVec};
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 
 /// Metrics specific to a single worker.
 #[derive(Clone, Debug)]
 pub struct Metrics {
-    events_read: UIntCounterVec,
+    events_read: IntCounterVec,
 }
 
 impl Metrics {
