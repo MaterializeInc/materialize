@@ -1,9 +1,13 @@
 ---
-title: "Cloud"
+title: "Materialize Cloud"
 description: "Learn about Materialize Cloud"
 disable_toc: true
 disable_list: true
 disable_h1: true
+menu:
+  main:
+    parent: "reference"
+    identifier: cloud
 aliases:
   - what-is-materialize-cloud
 ---

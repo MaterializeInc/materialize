@@ -3,7 +3,9 @@ title: "JOIN"
 description: "`JOIN` lets you combine two or more table expressions."
 menu:
   main:
-    parent: 'sql'
+    parent: 'reference'
+    name: Joins
+    weight: 46
 ---
 
 `JOIN` lets you combine two or more table expressions into a single table

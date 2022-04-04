@@ -3,7 +3,7 @@ title: "CREATE ROLE"
 description: "`CREATE ROLE` creates a new role."
 menu:
   main:
-    parent: sql
+    parent: commands
 ---
 
 {{< version-added v0.7.0 />}}

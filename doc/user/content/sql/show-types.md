@@ -3,7 +3,7 @@ title: "SHOW TYPES"
 description: "`SHOW TYPES` returns a list of the data types in your Materialize instance."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.

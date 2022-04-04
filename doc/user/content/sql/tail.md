@@ -3,7 +3,7 @@ title: "TAIL"
 description: "`TAIL` streams updates from a relation as they occur."
 menu:
   main:
-    parent: "sql"
+    parent: commands
 ---
 
 `TAIL` streams updates from a source, table, or view as they occur.

@@ -3,7 +3,7 @@ title: "CREATE MATERIALIZED VIEW"
 description: "`CREATE MATERIALIZED VIEW` creates a materialized view, which Materialize will incrementally maintain as updates occur to the underlying data."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE MATERIALIZED VIEW` creates a materialized view, which lets you retrieve

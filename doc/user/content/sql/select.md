@@ -3,7 +3,7 @@ title: "SELECT"
 description: "`SELECT` reads from or queries your materialized views."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SELECT` is used in a few ways within Materialize. You can use it to:

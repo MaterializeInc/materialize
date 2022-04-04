@@ -4,6 +4,7 @@ description: "Connecting Materialize to a Kinesis data stream"
 menu:
   main:
     parent: 'create-source'
+    name: Kinesis
 aliases:
     - /sql/create-source/kinesis-source
     - /sql/create-source/json-kinesis

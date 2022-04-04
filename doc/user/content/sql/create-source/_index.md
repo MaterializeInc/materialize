@@ -5,10 +5,10 @@ menu:
   # This should also have a "non-content entry" under Connect, which is
   # configured in doc/user/config.toml
   main:
-    identifier: create-source
-    parent: sql
-disable_list: true
-disable_toc: true
+    parent: reference
+    name: Sources
+    identifier: 'create-source'
+    weight: 20
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact

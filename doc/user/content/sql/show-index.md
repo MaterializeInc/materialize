@@ -3,7 +3,7 @@ title: "SHOW INDEX"
 description: "SHOW INDEX provides details about a materialized view's indexes"
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 aliases:
     - /sql/show-indexes
     - /sql/show-keys

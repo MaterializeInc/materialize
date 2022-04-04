@@ -3,7 +3,7 @@ title: "SHOW SOURCES"
 description: "`SHOW SOURCES` returns a list of all sources available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW SOURCES` returns a list of all sources available to your Materialize

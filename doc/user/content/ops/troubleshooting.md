@@ -3,7 +3,8 @@ title: "Troubleshooting"
 description: "Troubleshoot performance issues."
 menu:
   main:
-    parent: operations
+    parent: ops
+    weight: 80
 aliases:
   - /ops/diagnosing-using-sql
 ---

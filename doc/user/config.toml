@@ -67,92 +67,77 @@ versions = [
   { name = "v0.1.0", date = "13 February 2020", targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"] }
 ]
 
+
+
 [[menu.main]]
-identifier = "overview"
-name = "Overview"
+identifier = "reference"
+name = "Reference"
 weight = 30
 
 [[menu.main]]
-identifier = "cloud"
-name="Cloud"
-weight = 60
+name = "Tables"
+parent = "reference"
+url = "/sql/create-table/"
+weight= 30
 
 [[menu.main]]
-name = "What Is Materialize Cloud?"
-parent = "cloud"
-url = "/cloud/"
-weight = 1
+name = "Views"
+parent = "reference"
+url = "/sql/create-view/"
+weight= 40
 
 [[menu.main]]
-identifier = "connections"
-name = "Connect"
-weight = 50
-
-[[menu.main]]
-name = "Sources"
-parent = "connections"
-url = "/sql/create-source"
-weight= 2
+name = "Materialized Views"
+parent = "reference"
+url = "/sql/create-materialized-view/"
+weight= 45
 
 [[menu.main]]
 name = "Sinks"
-parent = "connections"
-url = "/sql/create-sink"
-weight= 3
+parent = "reference"
+url = "/sql/create-sink/"
+weight= 60
 
 [[menu.main]]
-identifier = "sql"
-name = "SQL"
-weight = 70
+name = "Queries (SELECT)"
+parent = "reference"
+url = "/sql/select/"
+weight= 70
 
 [[menu.main]]
-name = "SQL Overview"
-parent = "sql"
-url = "/sql/"
-weight = 1
+name = "Subscriptions (TAIL)"
+parent = "reference"
+url = "/sql/create-index/"
+weight= 80
 
 [[menu.main]]
-identifier = "guides"
-name = "Guides"
-weight = 75
+name = "Indexes"
+parent = "reference"
+url = "/sql/create-index"
+weight= 50
+
 
 [[menu.main]]
-identifier = "operations"
-name = "Operations"
+identifier = "advanced"
+name = "Advanced Concepts"
 weight = 80
 
 [[menu.main]]
-identifier = "demos"
-name = "Demos"
-weight = 100
-
-[[menu.main]]
-name = "Try Materialize"
-parent = "demos"
-url = "/demos/"
-weight = 1
-
-[[menu.main]]
-identifier = "third-party"
-name = "Third-Party Tools"
-weight = 120
-
-[[menu.main]]
-identifier = "security"
-name = "Security"
-weight = 140
+identifier = "about"
+name = "About"
+weight = 70
 
 [[menu.main]]
 name = "Security Overview"
-parent = "security"
+parent = "about"
 url = "https://materialize.com/security-overview"
-weight= 1
+weight= 40
 
 [[menu.main]]
 name = "Responsible Disclosure Policy"
-parent = "security"
+parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight= 2
+weight= 2000
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works

@@ -4,6 +4,7 @@ description: "Connecting Materialize to a Kafka or Redpanda broker"
 menu:
   main:
     parent: 'create-source'
+    name: Kafka
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka

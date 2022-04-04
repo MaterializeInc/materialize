@@ -5,7 +5,7 @@ menu:
   # This should also have a "non-content entry" under Connect, which is
   # configured in doc/user/config.toml
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE SINK` sends data from Materialize to an external sink.

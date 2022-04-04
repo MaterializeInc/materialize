@@ -2,8 +2,10 @@
 title: "CREATE VIEW"
 description: "`CREATE VIEW` creates an alias for a `SELECT` statement."
 menu:
+  # This should also have a "non-content entry" under Reference, which is
+  # configured in doc/user/config.toml
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE VIEW` creates a _non-materialized_ view, which only provides an alias

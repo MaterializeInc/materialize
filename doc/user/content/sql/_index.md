@@ -1,11 +1,11 @@
 ---
-title: "SQL Overview"
-description: "Find all of the great SQL statements you know and love..."
-disable_toc: true
-disable_list: true
+title: "SQL"
+description: "A single page with every SQL command, function, type, and keyword."
 menu:
   main:
-    weight: 1
+    parent: 'reference'
+    name: 'All SQL on One Page'
+    weight: 10
 ---
 
 We want Materialize to be easy to use, so we designed it to work with SQL. However, every database implements SQL a little differently, and none matches the full standard. In general, we model our implementation after PostgreSQL.

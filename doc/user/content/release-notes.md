@@ -1,8 +1,10 @@
 ---
 title: "Release Notes"
 description: "What's new in this version of Materialize"
-menu: "main"
-weight: 500
+menu:
+  main:
+    parent: 'about'
+    weight: 10
 ---
 
 This page details changes between versions of Materialize, including:

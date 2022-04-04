@@ -2,8 +2,10 @@
 title: "CREATE TABLE"
 description: "`CREATE TABLE` creates an in-memory table."
 menu:
+  # This should also have a "non-content entry" under Reference, which is
+  # configured in doc/user/config.toml
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< version-added v0.5.0 />}}

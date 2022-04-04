@@ -3,7 +3,7 @@ title: "DROP ROLE"
 description: "`DROP ROLE` removes a role from your Materialize instance."
 menu:
   main:
-    parent: sql
+    parent: commands
 ---
 
 {{< version-added v0.7.0 />}}

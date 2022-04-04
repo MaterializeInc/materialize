@@ -3,7 +3,7 @@ title: "CREATE DATABASE"
 description: "`CREATE DATABASE` creates a new database."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE DATABASE` creates a new database.

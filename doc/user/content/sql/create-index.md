@@ -2,8 +2,10 @@
 title: "CREATE INDEX"
 description: "`CREATE INDEX` creates an in-memory index on a source or view."
 menu:
-    main:
-        parent: "sql"
+  # This should also have a "non-content entry" under Reference, which is
+  # configured in doc/user/config.toml
+  main:
+    parent: 'commands'
 ---
 
 {{< warning >}} This is an advanced feature. Running `CREATE MATERIALIZED VIEW` automatically

@@ -1,11 +1,11 @@
 ---
-title: "Functions + Operators"
+title: "SQL Functions + Operators"
 description: "Find all of the great SQL functions you know and love..."
 menu:
   main:
     identifier: sql-functions
-    parent: sql
-    weight: 20
+    parent: reference
+    weight: 100
 disable_list: true
 disable_toc: true
 ---
