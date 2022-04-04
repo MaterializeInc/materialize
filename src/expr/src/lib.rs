@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_repr::{ColumnType, ScalarType};
 
+mod gen;
 mod id;
 mod linear;
 mod relation;

@@ -36,6 +36,8 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs", "sts"] }
 mz-ccsr = { path = "../ccsr" }
 mz-coord = { path = "../coord" }
+mz-dataflow-types = { path = "../dataflow-types" }
+mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task"] }
@@ -43,6 +45,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-stash = { path = "../stash" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 prost = "0.9.0"
 prost-reflect = { version = "0.6.1", features = ["serde"] }

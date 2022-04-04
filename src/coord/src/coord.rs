@@ -91,9 +91,9 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ComputeResponse, CreateSourceCommand, InstanceConfig,
-    LinearizedTimestampBindingFeedback, Response as DataflowResponse, StorageResponse,
-    TimestampBindingFeedback, DEFAULT_COMPUTE_INSTANCE_ID,
+    ComputeInstanceId, ComputeResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
+    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
+    DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -425,7 +425,8 @@ impl Coordinator {
         self.dataflow_client
             .storage_mut()
             .set_read_policy(policy_updates)
-            .await;
+            .await
+            .unwrap();
     }
 
     /// Initialize the compute read policies.
@@ -452,7 +453,8 @@ impl Coordinator {
             .compute_mut(instance)
             .unwrap()
             .set_read_policy(policy_updates)
-            .await;
+            .await
+            .unwrap();
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -499,19 +501,12 @@ impl Coordinator {
                         .source_description_for(entry.id())
                         .unwrap();
 
-                    let ts_bindings = self
-                        .catalog
-                        .load_timestamp_bindings(entry.id())
-                        .expect("loading timestamps from coordinator cannot fail");
-
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![CreateSourceCommand {
-                            id: entry.id(),
-                            desc: source_description,
-                            since: Antichain::from_elem(since_ts),
-                            ts_bindings,
-                        }])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -540,12 +535,10 @@ impl Coordinator {
                         .unwrap();
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![CreateSourceCommand {
-                            id: entry.id(),
-                            desc: source_description,
-                            since: Antichain::from_elem(since_ts),
-                            ts_bindings: vec![],
-                        }])
+                        .create_sources(vec![(
+                            entry.id(),
+                            (source_description, Antichain::from_elem(since_ts)),
+                        )])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -854,41 +847,11 @@ impl Coordinator {
             }
             DataflowResponse::Compute(ComputeResponse::FrontierUppers(_updates)) => {}
             DataflowResponse::Storage(StorageResponse::TimestampBindings(
-                TimestampBindingFeedback { bindings, changes },
+                TimestampBindingFeedback {
+                    bindings: _,
+                    changes,
+                },
             )) => {
-                self.catalog
-                    .insert_timestamp_bindings(
-                        bindings
-                            .into_iter()
-                            .map(|(id, pid, ts, offset)| (id, pid.to_string(), ts, offset.offset)),
-                    )
-                    .expect("inserting timestamp bindings cannot fail");
-
-                // Take the opportunity to compact the catalog here.
-                let mut durability_updates = Vec::new();
-                let mut timestamp_compactions = Vec::new();
-                let storage = self.dataflow_client.storage();
-                for (id, _) in changes.iter() {
-                    let collection = storage.collection(*id).unwrap();
-                    durability_updates.push((*id, collection.write_frontier.frontier().to_owned()));
-                    if let Some(time) = collection.read_capabilities.frontier().first() {
-                        timestamp_compactions.push((*id, *time));
-                    }
-                }
-
-                self.catalog
-                    .compact_timestamp_bindings(&timestamp_compactions)
-                    .expect("compacting timestamp bindings cannot fail");
-
-                // Announce the new frontiers that have been durably persisted.
-                if !durability_updates.is_empty() {
-                    self.dataflow_client
-                        .storage_mut()
-                        .update_durability_frontiers(durability_updates)
-                        .await
-                        .unwrap();
-                }
-
                 // Allow compaction of persisted tables.
                 let storage = self.dataflow_client.storage();
                 let source_since_updates: Vec<_> = changes
@@ -2228,12 +2191,10 @@ impl Coordinator {
                     .unwrap();
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![CreateSourceCommand {
-                        id: table_id,
-                        desc: source_description,
-                        since: Antichain::from_elem(since_ts),
-                        ts_bindings: vec![],
-                    }])
+                    .create_sources(vec![(
+                        table_id,
+                        (source_description, Antichain::from_elem(since_ts)),
+                    )])
                     .await
                     .unwrap();
                 self.initialize_storage_read_policies(
@@ -2339,23 +2300,18 @@ impl Coordinator {
                     .map(|p| p.since_ts)
                     .unwrap_or_else(Timestamp::minimum);
 
-                let ts_bindings = self
+                let source_description = self
                     .catalog
-                    .load_timestamp_bindings(source_id)
-                    .expect("loading timestamps from coordinator cannot fail");
+                    .state()
+                    .source_description_for(source_id)
+                    .unwrap();
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![CreateSourceCommand {
-                        id: source_id,
-                        desc: self
-                            .catalog
-                            .state()
-                            .source_description_for(source_id)
-                            .unwrap(),
-                        since: Antichain::from_elem(since_ts),
-                        ts_bindings,
-                    }])
+                    .create_sources(vec![(
+                        source_id,
+                        (source_description, Antichain::from_elem(since_ts)),
+                    )])
                     .await
                     .unwrap();
                 self.initialize_storage_read_policies(
@@ -4641,7 +4597,8 @@ impl Coordinator {
                         .compute_mut(compute_instance)
                         .unwrap()
                         .set_read_policy(vec![(id, needs.policy())])
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -5481,7 +5438,7 @@ pub mod read_holds {
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            storage.set_read_policy(policy_changes).await;
+            storage.set_read_policy(policy_changes).await.unwrap();
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             let mut compute = self
@@ -5498,7 +5455,7 @@ pub mod read_holds {
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            compute.set_read_policy(policy_changes).await;
+            compute.set_read_policy(policy_changes).await.unwrap();
         }
         /// Release read holds on the indicated collections at the indicated time.
         ///
@@ -5529,7 +5486,8 @@ pub mod read_holds {
             self.dataflow_client
                 .storage_mut()
                 .set_read_policy(policy_changes)
-                .await;
+                .await
+                .unwrap();
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             for id in compute_ids.iter() {
@@ -5541,7 +5499,8 @@ pub mod read_holds {
                 .compute_mut(compute_instance)
                 .expect("Reference to absent compute instance")
                 .set_read_policy(policy_changes)
-                .await;
+                .await
+                .unwrap();
         }
     }
 }

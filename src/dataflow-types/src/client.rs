@@ -399,7 +399,7 @@ pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// Durability frontier changes
     pub changes: Vec<(GlobalId, ChangeBatch<T>)>,
     /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, PartitionId, T, MzOffset)>,
+    pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
 }
 
 /// Responses that the worker/dataflow can provide back to the coordinator.

@@ -236,13 +236,13 @@ where
                             // response about a terminated instance.
                             .expect("Reference to absent instance")
                             .update_write_frontiers(updates)
-                            .await;
+                            .await?;
                     }
                     ComputeResponse::PeekResponse(uuid, _response) => {
                         self.compute_mut(instance)
                             .expect("Reference to absent instance")
                             .remove_peeks(std::iter::once(*uuid))
-                            .await;
+                            .await?;
                     }
                     ComputeResponse::TailResponse(global_id, response) => {
                         let mut changes = timely::progress::ChangeBatch::new();
@@ -260,7 +260,7 @@ where
                         self.compute_mut(instance)
                             .expect("Reference to absent instance")
                             .update_write_frontiers(&[(*global_id, changes)])
-                            .await;
+                            .await?;
                     }
                 }
                 Ok(Some(Response::Compute(response)))
@@ -271,7 +271,11 @@ where
                     Some(StorageResponse::TimestampBindings(feedback)) => {
                         self.storage_controller
                             .update_write_frontiers(&feedback.changes)
-                            .await;
+                            .await?;
+
+                        self.storage_controller
+                            .persist_timestamp_bindings(&feedback)
+                            .await?;
                     }
                     Some(StorageResponse::LinearizedTimestamps(_)) => {
                         // Nothing to do here.

@@ -18,7 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
@@ -38,8 +38,8 @@ use mz_sql::DEFAULT_SCHEMA;
 #[tokio::test]
 async fn datadriven() {
     datadriven::walk_async("tests/testdata", |mut f| async {
-        let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())
+        let data_dir = TempDir::new().unwrap();
+        let mut catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone())
             .await
             .unwrap();
         f.run(|test_case| -> String {
