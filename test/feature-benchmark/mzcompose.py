@@ -16,7 +16,9 @@ from typing import List, Type
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
-from scenarios import *
+from scenarios import *  # noqa: F401 F403
+from scenarios import Scenario
+from scenarios_concurrency import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
