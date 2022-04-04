@@ -78,6 +78,30 @@ The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view up
 
 A `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a deletion (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
 
+### Streaming with psycopg3
+
+{{< warning >}}
+psycopg3 is not yet stable.
+The example here could break if their API changes.
+{{< /warning >}}
+
+Although psycopg3 can function identically as the psycopg2 example above,
+it also has a `stream` feature where rows are not buffered and we can thus use `TAIL` directly.
+
+```python
+#!/usr/bin/env python3
+
+import psycopg3
+import sys
+
+dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+conn = psycopg3.connect(dsn)
+
+conn = psycopg3.connect(dsn)
+with conn.cursor() as cur:
+    for row in cur.stream("TAIL t"):
+        print(row)
+```
 ## Query
 
 Querying Materialize is identical to querying a traditional PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
