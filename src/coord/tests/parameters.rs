@@ -9,7 +9,7 @@
 
 use std::error::Error;
 
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 use mz_coord::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
@@ -110,8 +110,8 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ),
     ];
 
-    let catalog_file = NamedTempFile::new()?;
-    let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
+    let data_dir = TempDir::new()?;
+    let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         let stmt = mz_sql::parse::parse(sql)?.into_element();

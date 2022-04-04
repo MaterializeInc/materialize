@@ -180,7 +180,7 @@ impl Action for SqlAction {
         })
         .await?;
 
-        if let Some(path) = &state.materialized_catalog_path {
+        if let Some(path) = &state.materialized_data_path {
             match self.stmt {
                 Statement::CreateDatabase { .. }
                 | Statement::CreateIndex { .. }
@@ -190,7 +190,7 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path, NOW_ZERO.clone()).await?.dump();
+                    let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,

@@ -259,7 +259,7 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--validate-catalog /path/to/catalog`
+#### `--validate-data-dir /path/to/mzdata`
 
 After executing a DDL statement, validate that the on-disk representation of the catalog is identical to the in-memory one.
 

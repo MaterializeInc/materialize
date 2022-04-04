@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use fail::fail_point;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -29,15 +28,13 @@ use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ExternalSourceConnector, MzOffset, SourceConnector, Timeline,
+    AwsExternalId, ExternalSourceConnector, SourceConnector, Timeline,
 };
-use mz_expr::PartitionId;
 use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::Timestamp;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
@@ -1415,10 +1412,10 @@ impl Catalog {
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
+    pub async fn open_debug(data_dir_path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(path, experimental_mode)?;
+        let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
             local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
@@ -1866,75 +1863,6 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
-    /// Insert timestamp bindings into SQLite, and ignores duplicate timestamp bindings.
-    ///
-    /// Each individual binding is listed as (source_id, partition_id, timestamp, offset)
-    /// and it indicates that all data from (source, partition) for offsets < `offset`, can
-    /// be assigned `timestamp` iff `offset` is the minimal such offset (this is a way to encode
-    /// a [start, end) offset interval without having to duplicate adjacent starts and ends in
-    /// storage).
-    /// TODO: we intentionally ignore duplicates because BYO sources can send multiple
-    /// copies of the same timestamp.
-    pub fn insert_timestamp_bindings(
-        &mut self,
-        timestamps: impl IntoIterator<Item = (GlobalId, String, Timestamp, i64)>,
-    ) -> Result<(), Error> {
-        fail_point!("insert_timestamp_bindings_before", |_| {
-            Err(Error::new(ErrorKind::FailpointReached(
-                "insert_timestamp_bindings_before".to_string(),
-            )))
-        });
-
-        let mut storage = self.storage();
-        let tx = storage.transaction()?;
-
-        for (sid, pid, ts, offset) in timestamps.into_iter() {
-            tx.insert_timestamp_binding(&sid, &pid, ts, offset)?;
-        }
-        tx.commit()?;
-
-        fail_point!("insert_timestamp_bindings_after", |_| {
-            Err(Error::new(ErrorKind::FailpointReached(
-                "insert_timestamp_bindings_after".to_string(),
-            )))
-        });
-
-        Ok(())
-    }
-
-    /// Read all available timestamp bindings for a source
-    ///
-    /// Returns its output sorted by (partition, timestamp)
-    pub fn load_timestamp_bindings(
-        &mut self,
-        source_id: GlobalId,
-    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
-        let mut storage = self.storage();
-        let tx = storage.transaction()?;
-
-        let ret = tx.load_timestamp_bindings(source_id)?;
-        tx.commit()?;
-
-        Ok(ret)
-    }
-
-    /// Compact timestamp bindings for several sources.
-    ///
-    /// In practice this ends up being "remove all bindings less than a given timestamp"
-    /// because all offsets are then assigned to the next available binding.
-    pub fn compact_timestamp_bindings(
-        &mut self,
-        sources: &[(GlobalId, Timestamp)],
-    ) -> Result<(), Error> {
-        let mut storage = self.storage();
-        let tx = storage.transaction()?;
-        for (source_id, frontier) in sources {
-            tx.compact_timestamp_bindings(*source_id, *frontier)?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn transact<F, T>(
         &mut self,
         ops: Vec<Op>,
@@ -2172,14 +2100,7 @@ impl Catalog {
                     vec![Action::DropComputeInstance { name }]
                 }
                 Op::DropItem(id) => {
-                    let entry = self.get_entry(&id);
-                    match entry.item() {
-                        CatalogItem::Source(_) => {
-                            tx.delete_timestamp_bindings(id)?;
-                        }
-                        _ => {}
-                    }
-                    if !entry.item().is_temporary() {
+                    if !self.get_entry(&id).item().is_temporary() {
                         tx.remove_item(id)?;
                     }
                     builtin_table_updates.extend(self.state.pack_item_update(id, -1));
@@ -3278,7 +3199,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     use mz_ore::now::NOW_ZERO;
     use mz_sql::names::{
@@ -3303,8 +3224,8 @@ mod tests {
             normal_output: PartialObjectName,
         }
 
-        let catalog_file = NamedTempFile::new()?;
-        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
+        let data_dir = TempDir::new()?;
+        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -3370,8 +3291,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let catalog_file = NamedTempFile::new()?;
-        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
+        let data_dir = TempDir::new()?;
+        let mut catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -3386,7 +3307,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())

@@ -115,7 +115,7 @@ pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
 impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Sets up the timestamp binding machinery if needed for this source
     fn setup_timestamp_binding_state(&mut self, source: &CreateSourceCommand<u64>) {
-        let source_timestamp_data = if let SourceConnector::External {
+        let ts_history = if let SourceConnector::External {
             connector,
             ts_frequency,
             ..
@@ -145,7 +145,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         };
 
         // Add any timestamp bindings that we were already aware of on restart.
-        if let Some(data) = source_timestamp_data {
+        if let Some(ts_history) = ts_history {
             for (pid, timestamp, offset) in source.ts_bindings.iter().cloned() {
                 if crate::source::responsible_for(
                     &source.id,
@@ -160,8 +160,8 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         timestamp,
                         offset
                     );
-                    data.add_partition(pid.clone(), None);
-                    data.add_binding(pid, timestamp, offset);
+                    ts_history.add_partition(pid.clone(), None);
+                    ts_history.add_binding(pid, timestamp, offset);
                 } else {
                     trace!(
                         "NOT adding partition/binding on worker {}: ({}, {}, {})",
@@ -173,7 +173,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
             }
 
-            self.storage_state.ts_histories.insert(source.id, data);
+            self.storage_state
+                .ts_histories
+                .insert(source.id, ts_history);
         } else {
             assert!(source.ts_bindings.is_empty());
         }
@@ -416,12 +418,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     changes.push((*id, change_batch));
                 }
                 // Add all timestamp bindings we know about between the old and new frontier.
-                bindings.extend(
-                    history
-                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
-                        .into_iter()
-                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
-                );
+                bindings.push((
+                    *id,
+                    history.get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow()),
+                ));
                 prev_frontier.clone_from(&new_frontier);
             }
         }

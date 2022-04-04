@@ -83,7 +83,7 @@ SERVICES = [
     # we will actually be benchmarking it.
     Materialized(image="materialize/materialized:latest"),
     Testdrive(
-        validate_catalog=False,
+        validate_data_dir=False,
         default_timeout=default_timeout,
     ),
     KgenService(),

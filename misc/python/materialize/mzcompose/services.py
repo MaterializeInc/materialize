@@ -486,7 +486,7 @@ class Testdrive(Service):
         default_timeout: str = "30s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_catalog: bool = True,
+        validate_data_dir: bool = True,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
@@ -525,8 +525,8 @@ class Testdrive(Service):
                 f"--materialized-url={materialized_url}",
             ]
 
-        if validate_catalog:
-            entrypoint.append("--validate-catalog=/share/mzdata/catalog")
+        if validate_data_dir:
+            entrypoint.append("--validate-data-dir=/share/mzdata")
 
         if no_reset:
             entrypoint.append("--no-reset")

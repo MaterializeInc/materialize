@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{named_params, params, Connection, Transaction};
+use rusqlite::{named_params, params, Connection, OptionalExtension, Transaction};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
@@ -71,6 +71,7 @@ CREATE TABLE uppers (
 /// truth, the intent is to swap all stashes for STORAGE collections.
 ///
 /// [STORAGE]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-db.md#STORAGE
+#[derive(Debug)]
 pub struct Stash {
     conn: Arc<Mutex<Connection>>,
 }
@@ -117,25 +118,35 @@ impl Stash {
     {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO collections (name) VALUES ($name) ON CONFLICT DO NOTHING",
-            named_params! {"$name": name},
-        )?;
-        let collection_id = tx.query_row(
-            "SELECT collection_id FROM collections WHERE name = $name",
-            named_params! {"$name": name},
-            |row| row.get("collection_id"),
-        )?;
-        tx.execute(
-            "INSERT INTO sinces (collection_id, since) VALUES ($collection_id, $since)
-             ON CONFLICT DO NOTHING",
-            named_params! {"$collection_id": collection_id, "$since": 0_i64},
-        )?;
-        tx.execute(
-            "INSERT INTO uppers (collection_id, upper) VALUES ($collection_id, $upper)
-             ON CONFLICT DO NOTHING",
-            named_params! {"$collection_id": collection_id, "$upper": 0_i64},
-        )?;
+
+        let collection_id_opt = tx
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name = $name",
+                named_params! {"$name": name},
+                |row| row.get("collection_id"),
+            )
+            .optional()?;
+
+        let collection_id = match collection_id_opt {
+            Some(id) => id,
+            None => {
+                let collection_id = tx.query_row(
+                    "INSERT INTO collections (name) VALUES ($name) RETURNING collection_id",
+                    named_params! {"$name": name},
+                    |row| row.get("collection_id"),
+                )?;
+                tx.execute(
+                    "INSERT INTO sinces (collection_id, since) VALUES ($collection_id, $since)",
+                    named_params! {"$collection_id": collection_id, "$since": 0_i64},
+                )?;
+                tx.execute(
+                    "INSERT INTO uppers (collection_id, upper) VALUES ($collection_id, $upper)",
+                    named_params! {"$collection_id": collection_id, "$upper": 0_i64},
+                )?;
+                collection_id
+            }
+        };
+
         tx.commit()?;
         Ok(StashCollection {
             conn: Arc::clone(&self.conn),
