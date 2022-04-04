@@ -456,7 +456,8 @@ mod tests {
         b0_desc: Description<u64>,
         b1_desc: Description<u64>,
         since: u64,
-        merged: TraceBatchMeta,
+        merged_normal: TraceBatchMeta,
+        merged_small_batches: TraceBatchMeta,
         expected_updates: Vec<((&'a [u8], &'a [u8]), u64, i64)>,
     }
 
@@ -562,6 +563,7 @@ mod tests {
         F: FnMut() -> Result<(Maintainer<B>, BlobCache<B>), Error>,
     >(
         test: &CompactionTestCase<'a>,
+        merged: &TraceBatchMeta,
         mut new_fn: F,
     ) -> Result<(), Error> {
         let (maintainer, blob) = new_fn()?;
@@ -622,7 +624,7 @@ mod tests {
 
         let expected_res = CompactTraceRes {
             req: req.clone(),
-            merged: test.merged.clone(),
+            merged: merged.clone(),
         };
         let mut res = maintainer.compact_trace(req).recv()?;
 
@@ -673,7 +675,7 @@ mod tests {
             Ok((maintainer, blob))
         };
 
-        let mut test_cases = vec![
+        let test_cases = vec![
             CompactionTestCase {
                 b0: vec![vec![
                     (("k".as_bytes(), "v".as_bytes()), 0, 1),
@@ -686,8 +688,19 @@ mod tests {
                 ]],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 1,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 1,
@@ -711,11 +724,22 @@ mod tests {
                 ]],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 0,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 1,
                     size_bytes: 0,
                 },
                 expected_updates: vec![
@@ -736,11 +760,22 @@ mod tests {
                 ],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 0,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 1,
                     size_bytes: 0,
                 },
                 expected_updates: vec![
@@ -764,8 +799,19 @@ mod tests {
                 ],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 0,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 0,
@@ -787,11 +833,22 @@ mod tests {
                 ]],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 0,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 1,
                     size_bytes: 0,
                 },
                 expected_updates: vec![
@@ -810,11 +867,22 @@ mod tests {
                 ]],
                 b1_desc: desc_from(1, 3, 0),
                 since: 2,
-                merged: TraceBatchMeta {
+                merged_normal: TraceBatchMeta {
                     keys: vec!["MERGED-KEY-0".into()],
                     format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 2),
                     level: 0,
+                    size_bytes: 0,
+                },
+                merged_small_batches: TraceBatchMeta {
+                    keys: vec![
+                        "MERGED-KEY-0".into(),
+                        "MERGED-KEY-1".into(),
+                        "MERGED-KEY-2".into(),
+                    ],
+                    format: ProtoBatchFormat::ParquetKvtd,
+                    desc: desc_from(0, 3, 2),
+                    level: 1,
                     size_bytes: 0,
                 },
                 expected_updates: vec![
@@ -826,7 +894,7 @@ mod tests {
         ];
 
         for test_case in test_cases.iter() {
-            compact_trace_test_case(test_case, new_fn.clone())?;
+            compact_trace_test_case(test_case, &test_case.merged_normal, new_fn.clone())?;
         }
 
         let new_fn = || {
@@ -843,17 +911,8 @@ mod tests {
             Ok((maintainer, blob))
         };
 
-        for test_case in test_cases.iter_mut() {
-            test_case.merged.keys = vec![
-                "MERGED-KEY-0".into(),
-                "MERGED-KEY-1".into(),
-                "MERGED-KEY-2".into(),
-            ];
-            test_case.merged.level = 1;
-        }
-
         for test_case in test_cases.iter() {
-            compact_trace_test_case(test_case, new_fn.clone())?;
+            compact_trace_test_case(test_case, &test_case.merged_small_batches, new_fn.clone())?;
         }
 
         Ok(())

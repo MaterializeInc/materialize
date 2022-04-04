@@ -9,15 +9,15 @@
 
 //! Apache Arrow encodings and utils for persist data
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-use arrow2::array::{BinaryArray, PrimitiveArray};
+use arrow2::array::{Array, BinaryArray, PrimitiveArray};
+use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
 use arrow2::io::ipc::write::{FileWriter, WriteOptions};
-use arrow2::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use lazy_static::lazy_static;
 use timely::progress::{Antichain, Timestamp};
@@ -33,38 +33,30 @@ use crate::storage::SeqNo;
 
 lazy_static! {
     /// The Arrow schema we use to encode ((K, V), T, D) tuples.
-    pub static ref SCHEMA_ARROW_KVTD: Arc<Schema> = Arc::new(Schema::new(vec![
+    pub static ref SCHEMA_ARROW_KVTD: Arc<Schema> = Arc::new(Schema::from(vec![
         Field {
             name: "k".into(),
             data_type: DataType::Binary,
-            nullable: false,
-            dict_id: 0,
-            dict_is_ordered: false,
-            metadata: None,
+            is_nullable: false,
+            metadata: BTreeMap::new(),
         },
         Field {
             name: "v".into(),
             data_type: DataType::Binary,
-            nullable: false,
-            dict_id: 0,
-            dict_is_ordered: false,
-            metadata: None,
+            is_nullable: false,
+            metadata: BTreeMap::new(),
         },
         Field {
             name: "t".into(),
             data_type: DataType::UInt64,
-            nullable: false,
-            dict_id: 0,
-            dict_is_ordered: false,
-            metadata: None,
+            is_nullable: false,
+            metadata: BTreeMap::new(),
         },
         Field {
             name: "d".into(),
             data_type: DataType::Int64,
-            nullable: false,
-            dict_id: 0,
-            dict_is_ordered: false,
-            metadata: None,
+            is_nullable: false,
+            metadata: BTreeMap::new(),
         },
     ]));
 }
@@ -76,16 +68,16 @@ const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
 pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> Result<(), Error> {
-    let mut metadata = HashMap::with_capacity(1);
+    let mut metadata = BTreeMap::new();
     metadata.insert(
         INLINE_METADATA_KEY.into(),
         encode_unsealed_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
     );
-    let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
+    let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
     let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, &schema, options)?;
+    let mut writer = FileWriter::try_new(w, &schema, None, options)?;
     for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(records))?;
+        writer.write(&encode_arrow_batch_kvtd(records), None)?;
     }
     writer.finish()?;
     Ok(())
@@ -96,16 +88,16 @@ pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> 
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
 pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
-    let mut metadata = HashMap::with_capacity(1);
+    let mut metadata = BTreeMap::new();
     metadata.insert(
         INLINE_METADATA_KEY.into(),
         encode_trace_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
     );
-    let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
+    let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
     let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, &schema, options)?;
+    let mut writer = FileWriter::try_new(w, &schema, None, options)?;
     for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(&records))?;
+        writer.write(&encode_arrow_batch_kvtd(&records), None)?;
     }
     writer.finish()?;
     Ok(())
@@ -118,7 +110,7 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Re
 pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBatch, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
-        decode_unsealed_inline_meta(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
+        decode_unsealed_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
@@ -143,7 +135,7 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
 pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPart, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
-        decode_trace_inline_meta(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
+        decode_trace_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
@@ -178,75 +170,62 @@ fn decode_arrow_file_kvtd<R: Read + Seek>(
     let projection = None;
     let file_reader = FileReader::new(r, file_meta, projection);
 
-    let file_schema = file_reader.schema().fields().as_slice();
+    let file_schema = file_reader.schema().fields.as_slice();
     // We're not trying to accept any sort of user created data, so be strict.
-    if file_schema != SCHEMA_ARROW_KVTD.fields() {
+    if file_schema != SCHEMA_ARROW_KVTD.fields {
         return Err(format!(
             "expected arrow schema {:?} got: {:?}",
-            SCHEMA_ARROW_KVTD.fields(),
-            file_schema
+            SCHEMA_ARROW_KVTD.fields, file_schema
         )
         .into());
     }
 
     let mut ret = Vec::new();
-    for batch in file_reader {
-        ret.push(decode_arrow_batch_kvtd(&batch?)?);
+    for chunk in file_reader {
+        ret.push(decode_arrow_batch_kvtd(&chunk?)?);
     }
     Ok(ret)
 }
 
-/// Converts a ColumnarRecords into an arrow [(K, V, T, D)] RecordBatch.
-pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> RecordBatch {
-    RecordBatch::try_new(
-        SCHEMA_ARROW_KVTD.clone(),
-        vec![
-            Arc::new(BinaryArray::from_data(
-                DataType::Binary,
-                x.key_offsets.clone(),
-                x.key_data.clone(),
-                None,
-            )),
-            Arc::new(BinaryArray::from_data(
-                DataType::Binary,
-                x.val_offsets.clone(),
-                x.val_data.clone(),
-                None,
-            )),
-            Arc::new(PrimitiveArray::from_data(
-                DataType::UInt64,
-                x.timestamps.clone(),
-                None,
-            )),
-            Arc::new(PrimitiveArray::from_data(
-                DataType::Int64,
-                x.diffs.clone(),
-                None,
-            )),
-        ],
-    )
+/// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
+pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Arc<dyn Array>> {
+    Chunk::try_new(vec![
+        Arc::new(BinaryArray::from_data(
+            DataType::Binary,
+            x.key_offsets.clone(),
+            x.key_data.clone(),
+            None,
+        )) as Arc<dyn Array>,
+        Arc::new(BinaryArray::from_data(
+            DataType::Binary,
+            x.val_offsets.clone(),
+            x.val_data.clone(),
+            None,
+        )),
+        Arc::new(PrimitiveArray::from_data(
+            DataType::UInt64,
+            x.timestamps.clone(),
+            None,
+        )),
+        Arc::new(PrimitiveArray::from_data(
+            DataType::Int64,
+            x.diffs.clone(),
+            None,
+        )),
+    ])
     .expect("schema matches fields")
 }
 
-/// Converts an arrow [(K, V, T, D)] RecordBatch into a ColumnarRecords.
-pub fn decode_arrow_batch_kvtd(x: &RecordBatch) -> Result<ColumnarRecords, String> {
-    // We're not trying to accept any sort of user created data, so be strict.
-    if x.schema().fields() != SCHEMA_ARROW_KVTD.fields() {
-        return Err(format!(
-            "expected arrow schema {:?} got: {:?}",
-            SCHEMA_ARROW_KVTD.fields(),
-            x.schema()
-        ));
-    }
-
+/// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
+pub fn decode_arrow_batch_kvtd(x: &Chunk<Arc<dyn Array>>) -> Result<ColumnarRecords, String> {
     let columns = x.columns();
     if columns.len() != 4 {
         return Err(format!("expected 4 fields got {}", columns.len()));
     }
-    let key_col = x.column(0);
-    let val_col = x.column(1);
-    let ts_col = x.column(2);
-    let diff_col = x.column(3);
+    let key_col = &x.columns()[0];
+    let val_col = &x.columns()[1];
+    let ts_col = &x.columns()[2];
+    let diff_col = &x.columns()[3];
 
     let key_array = key_col
         .as_any()
@@ -275,7 +254,7 @@ pub fn decode_arrow_batch_kvtd(x: &RecordBatch) -> Result<ColumnarRecords, Strin
         .values()
         .clone();
 
-    let len = x.num_rows();
+    let len = x.len();
     let ret = ColumnarRecords {
         len,
         key_data,
