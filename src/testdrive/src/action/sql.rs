@@ -15,6 +15,7 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use fs_extra::dir::CopyOptions;
 use md5::{Digest, Md5};
 use postgres_array::Array;
 use regex::Regex;
@@ -190,6 +191,11 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
+                    let temp_dir = tempfile::tempdir()?;
+                    let mut options = CopyOptions::new();
+                    options.content_only = true;
+                    fs_extra::dir::copy(&path, temp_dir.path(), &options)?;
+                    let path = temp_dir.path();
                     let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
