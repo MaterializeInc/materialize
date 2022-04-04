@@ -22,6 +22,13 @@ message ProtoGlobalId {
     }
 }
 
+message ProtoId {
+    oneof kind {
+        ProtoGlobalId global = 1;
+        ProtoLocalId local = 2;
+    }
+}
+
 message ProtoLocalId {
     uint64 value = 1;
 }
