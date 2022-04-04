@@ -173,19 +173,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
             }
 
-            let mut reported_frontier = Antichain::new();
-            ts_history.read_upper(&mut reported_frontier);
-            // Mark the initialization bindings as already reported
-            self.storage_state
-                .reported_frontiers
-                .insert(source.id, reported_frontier);
             self.storage_state
                 .ts_histories
                 .insert(source.id, ts_history);
         } else {
-            self.storage_state
-                .reported_frontiers
-                .insert(source.id, Antichain::new());
             assert!(source.ts_bindings.is_empty());
         }
     }
@@ -227,6 +218,11 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         Rc::new(RefCell::new(Antichain::from_elem(
                             mz_repr::Timestamp::minimum(),
                         ))),
+                    );
+
+                    self.storage_state.reported_frontiers.insert(
+                        source.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
                 }
             }
