@@ -20,9 +20,8 @@ from typing import Any, Callable, Dict, List, Optional
 import boto3
 import botocore.exceptions
 from mypy_boto3_iam import IAMClient
-from mypy_boto3_s3 import S3Client
+from mypy_boto3_s3 import S3Client, S3ServiceResource
 from mypy_boto3_sts import STSClient
-from retry import retry
 
 from materialize.mzcompose import Composition, UIError
 from materialize.mzcompose.services import Materialized, Testdrive
@@ -184,19 +183,20 @@ def workflow_default(c: Composition) -> None:
 
 
 def create_buckets(session: boto3.Session) -> None:
-    test_names = ["test", "testrestart", "witheid", "noeid"]
-    print(f"Creating bucket S3 buckets for: {test_names}")
+    print(f"Creating bucket S3 buckets")
     try:
-        s3 = session.resource("s3")
-        constraint = (
-            {"LocationConstraint": session.region_name}
-            if session.region_name != "us-east-1"
-            else None
-        )
-        for name in [f"testdrive-{n}-{SEED}" for n in test_names]:
-            bucket = s3.create_bucket(Bucket=name, CreateBucketConfiguration=constraint)
+        resource: S3ServiceResource = session.resource("s3")
+        for name in BUCKET_NAMES:
+            constraint = (
+                {"LocationConstraint": session.region_name}
+                if session.region_name != "us-east-1"
+                else None
+            )
+            bucket = resource.create_bucket(
+                Bucket=name,
+                CreateBucketConfiguration=constraint,  # type: ignore
+            )
             bucket.wait_until_exists()
-
     except Exception as e:
         raise UIError("Unable to create s3 bucket")
 
