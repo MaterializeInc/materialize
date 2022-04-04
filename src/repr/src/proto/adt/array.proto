@@ -7,8 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    prost_build::Config::new()
-        .compile_protos(&["row.proto", "adt/array.proto"], &["src/proto"])
-        .unwrap();
+syntax = "proto3";
+
+package adt.array;
+
+message ProtoInvalidArrayError {
+    message ProtoWrongCardinality {
+        uint64 actual = 1;
+        uint64 expected = 2;
+    }
+    oneof value {
+        uint64 too_many_dimensions = 1;
+        ProtoWrongCardinality wrong_cardinality = 2;
+    }
 }

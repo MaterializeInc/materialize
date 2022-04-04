@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    prost_build::Config::new()
-        .compile_protos(&["row.proto", "adt/array.proto"], &["src/proto"])
-        .unwrap();
-}
+//! Protobuf structs mirroring `crate::row`.
+
+include!(concat!(env!("OUT_DIR"), "/row.rs"));
