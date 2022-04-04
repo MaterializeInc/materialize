@@ -227,8 +227,6 @@ pub struct RemoteStorageConfig {
     pub compute_addr: String,
     /// The address that the controller should connect to.
     pub controller_addr: String,
-    /// The number of workers in the remote process.
-    pub workers: usize,
 }
 
 /// Start a `materialized` server.
@@ -346,7 +344,6 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 config.storage = StorageConfig::Remote(RemoteStorageConfig {
                     compute_addr: format!("{storage_host}:2102"),
                     controller_addr: format!("{storage_host}:6876"),
-                    workers: storage_workers,
                 });
             }
 
@@ -359,7 +356,6 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 orchestrator: Box::new(orchestrator),
                 dataflowd_image,
                 storage_addr: remote_storage_config.compute_addr.clone(),
-                storage_workers: remote_storage_config.workers,
             })
         }
     };
@@ -396,11 +392,9 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         StorageConfig::Remote(RemoteStorageConfig {
             compute_addr,
             controller_addr,
-            workers,
         }) => {
             let (storage_compute_client, _thread) =
-                mz_dataflow::tcp_boundary::client::connect(compute_addr, config.workers, *workers)
-                    .await?;
+                mz_dataflow::tcp_boundary::client::connect(compute_addr, config.workers).await?;
             let boundary = (0..config.workers)
                 .into_iter()
                 .map(|_| Some((mz_dataflow::DummyBoundary, storage_compute_client.clone())))

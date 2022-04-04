@@ -178,21 +178,12 @@ pub struct Args {
     /// Number of dataflow worker threads.
     #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
     workers: WorkerCount,
-    /// Number of storage worker threads.
-    #[clap(
-        long,
-        env = "MZ_STORAGE_WORKERS",
-        value_name = "N",
-        requires_all = &["storage-compute-addr", "storage-controller-addr"],
-        hide = true
-    )]
-    storage_workers: Option<usize>,
     /// Address of a storage process that compute instances should connect to.
     #[clap(
         long,
         env = "MZ_STORAGE_COMPUTE_ADDR",
         value_name = "N",
-        requires_all = &["storage-workers", "storage-controller-addr"],
+        requires = "storage-controller-addr",
         hide = true
     )]
     storage_compute_addr: Option<String>,
@@ -201,7 +192,7 @@ pub struct Args {
         long,
         env = "MZ_STORAGE_CONTROLLER_ADDR",
         value_name = "N",
-        requires_all = &["storage-workers", "storage-compute-addr"],
+        requires = "storage-controller-addr",
         hide = true
     )]
     storage_controller_addr: Option<String>,
@@ -625,19 +616,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
-    let storage = match (
-        args.storage_workers,
-        args.storage_compute_addr,
-        args.storage_controller_addr,
-    ) {
-        (None, None, None) => StorageConfig::Local,
-        (Some(workers), Some(compute_addr), Some(controller_addr)) => {
-            StorageConfig::Remote(RemoteStorageConfig {
-                workers,
-                compute_addr,
-                controller_addr,
-            })
-        }
+    let storage = match (args.storage_compute_addr, args.storage_controller_addr) {
+        (None, None) => StorageConfig::Local,
+        (Some(compute_addr), Some(controller_addr)) => StorageConfig::Remote(RemoteStorageConfig {
+            compute_addr,
+            controller_addr,
+        }),
         _ => unreachable!("clap enforced"),
     };
 

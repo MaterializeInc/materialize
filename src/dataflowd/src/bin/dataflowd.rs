@@ -95,8 +95,6 @@ struct Args {
         default_value = "127.0.0.1:6877"
     )]
     storage_addr: String,
-    #[clap(long, default_value = "0")]
-    storage_workers: usize,
     #[clap(long)]
     linger: bool,
     /// Enable command reconciliation.
@@ -211,13 +209,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     match args.runtime {
         RuntimeType::Compute => {
-            assert!(args.storage_workers > 0, "Storage workers needs to be > 0");
-            let (storage_client, _thread) = mz_dataflow::tcp_boundary::client::connect(
-                args.storage_addr,
-                config.workers,
-                args.storage_workers,
-            )
-            .await?;
+            let (storage_client, _thread) =
+                mz_dataflow::tcp_boundary::client::connect(args.storage_addr, config.workers)
+                    .await?;
             let boundary = (0..config.workers)
                 .into_iter()
                 .map(|_| Some((DummyBoundary, storage_client.clone())))
@@ -238,14 +232,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 !args.reconcile,
                 "Storage runtime does not support command reconciliation."
             );
+            let workers = config.workers;
             let (storage_server, request_rx, _thread) =
-                mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
-            let boundary = (0..config.workers)
+                mz_dataflow::tcp_boundary::server::serve(args.storage_addr, workers).await?;
+            let boundary = (0..workers)
                 .into_iter()
                 .map(|_| Some((storage_server.clone(), DummyBoundary)))
                 .collect::<Vec<_>>();
             let boundary = Arc::new(Mutex::new(boundary));
-            let workers = config.workers;
             let (server, client) =
                 mz_dataflow::serve_boundary_requests(config, request_rx, move |index| {
                     boundary.lock().unwrap()[index % workers].take().unwrap()

@@ -54,11 +54,6 @@ pub struct OrchestratorConfig {
     pub dataflowd_image: String,
     /// The storage address that compute instances should connect to.
     pub storage_addr: String,
-    /// The number of storage workers in the storage instance.
-    ///
-    /// TODO(benesch,antiguru): make this something that is discovered in the
-    /// handshake between compute and storage.
-    pub storage_workers: usize,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -116,7 +111,6 @@ where
                 let OrchestratorConfig {
                     orchestrator,
                     storage_addr,
-                    storage_workers,
                     dataflowd_image,
                 } = match &mut self.orchestrator {
                     Some(orchestrator) => orchestrator,
@@ -133,7 +127,6 @@ where
                             image: dataflowd_image.clone(),
                             args: vec![
                                 "--runtime=compute".into(),
-                                format!("--storage-workers={storage_workers}"),
                                 format!("--storage-addr={storage_addr}"),
                                 "0.0.0.0:2101".into(),
                             ],

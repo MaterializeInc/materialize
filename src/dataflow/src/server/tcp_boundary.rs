@@ -99,6 +99,7 @@ pub mod server {
     /// Returns a handle implementing [StorageCapture] and a join handle to await termination.
     pub async fn serve<A: ToSocketAddrs + std::fmt::Display>(
         addr: A,
+        storage_workers: usize,
     ) -> std::io::Result<(
         TcpEventLinkHandle,
         tokio::sync::mpsc::UnboundedReceiver<SourceInstanceRequest>,
@@ -115,8 +116,10 @@ pub mod server {
             listener.local_addr()
         );
 
-        let thread =
-            mz_ore::task::spawn(|| "storage server", accept(listener, worker_rx, request_tx));
+        let thread = mz_ore::task::spawn(
+            || "storage server",
+            accept(listener, worker_rx, request_tx, storage_workers),
+        );
 
         Ok((TcpEventLinkHandle { worker_tx }, request_rx, thread))
     }
@@ -126,6 +129,7 @@ pub mod server {
         listener: TcpListener,
         mut worker_rx: UnboundedReceiver<WorkerResponse>,
         render_requests: SourceRequestSender,
+        storage_workers: usize,
     ) -> std::io::Result<()> {
         debug!("server listening {listener:?}");
 
@@ -145,7 +149,7 @@ pub mod server {
                                 debug!("Accepting client {id} on {addr}...");
                                 let state = Arc::clone(&state);
                                 mz_ore::task::spawn(|| "client loop", async move {
-                                    handle_compute(id, Arc::clone(&state), socket, render_requests.clone()).await
+                                    handle_compute(id, Arc::clone(&state), socket, render_requests.clone(), storage_workers).await
                                 });
                             }
                             Err(e) => {
@@ -188,6 +192,7 @@ pub mod server {
         state: Arc<Mutex<Shared>>,
         socket: TcpStream,
         render_requests: SourceRequestSender,
+        storage_workers: usize,
     ) -> std::io::Result<()> {
         let mut source_ids = HashSet::new();
         let result = handle_compute_inner(
@@ -196,6 +201,7 @@ pub mod server {
             socket,
             &mut source_ids,
             render_requests,
+            storage_workers,
         )
         .await;
         let mut state = state.lock().await;
@@ -210,10 +216,17 @@ pub mod server {
     async fn handle_compute_inner(
         client_id: ClientId,
         state: Arc<Mutex<Shared>>,
-        socket: TcpStream,
+        mut socket: TcpStream,
         active_source_ids: &mut HashSet<SubscriptionId>,
         render_requests: SourceRequestSender,
+        storage_workers: usize,
     ) -> std::io::Result<()> {
+        /// Announce storage configuration
+        use tokio_byteorder::{AsyncWriteBytesExt, NetworkEndian};
+        socket
+            .write_u64::<NetworkEndian>(storage_workers as u64)
+            .await?;
+
         let mut connection = framed_server(socket);
 
         let (client_tx, mut client_rx) = unbounded_channel();
@@ -374,6 +387,7 @@ pub mod client {
     use tokio::select;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    use tokio::sync::oneshot::Sender;
     use tokio::task::JoinHandle;
     use tokio::time;
     use tokio_serde::formats::Bincode;
@@ -550,7 +564,6 @@ pub mod client {
     pub async fn connect<A: ToSocketAddrs + std::fmt::Debug>(
         addr: A,
         workers: usize,
-        storage_workers: usize,
     ) -> std::io::Result<(TcpEventLinkClientHandle, JoinHandle<std::io::Result<()>>)> {
         let (announce_tx, announce_rx) = unbounded_channel();
         info!("About to connect to {addr:?}");
@@ -561,10 +574,17 @@ pub mod client {
             stream = TcpStream::connect(&addr).await;
         }
         info!("Connected to storage server");
+
+        let (storage_workers_tx, storage_workers_rx) = tokio::sync::oneshot::channel();
+
         let thread = mz_ore::task::spawn(
             || "storage client",
-            run_client(stream.unwrap(), announce_rx, workers),
+            run_client(stream.unwrap(), announce_rx, storage_workers_tx, workers),
         );
+
+        let storage_workers = storage_workers_rx
+            .await
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
 
         Ok((
             TcpEventLinkClientHandle {
@@ -578,11 +598,18 @@ pub mod client {
     /// Communicate data and subscriptions on `stream`, receiving local replay notifications on
     /// `announce_rx`. `workers` is the number of local Timely workers.
     async fn run_client(
-        stream: TcpStream,
+        mut stream: TcpStream,
         mut announce_rx: UnboundedReceiver<Announce>,
+        storage_workers_tx: Sender<usize>,
         workers: usize,
     ) -> std::io::Result<()> {
         debug!("client: connected to server");
+
+        /// Retrieve storage configuration
+        use tokio_byteorder::{AsyncReadBytesExt, NetworkEndian};
+        let storage_workers = stream.read_u64::<NetworkEndian>().await?;
+        let _ = storage_workers_tx.send(storage_workers as usize);
+
         let mut client = framed_client(stream);
 
         let mut state = ClientState::new(workers);

@@ -26,22 +26,22 @@ SERVICES = [
     SchemaRegistry(),
     Dataflowd(
         name="dataflowd_compute_1",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_compute_2",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_compute_3",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_compute_4",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
         ports=[6876, 2101],
     ),
     Dataflowd(
@@ -50,7 +50,7 @@ SERVICES = [
         ports=[6876, 2102],
     ),
     Materialized(
-        options="--storage-workers=2 --storage-compute-addr=dataflowd_storage:2102 --storage-controller-addr=dataflowd_storage:6876",
+        options="--storage-compute-addr=dataflowd_storage:2102 --storage-controller-addr=dataflowd_storage:6876",
     ),
     Testdrive(
         volumes=[
