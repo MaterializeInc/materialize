@@ -1,2 +1,3 @@
 **FILE** _path_ | The absolute path to the file you want to use as the source.
-**COMPRESSION** _algorithm_ | The compression algorithm used with this file.
+**COMPRESSION NONE** | _(Default)_ The file does not use a compression algorithm.
+**COMPRESSION** _algorithm_ | The compression algorithm used with the file. Using `GZIP` compression requires the file to be a normal `.gz` file (e.g. one produced by `gzip`) or a concatenation of multiple `gzip` member streams.
