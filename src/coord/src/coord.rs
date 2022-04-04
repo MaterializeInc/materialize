@@ -280,6 +280,9 @@ pub struct Coordinator {
     catalog: Catalog,
     /// A runtime for the `persist` crate alongside its configuration.
     persister: PersisterWithConfig,
+    /// An in-memory WAL that stages writes before publishing them to Storage
+    // TODO: this must be backed by some durable medium, e.g a STORAGE collection
+    volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
 
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -809,11 +812,24 @@ impl Coordinator {
             );
         }
 
-        self.dataflow_client
-            .storage_mut()
-            .advance_all_table_timestamps(advance_to)
-            .await
-            .unwrap();
+        // Advance the timestmap of untouched tables by appending an empty batch
+        for table in self.catalog.entries().filter(|e| e.is_table()) {
+            let id = table.id();
+            if !self.volatile_updates.contains_key(&id) {
+                self.dataflow_client
+                    .storage_mut()
+                    .append(id, vec![], advance_to)
+                    .await
+                    .unwrap();
+            }
+        }
+        for (id, updates) in self.volatile_updates.drain() {
+            self.dataflow_client
+                .storage_mut()
+                .append(id, updates, advance_to)
+                .await
+                .unwrap();
+        }
     }
 
     async fn message_worker(&mut self, message: DataflowResponse) {
@@ -2904,7 +2920,7 @@ impl Coordinator {
                         // with table-level granularity so it will be all of
                         // them or none of them, which is checked below.
                         let mut persist_updates = Vec::new();
-                        let mut volatile_updates = Vec::new();
+                        let mut had_volatile_updates = false;
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
                             let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
@@ -2927,8 +2943,9 @@ impl Coordinator {
                                         diff,
                                         timestamp,
                                     })
-                                    .collect();
-                                volatile_updates.push((id, updates));
+                                    .collect::<Vec<_>>();
+                                had_volatile_updates = true;
+                                self.volatile_updates.entry(id).or_default().extend(updates);
                             }
                         }
 
@@ -2937,7 +2954,7 @@ impl Coordinator {
                         // writes to the dataflow, so we only need a
                         // Command::Insert for the volatile updates.
                         if !persist_updates.is_empty() {
-                            if !volatile_updates.is_empty() {
+                            if had_volatile_updates {
                                 coord_bail!("transaction had mixed persistent and volatile writes");
                             }
                             let persist_multi =
@@ -2966,14 +2983,6 @@ impl Coordinator {
                                         }
                                     }),
                             );
-                        } else {
-                            for (id, updates) in volatile_updates {
-                                self.dataflow_client
-                                    .storage_mut()
-                                    .table_insert(id, updates)
-                                    .await
-                                    .unwrap();
-                            }
                         }
                     }
                     _ => {}
@@ -4425,6 +4434,7 @@ impl Coordinator {
                 for id in &tables_to_drop {
                     self.persister.remove_table(*id);
                     self.read_capability.remove(id);
+                    self.volatile_updates.remove(id);
                 }
                 self.dataflow_client
                     .storage_mut()
@@ -4503,11 +4513,7 @@ impl Coordinator {
                 let write_fut = persist.write_handle.write(&updates);
                 let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
-                self.dataflow_client
-                    .storage_mut()
-                    .table_insert(id, updates)
-                    .await
-                    .unwrap();
+                self.volatile_updates.entry(id).or_default().extend(updates);
             }
         }
     }
@@ -4893,6 +4899,7 @@ pub async fn serve(
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 persister,
+                volatile_updates: HashMap::new(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 logging,

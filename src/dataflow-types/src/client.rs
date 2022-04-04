@@ -175,13 +175,14 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-
-    /// Insert `updates` into the local input named `id`.
-    Insert {
+    /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    Append {
         /// Identifier of the local input.
         id: GlobalId,
         /// A list of updates to be introduced to the input.
         updates: Vec<Update<T>>,
+        /// The timestamp to advance to.
+        upper: T,
     },
     /// Update durability information for sources.
     ///
@@ -189,11 +190,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
     /// all the same data)
     DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
-    /// Advance all local inputs to the given timestamp.
-    AdvanceAllLocalInputs {
-        /// The timestamp to advance to.
-        advance_to: T,
-    },
 }
 
 impl<T> ComputeCommand<T> {

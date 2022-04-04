@@ -261,37 +261,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
             }
 
-            StorageCommand::AdvanceAllLocalInputs { advance_to } => {
-                let new_frontier = Antichain::from_elem(advance_to);
-                for (id, table_state) in &mut self.storage_state.table_state {
-                    for local_input in &mut table_state.inputs {
-                        if let Some(capability) = local_input.capability.upgrade() {
-                            capability.borrow_mut().downgrade(&advance_to);
-                        }
-                    }
-                    // Discard entries that are no longer active.
-                    table_state
-                        .inputs
-                        .retain(|input| input.capability.upgrade().is_some());
-
-                    assert!(advance_to >= table_state.upper);
-                    table_state.upper = advance_to;
-
-                    // Announce the table updates as durably recorded. This is not correct,
-                    // but it also hasn't been correct afaict.
-                    // TODO(petrosagg): correct this once STORAGE owns table durability.
-                    let mut borrow = self.storage_state.source_uppers[id].borrow_mut();
-                    let mut joined_frontier = Antichain::new();
-                    for time1 in borrow.iter() {
-                        for time2 in new_frontier.iter() {
-                            joined_frontier.insert(time1.join(time2));
-                        }
-                    }
-                    *borrow = joined_frontier;
-                }
-            }
-
-            StorageCommand::Insert { id, updates } => {
+            StorageCommand::Append { id, updates, upper } => {
                 let table_state = match self.storage_state.table_state.get_mut(&id) {
                     Some(table_state) => table_state,
                     None => panic!(
@@ -304,12 +274,24 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 // Add the new updates to all existing renders of the table.
                 for input in &mut table_state.inputs {
                     if let Some(capability) = input.capability.upgrade() {
-                        let capability = capability.borrow_mut();
+                        let mut capability = capability.borrow_mut();
                         let mut session = input.handle.session(capability.clone());
                         for update in &updates {
                             assert!(update.timestamp >= *capability.time());
                             session.give((update.row.clone(), update.timestamp, update.diff));
                         }
+                        capability.downgrade(&upper);
+                        assert!(upper >= table_state.upper);
+                        table_state.upper = upper;
+                        // Announce the table updates as durably recorded. This is not correct,
+                        // but it also hasn't been correct afaict.
+                        // TODO(petrosagg): correct this once STORAGE owns table durability.
+                        let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
+                        let mut joined_frontier = Antichain::new();
+                        for time1 in borrow.iter() {
+                            joined_frontier.insert(time1.join(&upper));
+                        }
+                        *borrow = joined_frontier;
                     }
                 }
                 // Discard entries that are no longer active.

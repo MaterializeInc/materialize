@@ -193,7 +193,7 @@ where
         self.observe_command(&command);
 
         match command {
-            StorageCommand::Insert { id, updates } => {
+            StorageCommand::Append { id, updates, upper } => {
                 let mut updates_parts = vec![Vec::new(); self.parts];
                 for update in updates {
                     let part = usize::cast_from(update.row.hashed()) % self.parts;
@@ -201,7 +201,11 @@ where
                 }
                 updates_parts
                     .into_iter()
-                    .map(|updates| StorageCommand::Insert { id, updates })
+                    .map(|updates| StorageCommand::Append {
+                        id,
+                        updates,
+                        upper: upper.clone(),
+                    })
                     .collect()
             }
             command => vec![command; self.parts],
