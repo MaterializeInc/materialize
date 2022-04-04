@@ -16,7 +16,7 @@ message ProtoInvalidArrayError {
         uint64 actual = 1;
         uint64 expected = 2;
     }
-    oneof value {
+    oneof kind {
         uint64 too_many_dimensions = 1;
         ProtoWrongCardinality wrong_cardinality = 2;
     }

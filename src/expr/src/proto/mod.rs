@@ -7,6 +7,4 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Generated protobuf code and companion impls.
-
-include!(concat!(env!("OUT_DIR"), "/mod.rs"));
+pub mod id;

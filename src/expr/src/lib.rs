@@ -19,13 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use mz_repr::{ColumnType, ScalarType};
 
-mod gen;
 mod id;
 mod linear;
 mod relation;
 mod scalar;
 
 pub mod explain;
+pub mod proto;
 
 pub use relation::canonicalize;
 

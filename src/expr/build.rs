@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
-        .compile_protos(&["id.proto"], &["src"])
+        .extern_path(".adt.array", "::mz_repr::proto::adt::array")
+        .compile_protos(&["id.proto"], &["src/proto", "../repr/src/proto"])
         .unwrap();
 }
