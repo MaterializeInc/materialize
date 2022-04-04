@@ -3286,6 +3286,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tokio-byteorder",
  "tokio-postgres",
  "tokio-serde",
  "tokio-util 0.7.1",
@@ -6148,6 +6149,16 @@ dependencies = [
  "tokio-macros",
  "tracing",
  "winapi",
+]
+
+[[package]]
+name = "tokio-byteorder"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cf347e8ae1d1ffd16c8aed569172a71bd81098a001d0f4964d476c0097aba4a"
+dependencies = [
+ "byteorder",
+ "tokio",
 ]
 
 [[package]]
