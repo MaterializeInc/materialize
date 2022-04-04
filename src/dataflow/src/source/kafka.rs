@@ -31,7 +31,6 @@ use mz_expr::{PartitionId, SourceInstanceId};
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::MessagePayload;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -610,7 +609,7 @@ fn create_kafka_config(
     kafka_config
 }
 
-fn construct_headers(headers: Option<&BorrowedHeaders>) -> Vec<(String, MessagePayload)> {
+fn construct_headers(headers: Option<&BorrowedHeaders>) -> Vec<(String, Option<Vec<u8>>)> {
     let mut out = Vec::new();
     use rdkafka::message::Headers;
 
@@ -619,12 +618,14 @@ fn construct_headers(headers: Option<&BorrowedHeaders>) -> Vec<(String, MessageP
             let header = headers.get(idx);
 
             let k = header.key.to_string();
-            let v = if let Some(value) = header.value {
-                MessagePayload::Data(value.to_vec())
-            } else {
-                MessagePayload::EOF
-            };
-            out.push((k, v));
+            out.push((
+                k,
+                if let Some(value) = header.value {
+                    Some(value.to_vec())
+                } else {
+                    None
+                },
+            ));
         }
     }
     out

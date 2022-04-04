@@ -619,7 +619,7 @@ fn to_metadata_row(
     partition: PartitionId,
     position: i64,
     upstream_time_millis: Option<i64>,
-    headers: Option<&[(String, MessagePayload)]>,
+    headers: Option<&[(String, Option<Vec<u8>>)]>,
 ) -> Row {
     let mut row = Row::default();
     let mut packer = row.packer();
@@ -655,11 +655,11 @@ fn to_metadata_row(
                             if let Some(headers) = headers {
                                 for (k, v) in headers {
                                     match v {
-                                        MessagePayload::Data(v) => r.push_list_with(|record_row| {
+                                        Some(v) => r.push_list_with(|record_row| {
                                             record_row.push(Datum::String(&k));
                                             record_row.push(Datum::Bytes(&v));
                                         }),
-                                        MessagePayload::EOF => r.push_list_with(|record_row| {
+                                        None => r.push_list_with(|record_row| {
                                             record_row.push(Datum::String(&k));
                                             record_row.push(Datum::Null);
                                         }),
