@@ -41,7 +41,7 @@ ENV['PGSSLROOTCERT'] = 'ca.crt'
 
 # Verify ssl in pg connect
 conn = PG.connect("MY_INSTANCE_ID", 6875, 'sslmode=verify-full', '', "materialize", "materialize", "materialize")
-res  = conn.exec('select tablename from pg_tables')
+res  = conn.exec('select tablename from pg_tables;')
 
 res.each do |row|
   puts row['tablename']
