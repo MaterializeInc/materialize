@@ -11,6 +11,7 @@ use bytes::BufMut;
 use prost::Message;
 
 use crate::id::PartitionId;
+use mz_repr::proto::TryFromProtoError;
 
 include!(concat!(env!("OUT_DIR"), "/id.rs"));
 
@@ -26,13 +27,13 @@ impl From<&PartitionId> for ProtoPartitionId {
 }
 
 impl TryFrom<ProtoPartitionId> for PartitionId {
-    type Error = String;
+    type Error = TryFromProtoError;
 
     fn try_from(x: ProtoPartitionId) -> Result<Self, Self::Error> {
         match x.kind {
             Some(proto_partition_id::Kind::Kafka(x)) => Ok(PartitionId::Kafka(x)),
             Some(proto_partition_id::Kind::None(_)) => Ok(PartitionId::None),
-            None => return Err("unknown partition_id".into()),
+            None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
         }
     }
 }
@@ -52,5 +53,6 @@ impl mz_persist_types::Codec for PartitionId {
         ProtoPartitionId::decode(buf)
             .map_err(|err| err.to_string())?
             .try_into()
+            .map_err(|err: TryFromProtoError| err.to_string())
     }
 }
