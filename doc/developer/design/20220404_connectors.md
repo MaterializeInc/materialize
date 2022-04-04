@@ -75,9 +75,9 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR schema_registry;
 
 The eventual goal is for connector create syntax to come in type specific variants and not include `WITH` options except in cases of client implementation specific details; however, the initial implementation will preserve existing syntax for connectors to avoid entangling separating connectors into their own objects from reworking the overall connection option syntax.
 
-All Sources in the catalog will have a reference to their connector which will also indicate if the connector is implicit or explicit. Implicit connectors are created when a traditional `CREATE SOURCE` command is executed and are invisible unless the catalog is directly inspected, i.e. `SHOW CREATE SOURCE` for a source with an implicit connector will return the same output as if connectors did not exist. Explicit connectors are created with `CREATE CONNECTOR` commands and used by specifying the connector in the `CREATE SOURCE` statement. 
+All Sources in the catalog will have a reference to their connector which will also indicate if the connector is implicit or explicit. Implicit connectors are created when a traditional `CREATE SOURCE` command is executed and are invisible unless the catalog is directly inspected, i.e. `SHOW CREATE SOURCE` for a source with an implicit connector will return the same output as if connectors did not exist. Explicit connectors are created with `CREATE CONNECTOR` commands and used by specifying the connector in the `CREATE SOURCE` statement.
 
-## Implementation Phases 
+## Implementation Phases
 
 1. Connectors marked `experimental` with support for implicit and explicit connectors using otherwise identical syntax to now (`WITH` options, etc) in `CREATE SOURCE` statements when enabled and when reading from the catalog in all cases
 2. During `experimental` phase evaluate restructuring the syntax to remove as many `WITH` options as is reasonable, limiting them to client implementation details such as `librdkafka` options which are not generic Kafka options.
@@ -93,7 +93,7 @@ The longer term syntax for `CREATE CONNECTOR` is expected to look similar to the
 ### Kafka connector
 ```
 CREATE CONNECTOR <connector_name>
-FOR KAFKA 
+FOR KAFKA
   BROKER <value>
   SECURITY [=] <security_options>
 
@@ -146,7 +146,7 @@ FOR POSTGRES
     CERTIFICATE FILE [[=] <value>]
     KEY FILE [[=] <value>]
     SNI [[=] <value>] )
-    
+
 ```
 
 ### AWS connector
