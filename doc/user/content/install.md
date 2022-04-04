@@ -112,7 +112,7 @@ for the correct release.
 git clone https://github.com/MaterializeInc/materialize.git
 cd materialize
 git checkout {{< version >}}
-cargo build --release
+cargo build --release --bin materialized
 ```
 
 ## Run the binary
