@@ -623,7 +623,11 @@ fn construct_headers(
             let header = headers.get(idx);
 
             let k = header.key.to_string();
-            let v = MessagePayload::Data(header.value.unwrap().to_vec());
+            let v = if let Some(value) = header.value {
+                MessagePayload::Data(value.to_vec())
+            } else {
+                MessagePayload::EOF
+            };
             out.push((k, v));
         }
     }

@@ -40,7 +40,7 @@ pub struct IngestAction {
     rows: Vec<String>,
     start_iteration: isize,
     repeat: isize,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone)]
@@ -249,7 +249,9 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         for headers_map in headers_maps {
             for (k, v) in headers_map.iter() {
                 if let Value::String(val) = v {
-                    headers.push((k.clone(), val.clone()));
+                    headers.push((k.clone(), Some(val.clone())));
+                } else if let Value::Null = v {
+                    headers.push((k.clone(), None));
                 } else {
                     bail!("lalala")
                 }
@@ -427,7 +429,7 @@ impl Action for IngestAction {
                         for (k, v) in &headers {
                             rd_meta = rd_meta.insert(Header {
                                 key: k,
-                                value: Some(v),
+                                value: v.as_deref(),
                             });
                         }
                         record = record.headers(rd_meta);

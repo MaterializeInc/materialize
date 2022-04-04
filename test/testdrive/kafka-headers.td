@@ -111,6 +111,15 @@ key     f1       f2     gus           partition
 -----------------------------------------------
 fish    fishval  1000   gus=five      0
 
+# null header
+$ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": null}
+{"key": "fish"} {"f1": "fishval", "f2": 1000}
+
+> SELECT key, f1, f2, headers[1].value as gus, partition from headers_also
+key     f1       f2     gus           partition
+-----------------------------------------------
+fish    fishval  1000   <null>        0
+
 # conflicting naming
 $ set schemaheaders={
         "type" : "record",

@@ -654,11 +654,15 @@ fn to_metadata_row(
                             // upheld
                             if let Some(headers) = headers {
                                 for (k, v) in headers {
-                                    if let MessagePayload::Data(v) = v {
-                                        r.push_list_with(|record_row| {
+                                    match v {
+                                        MessagePayload::Data(v) => r.push_list_with(|record_row| {
                                             record_row.push(Datum::String(&k));
                                             record_row.push(Datum::Bytes(&v));
-                                        })
+                                        }),
+                                        MessagePayload::EOF => r.push_list_with(|record_row| {
+                                            record_row.push(Datum::String(&k));
+                                            record_row.push(Datum::Null);
+                                        }),
                                     }
                                 }
                             }
