@@ -7,8 +7,6 @@ menu:
     parent: guides
 ---
 
-# Materialize + Ruby example
-
 Materialize is **PostgreSQL-compatible**, which means that Ruby applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the  [`pg` gem](https://rubygems.org/gems/pg/) to connect to Materialize and issue PostgreSQL commands.
 
 ## Connect
