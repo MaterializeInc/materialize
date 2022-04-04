@@ -234,6 +234,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             serve(serve_config, server, client).await
         }
         RuntimeType::Storage => {
+            assert!(
+                !args.reconcile,
+                "Storage runtime does not support command reconciliation."
+            );
             let (storage_server, request_rx, _thread) =
                 mz_dataflow::tcp_boundary::server::serve(args.storage_addr).await?;
             let boundary = (0..config.workers)
