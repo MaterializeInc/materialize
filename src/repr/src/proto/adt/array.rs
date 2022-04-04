@@ -18,8 +18,8 @@ use mz_ore::cast::CastFrom;
 impl From<InvalidArrayError> for ProtoInvalidArrayError {
     fn from(error: InvalidArrayError) -> Self {
         use proto_invalid_array_error::*;
-        use Value::*;
-        let value = match error {
+        use Kind::*;
+        let kind = match error {
             InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(u64::cast_from(dims)),
             InvalidArrayError::WrongCardinality { actual, expected } => {
                 WrongCardinality(ProtoWrongCardinality {
@@ -28,7 +28,7 @@ impl From<InvalidArrayError> for ProtoInvalidArrayError {
                 })
             }
         };
-        ProtoInvalidArrayError { value: Some(value) }
+        ProtoInvalidArrayError { kind: Some(kind) }
     }
 }
 
@@ -36,9 +36,9 @@ impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
     type Error = TryFromProtoError;
 
     fn try_from(error: ProtoInvalidArrayError) -> Result<Self, Self::Error> {
-        use proto_invalid_array_error::Value::*;
-        match error.value {
-            Some(value) => match value {
+        use proto_invalid_array_error::Kind::*;
+        match error.kind {
+            Some(kind) => match kind {
                 TooManyDimensions(dims) => {
                     Ok(InvalidArrayError::TooManyDimensions(usize::try_from(dims)?))
                 }
@@ -48,7 +48,7 @@ impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
                 }),
             },
             None => Err(TryFromProtoError::missing_field(
-                "`ProtoInvalidArrayError::value`",
+                "`ProtoInvalidArrayError::kind`",
             )),
         }
     }
