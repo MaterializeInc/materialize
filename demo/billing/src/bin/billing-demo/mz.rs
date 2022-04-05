@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use csv::Writer;
@@ -156,6 +157,7 @@ pub async fn validate_sink(
     let count_input_view_query = format!("SELECT count(*) from {}", input_view);
 
     Retry::default()
+        .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {
             let count_check_sink: i64 = mz_client
                 .query_one(&*count_check_sink_query, &[])

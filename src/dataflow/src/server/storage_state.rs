@@ -354,12 +354,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         )>,
     ) {
         for (debug_name, dataflow_id, as_of, source_imports) in dataflows {
-            for (source_id, instance) in source_imports.iter() {
-                assert_eq!(
-                    self.storage_state.source_descriptions[source_id],
-                    instance.description
-                );
-            }
             crate::render::build_storage_dataflow(
                 self.timely_worker,
                 &mut self.storage_state,

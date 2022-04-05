@@ -30,7 +30,7 @@ use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
 };
-use crate::storage::SeqNo;
+use crate::location::SeqNo;
 
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 

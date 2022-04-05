@@ -70,8 +70,8 @@ you view it as [rustdoc for the persist crate].
     thread-safe and clone-able "client".
 
 [OrdKeySpine]: differential_dataflow::trace::implementations::ord::OrdKeySpine
-[Blob]: crate::storage::Blob
-[Log]: crate::storage::Log
+[Blob]: crate::location::Blob
+[Log]: crate::location::Log
 [storage layer]: #integration-with-platform
 
 
@@ -309,7 +309,7 @@ first gracefully finish any pending work, but rejecting new work. However, this
 is not required for correctness; persist will not lose or corrupt data as a
 result of process crash, including e.g. sudden power loss.
 
-[persist write lock]: crate::storage::LockInfo
+[persist write lock]: crate::location::LockInfo
 [RuntimeClient]: crate::client::RuntimeClient
 [RuntimeClient::stop]: crate::client::RuntimeClient::stop
 

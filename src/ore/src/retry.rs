@@ -265,8 +265,8 @@ impl Retry {
 }
 
 impl Default for Retry {
-    /// Constructs a retry operation with defaults that are reasonable for a
-    /// fallible network operation.
+    /// Constructs a retry operation that will retry forever with backoff
+    /// defaults that are reasonable for a fallible network operation.
     fn default() -> Self {
         Retry {
             initial_backoff: Duration::from_millis(125),

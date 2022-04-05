@@ -13,12 +13,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use rusqlite::{named_params, params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use crate::error::Error;
-use crate::storage::{Consensus, SeqNo, VersionedData};
+use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const APPLICATION_ID: i32 = 0x0678_ef32; // chosen randomly
 
@@ -65,7 +66,7 @@ impl SqliteConsensus {
     ///
     /// TODO: We probably are going to move this function directly into the [Consensus]
     /// trait itself.
-    async fn truncate(&mut self, sequence_number: SeqNo) -> Result<(), Error> {
+    async fn truncate(&self, sequence_number: SeqNo) -> Result<(), Error> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "DELETE FROM consensus
@@ -80,7 +81,7 @@ impl SqliteConsensus {
 
 #[async_trait]
 impl Consensus for SqliteConsensus {
-    async fn head(&self, _deadline: Instant) -> Result<Option<VersionedData>, Error> {
+    async fn head(&self, _deadline: Instant) -> Result<Option<VersionedData>, ExternalError> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT sequence_number, data FROM consensus
@@ -99,15 +100,15 @@ impl Consensus for SqliteConsensus {
     }
 
     async fn compare_and_set(
-        &mut self,
+        &self,
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, Error> {
+    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
-                return Err(Error::from(
-                        format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
+                return Err(ExternalError::from(
+                        anyhow!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
                                  new.seqno, expected)));
             }
         }
@@ -182,7 +183,7 @@ impl Consensus for SqliteConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::consensus_impl_test;
+    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 

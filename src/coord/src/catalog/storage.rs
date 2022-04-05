@@ -175,8 +175,10 @@ const MIGRATIONS: &[&dyn Migration] = &[
             .query_and_then([], |row| Ok(row.get::<_, SqlVal<GlobalId>>(0)?.0))?
             .collect::<Result<Vec<_>, Error>>()?;
 
-        let stash =
-            Stash::open(&data_dir_path.join("storage")).expect("unable to open STORAGE stash");
+        let stash = Stash::new(
+            mz_stash::Sqlite::open(&data_dir_path.join("storage"))
+                .expect("unable to open STORAGE stash"),
+        );
         let mut statement = tx.prepare(
             "SELECT pid, timestamp, offset FROM timestamps WHERE sid = ? ORDER BY pid, timestamp",
         )?;

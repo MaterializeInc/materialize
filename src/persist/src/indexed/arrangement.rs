@@ -29,7 +29,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::snapshot::{ArrangementSnapshot, Snapshot, TraceSnapshot};
 use crate::indexed::{BlobUnsealedBatch, Id};
-use crate::storage::{Blob, BlobRead, SeqNo};
+use crate::location::{Blob, BlobRead, SeqNo};
 
 /// A persistent, compacting data structure containing indexed `(Key, Value,
 /// Time, i64)` entries.
@@ -61,7 +61,7 @@ use crate::storage::{Blob, BlobRead, SeqNo};
 /// Unsealed exists to hold data that has been added to the persistent
 /// collection but not yet "seal"ed into a trace. We store incoming data as
 /// immutable batches of updates, corresponding to non-empty, sorted intervals
-/// of [crate::storage::SeqNo]s.
+/// of [crate::location::SeqNo]s.
 ///
 /// As times get sealed and the corresponding updates get moved into the trace,
 /// Unsealed can remove those updates, and eventually, entire batches. The

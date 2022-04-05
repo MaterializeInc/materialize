@@ -2989,6 +2989,7 @@ impl Coordinator {
         uses_ids: I,
         timeline: &Option<Timeline>,
         conn_id: u32,
+        compute_instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Result<CollectionIdBundle, CoordError>
     where
         I: IntoIterator<Item = &'a GlobalId>,
@@ -3029,17 +3030,9 @@ impl Coordinator {
         }
 
         // Gather the indexes and unmaterialized sources used by those items.
-        //
-        // NOTE: there is surely a more efficient way to do this than to call
-        // sufficient_collections per cluster.
-        let mut id_bundle = CollectionIdBundle::default();
-        for compute_instance in self.catalog.compute_instances() {
-            id_bundle.extend(
-                &self
-                    .index_oracle(compute_instance.id())
-                    .sufficient_collections(item_ids.iter()),
-            );
-        }
+        let mut id_bundle: CollectionIdBundle = self
+            .index_oracle(compute_instance)
+            .sufficient_collections(item_ids.iter());
 
         // Filter out ids from different timelines.
         for ids in [&mut id_bundle.storage_ids, &mut id_bundle.compute_ids] {
@@ -3167,7 +3160,8 @@ impl Coordinator {
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
-                    let id_bundle = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                    let id_bundle =
+                        self.timedomain_for(&source_ids, &timeline, conn_id, compute_instance)?;
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
@@ -4443,6 +4437,7 @@ impl Coordinator {
                     for (conn, slot_names) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
+                            .max_duration(Duration::from_secs(30))
                             .retry_async(|_state| {
                                 mz_postgres_util::drop_replication_slots(&conn, &slot_names)
                             })

@@ -10,12 +10,17 @@
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 
-use mz_stash::Stash;
+use mz_stash::{Sqlite, Stash, StashConn, Timestamp};
 
 #[test]
-fn test_stash() -> Result<(), anyhow::Error> {
+fn test_stash_sqlite() -> Result<(), anyhow::Error> {
     let file = NamedTempFile::new()?;
-    let stash = Stash::open(file.path())?;
+    let conn = Sqlite::open(file.path())?;
+    test_stash(conn)
+}
+
+fn test_stash<C: StashConn>(conn: C) -> Result<(), anyhow::Error> {
+    let stash = Stash::new(conn);
 
     // Create an arrangement, write some data into it, then read it back.
     let mut orders = stash.collection::<String, String>("orders")?;
@@ -149,8 +154,8 @@ fn test_stash() -> Result<(), anyhow::Error> {
         other.iter()?.collect::<Vec<_>>(),
         &[(("foo".into(), "bar".into()), 1, 1)],
     );
-    assert_eq!(other.since()?, Antichain::from_elem(0));
-    assert_eq!(other.upper()?, Antichain::from_elem(0));
+    assert_eq!(other.since()?, Antichain::from_elem(Timestamp::MIN));
+    assert_eq!(other.upper()?, Antichain::from_elem(Timestamp::MIN));
 
     Ok(())
 }

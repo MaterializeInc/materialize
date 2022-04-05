@@ -16,13 +16,13 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
+use crate::location::SeqNo;
 use crate::nemesis::validator::uptime::Uptime;
 use crate::nemesis::{
     AllowCompactionReq, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
     ReadSnapshotRes, Res, SealReq, SnapshotId, Step, StepMeta, TakeSnapshotReq, WriteReq,
     WriteReqMulti, WriteReqSingle,
 };
-use crate::storage::SeqNo;
 
 #[derive(Debug)]
 pub struct Validator {

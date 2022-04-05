@@ -23,8 +23,8 @@ use crate::error::Error;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::BlobTraceBatchPart;
 use crate::indexed::BlobUnsealedBatch;
+use crate::location::SeqNo;
 use crate::pfuture::PFuture;
-use crate::storage::SeqNo;
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
 /// updates.
