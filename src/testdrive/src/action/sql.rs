@@ -35,6 +35,7 @@ use mz_sql_parser::ast::{
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
+use crate::util::mz_data::mzdata_copy;
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -190,6 +191,8 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
+                    let temp_mzdata = mzdata_copy(path)?;
+                    let path = temp_mzdata.path();
                     let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",

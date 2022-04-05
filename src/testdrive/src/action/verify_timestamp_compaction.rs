@@ -26,6 +26,7 @@ use mz_stash::Stash;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
+use crate::util::mz_data::mzdata_copy;
 
 pub struct VerifyTimestampCompactionAction {
     source: String,
@@ -56,6 +57,8 @@ impl Action for VerifyTimestampCompactionAction {
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         if let Some(path) = &state.materialized_data_path {
+            let temp_mzdata = mzdata_copy(path)?;
+            let path = temp_mzdata.path();
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
                 .initial_backoff(Duration::from_secs(1))
