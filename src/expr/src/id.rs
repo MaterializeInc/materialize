@@ -34,7 +34,7 @@ impl fmt::Display for Id {
 
 /// The identifier for a local component of a dataflow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct LocalId(pub u64);
+pub struct LocalId(pub(crate) u64);
 
 impl LocalId {
     /// Constructs a new local identifier. It is the caller's responsibility
