@@ -12,6 +12,7 @@
 pub mod adt;
 pub mod row;
 
+use mz_ore::cast::CastFrom;
 use std::num::TryFromIntError;
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
@@ -53,5 +54,69 @@ impl std::error::Error for TryFromProtoError {
             TryFromIntError(error) => Some(error),
             MissingField(_) | InvalidChar(_) => None,
         }
+    }
+}
+
+/// A trait for representing `Self` as a value of type `Self::Repr` for
+/// the purpose of serializing this value as part of a Protobuf message.
+///
+/// To encode a value, use [`ProtoRepr::into_proto()`] (which
+/// should always be an infallible conversion).
+///
+/// To decode a value, use the fallible [`ProtoRepr::from_proto()`].
+/// Since the representation type can be "bigger" than the original,
+/// decoding may fail, indicated by returning a [`TryFromProtoError`]
+/// wrapped in a [`Result::Err`].
+pub trait ProtoRepr: Sized {
+    /// A Protobuf type to represent `Self`.
+    type Repr;
+
+    /// Consume and convert a `Self` into a `Self::Repr` value.
+    fn into_proto(self: Self) -> Self::Repr;
+
+    /// Consume and convert a `Self::Repr` back into a `Self` value.
+    ///
+    /// Since `Self::Repr` can be "bigger" than the original, this
+    /// may fail, indicated by returning a [`TryFromProtoError`]
+    /// wrapped in a [`Result::Err`].
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError>;
+}
+
+impl ProtoRepr for usize {
+    type Repr = u64;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        u64::cast_from(self)
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        usize::try_from(repr).map_err(|err| err.into())
+    }
+}
+
+impl ProtoRepr for char {
+    type Repr = String;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self.to_string()
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        match repr.len() {
+            1 => Ok(repr.chars().next().unwrap()),
+            _ => Err(TryFromProtoError::InvalidChar(repr)),
+        }
+    }
+}
+
+impl<T: ProtoRepr> ProtoRepr for Option<T> {
+    type Repr = Option<T::Repr>;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self.map(|x| x.into_proto())
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        repr.map(T::from_proto).transpose()
     }
 }

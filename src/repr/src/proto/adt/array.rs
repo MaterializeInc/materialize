@@ -11,20 +11,19 @@
 
 include!(concat!(env!("OUT_DIR"), "/adt.array.rs"));
 
-use super::super::TryFromProtoError;
+use super::super::{ProtoRepr, TryFromProtoError};
 use crate::adt::array::InvalidArrayError;
-use mz_ore::cast::CastFrom;
 
 impl From<InvalidArrayError> for ProtoInvalidArrayError {
     fn from(error: InvalidArrayError) -> Self {
         use proto_invalid_array_error::*;
         use Kind::*;
         let kind = match error {
-            InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(u64::cast_from(dims)),
+            InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(dims.into_proto()),
             InvalidArrayError::WrongCardinality { actual, expected } => {
                 WrongCardinality(ProtoWrongCardinality {
-                    actual: u64::cast_from(actual),
-                    expected: u64::cast_from(expected),
+                    actual: actual.into_proto(),
+                    expected: expected.into_proto(),
                 })
             }
         };
@@ -39,12 +38,12 @@ impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
         use proto_invalid_array_error::Kind::*;
         match error.kind {
             Some(kind) => match kind {
-                TooManyDimensions(dims) => {
-                    Ok(InvalidArrayError::TooManyDimensions(usize::try_from(dims)?))
-                }
+                TooManyDimensions(dims) => Ok(InvalidArrayError::TooManyDimensions(
+                    usize::from_proto(dims)?,
+                )),
                 WrongCardinality(v) => Ok(InvalidArrayError::WrongCardinality {
-                    actual: usize::try_from(v.actual)?,
-                    expected: usize::try_from(v.expected)?,
+                    actual: usize::from_proto(v.actual)?,
+                    expected: usize::from_proto(v.expected)?,
                 }),
             },
             None => Err(TryFromProtoError::missing_field(
