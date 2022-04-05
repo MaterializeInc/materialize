@@ -137,10 +137,10 @@ pub trait Stash {
     /// See [Stash::seal]
     fn seal_batch<K, V>(
         &self,
-        seals: &[(StashCollection<K, V>, AntichainRef<Timestamp>)],
+        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
         for (id, new_upper) in seals {
-            self.seal(*id, *new_upper)?;
+            self.seal(*id, new_upper.borrow())?;
         }
         Ok(())
     }
@@ -164,10 +164,10 @@ pub trait Stash {
     /// See [Stash::compact]
     fn compact_batch<K, V>(
         &self,
-        compactions: &[(StashCollection<K, V>, AntichainRef<Timestamp>)],
+        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
         for (id, since) in compactions {
-            self.compact(*id, *since)?;
+            self.compact(*id, since.borrow())?;
         }
         Ok(())
     }
