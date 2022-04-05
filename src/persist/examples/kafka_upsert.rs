@@ -25,10 +25,10 @@ use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
 use mz_persist::error::Error as PersistError;
 use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::location::{Blob, LockInfo};
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use mz_persist::runtime::{self, RuntimeConfig};
-use mz_persist::storage::{Blob, LockInfo};
 use mz_persist::Data;
 use mz_persist_types::Codec;
 

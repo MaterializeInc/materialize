@@ -14,6 +14,7 @@ use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write as StdWrite};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use fail::fail_point;
@@ -21,7 +22,7 @@ use fail::fail_point;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::location::{Atomicity, Blob, BlobMulti, BlobRead, ExternalError, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
@@ -523,6 +524,68 @@ impl Blob for FileBlob {
     }
 }
 
+/// Implementation of [BlobMulti] backed by files.
+#[derive(Debug)]
+pub struct FileBlobMulti {
+    core: FileBlobCore,
+}
+
+impl FileBlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open_multi(
+        _deadline: Instant,
+        config: FileBlobConfig,
+    ) -> Result<Self, ExternalError> {
+        let base_dir = config.base_dir;
+        fs::create_dir_all(&base_dir).map_err(Error::from)?;
+        let core = FileBlobCore {
+            base_dir: Some(base_dir),
+        };
+        Ok(FileBlobMulti { core })
+    }
+}
+
+#[async_trait]
+impl BlobMulti for FileBlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        let value = self.core.get(key)?;
+        Ok(value)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+        let keys = self.core.list_keys()?;
+        Ok(keys)
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        // TODO: Move this impl here once we delete FileBlob.
+        let mut hack = FileBlob {
+            core: FileBlobCore {
+                base_dir: self.core.base_dir.clone(),
+            },
+        };
+        hack.set(key, value, atomic).await?;
+        Ok(())
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        // TODO: Move this impl here once we delete FileBlob.
+        let mut hack = FileBlob {
+            core: FileBlobCore {
+                base_dir: self.core.base_dir.clone(),
+            },
+        };
+        hack.delete(key).await?;
+        Ok(())
+    }
+}
+
 fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, Error> {
     // TODO: flock this for good measure? There's all sorts of tricky edge cases
     // here when this gets called concurrently, and we'll have the same issues
@@ -546,7 +609,9 @@ fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, E
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, log_impl_test};
+    use std::time::Duration;
+
+    use crate::location::tests::{blob_impl_test, blob_multi_impl_test, log_impl_test};
 
     use super::*;
 
@@ -564,6 +629,17 @@ mod tests {
             },
             move |path| FileBlob::open_read(temp_dir_read.join(path).into()),
         )
+        .await
+    }
+
+    #[tokio::test]
+    async fn file_blob_multi() -> Result<(), ExternalError> {
+        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
+        let temp_dir = tempfile::tempdir().map_err(Error::from)?;
+        blob_multi_impl_test(move |path| {
+            let instance_dir = temp_dir.path().join(path);
+            FileBlobMulti::open_multi(no_timeout, instance_dir.into())
+        })
         .await
     }
 

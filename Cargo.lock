@@ -3715,6 +3715,7 @@ dependencies = [
 name = "mz-persist"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "arrow2",
  "async-trait",
  "aws-config",
@@ -3762,6 +3763,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "mz-ore",
+ "mz-persist",
  "mz-persist-types",
  "serde",
  "timely",

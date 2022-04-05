@@ -40,9 +40,9 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::indexed::snapshot::ArrangementSnapshot;
+use crate::location::{Blob, BlobRead, Log, SeqNo};
 use crate::mem::MemBlob;
 use crate::pfuture::{PFuture, PFutureHandle};
-use crate::storage::{Blob, BlobRead, Log, SeqNo};
 use crate::unreliable::UnreliableBlob;
 
 /// The description of a persisted stream.
@@ -391,7 +391,7 @@ impl AppliedState {
     }
 
     fn assign_seqno(&mut self) -> SeqNo {
-        let seqno = self.highest_assigned_seqno + 1;
+        let seqno = self.highest_assigned_seqno.next();
         self.highest_assigned_seqno = seqno;
         seqno
     }

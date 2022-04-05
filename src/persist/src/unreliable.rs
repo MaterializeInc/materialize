@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 
 #[derive(Debug)]
 struct UnreliableCore {
@@ -212,8 +212,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::location::Atomicity::RequireAtomic;
     use crate::mem::{MemBlob, MemLog};
-    use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
 

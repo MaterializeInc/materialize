@@ -25,6 +25,7 @@ harness = false
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
+anyhow = { version = "1.0.55", features = ["backtrace"] }
 arrow2 = { version = "0.10.1", features = ["io_ipc", "io_parquet"] }
 async-trait = "0.1.53"
 aws-config = { version = "0.9.0", default-features = false, features = ["native-tls"] }

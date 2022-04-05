@@ -33,7 +33,7 @@ use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
+use crate::location::{Atomicity, Blob, BlobMulti, BlobRead, ExternalError, LockInfo};
 
 /// Configuration for opening an [S3Blob] or [S3BlobRead].
 #[derive(Clone, Debug)]
@@ -414,11 +414,6 @@ impl S3BlobCore {
                         }
                     }
                 }
-            } else {
-                return Err(Error::from(format!(
-                    "s3 response contents empty: {:?}",
-                    resp
-                )));
             }
 
             if resp.next_continuation_token.is_some() {
@@ -735,6 +730,75 @@ impl Blob for S3Blob {
     }
 }
 
+/// Implementation of [BlobMulti] backed by S3.
+#[derive(Debug)]
+pub struct S3BlobMulti {
+    core: S3BlobCore,
+}
+
+impl S3BlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open(_deadline: Instant, config: S3BlobConfig) -> Result<Self, ExternalError> {
+        let core = S3BlobCore {
+            client: Some(config.client),
+            bucket: config.bucket,
+            prefix: config.prefix,
+            max_keys: 1_000,
+            multipart_config: MultipartConfig::default(),
+        };
+        Ok(S3BlobMulti { core })
+    }
+}
+
+#[async_trait]
+impl BlobMulti for S3BlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        let value = self.core.get(key).await?;
+        Ok(value)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+        let keys = self.core.list_keys().await?;
+        Ok(keys)
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        // TODO: Move this impl here once we delete S3Blob.
+        let mut hack = S3Blob {
+            core: S3BlobCore {
+                client: self.core.client.clone(),
+                bucket: self.core.bucket.clone(),
+                prefix: self.core.prefix.clone(),
+                max_keys: self.core.max_keys,
+                multipart_config: self.core.multipart_config.clone(),
+            },
+        };
+        hack.set(key, value, atomic).await?;
+        Ok(())
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        // TODO: Move this impl here once we delete S3Blob.
+        let mut hack = S3Blob {
+            core: S3BlobCore {
+                client: self.core.client.clone(),
+                bucket: self.core.bucket.clone(),
+                prefix: self.core.prefix.clone(),
+                max_keys: self.core.max_keys,
+                multipart_config: self.core.multipart_config.clone(),
+            },
+        };
+        hack.delete(key).await?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct MultipartConfig {
     multipart_threshold: usize,
@@ -867,7 +931,7 @@ impl MinElapsed {
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
-    use crate::storage::tests::blob_impl_test;
+    use crate::location::tests::{blob_impl_test, blob_multi_impl_test};
     use tracing::info;
 
     use super::*;
@@ -911,6 +975,53 @@ mod tests {
                 Ok(blob)
             },
         )
+        .await?;
+
+        // Also specifically test multipart. S3 requires all parts but the last
+        // to be at least 5MB, which we don't want to do from a test, so this
+        // uses the multipart code path but only writes a single part.
+        {
+            let blob = S3Blob::open_exclusive(
+                config_multipart,
+                LockInfo::new_no_reentrance("multipart".into()),
+            )?;
+            blob.set_multi_part("multipart", "foobar".into()).await?;
+            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn s3_blob_multi() -> Result<(), ExternalError> {
+        mz_ore::test::init_logging();
+        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
+        let config = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    S3BlobConfig::EXTERNAL_TESTS_S3_BUCKET
+                );
+                return Ok(());
+            }
+        };
+        let config_multipart = config.clone_with_new_uuid_prefix();
+
+        blob_multi_impl_test(move |path| {
+            let path = path.to_owned();
+            let config = config.clone();
+            async move {
+                let config = S3BlobConfig {
+                    client: config.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix: format!("{}/s3_blob_multi_impl_test/{}", config.prefix, path),
+                };
+                let mut blob = S3BlobMulti::open(no_timeout, config).await?;
+                blob.core.max_keys = 2;
+                Ok(blob)
+            }
+        })
         .await?;
 
         // Also specifically test multipart. S3 requires all parts but the last
