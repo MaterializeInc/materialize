@@ -40,7 +40,7 @@ ENV['PGSSLKEY'] = 'materialize.key'
 ENV['PGSSLROOTCERT'] = 'ca.crt'
 
 # Verify ssl in pg connect
-conn = PG.connect("MY_INSTANCE_ID", 6875, 'sslmode=verify-full', '', "materialize", "materialize", "materialize")
+conn = PG.connect(host:"MY_INSTANCE_ID", port: 6875, user: "materialize", sslmode: "verify-full")
 res  = conn.exec('select tablename from pg_tables;')
 
 res.each do |row|
@@ -56,17 +56,16 @@ To read a stream of updates from an existing materialized view, open a long-live
 
 ```ruby
 require 'pg'
-require 'pp'
 
 # Locally running instance:
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 conn.exec('BEGIN')
 conn.exec('DECLARE c CURSOR FOR TAIL my_view')
 
 while true
   conn.exec('FETCH c') do |result|
     result.each do |row|
-      pp row
+      puts row
     end
   end
 end
@@ -96,14 +95,13 @@ Query a view `my_view` with a select statement:
 
 ```ruby
 require 'pg'
-require 'pp'
 
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 
 res  = conn.exec('SELECT * FROM my_view')
 
 res.each do |row|
-  pp row
+  puts row
 end
 ```
 
@@ -117,16 +115,15 @@ Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materi
 
 ```ruby
 require 'pg'
-require 'pp'
 
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 
 conn.exec("INSERT INTO my_table (my_column) VALUES ('some_value')")
 
 res  = conn.exec('SELECT * FROM my_table')
 
 res.each do |row|
-  pp row
+  puts row
 end
 ```
 
@@ -138,8 +135,8 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 
 ```ruby
 require 'pg'
-require 'pp'
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 
 # Create a source
 src = conn.exec(
@@ -148,12 +145,12 @@ src = conn.exec(
             CHANNEL 'pubnub-market-orders'"
 );
 
-pp src
+puts src.inspect
 
 # Show the source
 res = conn.exec("SHOW SOURCES")
 res.each do |row|
-  pp row
+  puts row
 end
 ```
 
@@ -163,8 +160,8 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
 ```ruby
 require 'pg'
-require 'pp'
-conn = PG.connect("127.0.0.1", 6875, '', '', "materialize", "materialize", "materialize")
+
+conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 
 # Create a view
 view = conn.exec(
@@ -174,12 +171,12 @@ view = conn.exec(
                 (val->'bid_price')::float AS bid_price
             FROM (SELECT text::jsonb AS val FROM market_orders_raw)"
 );
-pp view
+puts view.inspect
 
 # Show the view
 res = conn.exec("SHOW VIEWS")
 res.each do |row|
-  pp row
+  puts row
 end
 ```
 
