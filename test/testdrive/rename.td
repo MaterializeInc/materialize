@@ -236,9 +236,9 @@ contains:renaming conflict
 
 # ❌ Name used by another item in schema's catalog
 ! ALTER VIEW t1 RENAME TO a
-contains:a is already taken by item in schema
+contains:catalog item 'a' already exists
 ! ALTER VIEW t1 RENAME TO dependent_view;
-contains:dependent_view is already taken by item in schema
+contains:catalog item 'dependent_view' already exists
 
 # 🔬 Aliases
 

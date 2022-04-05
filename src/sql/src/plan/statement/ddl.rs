@@ -2404,8 +2404,8 @@ pub fn plan_create_type(
     };
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if scx.catalog.item_exists(&name) {
-        bail!("catalog item {} already exists", name.to_string().quoted());
+    if scx.item_exists(&name) {
+        bail!("catalog item '{}' already exists", name);
     }
 
     let inner = match as_type {
@@ -3036,7 +3036,7 @@ pub fn plan_alter_object_rename(
                 item: to_item_name.clone().into_string(),
             };
             if scx.item_exists(&proposed_name) {
-                bail!("{} is already taken by item in schema", to_item_name)
+                bail!("catalog item '{}' already exists", to_item_name);
             }
             Ok(Plan::AlterItemRename(AlterItemRenamePlan {
                 id: entry.id(),
