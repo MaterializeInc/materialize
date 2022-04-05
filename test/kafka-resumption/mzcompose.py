@@ -53,7 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         c.start_and_wait_for_tcp(["toxiproxy"])
         c.run(
-            "testdrive-svc",
+            "testdrive",
             "--no-reset",
             "--max-errors=1",
             f"--seed={seed}{i}",

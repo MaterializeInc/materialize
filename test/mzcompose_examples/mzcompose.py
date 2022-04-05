@@ -69,7 +69,7 @@ def workflow_versioned_mz(c: Composition) -> None:
 
         c.wait_for_materialized(mz.name)
 
-        c.run("testdrive-svc", "test*.td")
+        c.run("testdrive", "test*.td")
 
         c.kill(mz.name)
 

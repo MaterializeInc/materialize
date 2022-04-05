@@ -27,7 +27,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("materialized", "test-certs", "testdrive-svc", "postgres")
+    c.up("materialized", "test-certs", "testdrive", "postgres")
     c.wait_for_materialized()
     c.wait_for_postgres()
-    c.run("testdrive-svc", *args.filter)
+    c.run("testdrive", *args.filter)

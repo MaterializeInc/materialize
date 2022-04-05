@@ -47,7 +47,7 @@ def workflow_default(c: Composition) -> None:
                 services=["zookeeper", "kafka", "schema-registry", "materialized"]
             )
             c.wait_for_materialized()
-            c.run("testdrive-svc", "kafka-matrix.td", "testdrive/kafka-*.td")
+            c.run("testdrive", "kafka-matrix.td", "testdrive/kafka-*.td")
             c.rm(
                 "zookeeper",
                 "kafka",

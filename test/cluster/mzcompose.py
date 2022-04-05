@@ -94,7 +94,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.sql(
         "CREATE CLUSTER c REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
     )
-    c.run("testdrive-svc", *glob)
+    c.run("testdrive", *glob)
 
     # Add a replica to that remote cluster and verify that tests still pass.
     c.up("dataflowd_compute_3")
@@ -106,12 +106,12 @@ def test_cluster(c: Composition, *glob: str) -> None:
             REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
         """
     )
-    c.run("testdrive-svc", *glob)
+    c.run("testdrive", *glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
     c.kill("dataflowd_compute_1")
-    c.run("testdrive-svc", *glob)
+    c.run("testdrive", *glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
@@ -127,4 +127,4 @@ def test_cluster(c: Composition, *glob: str) -> None:
             REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
         """
     )
-    c.run("testdrive-svc", "smoke/insert-select.td")
+    c.run("testdrive", "smoke/insert-select.td")
