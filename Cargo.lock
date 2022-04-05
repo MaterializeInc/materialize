@@ -4099,7 +4099,6 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
- "fs_extra",
  "futures",
  "globset",
  "http",

@@ -1,4 +1,4 @@
-use fs_extra::dir::CopyOptions;
+use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -8,8 +8,9 @@ use tempfile::TempDir;
 /// Materialize instance. Therefore it's better to run validations on a copy of the catalog.
 pub fn catalog_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
     let temp_dir = tempfile::tempdir()?;
-    let mut options = CopyOptions::new();
-    options.content_only = true;
-    fs_extra::dir::copy(catalog_path, temp_dir.path(), &options)?;
+    fs::copy(
+        catalog_path.join("catalog"),
+        temp_dir.path().join("catalog"),
+    )?;
     Ok(temp_dir)
 }
