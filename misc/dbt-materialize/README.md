@@ -53,7 +53,7 @@ Type               | Supported? | Details
 `view`             | YES        | Creates a [view].
 `materializedview` | YES        | Creates a [materialized view].
 `table`            | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
-`index`            | YES        | Creates an [index].
+`index`            | NO         | Deprecated. Create a materializedview, view, or source with an index instead.
 `sink`             | YES        | Creates a [sink].
 `ephemeral`        | YES        | Executes queries using CTEs.
 `incremental`      | NO         | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).

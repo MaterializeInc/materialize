@@ -14,17 +14,13 @@
 -- limitations under the License.
 
 {% materialization index, adapter='materialize' %}
-   -- TL;DR: dbt-materialize does not support incremental models, use materializedview
-
-    {{ exceptions.raise_compiler_error(
+    {{ exceptions.warn(
         """
-        The dbt-materialize index custom materialization has been deprecated in favor
-        of native support on view, materializedview, and source creation.
+        The dbt-materialize index custom materialization is no longer actively supported.
+        Define indexes when creating a view, materializedview, or source instead.
 
         See: https://materialize.com/docs/sql/create-index for more information about creating indexes
         with materialize.
-        See: TODO: https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#materializations
-        See: TODO: https://docs.getdbt.com/reference/resource-configs/postgres-configs but for Materialize.
         """
     )}}
 {% endmaterialization %}
