@@ -1066,8 +1066,9 @@ impl CatalogEntry {
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog and a list of updates to builtin tables that
-    /// describe the initial state of the catalog.
+    /// Returns the catalog, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and a map of all
+    /// introspections sources with allocated global IDs for their indexes.
     pub async fn open(
         mut config: Config<'_>,
     ) -> Result<
