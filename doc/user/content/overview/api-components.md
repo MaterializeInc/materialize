@@ -35,7 +35,7 @@ In terms of SQL, sources are similar to a combination of tables and
 clients.
 
 - Like tables, sources are structured components that users can read from.
-- Like clients, sources are responsible for writing data. External
+- Like clients, sources are responsible for reading data. External
   sources provide all of the underlying data to process.
 
 By looking at what comprises a source, we can develop a sense for how this
