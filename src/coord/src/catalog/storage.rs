@@ -238,8 +238,8 @@ const MIGRATIONS: &[&dyn Migration] = &[
         next_gid integer NOT NULL
     );
 
-    -- Higher than all statically assigned Type IDs
-    INSERT INTO system_gid_alloc VALUES (2000);
+    -- Higher than all previous statically assigned IDs
+    INSERT INTO system_gid_alloc VALUES (5044);
 
     CREATE TABLE system_gid_mapping (
         schema_name text NOT NULL,
