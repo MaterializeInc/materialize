@@ -13,6 +13,7 @@ use std::str::FromStr;
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 
+use mz_lowertest::MzReflect;
 use mz_repr::GlobalId;
 
 // The `Arbitrary` impls are only used during testing and we gate them
@@ -23,7 +24,9 @@ use proptest_derive::Arbitrary;
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+)]
 #[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
@@ -46,7 +49,9 @@ impl fmt::Display for Id {
 }
 
 /// The identifier for a local component of a dataflow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+)]
 #[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub struct LocalId(pub(crate) u64);
 

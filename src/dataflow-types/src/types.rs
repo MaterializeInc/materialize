@@ -579,7 +579,7 @@ pub mod sources {
                             "row_data",
                             ScalarType::List {
                                 element_type: Box::new(ScalarType::String),
-                                custom_oid: None,
+                                custom_id: None,
                             }
                             .nullable(false),
                         ),
@@ -1106,7 +1106,7 @@ pub mod sources {
                                                 .zip(key_type.column_types.iter())
                                                 .map(|(name, ty)| (name.clone(), ty.clone()))
                                                 .collect(),
-                                            custom_oid: None,
+                                            custom_id: None,
                                             custom_name: None,
                                         },
                                     }]);
@@ -1370,10 +1370,10 @@ pub mod sources {
                                             },
                                         ),
                                     ],
-                                    custom_oid: None,
+                                    custom_id: None,
                                     custom_name: None,
                                 }),
-                                custom_oid: None,
+                                custom_id: None,
                             },
                         ),
                     ] {

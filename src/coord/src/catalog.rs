@@ -3173,8 +3173,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
-            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
-                let item = self.get_item_by_oid(&custom_oid.unwrap());
+            List {
+                custom_id: Some(global_id),
+                ..
+            }
+            | Map {
+                custom_id: Some(global_id),
+                ..
+            } => {
+                let item = self.get_item(global_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -3186,10 +3193,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_oid: Some(oid),
+                custom_id: Some(id),
                 ..
             } => {
-                let item = self.get_item_by_oid(oid);
+                let item = self.get_item(id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record {
@@ -3208,6 +3215,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =
                     SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone());
+
                 let res = if self
                     .search_path
                     .iter()

@@ -51,7 +51,7 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
     fn output_type(&self, input_type: ColumnType) -> ColumnType {
         ScalarType::List {
             element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
-            custom_oid: None,
+            custom_id: None,
         }
         .nullable(true)
     }

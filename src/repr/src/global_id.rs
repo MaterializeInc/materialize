@@ -12,9 +12,19 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
+use proptest_derive::Arbitrary;
+
+use mz_lowertest::MzReflect;
 
 /// The identifier for a global dataflow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+)]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum GlobalId {
     /// System namespace.
     System(u64),

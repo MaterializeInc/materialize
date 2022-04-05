@@ -193,7 +193,7 @@ fn validate_schema_2(
             }
             ScalarType::Record {
                 fields: columns,
-                custom_oid: None,
+                custom_id: None,
                 custom_name: None,
             }
         }
@@ -213,7 +213,7 @@ fn validate_schema_2(
             let next_node = schema.step(inner);
             let ret = ScalarType::List {
                 element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
-                custom_oid: None,
+                custom_id: None,
             };
             if let Some(named_idx) = named_idx {
                 seen_avro_nodes.remove(&named_idx);
@@ -222,7 +222,7 @@ fn validate_schema_2(
         }
         SchemaPiece::Map(inner) => ScalarType::Map {
             value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
-            custom_oid: None,
+            custom_id: None,
         },
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),

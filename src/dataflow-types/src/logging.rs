@@ -116,7 +116,7 @@ impl LogVariant {
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
-                        custom_oid: None,
+                        custom_id: None,
                     }
                     .nullable(false),
                 )
@@ -142,7 +142,7 @@ impl LogVariant {
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
-                        custom_oid: None,
+                        custom_id: None,
                     }
                     .nullable(false),
                 )

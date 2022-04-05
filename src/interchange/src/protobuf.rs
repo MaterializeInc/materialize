@@ -127,7 +127,7 @@ fn derive_column_type(
             nullable: false,
             scalar_type: ScalarType::List {
                 element_type: Box::new(ty.scalar_type),
-                custom_oid: None,
+                custom_id: None,
             },
         })
     } else {
@@ -165,7 +165,7 @@ fn derive_inner_type(
             seen_messages.remove(m.name());
             let ty = ScalarType::Record {
                 fields,
-                custom_oid: None,
+                custom_id: None,
                 custom_name: None,
             };
             Ok(ty.nullable(true))

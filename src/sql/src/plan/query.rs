@@ -3374,7 +3374,7 @@ fn plan_list_subquery(
                 Datum::empty_list(),
                 ScalarType::List {
                     element_type: Box::new(elem_type),
-                    custom_oid: None,
+                    custom_id: None,
                 },
             )
         },
@@ -4331,7 +4331,7 @@ pub fn scalar_type_from_sql(
             }
             Ok(ScalarType::List {
                 element_type: Box::new(elem_type),
-                custom_oid: None,
+                custom_id: None,
             })
         }
         ResolvedDataType::AnonymousMap {
@@ -4348,7 +4348,7 @@ pub fn scalar_type_from_sql(
             }
             Ok(ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
-                custom_oid: None,
+                custom_id: None,
             })
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
@@ -4447,14 +4447,14 @@ fn scalar_type_from_catalog(
                     element_reference: element_id,
                 } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Map {
                     key_reference: _,
                     value_reference: value_id,
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
@@ -4470,11 +4470,10 @@ fn scalar_type_from_catalog(
                             ))
                         })
                         .collect::<Result<Vec<_>, PlanError>>()?;
-                    let catalog_item = scx.catalog.get_item(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
                         custom_name: None,
-                        custom_oid: Some(catalog_item.oid()),
+                        custom_id: Some(id),
                     })
                 }
                 CatalogType::Bool => Ok(ScalarType::Bool),

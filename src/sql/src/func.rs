@@ -94,10 +94,10 @@ impl TypeCategory {
             | ScalarType::VarChar { .. } => Self::String,
             ScalarType::Record {
                 custom_name,
-                custom_oid,
+                custom_id,
                 ..
             } => {
-                if custom_name.is_some() || custom_oid.is_some() {
+                if custom_name.is_some() || custom_id.is_some() {
                     Self::Composite
                 } else {
                     Self::Pseudo
@@ -1410,7 +1410,7 @@ impl PolymorphicSolution {
             | NonVecAny | RecordAny => seen,
             ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
             ListElementAnyCompatible => seen.map(|el| ScalarType::List {
-                custom_oid: None,
+                custom_id: None,
                 element_type: Box::new(el),
             }),
             o => {
@@ -1453,12 +1453,12 @@ impl PolymorphicSolution {
                 Some(t) => match t {
                     PolymorphicCompatClass::BestCommonAny => Some(ScalarType::String),
                     PolymorphicCompatClass::BestCommonList => Some(ScalarType::List {
-                        custom_oid: None,
+                        custom_id: None,
                         element_type: Box::new(ScalarType::String),
                     }),
                     PolymorphicCompatClass::BestCommonMap => Some(ScalarType::Map {
                         value_type: Box::new(ScalarType::String),
-                        custom_oid: None,
+                        custom_id: None,
                     }),
                     // Do not infer type.
                     PolymorphicCompatClass::StructuralEq | PolymorphicCompatClass::BaseEq => None,

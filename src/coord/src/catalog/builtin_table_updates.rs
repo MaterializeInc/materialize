@@ -464,7 +464,7 @@ impl CatalogState {
                 .push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
-                        length: arg_ids.len(),
+                        length: func_impl_details.arg_typs.len(),
                     }],
                     arg_ids.iter().map(|id| Datum::String(&id)),
                 )

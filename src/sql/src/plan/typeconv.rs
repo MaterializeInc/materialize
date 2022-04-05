@@ -468,8 +468,8 @@ lazy_static! {
                     return None;
                 }
 
-                if let (l @ ScalarType::Record {custom_oid: Some(..), ..}, r) = (from_type, to_type) {
-                    // Changing `from`'s custom_oid requires at least Assignment context
+                if let (l @ ScalarType::Record {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_id requires at least Assignment context
                     if ccx == CastContext::Implicit && l != r {
                         return None;
                     }
@@ -504,8 +504,8 @@ lazy_static! {
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
 
-                if let (l @ ScalarType::List {custom_oid: Some(..), ..}, r) = (from_type, to_type) {
-                    // Changing `from`'s custom_oid requires at least Assignment context
+                if let (l @ ScalarType::List {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_id requires at least Assignment context
                     if ccx == CastContext::Implicit && !l.base_eq(r) {
                         return None;
                     }

@@ -19,7 +19,7 @@ build format=types
 ----
 %0 =
 | Get x (u0)
-| | types = (List { element_type: Bool, custom_oid: None }, Array(String)?, Float32?)
+| | types = (List { element_type: Bool, custom_id: None }, Array(String)?, Float32?)
 | | keys = ((#0), (#1))
 
 cat

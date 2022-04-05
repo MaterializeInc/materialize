@@ -42,18 +42,23 @@ build-scalar-type
 Array(Oid)
 
 build-scalar-type
-(list jsonb 100)
+(list jsonb)
 ----
-List { element_type: Jsonb, custom_oid: Some(100) }
+List { element_type: Jsonb, custom_id: None }
+
+build-scalar-type
+(list jsonb (user 100))
+----
+List { element_type: Jsonb, custom_id: Some(User(100)) }
 
 build-scalar-type
 (record
     [["col1name" (date true)]
-     ["col2name" ((list (map bytes 98) null) false)]
-     ["col3name" ((list interval 34234) false) ]]
-     0 "recordname")
+     ["col2name" ((list (map bytes (user 98))) false)]
+     ["col3name" ((list interval (user 34234)) false) ]]
+     (user 0) "recordname")
 ----
-Record { fields: [(ColumnName("col1name"), ColumnType { scalar_type: Date, nullable: true }), (ColumnName("col2name"), ColumnType { scalar_type: List { element_type: Map { value_type: Bytes, custom_oid: Some(98) }, custom_oid: None }, nullable: false }), (ColumnName("col3name"), ColumnType { scalar_type: List { element_type: Interval, custom_oid: Some(34234) }, nullable: false })], custom_oid: Some(0), custom_name: Some("recordname") }
+Record { fields: [(ColumnName("col1name"), ColumnType { scalar_type: Date, nullable: true }), (ColumnName("col2name"), ColumnType { scalar_type: List { element_type: Map { value_type: Bytes, custom_id: Some(User(98)) }, custom_id: None }, nullable: false }), (ColumnName("col3name"), ColumnType { scalar_type: List { element_type: Interval, custom_id: Some(User(34234)) }, nullable: false })], custom_id: Some(User(0)), custom_name: Some("recordname") }
 
 build-scalar-type
 nonexistent

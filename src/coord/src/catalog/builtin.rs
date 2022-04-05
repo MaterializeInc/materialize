@@ -2487,7 +2487,8 @@ mod tests {
                         if imp_arg_oids != pg_fn.arg_oids {
                             println!(
                                 "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp_arg_oids, pg_fn.arg_oids                            );
+                                imp.oid, func.name, imp_arg_oids, pg_fn.arg_oids
+                            );
                         }
 
                         let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
@@ -2495,7 +2496,8 @@ mod tests {
                         if imp_return_oid != pg_fn.ret_oid {
                             println!(
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp_return_oid, pg_fn.ret_oid              );
+                                imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
+                            );
                         }
 
                         if imp.return_is_set != pg_fn.ret_set {
