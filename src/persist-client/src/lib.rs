@@ -107,8 +107,8 @@ impl Id {
 /// single [Location].
 #[derive(Debug)]
 pub struct Client {
-    blob: Arc<dyn BlobMulti>,
-    consensus: Arc<dyn Consensus>,
+    blob: Arc<dyn BlobMulti + Send + Sync>,
+    consensus: Arc<dyn Consensus + Send + Sync>,
 }
 
 impl Client {
@@ -310,6 +310,29 @@ mod tests {
 
         let mut snap = read2.snapshot_one(2).await??;
         assert_eq!(snap.read_all().await?, all_ok(&data2[..], 1));
+
+        Ok(())
+    }
+
+    // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
+    // NOTE: This is a compile-time only test. If it compiles, we're good.
+    #[allow(unused)]
+    async fn sync_send() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        fn is_send_sync<T: Send + Sync>(_x: T) -> bool {
+            true
+        }
+
+        let client = new_test_client().await?;
+
+        let (write, read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, Id::new())
+            .await?;
+
+        assert!(is_send_sync(client));
+        assert!(is_send_sync(write));
+        assert!(is_send_sync(read));
 
         Ok(())
     }

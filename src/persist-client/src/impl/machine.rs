@@ -30,7 +30,7 @@ use crate::Id;
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
-    consensus: Arc<dyn Consensus>,
+    consensus: Arc<dyn Consensus + Send + Sync>,
 
     seqno: Option<SeqNo>,
     state: State<K, V, T, D>,
@@ -54,7 +54,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
-    pub fn new(id: Id, consensus: Arc<dyn Consensus>) -> Self {
+    pub fn new(id: Id, consensus: Arc<dyn Consensus + Send + Sync>) -> Self {
         Machine {
             consensus,
             seqno: None,

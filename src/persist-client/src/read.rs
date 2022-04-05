@@ -70,7 +70,7 @@ pub struct SnapshotSplit {
 pub struct SnapshotIter<K, V, T, D> {
     as_of: Antichain<T>,
     batches: Vec<String>,
-    blob: Arc<dyn BlobMulti>,
+    blob: Arc<dyn BlobMulti + Send + Sync>,
     _phantom: PhantomData<(K, V, T, D)>,
 }
 
@@ -207,7 +207,7 @@ pub struct Listen<K, V, T, D> {
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
-    blob: Arc<dyn BlobMulti>,
+    blob: Arc<dyn BlobMulti + Send + Sync>,
 }
 
 impl<K, V, T, D> Listen<K, V, T, D>
@@ -326,7 +326,7 @@ where
 {
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) blob: Arc<dyn BlobMulti>,
+    pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
 }
