@@ -1003,6 +1003,30 @@ pub mod tests {
             Ok(Some(new_state.clone()))
         );
 
+        // Trying to update from a stale version of current doesn't work.
+        let invalid_jump_forward = VersionedData {
+            seqno: SeqNo(11),
+            data: "invalid".as_bytes().to_vec(),
+        };
+        assert_eq!(
+            consensus
+                .compare_and_set(key, deadline, Some(state.seqno), invalid_jump_forward)
+                .await,
+            Ok(Err(Some(new_state.clone())))
+        );
+
+        // Writing a large (~10 KiB) amount of data works fine.
+        let large_state = VersionedData {
+            seqno: SeqNo(11),
+            data: std::iter::repeat('a' as u8).take(10240).collect(),
+        };
+        assert_eq!(
+            consensus
+                .compare_and_set(key, deadline, Some(new_state.seqno), large_state)
+                .await,
+            Ok(Ok(()))
+        );
+
         Ok(())
     }
 
