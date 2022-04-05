@@ -116,6 +116,18 @@ impl ProtoRepr for char {
     }
 }
 
+impl ProtoRepr for u8 {
+    type Repr = u32;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self as u32
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        u8::try_from(repr).map_err(TryFromProtoError::TryFromIntError)
+    }
+}
+
 impl<T: ProtoRepr> ProtoRepr for Option<T> {
     type Repr = Option<T::Repr>;
 

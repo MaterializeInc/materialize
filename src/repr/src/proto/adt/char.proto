@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Protobuf structs mirroring [`crate::adt`].
+syntax = "proto3";
 
-pub mod array;
-pub mod char;
-pub mod numeric;
-pub mod varchar;
+package adt.char;
+
+message ProtoCharLength {
+    uint32 value = 1;
+}
