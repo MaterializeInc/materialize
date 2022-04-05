@@ -15,9 +15,9 @@ pub(super) struct BucketMetrics {
     // public because the normal `inc` flow should *not* increment this, it is
     // specifically used when we aren't incrementing anything else
     pub objects_duplicate: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    objects_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    messages_ingested: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub objects_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub messages_ingested: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl<'a> BucketMetrics {
@@ -39,13 +39,6 @@ impl<'a> BucketMetrics {
                 .messages_ingested
                 .get_delete_on_drop_counter(labels.to_vec()),
         }
-    }
-
-    /// Increment counters
-    pub(super) fn inc(&self, objects: u64, bytes: u64, messages: u64) {
-        self.objects_downloaded.inc_by(objects);
-        self.bytes_downloaded.inc_by(bytes);
-        self.messages_ingested.inc_by(messages);
     }
 }
 

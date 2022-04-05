@@ -249,6 +249,13 @@ impl ConfluentAvroResolver {
             confluent_wire_format,
         })
     }
+    pub fn fresh(&self) -> ConfluentAvroResolver {
+        ConfluentAvroResolver {
+            reader_schema: self.reader_schema.clone(),
+            writer_schemas: self.writer_schemas.as_ref().map(SchemaCache::fresh),
+            confluent_wire_format: self.confluent_wire_format,
+        }
+    }
 
     pub async fn resolve<'a, 'b>(
         &'a mut self,
@@ -309,14 +316,28 @@ impl fmt::Debug for ConfluentAvroResolver {
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
     ccsr_client: mz_ccsr::Client,
+    client_config: mz_ccsr::ClientConfig,
 }
 
 impl SchemaCache {
     fn new(schema_registry: mz_ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
+            client_config: schema_registry.clone(),
             ccsr_client: schema_registry.build()?,
         })
+    }
+
+    fn fresh(&self) -> SchemaCache {
+        SchemaCache {
+            cache: self.cache.clone(),
+            ccsr_client: self
+                .client_config
+                .clone()
+                .build()
+                .expect("schema client errors are all detected in initial build"),
+            client_config: self.client_config.clone(),
+        }
     }
 
     /// Looks up the writer schema for ID. If the schema is literally identical

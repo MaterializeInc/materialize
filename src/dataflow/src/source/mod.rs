@@ -439,6 +439,12 @@ pub fn responsible_for(
             let hash = (source_id.hashed() >> 32) + *p as u64;
             (hash % worker_count as u64) == worker_id as u64
         }
+        PartitionId::S3 { bucket, key } => {
+            // We want to distribut partitions across workers evenly, such that every object goes to
+            // the same worker.
+            let hash = (bucket, "/", key).hashed();
+            (hash % worker_count as u64) == worker_id as u64
+        }
     }
 }
 

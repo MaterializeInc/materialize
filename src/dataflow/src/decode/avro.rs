@@ -38,6 +38,13 @@ impl AvroDecoderState {
         })
     }
 
+    pub fn fresh(&self) -> AvroDecoderState {
+        AvroDecoderState {
+            decoder: self.decoder.fresh(),
+            events_success: 0,
+        }
+    }
+
     pub fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match block_on(self.decoder.decode(bytes)) {
             Ok(row) => {

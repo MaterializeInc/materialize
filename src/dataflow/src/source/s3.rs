@@ -30,8 +30,10 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::ops::AddAssign;
+use std::sync::Arc;
+use std::time::Instant;
 
 use async_compression::tokio::bufread::GzipDecoder;
 use aws_sdk_s3::error::{GetObjectError, ListObjectsV2Error};
@@ -39,6 +41,7 @@ use aws_sdk_s3::types::SdkError;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::model::{ChangeMessageVisibilityBatchRequestEntry, Message as SqsMessage};
 use aws_sdk_sqs::Client as SqsClient;
+use futures::lock::Mutex;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use globset::GlobMatcher;
 use timely::scheduling::SyncActivator;
@@ -55,7 +58,7 @@ use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::MessagePayload;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace, warn, Instrument};
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
@@ -71,9 +74,10 @@ mod notifications;
 type Out = MessagePayload;
 struct InternalMessage {
     record: Out,
+    partition: PartitionId,
 }
 /// Size of data chunks we send to dataflow
-const CHUNK_SIZE: usize = 4096;
+const CHUNK_SIZE: usize = 16384;
 
 /// Information required to load data from S3
 pub struct S3SourceReader {
@@ -118,35 +122,95 @@ impl From<S3Offset> for MzOffset {
     }
 }
 
+#[derive(Debug, Clone)]
 struct KeyInfo {
     bucket: String,
     key: String,
 }
 
+struct KeyDisplay<'a, 'b>(&'a str, &'b str);
+
+impl<'a, 'b> Display for KeyDisplay<'a, 'b> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.0, self.1)
+    }
+}
+
+#[derive(Clone)]
+struct SeenObjects {
+    /// Map from bucket name -> seen keys
+    inner: Arc<Mutex<HashMap<String, BucketInfo>>>,
+    metrics: SourceBaseMetrics,
+    source_id: Arc<str>,
+}
+
+struct BucketInfo {
+    keys: HashSet<String>,
+    metrics: BucketMetrics,
+}
+
+impl SeenObjects {
+    fn new(metrics: SourceBaseMetrics, source_id: String) -> SeenObjects {
+        SeenObjects {
+            inner: Default::default(),
+            metrics,
+            source_id: Arc::from(source_id),
+        }
+    }
+
+    /// True if you have successfully taken responsibility for the key
+    async fn take_key_ownership(&self, bucket: &str, key: &str) -> bool {
+        let mut seen_objects = self.inner.lock().await;
+        if let Some(bi) = seen_objects.get_mut(bucket) {
+            if bi.keys.contains(key) {
+                bi.metrics.objects_duplicate.inc();
+                return false;
+            }
+        } else {
+            let bi = BucketInfo {
+                keys: HashSet::new(),
+                metrics: BucketMetrics::new(&self.metrics, &self.source_id, &bucket),
+            };
+            seen_objects.insert(bucket.to_string(), bi);
+        }
+        return true;
+    }
+
+    async fn metrics_inc(
+        &self,
+        bucket: &str,
+        new_key: String,
+        objects: u64,
+        bytes: u64,
+        messages: u64,
+    ) {
+        let mut seen_buckets = self.inner.lock().await;
+        let bi = seen_buckets.get_mut(bucket).expect("just inserted");
+        bi.metrics.objects_downloaded.inc_by(objects);
+        bi.metrics.bytes_downloaded.inc_by(bytes);
+        bi.metrics.messages_ingested.inc_by(messages);
+        bi.keys.insert(new_key);
+    }
+}
+
 async fn download_objects_task(
     source_id: String,
-    mut rx: Receiver<S3Result<KeyInfo>>,
+    rx: async_channel::Receiver<S3Result<KeyInfo>>,
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
     aws_external_id: AwsExternalId,
-    activator: SyncActivator,
+    activator: Arc<Mutex<SyncActivator>>,
     compression: Compression,
-    metrics: SourceBaseMetrics,
+    seen_objects: SeenObjects,
 ) {
     let config = aws_config.load(aws_external_id).await;
     let client = mz_aws_util::s3::client(&config);
 
-    struct BucketInfo {
-        keys: HashSet<String>,
-        metrics: BucketMetrics,
-    }
-    let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
-
     loop {
         let msg = tokio::select! {
             msg = rx.recv() => {
-                if let Some(msg) = msg {
+                if let Ok(msg) = msg {
                     msg
                 } else {
                     break;
@@ -155,7 +219,7 @@ async fn download_objects_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        debug!("download_objects received dataflow shutdown message");
                         break;
                     }
                 }
@@ -165,26 +229,14 @@ async fn download_objects_task(
 
         match msg {
             Ok(msg) => {
-                if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
-                    if bi.keys.contains(&msg.key) {
-                        bi.metrics.objects_duplicate.inc();
-                        debug!(
-                            "source_id={} skipping object because it was already seen: {}/{}",
-                            source_id, msg.bucket, msg.key
-                        );
-                        continue;
-                    }
-                } else {
-                    let bi = BucketInfo {
-                        keys: HashSet::new(),
-                        metrics: BucketMetrics::new(&metrics, &source_id, &msg.bucket),
-                    };
-                    seen_buckets.insert(msg.bucket.clone(), bi);
-                };
-
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
+                if !seen_objects.take_key_ownership(&msg.bucket, &msg.key).await {
+                    continue;
+                }
+
+                let start = Instant::now();
                 let download_result = download_object(
                     tx,
                     &activator,
@@ -199,13 +251,14 @@ async fn download_objects_task(
                 // Extract and handle status updates
                 match download_result {
                     Ok(update) => {
-                        let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
-                        bucket_info.metrics.inc(1, update.bytes, update.messages);
                         debug!(
-                            "source_id={} successfully downloaded {}/{}",
-                            source_id, msg.bucket, msg.key
+                            timing=?start.elapsed(),
+                            "successfully downloaded {}/{}",
+                            msg.bucket, msg.key
                         );
-                        bucket_info.keys.insert(msg.key);
+                        seen_objects
+                            .metrics_inc(&msg.bucket, msg.key, 1, update.bytes, update.messages)
+                            .await;
                     }
                     Err(DownloadError::Failed { err }) => {
                         if tx
@@ -216,25 +269,25 @@ async fn download_objects_task(
                             .await
                             .is_err()
                         {
-                            rx.close();
+                            drop(rx);
                             break;
                         };
                     }
                     Err(DownloadError::SendFailed) => {
-                        rx.close();
+                        drop(rx);
                         break;
                     }
                 };
             }
             Err(e) => {
                 if tx.send(Err(e)).await.is_err() {
-                    rx.close();
+                    drop(rx);
                     break;
                 }
             }
         }
     }
-    debug!("source_id={} exiting download objects task", source_id);
+    debug!("exiting download objects task");
 }
 
 async fn scan_bucket_task(
@@ -243,7 +296,7 @@ async fn scan_bucket_task(
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
     aws_external_id: AwsExternalId,
-    tx: Sender<S3Result<KeyInfo>>,
+    tx: async_channel::Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
     let config = aws_config.load(aws_external_id).await;
@@ -261,8 +314,8 @@ async fn scan_bucket_task(
     if is_literal_object {
         let key = glob.unwrap().glob().glob();
         debug!(
-            "source_id={} downloading single object from s3 bucket={} key={}",
-            source_id, bucket, key
+            "downloading single object from s3 bucket={} key={}",
+            bucket, key
         );
         if let Err(e) = tx
             .send(Ok(KeyInfo {
@@ -271,17 +324,14 @@ async fn scan_bucket_task(
             }))
             .await
         {
-            debug!(
-                "source_id={} Unable to send single key to downloader: {}",
-                source_id, e
-            );
+            debug!("Unable to send single key to downloader: {}", e);
         };
 
         return;
     } else {
         debug!(
-            "source_id={} scanning bucket to find objects to download bucket={}",
-            source_id, bucket
+            "scanning bucket to find objects to download bucket={}",
+            bucket
         );
     }
 
@@ -344,10 +394,7 @@ async fn scan_bucket_task(
             }
         }
     }
-    debug!(
-        "source_id={} exiting bucket scan task bucket={}",
-        source_id, bucket
-    );
+    debug!("exiting bucket scan task bucket={}", bucket);
 }
 
 async fn read_sqs_task(
@@ -356,13 +403,13 @@ async fn read_sqs_task(
     queue: String,
     aws_config: AwsConfig,
     aws_external_id: AwsExternalId,
-    tx: Sender<S3Result<KeyInfo>>,
+    tx: async_channel::Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
 ) {
     debug!(
-        "source_id={} starting read sqs task queue={}",
-        source_id, queue,
+        %source_id, %queue,
+        "starting read sqs task",
     );
 
     let config = aws_config.load(aws_external_id).await;
@@ -494,7 +541,7 @@ async fn process_message(
     base_metrics: SourceBaseMetrics,
     metrics: &mut HashMap<String, ScanBucketMetrics>,
     source_id: &str,
-    tx: &Sender<S3Result<KeyInfo>>,
+    tx: &async_channel::Sender<S3Result<KeyInfo>>,
     client: &SqsClient,
     queue_url: &str,
 ) -> Option<(SqsMessage, String)> {
@@ -649,13 +696,17 @@ type S3Result<R> = Result<R, S3Error>;
 
 async fn download_object(
     tx: &Sender<S3Result<InternalMessage>>,
-    activator: &SyncActivator,
+    activator: &Arc<Mutex<SyncActivator>>,
     client: &S3Client,
     bucket: &str,
     key: &str,
     compression: Compression,
     source_id: &str,
 ) -> Result<DownloadMetricUpdate, DownloadError> {
+    let partition = PartitionId::S3 {
+        bucket: Arc::from(bucket),
+        key: Arc::from(key),
+    };
     let retry_reader: RetryReader<_, _, _> = RetryReader::new(|state, offset| async move {
         let range = if offset == 0 {
             None
@@ -714,27 +765,30 @@ async fn download_object(
     };
 
     let mut download_result = match compression {
-        Compression::None => read_object_chunked(source_id, reader, tx).await,
+        Compression::None => read_object_chunked(source_id, reader, tx, partition.clone()).await,
         Compression::Gzip => {
             let decoder = GzipDecoder::new(reader);
-            read_object_chunked(source_id, decoder, tx).await
+            read_object_chunked(source_id, decoder, tx, partition.clone()).await
         }
     };
 
     debug!(
-        "source_id={} {}/{} download_result={:?}",
-        source_id, bucket, key, download_result,
+        object=%KeyDisplay(bucket, key),
+        ?download_result,
+        "completed object download"
     );
 
     if download_result.is_ok() {
         let sent = tx.send(Ok(InternalMessage {
             record: MessagePayload::EOF,
+            partition: partition.clone(),
         }));
         if sent.await.is_err() {
             download_result = Err(DownloadError::SendFailed);
         }
     };
-    activator.activate().expect("s3 reader activation failed");
+    let act = activator.lock().await;
+    act.activate().expect("s3 reader activation failed");
     download_result
 }
 
@@ -742,6 +796,7 @@ async fn read_object_chunked<R>(
     source_id: &str,
     reader: R,
     tx: &Sender<Result<InternalMessage, S3Error>>,
+    partition_id: PartitionId,
 ) -> Result<DownloadMetricUpdate, DownloadError>
 where
     R: Unpin + AsyncRead,
@@ -761,6 +816,7 @@ where
                         // gives out 0 bytes, so the chunk is always !empty.
                         // See https://github.com/tokio-rs/tokio/blob/e8f19e771f501408427f7f9ee6ba4f54b2d4094c/tokio-util/src/io/reader_stream.rs#L102-L108
                         record: MessagePayload::Data(chunk.to_vec()),
+                        partition: partition_id.clone(),
                     }))
                     .await
                     .is_err()
@@ -808,27 +864,40 @@ impl SourceReader for S3SourceReader {
             }
         };
 
-        // a single arbitrary worker is responsible for scanning the bucket
+        // a single arbitrary worker is responsible for scanning the bucket it spins up a bunch of
+        // tokio tasks, which get data, which then send the data into the workflow which hashes to
+        // workers
         let (receiver, shutdowner) = {
             let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
-            let (keys_tx, keys_rx) = tokio::sync::mpsc::channel(10_000);
+            let (keys_tx, keys_rx) = async_channel::unbounded();
             let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
+            let seen_objects = SeenObjects::new(metrics.clone(), source_id.to_string());
+            let activator = Arc::from(Mutex::new(consumer_activator));
+            let task_count = std::env::var("__MZ_S3_TASKS")
+                .unwrap_or_else(|_| "5".to_string())
+                .parse()
+                .unwrap();
+            debug!(%task_count, "spawning concurrent download tasks");
 
-            task::spawn(
-                || format!("s3_download:{}", source_id),
-                download_objects_task(
-                    source_id.to_string(),
-                    keys_rx,
-                    dataflow_tx,
-                    shutdown_rx.clone(),
-                    s3_conn.aws.clone(),
-                    aws_external_id.clone(),
-                    consumer_activator,
-                    s3_conn.compression,
-                    metrics.clone(),
-                ),
-            );
+            for task_id in 0..task_count {
+                let span = tracing::debug_span!("s3_download", %source_id, %task_id);
+                task::spawn(
+                    || format!("s3_download:{source_id}:{task_id}"),
+                    download_objects_task(
+                        source_id.to_string(),
+                        keys_rx.clone(),
+                        dataflow_tx.clone(),
+                        shutdown_rx.clone(),
+                        s3_conn.aws.clone(),
+                        aws_external_id.clone(),
+                        Arc::clone(&activator),
+                        s3_conn.compression,
+                        seen_objects.clone(),
+                    )
+                    .instrument(span),
+                );
+            }
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
@@ -886,10 +955,10 @@ impl SourceReader for S3SourceReader {
 
     fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
-            Some(Some(Ok(InternalMessage { record }))) => {
+            Some(Some(Ok(InternalMessage { record, partition }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
+                    partition,
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: (),
@@ -914,9 +983,9 @@ impl SourceReader for S3SourceReader {
 
 impl Drop for S3SourceReader {
     fn drop(&mut self) {
-        debug!("source_id={} Dropping S3SourceReader", self.id);
+        debug!(source_id=%self.id, "Dropping S3SourceReader");
         if self.dataflow_status.send(DataflowStatus::Stopped).is_err() {
-            debug!("source_id={} already shutdown", self.id);
+            debug!(source_id=%self.id, "already shutdown" );
         };
     }
 }

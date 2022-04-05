@@ -25,6 +25,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::BufMut;
@@ -42,7 +43,7 @@ use mz_ore::now::NowFn;
 use mz_repr::Timestamp;
 
 use crate::source::gen::source::{
-    proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp,
+    proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp, S3PartitionId,
 };
 
 /// This struct holds state for proposed timestamps and
@@ -646,13 +647,20 @@ impl PartialOrd for SourceTimestamp {
                 self.offset.offset.cmp(&other.offset.offset)
             }
             (PartitionId::Kafka(a), PartitionId::Kafka(b)) => a.cmp(b),
+            (
+                PartitionId::S3 {
+                    bucket: bucket_a,
+                    key: key_a,
+                },
+                PartitionId::S3 {
+                    bucket: bucket_b,
+                    key: key_b,
+                },
+            ) => (bucket_a, key_a, self.offset.offset).cmp(&(bucket_b, key_b, other.offset.offset)),
             (PartitionId::None, PartitionId::None) => self.offset.offset.cmp(&other.offset.offset),
-            // We're not using a wildcard pattern here, to make sure this fails when someone adds
-            // new types of partition ID.
-            (PartitionId::None, PartitionId::Kafka(_)) => {
-                unreachable!("PartitionId types must match")
-            }
-            (PartitionId::Kafka(_), PartitionId::None) => {
+            // We're not using a complete wildcard pattern here, to make sure this fails when
+            // someone adds new types of partition ID.
+            (PartitionId::Kafka(_) | PartitionId::S3 { .. } | PartitionId::None, _) => {
                 unreachable!("PartitionId types must match")
             }
         };
@@ -671,12 +679,9 @@ impl Ord for SourceTimestamp {
             }
             (PartitionId::Kafka(a), PartitionId::Kafka(b)) => a.cmp(b),
             (PartitionId::None, PartitionId::None) => self.offset.offset.cmp(&other.offset.offset),
-            // We're not using a wildcard pattern here, to make sure this fails when someone adds
-            // new types of partition ID.
-            (PartitionId::None, PartitionId::Kafka(_)) => {
-                unreachable!("PartitionId types must match")
-            }
-            (PartitionId::Kafka(_), PartitionId::None) => {
+            // We're not using a complete wildcard pattern here, to make sure this fails when
+            // someone adds new types of partition ID.
+            (PartitionId::Kafka(_) | PartitionId::S3 { .. } | PartitionId::None, _) => {
                 unreachable!("PartitionId types must match")
             }
         };
@@ -693,6 +698,12 @@ impl From<&SourceTimestamp> for ProtoSourceTimestamp {
         ProtoSourceTimestamp {
             partition_id: Some(match &x.partition {
                 PartitionId::Kafka(x) => proto_source_timestamp::PartitionId::Kafka(*x),
+                PartitionId::S3 { bucket, key } => {
+                    proto_source_timestamp::PartitionId::S3(S3PartitionId {
+                        bucket: String::from(&**bucket),
+                        key: String::from(&**key),
+                    })
+                }
                 PartitionId::None => proto_source_timestamp::PartitionId::None(()),
             }),
             mz_offset: x.offset.offset,
@@ -706,6 +717,12 @@ impl TryFrom<ProtoSourceTimestamp> for SourceTimestamp {
     fn try_from(x: ProtoSourceTimestamp) -> Result<Self, Self::Error> {
         let partition = match x.partition_id {
             Some(proto_source_timestamp::PartitionId::Kafka(x)) => PartitionId::Kafka(x),
+            Some(proto_source_timestamp::PartitionId::S3(S3PartitionId { bucket, key })) => {
+                PartitionId::S3 {
+                    bucket: Arc::from(bucket),
+                    key: Arc::from(key),
+                }
+            }
             Some(proto_source_timestamp::PartitionId::None(_)) => PartitionId::None,
             None => return Err("unknown partition_id".into()),
         };

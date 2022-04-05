@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,8 @@ use flate2::Compression as Flate2Compression;
 use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
+
+// ============ Create S3 Bucket ============
 
 pub struct CreateBucketAction {
     bucket_prefix: String,
@@ -79,6 +82,8 @@ impl Action for CreateBucketAction {
     }
 }
 
+// ============ Put/Delete Objects ============
+
 pub struct PutObjectAction {
     bucket_prefix: String,
     key: String,
@@ -90,7 +95,8 @@ pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, anyh
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let key = cmd.args.string("key")?;
     let compression = build_compression(&mut cmd)?;
-    let contents = cmd.input.join("\n");
+    let mut contents = cmd.input.join("\n");
+
     cmd.args.done()?;
     Ok(PutObjectAction {
         bucket_prefix,
@@ -186,6 +192,96 @@ impl Action for DeleteObjectAction {
         Ok(ControlFlow::Continue)
     }
 }
+
+pub struct PutObjectsAction {
+    bucket_prefix: String,
+    key: String,
+    compression: Compression,
+    contents: BTreeMap<u32, String>,
+}
+
+pub fn build_put_objects(mut cmd: BuiltinCommand) -> Result<PutObjectsAction, anyhow::Error> {
+    let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
+    let key = cmd.args.string("key")?;
+    let compression = build_compression(&mut cmd)?;
+
+    let repeat_objects = cmd.args.opt_parse("object-count")?.unwrap_or(1);
+    let repeat_contents = cmd.args.opt_parse("repeat-contents")?.unwrap_or(1);
+
+    let mut contents = BTreeMap::new();
+    for i in 0..repeat_objects {
+        let mut these_contents = cmd.input.join("\n").replace("OBJECT_ID", &i.to_string());
+        if repeat_contents > 1 {
+            these_contents.push('\n');
+            these_contents = these_contents.repeat(repeat_contents);
+        }
+        contents.insert(i, these_contents);
+    }
+
+    cmd.args.done()?;
+    Ok(PutObjectsAction {
+        bucket_prefix,
+        key,
+        compression,
+        contents,
+    })
+}
+
+#[async_trait]
+impl Action for PutObjectsAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
+
+        for (i, contents) in &self.contents {
+            let key = self.key.replace("OBJECT_ID", &i.to_string());
+
+            let buffer = contents.clone().into_bytes();
+            let contents = match self.compression {
+                Compression::None => Ok(buffer),
+                Compression::Gzip => {
+                    let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
+                    encoder
+                        .write_all(buffer.as_ref())
+                        .context("writing to gzip encoder")?;
+                    encoder.finish().context("writing to gzip encoder")
+                }
+            }?;
+
+            let content_len = contents.len();
+            let start = std::time::Instant::now();
+            state
+                .s3_client
+                .put_object()
+                .bucket(bucket.clone())
+                .body(ByteStream::from(contents))
+                .content_type("application/octet-stream")
+                .set_content_encoding(match self.compression {
+                    Compression::None => None,
+                    Compression::Gzip => Some("gzip".to_string()),
+                })
+                .key(&key)
+                .send()
+                .await
+                .map(|_| ())
+                .context("putting to S3")?;
+            println!(
+                "Put S3 object {}/{} ({}KB {:?})",
+                bucket,
+                key,
+                content_len as f64 / 1000.0,
+                start.elapsed()
+            );
+        }
+
+        Ok(ControlFlow::Continue)
+    }
+}
+
+// ============ Notifications ============
 
 pub struct AddBucketNotifications {
     bucket_prefix: String,
