@@ -12,7 +12,7 @@ The basic idea is to capitalize keywords, but lowercase identifiers. What
 counts as a keyword and what counts as an identifier is often surprising,
 especially when the identifier refers to a built-in function or type.
 
-For example, here is a properly formatted `CREATE TABLE statement:
+For example, here is a properly formatted `CREATE TABLE` statement:
 
 ```sql
 CREATE TABLE distributors (
@@ -24,7 +24,7 @@ CREATE TABLE distributors (
 `CREATE` and `TABLE` are obviously both keywords, and are capitalized as such.
 Perhaps surprisingly, `integer` is a type name—an identifier—and therefore is
 not capitalized. The same is true for `varchar`. But `PRIMARY` and `KEY` *are*
-identifiers, and are again capitalized.
+keywords, and are again capitalized.
 
 The formatting of SQL statements is generally straightforward. For example:
 

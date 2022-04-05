@@ -278,7 +278,7 @@ tests.
 
 As a module stabilizes and its abstraction boundaries harden, unit
 testing becomes more attractive. But be wary of introducing abstraction just
-to make unit tests easier to right.
+to make unit tests easier to get right.
 
 And, as a general rule of thumb, you don't want to add a new long-running test.
 Experience suggests that these are quite finicky (e.g., because a VM fails to

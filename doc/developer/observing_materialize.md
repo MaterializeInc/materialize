@@ -22,8 +22,7 @@ And you will receive something like the following:
     mz_arrangement_maintenance_active_info{worker_id="10"} 0
     mz_arrangement_maintenance_active_info{worker_id="11"} 0
 
-The metrics are generated directly by code in materialized using the our [own
-fork](https://github.com/MaterializeInc/rust-prometheus/commits/master) of
+The metrics are generated directly by code in materialized using
 [rust-prometheus](https://github.com/tikv/rust-prometheus).
 
 #### Prometheus metrics from SQL

@@ -370,7 +370,7 @@ indicating the danger zones so they can pay closer attention.
 
 At the moment, choosing reviewers is a bit of a dark art. The best reviewer for
 a PR is the person besides you who is most familiar with the code that is
-changed. If you are not sure who that is, ask in #engineering.
+changed. If you are not sure who that is, ask in #eng-general.
 
 If you are more experienced, one additional aspect of choosing a reviewer to
 keep in mind is [mentoring](#mentoring). Asking a less experienced engineer to
@@ -830,7 +830,7 @@ of code that you have written.
 
 A PR without appropriate code documentation may reasonably be rejected. Imagine
 that the reviewer would first like to read a precis of your new code, and only
-the read the code itself. This approximates the experience of most people new
+then read the code itself. This approximates the experience of most people new
 to your new code.
 
 User documentation is also important, but may be outside the tradecraft that

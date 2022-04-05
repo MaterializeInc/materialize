@@ -350,7 +350,7 @@ bin/crate-diagram
 It is possible to view transitive dependencies of a select subset of roots by specifying the `--roots` flag with a comma separated list of crates:
 
 ```shell
-bin/crate-diagram --roots sql,dataflow
+bin/crate-diagram --roots mz-sql,mz-dataflow
 ```
 
 ## Developer tools
