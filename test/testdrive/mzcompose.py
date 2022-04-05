@@ -100,7 +100,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.wait_for_materialized("materialized")
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            c.run("testdrive-svc", f"--junit-report={junit_report}", *args.files)
+            c.run("testdrive", f"--junit-report={junit_report}", *args.files)
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

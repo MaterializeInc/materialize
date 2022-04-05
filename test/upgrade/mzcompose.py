@@ -138,7 +138,7 @@ def test_upgrade_from_version(
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
-    c.rm("materialized", "testdrive-svc", stop=True)
+    c.rm("materialized", "testdrive", stop=True)
     c.rm_volumes("mzdata", "tmp")
 
     if from_version != "current_source":
@@ -164,7 +164,7 @@ def test_upgrade_from_version(
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
@@ -173,13 +173,13 @@ def test_upgrade_from_version(
     )
 
     c.kill("materialized")
-    c.rm("materialized", "testdrive-svc")
+    c.rm("materialized", "testdrive")
 
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,

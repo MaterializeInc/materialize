@@ -476,7 +476,7 @@ class Localstack(Service):
 class Testdrive(Service):
     def __init__(
         self,
-        name: str = "testdrive-svc",
+        name: str = "testdrive",
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
         materialized_params: Dict[str, str] = {},

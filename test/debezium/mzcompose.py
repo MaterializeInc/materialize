@@ -49,19 +49,19 @@ def workflow_postgres(c: Composition) -> None:
     c.wait_for_postgres(service="postgres")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", "postgres/debezium-postgres.td.initialize")
-    c.run("testdrive-svc", "postgres/*.td")
+    c.run("testdrive", "postgres/debezium-postgres.td.initialize")
+    c.run("testdrive", "postgres/*.td")
 
 
 def workflow_sql_server(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["sql-server"])
 
-    c.run("testdrive-svc", f"--var=sa-password={password}", "sql-server/*.td")
+    c.run("testdrive", f"--var=sa-password={password}", "sql-server/*.td")
 
 
 def workflow_mysql(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["mysql"])
 
-    c.run("testdrive-svc", f"--var=mysql-root-password={password}", "mysql/*.td")
+    c.run("testdrive", f"--var=mysql-root-password={password}", "mysql/*.td")

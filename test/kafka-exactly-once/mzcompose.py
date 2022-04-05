@@ -38,7 +38,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         services=["zookeeper", "kafka", "schema-registry", "materialized"]
     )
     c.run(
-        "testdrive-svc",
+        "testdrive",
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",
         "before-restart.td",
@@ -47,7 +47,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
     c.wait_for_materialized()
     c.run(
-        "testdrive-svc",
+        "testdrive",
         f"--seed={args.seed}",
         "--no-reset",
         "--kafka-option=group.id=group2",

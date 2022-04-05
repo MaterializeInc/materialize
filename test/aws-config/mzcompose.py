@@ -101,12 +101,12 @@ def workflow_default(c: Composition) -> None:
 
         c.wait_for_materialized("materialized")
         c.run(
-            "testdrive-svc",
+            "testdrive",
             *td_args,
             "test.td",
         )
         c.run(
-            "testdrive-svc",
+            "testdrive",
             *td_args,
             # no reset because the next test wants to validate behavior with
             # the previous catalog
@@ -128,14 +128,14 @@ def workflow_default(c: Composition) -> None:
         c.up("materialized")
 
         c.run(
-            "testdrive-svc",
+            "testdrive",
             "--no-reset",
             "test-restart-no-creds.td",
         )
 
         # now test that with added credentials things can be done
         write_aws_config(LOCAL_DIR, profile_contents)
-        c.run("testdrive-svc", *td_args, "test-restart-with-creds.td")
+        c.run("testdrive", *td_args, "test-restart-with-creds.td")
 
         # == Test that requires --aws-external-id has been supplied ==
         print("+++ Test AWS External IDs")
@@ -146,7 +146,7 @@ def workflow_default(c: Composition) -> None:
             c.up("materialized")
             c.wait_for_materialized("materialized")
             write_aws_config(LOCAL_DIR, profile_contents)
-            c.run("testdrive-svc", *td_args, "test-externalid-present.td")
+            c.run("testdrive", *td_args, "test-externalid-present.td")
     finally:
         errored = False
         for role in created_roles:

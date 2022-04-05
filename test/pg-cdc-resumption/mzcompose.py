@@ -49,7 +49,7 @@ def initialize(c: Composition) -> None:
     # We run configure-postgres.td only once for all workflows as
     # it contains CREATE USER that is not indempotent
 
-    c.run("testdrive-svc", "configure-postgres.td")
+    c.run("testdrive", "configure-postgres.td")
 
 
 def restart_pg(c: Composition) -> None:
@@ -68,7 +68,7 @@ def begin(c: Composition) -> None:
     """Configure Toxiproxy and Mz and populate initial data"""
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "configure-toxiproxy.td",
         "populate-tables.td",
         "configure-materalize.td",
@@ -77,12 +77,12 @@ def begin(c: Composition) -> None:
 
 def end(c: Composition) -> None:
     """Validate the data at the end and reset Toxiproxy"""
-    c.run("testdrive-svc", "verify-data.td", "toxiproxy-remove.td")
+    c.run("testdrive", "verify-data.td", "toxiproxy-remove.td")
 
 
 def disconnect_pg_during_snapshot(c: Composition) -> None:
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
         "delete-rows-t1.td",
@@ -94,18 +94,18 @@ def disconnect_pg_during_snapshot(c: Composition) -> None:
 def restart_pg_during_snapshot(c: Composition) -> None:
     restart_pg(c)
 
-    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+    c.run("testdrive", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
     restart_mz(c)
 
-    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+    c.run("testdrive", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
@@ -116,20 +116,16 @@ def disconnect_pg_during_replication(c: Composition) -> None:
 
 
 def restart_pg_during_replication(c: Composition) -> None:
-    c.run(
-        "testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td"
-    )
+    c.run("testdrive", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td")
 
     restart_pg(c)
 
-    c.run("testdrive-svc", "delete-rows-t2.td")
+    c.run("testdrive", "delete-rows-t2.td")
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run(
-        "testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td"
-    )
+    c.run("testdrive", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td")
 
     restart_mz(c)
 
-    c.run("testdrive-svc", "delete-rows-t2.td")
+    c.run("testdrive", "delete-rows-t2.td")

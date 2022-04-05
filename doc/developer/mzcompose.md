@@ -68,7 +68,7 @@ def workflow_test(c: Composition):
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "materialized"])
     c.wait_for_materialized()
 
-    c.run("testdrive-svc", "*.td")
+    c.run("testdrive", "*.td")
 ```
 
 Additional examples can be found here:
@@ -200,6 +200,6 @@ To run a Testdrive test or tests:
 ```python
 def workflow_simple_test(c: Composition):
    ...
-   w.run("testdrive-svc", "*.td")
+   w.run("testdrive", "*.td")
    ...
 ```

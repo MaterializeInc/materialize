@@ -121,4 +121,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "materialized",
         ]
     )
-    c.run("testdrive-svc", *args.files)
+    c.run("testdrive", *args.files)

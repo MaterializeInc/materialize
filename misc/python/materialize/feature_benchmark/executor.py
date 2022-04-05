@@ -72,7 +72,7 @@ class Docker(Executor):
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
             return self._composition.run(
-                "testdrive-svc",
+                "testdrive",
                 "--no-reset",
                 f"--seed={self._seed}",
                 "--initial-backoff=10ms",
