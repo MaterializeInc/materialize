@@ -273,6 +273,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multiple_shards() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let data1 = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let data2 = vec![(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
+
+        let client = new_test_client().await?;
+
+        let (mut write1, read1) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, Id::new())
+            .await?;
+
+        // Different types, so that checks would fail in case we were not separating these
+        // collections internally.
+        let (mut write2, read2) = client
+            .open::<String, (), u64, i64>(NO_TIMEOUT, Id::new())
+            .await?;
+
+        let res = write1
+            .compare_and_append_slice(&data1[..], u64::minimum(), 3)
+            .await??;
+        assert_eq!(res, Ok(()));
+
+        let res = write2
+            .compare_and_append_slice(&data2[..], u64::minimum(), 3)
+            .await??;
+        assert_eq!(res, Ok(()));
+
+        let mut snap = read1.snapshot_one(2).await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data1[..], 1));
+
+        let mut snap = read2.snapshot_one(2).await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data2[..], 1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn compare_and_append() -> Result<(), Box<dyn std::error::Error>> {
         mz_ore::test::init_logging_default("warn");
 

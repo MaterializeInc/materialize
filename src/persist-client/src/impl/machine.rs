@@ -240,6 +240,8 @@ where
         mut work_fn: WorkFn,
     ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
         loop {
+            let id = self.state.id();
+
             let new_seqno = self.seqno.unwrap_or_default().next();
             let mut new_state = self.state.clone();
             let work_ret = match work_fn(new_seqno, &mut new_state) {
@@ -252,6 +254,7 @@ where
             let cas_res = self
                 .consensus
                 .compare_and_set(
+                    &id.to_string(),
                     deadline,
                     self.seqno,
                     VersionedData {
@@ -286,7 +289,8 @@ where
     }
 
     async fn fetch_and_update_state(&mut self, deadline: Instant) -> Result<(), ExternalError> {
-        let current = self.consensus.head(deadline).await?;
+        let id = self.id();
+        let current = self.consensus.head(&id.to_string(), deadline).await?;
         self.update_state(current).await
     }
 

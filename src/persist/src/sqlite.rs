@@ -36,13 +36,12 @@ CREATE TABLE consensus (
 #[derive(Debug)]
 pub struct SqliteConsensus {
     conn: Arc<Mutex<Connection>>,
-    shard: String,
 }
 
 impl SqliteConsensus {
     /// Open a sqlite-backed [Consensus] instance at `path`, for the collection
     /// named `shard`.
-    pub fn open<P: AsRef<Path>>(path: P, shard: String) -> Result<Self, Error> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         let mut conn = Connection::open(path)?;
         let tx = conn.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
@@ -58,7 +57,6 @@ impl SqliteConsensus {
         tx.commit()?;
         Ok(SqliteConsensus {
             conn: Arc::new(Mutex::new(conn)),
-            shard,
         })
     }
 
@@ -66,14 +64,14 @@ impl SqliteConsensus {
     ///
     /// TODO: We probably are going to move this function directly into the [Consensus]
     /// trait itself.
-    async fn truncate(&self, sequence_number: SeqNo) -> Result<(), Error> {
+    async fn truncate(&self, key: &str, sequence_number: SeqNo) -> Result<(), Error> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "DELETE FROM consensus
              WHERE shard = $shard AND sequence_number < $sequence_number",
         )?;
 
-        stmt.execute(named_params! {"$shard": self.shard, "$sequence_number": sequence_number.0})?;
+        stmt.execute(named_params! {"$shard": key, "$sequence_number": sequence_number.0})?;
 
         Ok(())
     }
@@ -81,13 +79,17 @@ impl SqliteConsensus {
 
 #[async_trait]
 impl Consensus for SqliteConsensus {
-    async fn head(&self, _deadline: Instant) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(
+        &self,
+        key: &str,
+        _deadline: Instant,
+    ) -> Result<Option<VersionedData>, ExternalError> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT sequence_number, data FROM consensus
                  WHERE shard = $shard ORDER BY sequence_number DESC LIMIT 1",
         )?;
-        stmt.query_row(named_params! {"$shard": self.shard}, |row| {
+        stmt.query_row(named_params! {"$shard": key}, |row| {
             let sequence_number = row.get("sequence_number")?;
             let data: Vec<_> = row.get("data")?;
             Ok(VersionedData {
@@ -101,6 +103,7 @@ impl Consensus for SqliteConsensus {
 
     async fn compare_and_set(
         &self,
+        key: &str,
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -134,7 +137,7 @@ impl Consensus for SqliteConsensus {
                 )?;
 
             stmt.execute(named_params! {
-                "$shard": self.shard,
+                "$shard": key,
                 "$sequence_number": new.seqno.0,
                 "$data": new.data,
                 "$expected": expected.0,
@@ -151,7 +154,7 @@ impl Consensus for SqliteConsensus {
                      ON CONFLICT DO NOTHING",
             )?;
             stmt.execute(named_params! {
-                "$shard": self.shard,
+                "$shard": key,
                 "$sequence_number": new.seqno.0,
                 "$data": new.data,
             })?
@@ -166,7 +169,7 @@ impl Consensus for SqliteConsensus {
             // TODO: remove this call once truncate becomes a full featured member
             // of [Consensus] or, restructure this implementation to not keep historical
             // data around if we don't need it.
-            let _ = self.truncate(new.seqno).await;
+            let _ = self.truncate(key, new.seqno).await;
             Ok(Ok(()))
         } else {
             // It's safe to call head in a subsequent transaction rather than doing
@@ -175,7 +178,7 @@ impl Consensus for SqliteConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline).await?;
+            let current = self.head(key, deadline).await?;
             Ok(Err(current))
         }
     }
@@ -192,7 +195,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         consensus_impl_test(|| {
             let path = temp_dir.path().join("sqlite_consensus");
-            SqliteConsensus::open(&path, "test_shard".to_string())
+            SqliteConsensus::open(&path)
         })
         .await
     }
