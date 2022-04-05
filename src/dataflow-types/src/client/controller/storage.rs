@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use timely::order::TotalOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
@@ -351,10 +351,7 @@ where
             if let Ok(collection) = self.collection_mut(id) {
                 let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
 
-                if <_ as timely::order::PartialOrder>::less_equal(
-                    &collection.implied_capability,
-                    &new_read_capability,
-                ) {
+                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                     let mut update = ChangeBatch::new();
                     update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                     std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
@@ -440,12 +437,19 @@ where
                 .state
                 .stash
                 .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
-            let collection = self.collection_mut(*id).expect("misisng_source_id");
+            let collection = self.collection_mut(*id).expect("missing source id");
             let write_frontier = collection.write_frontier.frontier().to_owned();
-            let stash_frontier = write_frontier
-                .as_option()
-                .map(|ts| ts.clone().try_into().expect("negative timestamp"));
-            ts_binding_collection.seal(Antichain::from_iter(stash_frontier).borrow())?;
+            let seal_frontier = Antichain::from_iter(
+                write_frontier
+                    .as_option()
+                    .map(|ts| ts.clone().try_into().expect("negative timestamp")),
+            );
+            let upper = ts_binding_collection.upper()?;
+            // TODO(petrosagg): This guard should go away by ensuring storage workers never re-send
+            // the bindings and frontiers they were initialized with
+            if PartialOrder::less_than(&upper, &seal_frontier) {
+                ts_binding_collection.seal(seal_frontier.borrow())?;
+            }
             durability_updates.push((*id, write_frontier));
         }
 
@@ -471,10 +475,7 @@ where
             let mut new_read_capability = collection
                 .read_policy
                 .frontier(collection.write_frontier.frontier());
-            if <_ as timely::order::PartialOrder>::less_equal(
-                &collection.implied_capability,
-                &new_read_capability,
-            ) {
+            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 // TODO: reuse change batch above?
                 let mut update = ChangeBatch::new();
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
