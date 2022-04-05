@@ -1408,10 +1408,10 @@ where
 /// An error while parsing an input as a type.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ParseError {
-    kind: ParseErrorKind,
-    type_name: String,
-    input: String,
-    details: Option<String>,
+    pub(crate) kind: ParseErrorKind,
+    pub(crate) type_name: String,
+    pub(crate) input: String,
+    pub(crate) details: Option<String>,
 }
 
 #[derive(

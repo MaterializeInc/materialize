@@ -11,6 +11,7 @@
 
 pub mod adt;
 pub mod row;
+pub mod strconv;
 
 use mz_ore::cast::CastFrom;
 use std::{char::CharTryFromError, num::TryFromIntError};
