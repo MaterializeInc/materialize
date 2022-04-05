@@ -70,7 +70,7 @@ SELECT TIME '01:23:45' AS t_v;
 <hr/>
 
 ```sql
-SELECT DATE '2001-02-03' + TIME '45:53:24' AS d_t;
+SELECT DATE '2001-02-03' + TIME '15:53:24' AS d_t;
 ```
 ```nofmt
          d_t
