@@ -70,6 +70,18 @@ sudo apt update
 sudo apt install materialized
 ```
 
+### apt DEB822 (Ubuntu jammy/22.04+, Debian bookworm/testing+)
+
+For Debian-based distributions with apt version `2.3.10` or later, we offer a DEB822-compliant sources file to install Materialize:
+
+```shell
+# Add and update the repository
+curl https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
+sudo apt update
+# Install materialized
+sudo apt install materialized
+```
+
 ### curl
 
 ```shell
