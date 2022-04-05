@@ -290,6 +290,8 @@ pub enum ExecuteResponse {
     Raise {
         severity: NoticeSeverity,
     },
+    /// lalala
+    WaitingOnTimestamp,
 }
 
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).

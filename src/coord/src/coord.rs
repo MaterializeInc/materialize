@@ -322,6 +322,8 @@ pub struct Coordinator {
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
+    /// lalala
+    lin_peeks: HashMap<Uuid, DeferredPlan>,
     /// A map from client connection ids to a set of all pending peeks for that client
     client_pending_peeks: HashMap<u32, BTreeSet<Uuid>>,
     /// A map from pending tails to the tail description.
@@ -893,6 +895,22 @@ impl Coordinator {
             )) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
                 println!("got timestamp: {} for peek:{}", timestamp, peek_id);
+
+                let mut ready = self.lin_peeks.remove(&peek_id).unwrap();
+
+                ready.tx.send(
+                    self.sequence_peek(
+                        &mut ready.session,
+                        match ready.plan {
+                            Plan::Peek(peek_plan) => peek_plan,
+                            _ => unreachable!("..."),
+                        },
+                        peek_id,
+                        Some(timestamp),
+                    )
+                    .await,
+                    ready.session,
+                )
             }
         }
     }
@@ -1757,9 +1775,20 @@ impl Coordinator {
                 };
                 self.sequence_end_transaction(tx, session, action).await;
             }
-            Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan).await, session);
-            }
+            Plan::Peek(plan) => match self.sequence_peek_before(tx, session, plan).await {
+                Err((e, (session, tx))) => {
+                    tx.send(Err(e), session);
+                }
+                Ok((uuid, Err((mut session, tx, plan)))) => {
+                    tx.send(
+                        self.sequence_peek(&mut session, plan, uuid, None).await,
+                        session,
+                    );
+                }
+                Ok((uuid, Ok(deferred_plan))) => {
+                    self.lin_peeks.insert(uuid, deferred_plan);
+                }
+            },
             Plan::Tail(plan) => {
                 tx.send(self.sequence_tail(&mut session, plan).await, session);
             }
@@ -3089,6 +3118,67 @@ impl Coordinator {
         Ok(id_bundle)
     }
 
+    async fn sequence_peek_before(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        plan: PeekPlan,
+    ) -> Result<
+        (
+            Uuid,
+            Result<DeferredPlan, (Session, ClientTransmitter<ExecuteResponse>, PeekPlan)>,
+        ),
+        (CoordError, (Session, ClientTransmitter<ExecuteResponse>)),
+    > {
+        let compute_instance = match self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())
+        {
+            Err(e) => return Err((e.into(), (session, tx))),
+            Ok(i) => i,
+        }
+        .id;
+
+        let mut uuid = Uuid::new_v4();
+        while self.pending_peeks.contains_key(&uuid) {
+            uuid = Uuid::new_v4();
+        }
+
+        let source_ids = plan.source.depends_on();
+        let yes_ids: Vec<_> = self
+            .index_oracle(compute_instance)
+            .actual_sources(source_ids.iter())
+            .storage_ids
+            .iter()
+            .copied()
+            .collect();
+
+        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
+        // small but unlikely chance that it's not unique to completed peeks.
+        if yes_ids.iter().all(|id| {
+            matches!(
+                id,
+                GlobalId::System(_) | GlobalId::Transient(_) | GlobalId::Explain
+            )
+        }) {
+            Ok((uuid, Err((session, tx, plan))))
+        } else {
+            let _ = self
+                .dataflow_client
+                .storage_mut()
+                .linearize_sources(uuid.clone(), yes_ids)
+                .await;
+            Ok((
+                uuid,
+                Ok(DeferredPlan {
+                    tx,
+                    session,
+                    plan: Plan::Peek(plan),
+                }),
+            ))
+        }
+    }
+
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
     ///
     /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
@@ -3099,6 +3189,8 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
+        uuid: Uuid,
+        lin_time: Option<Timestamp>,
     ) -> Result<ExecuteResponse, CoordError> {
         // TODO: remove this function when sources are linearizable.
         // See: #11048.
@@ -3161,7 +3253,6 @@ impl Coordinator {
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        dbg!(&source);
         let source_ids = source.depends_on();
 
         let timeline = self.validate_timeline(source_ids.clone())?;
@@ -3276,26 +3367,12 @@ impl Coordinator {
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
 
-        let yes_ids = self
-            .index_oracle(compute_instance)
-            .actual_sources(source_ids.iter())
-            .storage_ids
-            .iter()
-            .copied()
-            .collect();
+        let timestamp = if let Some(lin_time) = lin_time {
+            std::cmp::max(lin_time, timestamp)
+        } else {
+            timestamp
+        };
 
-        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
-        // small but unlikely chance that it's not unique to completed peeks.
-        let mut uuid = Uuid::new_v4();
-        while self.pending_peeks.contains_key(&uuid) {
-            uuid = Uuid::new_v4();
-        }
-
-        let _ = self
-            .dataflow_client
-            .storage_mut()
-            .linearize_sources(uuid.clone(), yes_ids)
-            .await;
         // before we have the corrected timestamp ^
         // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
         // `linearize_sources(source_ids.iter().collect()).await`
@@ -4217,6 +4294,12 @@ impl Coordinator {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
         );
+
+        let mut uuid = Uuid::new_v4();
+        while self.pending_peeks.contains_key(&uuid) {
+            uuid = Uuid::new_v4();
+        }
+
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -4226,6 +4309,8 @@ impl Coordinator {
                     finishing,
                     copy_to: None,
                 },
+                uuid,
+                None,
             )
             .await
         {
@@ -4969,6 +5054,7 @@ pub async fn serve(
                 read_capability: Default::default(),
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
+                lin_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),

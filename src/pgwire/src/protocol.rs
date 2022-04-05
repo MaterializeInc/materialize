@@ -1106,6 +1106,7 @@ where
                 self.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
             }
+            ExecuteResponse::WaitingOnTimestamp => Ok(State::Ready),
             ExecuteResponse::Fetch {
                 name,
                 count,

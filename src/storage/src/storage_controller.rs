@@ -35,6 +35,12 @@ use mz_dataflow_types::Update;
 use mz_expr::{GlobalId, PartitionId};
 use mz_stash::Stash;
 
+#[derive(Debug)]
+struct PendingLin<T> {
+    desired: HashMap<GlobalId, Vec<(mz_expr::PartitionId, mz_dataflow_types::sources::MzOffset)>>,
+    merged: T,
+}
+
 /// A storage controller for a storage instance.
 #[derive(Debug)]
 pub struct Controller<T> {
@@ -42,6 +48,7 @@ pub struct Controller<T> {
     /// lalala
     pub internal_responses: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     responder: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+    pending_linearizations: HashMap<Uuid, PendingLin<T>>,
 }
 
 #[async_trait]
@@ -246,14 +253,16 @@ where
             // Sort the bindings by (pid, ts, offset)
             bindings.sort_unstable();
             let mut updates = vec![];
-            for (pid, ts, offset) in bindings {
+            for (pid, orig_ts, offset) in bindings.clone() {
                 let prev_offset = collection_state
                     .last_reported_ts_bindings
                     .entry(pid.clone())
                     .or_default();
-
-                let ts = ts.try_into().expect("timestamp overflowed i64");
-                let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
+                let ts = orig_ts
+                    .clone()
+                    .try_into()
+                    .expect("timestamp overflowed i64");
+                let update = ((pid.clone(), ()), ts, offset.offset - prev_offset.offset);
 
                 prev_offset.offset = offset.offset;
                 // TODO(petrosagg): refactor timestamp binding handling so that we never enter a
@@ -261,6 +270,38 @@ where
                 if upper.less_equal(&ts) {
                     updates.push(update);
                 }
+            }
+            for (pid, orig_ts, offset) in bindings {
+                self.pending_linearizations.retain(|uuid, pending| {
+                    if let Some(p) = pending.desired.get_mut(id) {
+                        p.retain(|(des_pid, des_offset)| {
+                            if &pid == des_pid && &offset >= des_offset {
+                                pending.merged =
+                                    std::cmp::max(pending.merged.clone(), orig_ts.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        });
+
+                        if p.is_empty() {
+                            pending.desired.remove(id);
+                        }
+                    }
+                    if pending.desired.is_empty() {
+                        self.responder
+                            .send(StorageResponse::LinearizedTimestamps(
+                                LinearizedTimestampBindingFeedback {
+                                    timestamp: pending.merged.clone(),
+                                    peek_id: uuid.clone(),
+                                },
+                            ))
+                            .unwrap();
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
             self.state
                 .stash
@@ -407,60 +448,89 @@ where
         peek_id: Uuid,
         source_ids: Vec<GlobalId>,
     ) -> Result<(), anyhow::Error> {
-        dbg!(&source_ids);
+        assert!(!source_ids.is_empty());
+        let mut futs = Vec::new();
         for id in source_ids {
-            let desc = self.collection(id).unwrap().description.0.clone();
-            let sender = self.responder.clone();
+            let desc = self.collection(id)?.description.0.clone();
             let ts_binding_collection = self
                 .state
                 .stash
                 .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
                 .unwrap();
             let stash = self.state.stash.clone();
-            tokio::spawn(async move {
+            futs.push(async move {
                 match desc.give_answer().await {
-                    SourceLinearizationResult::Answer(answer) => {
-                        let mut i = tokio::time::interval(std::time::Duration::from_secs(1));
-                        let t = loop {
-                            let mut last_bindings: HashMap<_, (T, MzOffset)> = HashMap::new();
-                            for ((pid, _), time, diff) in stash.iter(ts_binding_collection).unwrap()
-                            {
-                                let entry = last_bindings
-                                    .entry(pid.clone())
-                                    .or_insert((T::minimum(), MzOffset::default()));
-                                let time = T::try_from(time).expect("timestamp overflowed i64");
-                                entry.1.offset += diff;
-                                entry.0 = std::cmp::max(time, entry.0.clone());
-                            }
+                    SourceLinearizationResult::Answer(mut answer) => {
+                        let mut last_bindings: HashMap<_, (T, MzOffset)> = HashMap::new();
+                        for ((pid, _), time, diff) in stash.iter(ts_binding_collection)? {
+                            let entry = last_bindings
+                                .entry(pid.clone())
+                                .or_insert((T::minimum(), MzOffset::default()));
+                            let time = T::try_from(time).expect("timestamp overflowed i64");
+                            entry.1.offset += diff;
+                            entry.0 = std::cmp::max(time, entry.0.clone());
+                        }
 
-                            dbg!(&last_bindings);
-
-                            let mut out = vec![];
-                            for (pid, offset) in &answer {
-                                if let Some(p) = last_bindings.get(&pid) {
-                                    if &p.1 <= offset {
-                                        out.push(p.0.clone());
-                                    }
+                        let mut out = vec![];
+                        answer.retain(|(pid, offset)| {
+                            if let Some(p) = last_bindings.get(&pid) {
+                                if &p.1 <= offset {
+                                    out.push(p.0.clone());
+                                    false
+                                } else {
+                                    true
                                 }
+                            } else {
+                                true
                             }
+                        });
 
-                            if out.len() == answer.len() {
-                                break out.iter().max().unwrap().clone();
-                            }
-                            i.tick().await;
-                        };
-
-                        sender.send(StorageResponse::LinearizedTimestamps(
-                            LinearizedTimestampBindingFeedback {
-                                timestamp: t,
-                                peek_id,
-                            },
-                        ))
+                        Ok(Some((
+                            id,
+                            out.iter().max().unwrap_or(&T::minimum()).clone(),
+                            answer,
+                        )))
                     }
-                    .unwrap(),
-                    _ => {}
+                    _ => Ok(None),
                 }
             });
+        }
+
+        let i: Result<Vec<_>, anyhow::Error> = futures::future::try_join_all(futs).await;
+        let mut total_merged = T::minimum();
+        let desired: HashMap<
+            GlobalId,
+            Vec<(mz_expr::PartitionId, mz_dataflow_types::sources::MzOffset)>,
+        > = i?
+            .into_iter()
+            .flat_map(|x| {
+                x.map(|(id, merged, answer)| {
+                    total_merged = std::cmp::max(total_merged.clone(), merged);
+                    (id, answer)
+                })
+            })
+            .filter(|(_, answer)| !answer.is_empty())
+            .collect();
+
+        if desired.is_empty() {
+            println!("fast path");
+            self.responder
+                .send(StorageResponse::LinearizedTimestamps(
+                    LinearizedTimestampBindingFeedback {
+                        timestamp: total_merged,
+                        peek_id,
+                    },
+                ))
+                .unwrap();
+        } else {
+            println!("slow path");
+            self.pending_linearizations.insert(
+                peek_id,
+                PendingLin {
+                    merged: total_merged,
+                    desired,
+                },
+            );
         }
         Ok(())
     }
@@ -491,6 +561,7 @@ where
             state: StorageControllerState::new(client, state_dir),
             internal_responses: rx,
             responder: tx,
+            pending_linearizations: HashMap::new(),
         }
     }
 
