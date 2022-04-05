@@ -150,6 +150,13 @@ impl From<rusqlite::Error> for ExternalError {
     }
 }
 
+impl From<tokio_postgres::Error> for ExternalError {
+    fn from(e: tokio_postgres::Error) -> Self {
+        ExternalError {
+            inner: anyhow::Error::new(e),
+        }
+    }
+}
 /// An abstraction over an append-only bytes log.
 ///
 /// Each written entry is assigned a unique, incrementing SeqNo, which can be

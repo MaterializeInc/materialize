@@ -3817,6 +3817,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tokio-postgres",
  "tracing",
  "url",
  "uuid",
