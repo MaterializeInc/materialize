@@ -299,20 +299,31 @@ impl Stash for Sqlite {
         collection: StashCollection<K, V>,
         new_upper: AntichainRef<Timestamp>,
     ) -> Result<(), StashError> {
+        self.seal_batch(&[(collection, new_upper.to_owned())])
+    }
+
+    fn seal_batch<K, V>(
+        &self,
+        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
+    ) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let upper = self.upper_tx(&tx, collection.id)?;
-        if PartialOrder::less_than(&new_upper, &upper.borrow()) {
-            return Err(StashError::from(format!(
-                "seal request {} is less than the current upper frontier {}",
-                AntichainFormatter(&new_upper),
-                AntichainFormatter(&upper),
-            )));
+        let mut update_stmt =
+            tx.prepare("UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id")?;
+        for (collection, new_upper) in seals {
+            let upper = self.upper_tx(&tx, collection.id)?;
+            if PartialOrder::less_than(new_upper, &upper) {
+                return Err(StashError::from(format!(
+                    "seal request {} is less than the current upper frontier {}",
+                    AntichainFormatter(new_upper),
+                    AntichainFormatter(&upper),
+                )));
+            }
+            update_stmt.execute(
+                named_params! {"$upper": new_upper.as_option(), "$collection_id": collection.id},
+            )?;
         }
-        tx.execute(
-            "UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id",
-            named_params! {"$upper": new_upper.as_option(), "$collection_id": collection.id},
-        )?;
+        drop(update_stmt);
         tx.commit()?;
         Ok(())
     }
@@ -322,66 +333,83 @@ impl Stash for Sqlite {
         collection: StashCollection<K, V>,
         new_since: AntichainRef<Timestamp>,
     ) -> Result<(), StashError> {
+        self.compact_batch(&[(collection, new_since.to_owned())])
+    }
+
+    fn compact_batch<K, V>(
+        &self,
+        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
+    ) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let since = self.since_tx(&tx, collection.id)?;
-        let upper = self.upper_tx(&tx, collection.id)?;
-        if PartialOrder::less_than(&upper.borrow(), &new_since) {
-            return Err(StashError::from(format!(
-                "compact request {} is greater than the current upper frontier {}",
-                AntichainFormatter(&new_since),
-                AntichainFormatter(&upper)
-            )));
+        let mut compact_stmt =
+            tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
+        for (collection, new_since) in compactions {
+            let since = self.since_tx(&tx, collection.id)?;
+            let upper = self.upper_tx(&tx, collection.id)?;
+            if PartialOrder::less_than(&upper, new_since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is greater than the current upper frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(&upper)
+                )));
+            }
+            if PartialOrder::less_than(new_since, &since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is less than the current since frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(&since)
+                )));
+            }
+            compact_stmt.execute(
+                named_params! {"$since": new_since.as_option(), "$collection_id": collection.id},
+            )?;
         }
-        if PartialOrder::less_than(&new_since, &since.borrow()) {
-            return Err(StashError::from(format!(
-                "compact request {} is less than the current since frontier {}",
-                AntichainFormatter(&new_since),
-                AntichainFormatter(&since)
-            )));
-        }
-        tx.execute(
-            "UPDATE sinces SET since = $since WHERE collection_id = $collection_id",
-            named_params! {"$since": new_since.as_option(), "$collection_id": collection.id},
-        )?;
+        drop(compact_stmt);
         tx.commit()?;
         Ok(())
     }
 
     fn consolidate<K, V>(&self, collection: StashCollection<K, V>) -> Result<(), StashError> {
+        self.consolidate_batch(&[collection])
+    }
+
+    fn consolidate_batch<K, V>(
+        &self,
+        collections: &[StashCollection<K, V>],
+    ) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
-        let since = self.since_tx(&tx, collection.id)?.into_option();
-        match since {
-            Some(since) => {
-                tx.execute(
-                    "INSERT INTO data (collection_id, key, value, time, diff)
-                     SELECT collection_id, key, value, $since, sum(diff) FROM data
-                     WHERE collection_id = $collection_id AND time < $since
-                     GROUP BY key, value
-                     ON CONFLICT (collection_id, key, value, time) DO UPDATE SET diff = diff + excluded.diff",
-                    named_params! {
+        let mut consolidation_stmt = tx.prepare(
+                        "INSERT INTO data (collection_id, key, value, time, diff)
+                         SELECT collection_id, key, value, $since, sum(diff) FROM data
+                         WHERE collection_id = $collection_id AND time < $since
+                         GROUP BY key, value
+                         ON CONFLICT (collection_id, key, value, time) DO UPDATE SET diff = diff + excluded.diff")?;
+        let mut cleanup_stmt =
+            tx.prepare("DELETE FROM data WHERE collection_id = $collection_id AND time < $since")?;
+        let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
+        for collection in collections {
+            let since = self.since_tx(&tx, collection.id)?.into_option();
+            match since {
+                Some(since) => {
+                    consolidation_stmt.execute(named_params! {
                         "$collection_id": collection.id,
                         "$since": since,
-                    },
-                )?;
-                tx.execute(
-                    "DELETE FROM data WHERE collection_id = $collection_id AND time < $since",
-                    named_params! {
+                    })?;
+                    cleanup_stmt.execute(named_params! {
                         "$collection_id": collection.id,
                         "$since": since,
-                    },
-                )?;
-            }
-            None => {
-                tx.execute(
-                    "DELETE FROM data WHERE collection_id = $collection_id",
-                    named_params! {
+                    })?;
+                }
+                None => {
+                    drop_stmt.execute(named_params! {
                         "$collection_id": collection.id,
-                    },
-                )?;
+                    })?;
+                }
             }
         }
+        drop((consolidation_stmt, cleanup_stmt, drop_stmt));
         tx.commit()?;
         Ok(())
     }
