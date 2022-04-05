@@ -13,6 +13,26 @@ import "google/protobuf/empty.proto";
 
 package id;
 
+message ProtoGlobalId {
+    oneof kind {
+        uint64 system = 1;
+        uint64 user = 2;
+        uint64 transient = 3;
+        google.protobuf.Empty explain = 4;
+    }
+}
+
+message ProtoId {
+    oneof kind {
+        ProtoGlobalId global = 1;
+        ProtoLocalId local = 2;
+    }
+}
+
+message ProtoLocalId {
+    uint64 value = 1;
+}
+
 message ProtoPartitionId {
     oneof kind {
         int32 kafka = 1;
