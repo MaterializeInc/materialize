@@ -6,7 +6,7 @@ menu:
     parent: 'create-source'
 aliases:
     - /sql/create-source/files
-    - /sql/create-source/text-file
+    - /sql/create-source/avro-file
     - /sql/create-source/csv-file
     - /sql/create-source/json-file
     - /sql/create-source/text-file
@@ -18,7 +18,15 @@ This page details how to use Materialize to read from local files.
 
 ## Syntax
 
-{{< diagram "create-source-text.svg" >}}
+{{< diagram "create-source-file.svg" >}}
+
+#### `format_spec`
+
+{{< diagram "file-format-spec.svg" >}}
+
+#### `compression`
+
+{{< diagram "compression.svg" >}}
 
 ### key_constraint
 
@@ -43,7 +51,6 @@ Field                                | Value     | Description
 ---------------------------------------|:--------------------:|:---------------:|:-----------------:|
 | Avro                                 | ✓                    |                 | ✓                 |
 | JSON                                 | ✓                    |                 |                   |
-| Protobuf                             |                      |                 |                   |
 | Text/bytes                           | ✓                    |                 |                   |
 | CSV                                  | ✓                    |                 |                   |
 
@@ -55,14 +62,14 @@ In addition to reading static files and making the data available for processing
 
 ```sql
 CREATE SOURCE csv_source
-  FROM FILE '[path to .csv]'
+  FROM FILE '/local/path/file.csv'
   WITH (tail = true)
   FORMAT CSV WITH HEADER;
 ```
 
-### Using regex
+### Formatting text
 
-If you're dealing with unstructured files, such as server logs, you can structure the content by providing a regular expression using the `REGEX` format specifier. This lets you generate multiple columns from arbitrary file content,
+If you're dealing with unstructured text files, such as server logs, you can structure the content by providing a regular expression using the `REGEX` format specifier. This lets you generate multiple columns from arbitrary lines of text,
 given it has some consistent formatting:
 
 ```sql
@@ -86,9 +93,8 @@ File](https://avro.apache.org/docs/current/spec.html#Object+Container+Files) (OC
 
 ```sql
 CREATE SOURCE avro_source
-  FROM AVRO OCF '[path to .ocf]'
-  WITH (tail = true)
-  ENVELOPE NONE;
+  FROM AVRO OCF '/local/path/file.ocf'
+  WITH (tail = true);
 ```
 
 This creates a source that...
@@ -118,16 +124,6 @@ CREATE MATERIALIZED VIEW jsonified_file_source AS
 ```
 {{< /tab >}}
 {{< tab "Text/bytes">}}
-
-To read from a local text- or byte-formatted file:
-
-```sql
-CREATE SOURCE text_source
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-  FORMAT TEXT
-  USING SCHEMA FILE '/scratch/data.json'
-  ENVELOPE UPSERT;
-```
 
 As an example, assume we have [`xxd`](https://linux.die.net/man/1/xxd)
 creating hex dumps for some incoming files. Its output might look like this:
@@ -172,7 +168,7 @@ this:
 
 ```sql
 CREATE SOURCE static_w_header
-  FROM FILE '[path to .csv]'
+  FROM FILE '/local/path/file.csv'
   FORMAT CSV WITH HEADER;
 ```
 
@@ -186,7 +182,7 @@ This creates a source that...
 
 ```sql
 CREATE SOURCE dynamic_wo_header (col_foo, col_bar, col_baz)
-  FROM FILE '[path to .csv]'
+  FROM FILE '/local/path/file.csv'
   WITH (tail = true)
   FORMAT CSV WITH 3 COLUMNS;
 ```
