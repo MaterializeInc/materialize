@@ -1191,7 +1191,8 @@ impl Catalog {
             .iter()
             .filter(|builtin| {
                 !matches!(builtin, BuiltinInner::Type(_))
-                    && !builtin_ids.contains_key(builtin.name())
+                    && !builtin_ids
+                        .contains_key(&(builtin.schema().to_string(), builtin.name().to_string()))
             })
             .count();
         let mut new_system_ids = catalog
@@ -1207,14 +1208,21 @@ impl Catalog {
             let id = match builtin_inner {
                 // Builtin Types are currently statically assigned Ids
                 BuiltinInner::Type(BuiltinType { id, .. }) => *id,
-                _ => match builtin_ids.get(builtin_inner.name()) {
+                _ => match builtin_ids.get(&(
+                    builtin_inner.schema().to_string(),
+                    builtin_inner.name().to_string(),
+                )) {
                     // TODO(jkosh44) These items may need to undergo schema migrations
                     // Builtin has already been assigned a global Id
                     Some(id) => *id,
                     // New Builtin which needs a global Id
                     None => {
                         let id = new_system_ids.next().expect("should be enough system ids");
-                        new_system_id_mappings.push((builtin_inner.name(), id));
+                        new_system_id_mappings.push((
+                            builtin_inner.schema(),
+                            builtin_inner.name(),
+                            id,
+                        ));
                         id
                     }
                 },

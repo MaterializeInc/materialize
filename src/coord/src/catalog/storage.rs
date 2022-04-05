@@ -249,96 +249,96 @@ const MIGRATIONS: &[&dyn Migration] = &[
     -- We need to insert previous static IDs in the mapping so user can successfully upgrade
     INSERT INTO system_gid_mapping (name, id) VALUES
         -- Logs
-        ('mz_dataflow_operators', 3000),
-        ('mz_dataflow_operator_addresses', 3002),
-        ('mz_dataflow_channels', 3004),
-        ('mz_scheduling_elapsed_internal', 3006),
-        ('mz_scheduling_histogram_internal', 3008),
-        ('mz_scheduling_parks_internal', 3010),
-        ('mz_arrangement_batches_internal', 3012),
-        ('mz_arrangement_sharing_internal', 3014),
-        ('mz_materializations', 3016),
-        ('mz_materialization_dependencies', 3018),
-        ('mz_worker_materialization_frontiers', 3020),
-        ('mz_peek_active', 3022),
-        ('mz_peek_durations', 3024),
-        ('mz_source_info', 3026),
-        ('mz_message_counts_received_internal', 3028),
-        ('mz_message_counts_sent_internal', 3036),
-        ('mz_dataflow_operator_reachability_internal', 3034),
-        ('mz_arrangement_records_internal', 3038),
-        ('mz_kafka_source_statistics', 3040),
+        ('mz_catalog.mz_dataflow_operators', 3000),
+        ('mz_catalog.mz_dataflow_operator_addresses', 3002),
+        ('mz_catalog.mz_dataflow_channels', 3004),
+        ('mz_catalog.mz_scheduling_elapsed_internal', 3006),
+        ('mz_catalog.mz_scheduling_histogram_internal', 3008),
+        ('mz_catalog.mz_scheduling_parks_internal', 3010),
+        ('mz_catalog.mz_arrangement_batches_internal', 3012),
+        ('mz_catalog.mz_arrangement_sharing_internal', 3014),
+        ('mz_catalog.mz_materializations', 3016),
+        ('mz_catalog.mz_materialization_dependencies', 3018),
+        ('mz_catalog.mz_worker_materialization_frontiers', 3020),
+        ('mz_catalog.mz_peek_active', 3022),
+        ('mz_catalog.mz_peek_durations', 3024),
+        ('mz_catalog.mz_source_info', 3026),
+        ('mz_catalog.mz_message_counts_received_internal', 3028),
+        ('mz_catalog.mz_message_counts_sent_internal', 3036),
+        ('mz_catalog.mz_dataflow_operator_reachability_internal', 3034),
+        ('mz_catalog.mz_arrangement_records_internal', 3038),
+        ('mz_catalog.mz_kafka_source_statistics', 3040),
          -- Tables
-        ('mz_view_keys', 4001),
-        ('mz_view_foreign_keys', 4003),
-        ('mz_kafka_sinks', 4005),
-        ('mz_avro_ocf_sinks', 4007),
-        ('mz_databases', 4009),
-        ('mz_schemas', 4011),
-        ('mz_columns', 4013),
-        ('mz_indexes', 4015),
-        ('mz_index_columns', 4017),
-        ('mz_tables', 4019),
-        ('mz_sources', 4021),
-        ('mz_sinks', 4023),
-        ('mz_views', 4025),
-        ('mz_types', 4027),
-        ('mz_array_types', 4029),
-        ('mz_base_types', 4031),
-        ('mz_list_types', 4033),
-        ('mz_map_types', 4035),
-        ('mz_roles', 4037),
-        ('mz_pseudo_types', 4039),
-        ('mz_functions', 4041),
-        ('mz_metrics', 4043),
-        ('mz_metrics_meta', 4045),
-        ('mz_metric_histograms', 4047),
-        ('mz_clusters', 4049),
-        ('mz_secrets', 4050),
+        ('mz_catalog.mz_view_keys', 4001),
+        ('mz_catalog.mz_view_foreign_keys', 4003),
+        ('mz_catalog.mz_kafka_sinks', 4005),
+        ('mz_catalog.mz_avro_ocf_sinks', 4007),
+        ('mz_catalog.mz_databases', 4009),
+        ('mz_catalog.mz_schemas', 4011),
+        ('mz_catalog.mz_columns', 4013),
+        ('mz_catalog.mz_indexes', 4015),
+        ('mz_catalog.mz_index_columns', 4017),
+        ('mz_catalog.mz_tables', 4019),
+        ('mz_catalog.mz_sources', 4021),
+        ('mz_catalog.mz_sinks', 4023),
+        ('mz_catalog.mz_views', 4025),
+        ('mz_catalog.mz_types', 4027),
+        ('mz_catalog.mz_array_types', 4029),
+        ('mz_catalog.mz_base_types', 4031),
+        ('mz_catalog.mz_list_types', 4033),
+        ('mz_catalog.mz_map_types', 4035),
+        ('mz_catalog.mz_roles', 4037),
+        ('mz_catalog.mz_pseudo_types', 4039),
+        ('mz_catalog.mz_functions', 4041),
+        ('mz_catalog.mz_metrics', 4043),
+        ('mz_catalog.mz_metrics_meta', 4045),
+        ('mz_catalog.mz_metric_histograms', 4047),
+        ('mz_catalog.mz_clusters', 4049),
+        ('mz_catalog.mz_secrets', 4050),
         -- Views
-        ('mz_relations', 5000),
-        ('mz_objects', 5001),
-        ('mz_catalog_names', 5002),
-        ('mz_dataflow_names', 5003),
-        ('mz_dataflow_operator_dataflows', 5004),
-        ('mz_materialization_frontiers', 5005),
-        ('mz_records_per_dataflow_operator', 5006),
-        ('mz_records_per_dataflow', 5007),
-        ('mz_records_per_dataflow_global', 5008),
-        ('mz_perf_arrangement_records', 5009),
-        ('mz_perf_peek_durations_core', 5010),
-        ('mz_perf_peek_durations_bucket', 5011),
-        ('mz_perf_peek_durations_aggregates', 5012),
-        ('mz_perf_dependency_frontiers', 5013),
-        ('pg_namespace', 5014),
-        ('pg_class', 5015),
-        ('pg_database', 5016),
-        ('pg_index', 5017),
-        ('pg_description', 5018),
-        ('pg_type', 5019),
-        ('pg_attribute', 5020),
-        ('pg_proc', 5021),
-        ('pg_range', 5022),
-        ('pg_enum', 5023),
-        ('pg_attrdef', 5025),
-        ('pg_settings', 5026),
-        ('mz_scheduling_elapsed', 5027),
-        ('mz_scheduling_histogram', 5028),
-        ('mz_scheduling_parks', 5029),
-        ('mz_message_counts', 5030),
-        ('mz_dataflow_operator_reachability', 5031),
-        ('mz_arrangement_sizes', 5032),
-        ('mz_arrangement_sharing', 5033),
-        ('pg_constraint', 5034),
-        ('pg_tables', 5035),
-        ('pg_am', 5036),
-        ('pg_roles', 5037),
-        ('pg_views', 5038),
-        ('columns', 5039),
-        ('tables', 5040),
-        ('pg_collation', 5041),
-        ('pg_policy', 5042),
-        ('pg_inherits', 5043);
+        ('mz_catalog.mz_relations', 5000),
+        ('mz_catalog.mz_objects', 5001),
+        ('mz_catalog.mz_catalog_names', 5002),
+        ('mz_catalog.mz_dataflow_names', 5003),
+        ('mz_catalog.mz_dataflow_operator_dataflows', 5004),
+        ('mz_catalog.mz_materialization_frontiers', 5005),
+        ('mz_catalog.mz_records_per_dataflow_operator', 5006),
+        ('mz_catalog.mz_records_per_dataflow', 5007),
+        ('mz_catalog.mz_records_per_dataflow_global', 5008),
+        ('mz_catalog.mz_perf_arrangement_records', 5009),
+        ('mz_catalog.mz_perf_peek_durations_core', 5010),
+        ('mz_catalog.mz_perf_peek_durations_bucket', 5011),
+        ('mz_catalog.mz_perf_peek_durations_aggregates', 5012),
+        ('mz_catalog.mz_perf_dependency_frontiers', 5013),
+        ('pg_catalog.pg_namespace', 5014),
+        ('pg_catalog.pg_class', 5015),
+        ('pg_catalog.pg_database', 5016),
+        ('pg_catalog.pg_index', 5017),
+        ('pg_catalog.pg_description', 5018),
+        ('pg_catalog.pg_type', 5019),
+        ('pg_catalog.pg_attribute', 5020),
+        ('pg_catalog.pg_proc', 5021),
+        ('pg_catalog.pg_range', 5022),
+        ('pg_catalog.pg_enum', 5023),
+        ('pg_catalog.pg_attrdef', 5025),
+        ('pg_catalog.pg_settings', 5026),
+        ('mz_catalog.mz_scheduling_elapsed', 5027),
+        ('mz_catalog.mz_scheduling_histogram', 5028),
+        ('mz_catalog.mz_scheduling_parks', 5029),
+        ('mz_catalog.mz_message_counts', 5030),
+        ('mz_catalog.mz_dataflow_operator_reachability', 5031),
+        ('mz_catalog.mz_arrangement_sizes', 5032),
+        ('mz_catalog.mz_arrangement_sharing', 5033),
+        ('pg_catalog.pg_constraint', 5034),
+        ('pg_catalog.pg_tables', 5035),
+        ('pg_catalog.pg_am', 5036),
+        ('pg_catalog.pg_roles', 5037),
+        ('pg_catalog.pg_views', 5038),
+        ('information_schema.columns', 5039),
+        ('information_schema.tables', 5040),
+        ('pg_catalog.pg_collation', 5041),
+        ('pg_catalog.pg_policy', 5042),
+        ('pg_catalog.pg_inherits', 5043);
 
     CREATE TABLE compute_introspection_source_indexes (
         compute_id integer NOT NULL,
@@ -596,13 +596,21 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_system_gids(&self) -> Result<BTreeMap<String, GlobalId>, Error> {
+    /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
+    pub fn load_system_gids(&self) -> Result<BTreeMap<(String, String), GlobalId>, Error> {
         self.inner
             .prepare("SELECT name, id FROM system_gid_mapping")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let name: String = row.get(0)?;
+                let name_parts: Vec<_> = name.split('.').collect();
+                if name_parts.len() != 2 {
+                    panic!("system table system_gid_mapping has been corrupted, encountered name {name}, all names should be of the form <schema-name>.<object-name>");
+                }
+                let schema_name = name_parts[0].to_string();
+                let object_name = name_parts[1].to_string();
                 let id: i64 = row.get(1)?;
-                Ok((name, GlobalId::System(id as u64)))
+                let id = id as u64;
+                Ok(((schema_name, object_name), GlobalId::System(id)))
             })?
             .collect()
     }
@@ -621,14 +629,18 @@ impl Connection {
             .collect()
     }
 
+    /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
+    /// (schema-name, object-name, global-id).
+    ///
     /// Panics if provided id is not a system id
-    pub fn set_system_gids(&mut self, mappings: Vec<(&str, GlobalId)>) -> Result<(), Error> {
+    pub fn set_system_gids(&mut self, mappings: Vec<(&str, &str, GlobalId)>) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
         }
 
         let tx = self.inner.transaction()?;
-        for (name, id) in mappings {
+        for (schema_name, object_name, id) in mappings {
+            let name = format!("{schema_name}.{object_name}");
             let id = if let GlobalId::System(id) = id {
                 id
             } else {
