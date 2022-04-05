@@ -220,6 +220,9 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
     ```sql
     SELECT * FROM cnt_ticker;
+    ```
+
+    ```
      ticker | cnt
     --------+-----
      AAPL   |  42
@@ -252,7 +255,9 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
 
     ```sql
     SELECT * FROM cnt_sliding;
+    ```
 
+    ```
        symbol    | cnt
     -------------+-----
      Apple       |  31
