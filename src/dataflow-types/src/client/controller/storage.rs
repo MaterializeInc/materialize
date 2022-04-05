@@ -434,6 +434,7 @@ where
         }
 
         let mut durability_updates = vec![];
+        let mut seals = vec![];
         for (id, _changes) in &feedback.changes {
             let ts_binding_collection = self
                 .state
@@ -450,12 +451,11 @@ where
             // TODO(petrosagg): This guard should go away by ensuring storage workers never re-send
             // the bindings and frontiers they were initialized with
             if PartialOrder::less_than(&upper, &seal_frontier) {
-                self.state
-                    .stash
-                    .seal(ts_binding_collection, seal_frontier.borrow())?;
+                seals.push((ts_binding_collection, seal_frontier));
             }
             durability_updates.push((*id, write_frontier));
         }
+        self.state.stash.seal_batch(&seals)?;
 
         self.update_durability_frontiers(durability_updates).await?;
 
@@ -518,6 +518,8 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands.
         let mut compaction_commands = Vec::new();
+        let mut stash_compactions = vec![];
+        let mut stash_consolidations = vec![];
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
@@ -538,14 +540,14 @@ where
                         .iter()
                         .map(|t| t.clone().try_into().expect("timestamp overflowed i64")),
                 );
-                self.state
-                    .stash
-                    .compact(ts_binding_collection, since.borrow())?;
-                self.state.stash.consolidate(ts_binding_collection)?;
-
+                stash_compactions.push((ts_binding_collection, since));
+                stash_consolidations.push(ts_binding_collection);
                 compaction_commands.push((*id, frontier));
             }
         }
+        self.state.stash.compact_batch(&stash_compactions)?;
+        self.state.stash.consolidate_batch(&stash_consolidations)?;
+
         if !compaction_commands.is_empty() {
             self.state
                 .client
