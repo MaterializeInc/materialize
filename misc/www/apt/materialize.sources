@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+Types: deb
+URIs: http://apt.materialize.com/
+Suites: generic
+Components: main
+Signed-By:
+ -----BEGIN PGP PUBLIC KEY BLOCK-----
+ .
+ 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
+ =btnH
+ -----END PGP PUBLIC KEY BLOCK-----
