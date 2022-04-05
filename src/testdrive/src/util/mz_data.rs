@@ -24,5 +24,9 @@ pub fn mzdata_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
         catalog_path.join(CATALOG_DB_NAME),
         temp_dir.path().join(CATALOG_DB_NAME),
     )?;
+    fs::copy(
+        catalog_path.join(STORAGE_DB_NAME),
+        temp_dir.path().join(STORAGE_DB_NAME),
+    )?;
     Ok(temp_dir)
 }
