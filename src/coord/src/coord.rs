@@ -95,6 +95,7 @@ use mz_dataflow_types::client::{
     Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
     DEFAULT_COMPUTE_INSTANCE_ID,
 };
+use mz_dataflow_types::logging::LogVariant;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
@@ -142,7 +143,10 @@ use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use crate::catalog::builtin::{
+    MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS, MZ_VIEW_FOREIGN_KEYS,
+    MZ_VIEW_KEYS,
+};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
 };
@@ -463,6 +467,7 @@ impl Coordinator {
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
+        logs: BTreeMap<GlobalId, LogVariant>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -548,7 +553,7 @@ impl Coordinator {
                     .await;
                 }
                 CatalogItem::Index(idx) => {
-                    if BUILTINS.logs().any(|log| log.id == idx.on) {
+                    if logs.contains_key(&idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
@@ -600,10 +605,11 @@ impl Coordinator {
 
         // Announce primary and foreign key relationships.
         if self.logging.is_some() {
-            for log in BUILTINS.logs() {
-                let log_id = &log.id.to_string();
+            let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
+            for (log_id, log_variant) in &logs {
+                let log_id = &log_id.to_string();
                 self.send_builtin_table_updates(
-                    log.variant
+                    log_variant
                         .desc()
                         .typ()
                         .keys
@@ -617,7 +623,7 @@ impl Coordinator {
                                     Datum::Int64(index as i64),
                                 ]);
                                 BuiltinTableUpdate {
-                                    id: MZ_VIEW_KEYS.id,
+                                    id: mz_view_keys,
                                     row,
                                     diff: 1,
                                 }
@@ -627,17 +633,18 @@ impl Coordinator {
                 )
                 .await;
 
+                let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
                 self.send_builtin_table_updates(
-                    log.variant
+                    log_variant
                         .foreign_keys()
                         .into_iter()
                         .enumerate()
-                        .flat_map(move |(index, (parent, pairs))| {
-                            let parent_id = BUILTINS
-                                .logs()
-                                .find(|src| src.variant == parent)
+                        .flat_map(|(index, (parent, pairs))| {
+                            let parent_id = logs
+                                .iter()
+                                .find(|src| *src.1 == parent)
                                 .unwrap()
-                                .id
+                                .0
                                 .to_string();
                             pairs.into_iter().map(move |(c, p)| {
                                 let row = Row::pack_slice(&[
@@ -648,7 +655,7 @@ impl Coordinator {
                                     Datum::Int64(index as i64),
                                 ]);
                                 BuiltinTableUpdate {
-                                    id: MZ_VIEW_FOREIGN_KEYS.id,
+                                    id: mz_foreign_keys,
                                     row,
                                     diff: 1,
                                 }
@@ -1981,9 +1988,15 @@ impl Coordinator {
         &mut self,
         plan: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let introspection_sources = if plan.config.introspection().is_some() {
+            self.catalog.allocate_introspection_source_indexes()
+        } else {
+            Vec::new()
+        };
         let op = catalog::Op::CreateComputeInstance {
             name: plan.name.clone(),
             config: plan.config.clone(),
+            introspection_sources,
         };
         let r = self.catalog_transact(vec![op], |_| Ok(())).await;
         match r {
@@ -4831,7 +4844,7 @@ pub async fn serve(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
-    let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
+    let (catalog, builtin_table_updates, builtin_logs) = Catalog::open(catalog::Config {
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
@@ -4855,7 +4868,17 @@ pub async fn serve(
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
-    let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
+    let mz_prometheus_metrics_global_id = catalog.resolve_builtin_table(&MZ_PROMETHEUS_METRICS);
+    let mz_prometheus_histograms_global_id =
+        catalog.resolve_builtin_table(&MZ_PROMETHEUS_HISTOGRAMS);
+    let mz_prometheus_readings_global_id = catalog.resolve_builtin_table(&MZ_PROMETHEUS_READINGS);
+    let metric_scraper = Scraper::new(
+        logging.as_ref(),
+        metrics_registry.clone(),
+        mz_prometheus_metrics_global_id,
+        mz_prometheus_histograms_global_id,
+        mz_prometheus_readings_global_id,
+    )?;
 
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
@@ -4886,7 +4909,7 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
-            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates, builtin_logs));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {

@@ -24,7 +24,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
-use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
@@ -57,8 +57,8 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, FIRST_SYSTEM_INDEX_ID, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA,
-    MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinInner, BuiltinLog, BuiltinTable, BuiltinType, BUILTINS, BUILTIN_ROLES,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
@@ -123,19 +123,9 @@ pub struct CatalogState {
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
-    system_index_counter: u64,
 }
 
 impl CatalogState {
-    fn allocate_system_index_id(&mut self) -> Result<GlobalId, Error> {
-        let id = self.system_index_counter;
-        if id == u64::max_value() {
-            return Err(Error::new(ErrorKind::IdExhaustion));
-        }
-        self.system_index_counter += 1;
-        Ok(GlobalId::System(id))
-    }
-
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         let oid = self.oid_counter;
         if oid == u32::max_value() {
@@ -368,6 +358,7 @@ impl CatalogState {
         name: String,
         config: ComputeInstanceConfig,
         local_compute_introspection: Option<ComputeInstanceIntrospectionConfig>,
+        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let (config, introspection) = match config {
             ComputeInstanceConfig::Local => (InstanceConfig::Local, local_compute_introspection),
@@ -384,7 +375,7 @@ impl CatalogState {
             None => None,
             Some(introspection) => {
                 let mut active_logs = HashMap::new();
-                for log in BUILTINS.logs() {
+                for (log, index_id) in introspection_sources {
                     let source_name = FullObjectName {
                         database: RawDatabaseSpecifier::Ambient,
                         schema: log.schema.into(),
@@ -405,21 +396,17 @@ impl CatalogState {
                     // TODO(clusters): Avoid panicking here on ID exhaustion
                     // before stabilization.
                     //
-                    // The system index counter is a u64, so it is hard to
-                    // imagine exhausting it. The OID counter is an i32,
-                    // however, and could more plausibly be exhausted.
+                    // The OID counter is an i32, and could plausibly be exhausted.
                     // Preallocating OIDs for each logging index is eminently
                     // doable, but annoying enough that we don't bother now.
-                    let index_id = self
-                        .allocate_system_index_id()
-                        .expect("cannot return error here");
                     let oid = self.allocate_oid().expect("cannot return error here");
+                    let log_id = self.resolve_builtin_log(&log);
                     self.insert_item(
                         index_id,
                         oid,
                         index_name,
                         CatalogItem::Index(Index {
-                            on: log.id,
+                            on: log_id,
                             keys: log
                                 .variant
                                 .index_by()
@@ -434,7 +421,7 @@ impl CatalogState {
                                 &log.variant.index_by(),
                             ),
                             conn_id: None,
-                            depends_on: vec![log.id],
+                            depends_on: vec![log_id],
                             enabled: true,
                             compute_instance: id,
                         }),
@@ -554,6 +541,29 @@ impl CatalogState {
             || schema == PG_CATALOG_SCHEMA
             || schema == INFORMATION_SCHEMA
             || schema == MZ_INTERNAL_SCHEMA
+    }
+
+    /// Optimized lookup for a builtin table
+    ///
+    /// Panics if the builtin table doesn't exist in the catalog
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+        self.resolve_builtin_object(&BuiltinInner::Table(builtin))
+    }
+
+    /// Optimized lookup for a builtin log
+    ///
+    /// Panics if the builtin log doesn't exist in the catalog
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
+        self.resolve_builtin_object(&BuiltinInner::Log(builtin))
+    }
+
+    /// Optimized lookup for a builtin object
+    ///
+    /// Panics if the builtin object doesn't exist in the catalog
+    pub fn resolve_builtin_object(&self, builtin: &BuiltinInner) -> GlobalId {
+        let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
+        let schema = &self.ambient_schemas_by_id[schema_id];
+        schema.items[builtin.name()].clone()
     }
 
     /// Reports whether the item identified by `id` is considered volatile.
@@ -1058,7 +1068,16 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn open(
+        mut config: Config<'_>,
+    ) -> Result<
+        (
+            Catalog,
+            Vec<BuiltinTableUpdate>,
+            BTreeMap<GlobalId, LogVariant>,
+        ),
+        Error,
+    > {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1086,7 +1105,6 @@ impl Catalog {
                     disable_user_indexes: config.disable_user_indexes,
                 },
                 oid_counter: FIRST_USER_OID,
-                system_index_counter: FIRST_SYSTEM_INDEX_ID,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -1166,7 +1184,53 @@ impl Catalog {
         }
 
         let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
-        for builtin in BUILTINS.values() {
+
+        let mut builtin_logs = BTreeMap::new();
+        let builtin_ids = catalog.storage().load_system_gids()?;
+        let new_system_id_amount = BUILTINS
+            .iter()
+            .filter(|builtin| {
+                !matches!(builtin, BuiltinInner::Type(_))
+                    && !builtin_ids
+                        .contains_key(&(builtin.schema().to_string(), builtin.name().to_string()))
+            })
+            .count();
+        let mut new_system_ids = catalog
+            .allocate_system_ids(
+                new_system_id_amount
+                    .try_into()
+                    .expect("builtins should fit into u64"),
+            )?
+            .into_iter();
+        let mut new_system_id_mappings = Vec::new();
+
+        for builtin_inner in BUILTINS.iter() {
+            let id = match builtin_inner {
+                // Builtin Types are currently statically assigned Ids
+                BuiltinInner::Type(BuiltinType { id, .. }) => *id,
+                _ => match builtin_ids.get(&(
+                    builtin_inner.schema().to_string(),
+                    builtin_inner.name().to_string(),
+                )) {
+                    // TODO(jkosh44) These items may need to undergo schema migrations
+                    // Builtin has already been assigned a global Id
+                    Some(id) => *id,
+                    // New Builtin which needs a global Id
+                    None => {
+                        let id = new_system_ids.next().expect("should be enough system ids");
+                        new_system_id_mappings.push((
+                            builtin_inner.schema(),
+                            builtin_inner.name(),
+                            id,
+                        ));
+                        id
+                    }
+                },
+            };
+            let builtin = Builtin {
+                inner: builtin_inner,
+                id,
+            };
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
@@ -1180,11 +1244,11 @@ impl Catalog {
                 schema: builtin.schema().into(),
                 item: builtin.name().into(),
             };
-            match builtin {
-                Builtin::Log(log) => {
+            match builtin.inner {
+                BuiltinInner::Log(log) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        log.id,
+                        builtin.id(),
                         oid,
                         name.clone(),
                         CatalogItem::Source(Source {
@@ -1197,19 +1261,20 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
+                    builtin_logs.insert(builtin.id(), log.variant.clone());
                 }
 
-                Builtin::Table(table) => {
+                BuiltinInner::Table(table) => {
                     let oid = catalog.allocate_oid()?;
                     let persist_name = if table.persistent {
                         config
                             .persister
-                            .new_table_persist_name(table.id, &full_name.to_string())
+                            .new_table_persist_name(builtin.id(), &full_name.to_string())
                     } else {
                         None
                     };
                     catalog.state.insert_item(
-                        table.id,
+                        builtin.id(),
                         oid,
                         name.clone(),
                         CatalogItem::Table(Table {
@@ -1223,12 +1288,12 @@ impl Catalog {
                     );
                 }
 
-                Builtin::View(view) => {
+                BuiltinInner::View(view) => {
                     let table_persist_name = None;
                     let source_persist_details = None;
                     let item = catalog
                         .parse_item(
-                            view.id,
+                            builtin.id(),
                             view.sql.into(),
                             None,
                             table_persist_name,
@@ -1245,12 +1310,12 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(view.id, oid, name, item);
+                    catalog.state.insert_item(builtin.id(), oid, name, item);
                 }
 
-                Builtin::Type(typ) => {
+                BuiltinInner::Type(typ) => {
                     catalog.state.insert_item(
-                        typ.id,
+                        builtin.id(),
                         typ.oid,
                         QualifiedObjectName {
                             qualifiers: ObjectQualifiers {
@@ -1267,10 +1332,10 @@ impl Catalog {
                     );
                 }
 
-                Builtin::Func(func) => {
+                BuiltinInner::Func(func) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        func.id,
+                        builtin.id(),
                         oid,
                         name.clone(),
                         CatalogItem::Func(Func { inner: func.inner }),
@@ -1278,22 +1343,60 @@ impl Catalog {
                 }
             }
         }
+        catalog.storage().set_system_gids(new_system_id_mappings)?;
 
         let compute_instances = catalog.storage().load_compute_instances()?;
         for (id, name, conf) in compute_instances {
+            // Only one virtual compute instance can configure logging or
+            // else the virtual compute host will panic. We arbitrarily
+            // choose to attach the virtual compute host's logging to the
+            // first virtual cluster we see. If the user drops this cluster
+            // then they lose access to the logs. This is a bit silly, but
+            // it preserves the existing behavior of the binary without
+            // inventing a bunch of new concepts just to support virtual
+            // clusters.
+            let local_logging = config.local_compute_introspection.take();
+            let introspection_sources = if conf.introspection().is_some()
+                || matches!(conf, ComputeInstanceConfig::Local if local_logging.is_some())
+            {
+                let introspection_source_index_gids =
+                    catalog.storage().load_introspection_source_index_gids(id)?;
+                // Previously allocated introspection source indexes
+                let existing_indexes = BUILTINS
+                    .logs()
+                    .filter(|log| introspection_source_index_gids.contains_key(log.name))
+                    .map(|log| (log, introspection_source_index_gids[log.name]));
+
+                // New introspection source indexes that need GlobalIds
+                let new_indexes: Vec<_> = BUILTINS
+                    .logs()
+                    .filter(|log| !introspection_source_index_gids.contains_key(log.name))
+                    .collect();
+                let global_ids = catalog.allocate_system_ids(
+                    new_indexes
+                        .len()
+                        .try_into()
+                        .expect("builtin logs should fit into u64"),
+                )?;
+                let new_indexes = new_indexes.into_iter().zip(global_ids.into_iter());
+
+                catalog.storage().set_introspection_source_index_gids(
+                    new_indexes
+                        .clone()
+                        .map(|(log, index_id)| (id, log.name, index_id))
+                        .collect(),
+                )?;
+
+                existing_indexes.chain(new_indexes).collect()
+            } else {
+                Vec::new()
+            };
             catalog.state.insert_compute_instance(
                 id,
                 name,
                 conf,
-                // Only one virtual compute instance can configure logging or
-                // else the virtual compute host will panic. We arbitrarily
-                // choose to attach the virtual compute host's logging to the
-                // first virtual cluster we see. If the user drops this cluster
-                // then they lose access to the logs. This is a bit silly, but
-                // it preserves the existing behavior of the binary without
-                // inventing a bunch of new concepts just to support virtual
-                // clusters.
-                config.local_compute_introspection.take(),
+                local_logging,
+                introspection_sources,
             );
         }
 
@@ -1348,7 +1451,7 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
         }
 
-        Ok((catalog, builtin_table_updates))
+        Ok((catalog, builtin_table_updates, builtin_logs))
     }
 
     /// Retuns the catalog's transient revision, which starts at 1 and is
@@ -1416,7 +1519,7 @@ impl Catalog {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
         let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
-        let (catalog, _) = Self::open(Config {
+        let (catalog, _, _) = Self::open(Config {
             storage,
             local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
                 granularity: Duration::from_secs(1),
@@ -1489,8 +1592,12 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
+    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        self.storage().allocate_system_ids(amount)
+    }
+
     pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        self.storage().allocate_id()
+        self.storage().allocate_user_id()
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -1569,6 +1676,11 @@ impl Catalog {
             name,
             conn_id,
         )
+    }
+
+    /// Resolves a `BuiltinTable`.
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+        self.state.resolve_builtin_table(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -1895,6 +2007,7 @@ impl Catalog {
                 id: ComputeInstanceId,
                 name: String,
                 config: ComputeInstanceConfig,
+                introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateItem {
                 id: GlobalId,
@@ -2009,16 +2122,21 @@ impl Catalog {
                         name,
                     }]
                 }
-                Op::CreateComputeInstance { name, config } => {
+                Op::CreateComputeInstance {
+                    name,
+                    config,
+                    introspection_sources,
+                } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
                     vec![Action::CreateComputeInstance {
-                        id: tx.insert_compute_instance(&name, &config)?,
+                        id: tx.insert_compute_instance(&name, &config, &introspection_sources)?,
                         name,
                         config,
+                        introspection_sources,
                     }]
                 }
                 Op::CreateItem {
@@ -2305,9 +2423,20 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_role_update(&name, 1));
                 }
 
-                Action::CreateComputeInstance { id, name, config } => {
+                Action::CreateComputeInstance {
+                    id,
+                    name,
+                    config,
+                    introspection_sources,
+                } => {
                     info!("create cluster {}", name);
-                    state.insert_compute_instance(id, name.clone(), config, None);
+                    state.insert_compute_instance(
+                        id,
+                        name.clone(),
+                        config,
+                        None,
+                        introspection_sources,
+                    );
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                 }
 
@@ -2652,6 +2781,20 @@ impl Catalog {
     pub fn compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
         self.state.compute_instances_by_id.values()
     }
+
+    pub fn allocate_introspection_source_indexes(
+        &mut self,
+    ) -> Vec<(&'static BuiltinLog, GlobalId)> {
+        let log_amount = BUILTINS.logs().count();
+        let system_ids = self
+            .allocate_system_ids(
+                log_amount
+                    .try_into()
+                    .expect("builtin logs should fit into u64"),
+            )
+            .expect("cannot fail to allocate system ids");
+        BUILTINS.logs().zip(system_ids.into_iter()).collect()
+    }
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -2677,6 +2820,7 @@ pub enum Op {
     CreateComputeInstance {
         name: String,
         config: ComputeInstanceConfig,
+        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateItem {
         id: GlobalId,

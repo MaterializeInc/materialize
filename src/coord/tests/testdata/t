@@ -13,11 +13,6 @@ foo
 u1
 
 resolve
-SELECT 1 FROM mz_catalog.mz_columns
-----
-SELECT 1 FROM [s4013 AS mz_catalog.mz_columns]
-
-resolve
 SELECT 1 FROM foo
 ----
 SELECT 1 FROM [u1 AS materialize.public.foo]

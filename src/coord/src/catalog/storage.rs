@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use rusqlite::params;
@@ -16,10 +16,12 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use crate::catalog::builtin::BuiltinLog;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
@@ -226,6 +228,128 @@ const MIGRATIONS: &[&dyn Migration] = &[
 
         Ok(())
     },
+    // Allows us to dynamically assign system IDs to all objects but funcs. Also allows us to
+    // track built-in object name to ID mapping.
+    //
+    // Introduced in v0.26.0
+    &"ALTER TABLE gid_alloc RENAME TO user_gid_alloc;
+
+    CREATE TABLE system_gid_alloc (
+        next_gid integer NOT NULL
+    );
+
+    -- Higher than all previous statically assigned IDs
+    INSERT INTO system_gid_alloc VALUES (5044);
+
+    CREATE TABLE system_gid_mapping (
+        schema_name text NOT NULL,
+        object_name text NOT NULL,
+        id integer NOT NULL,
+        PRIMARY KEY (schema_name, object_name)
+    );
+
+    -- We need to insert previous static IDs in the mapping so user can successfully upgrade
+    INSERT INTO system_gid_mapping (schema_name, object_name, id) VALUES
+        -- Logs
+        ('mz_catalog', 'mz_dataflow_operators', 3000),
+        ('mz_catalog', 'mz_dataflow_operator_addresses', 3002),
+        ('mz_catalog', 'mz_dataflow_channels', 3004),
+        ('mz_catalog', 'mz_scheduling_elapsed_internal', 3006),
+        ('mz_catalog', 'mz_scheduling_histogram_internal', 3008),
+        ('mz_catalog', 'mz_scheduling_parks_internal', 3010),
+        ('mz_catalog', 'mz_arrangement_batches_internal', 3012),
+        ('mz_catalog', 'mz_arrangement_sharing_internal', 3014),
+        ('mz_catalog', 'mz_materializations', 3016),
+        ('mz_catalog', 'mz_materialization_dependencies', 3018),
+        ('mz_catalog', 'mz_worker_materialization_frontiers', 3020),
+        ('mz_catalog', 'mz_peek_active', 3022),
+        ('mz_catalog', 'mz_peek_durations', 3024),
+        ('mz_catalog', 'mz_source_info', 3026),
+        ('mz_catalog', 'mz_message_counts_received_internal', 3028),
+        ('mz_catalog', 'mz_message_counts_sent_internal', 3036),
+        ('mz_catalog', 'mz_dataflow_operator_reachability_internal', 3034),
+        ('mz_catalog', 'mz_arrangement_records_internal', 3038),
+        ('mz_catalog', 'mz_kafka_source_statistics', 3040),
+         -- Tables
+        ('mz_catalog', 'mz_view_keys', 4001),
+        ('mz_catalog', 'mz_view_foreign_keys', 4003),
+        ('mz_catalog', 'mz_kafka_sinks', 4005),
+        ('mz_catalog', 'mz_avro_ocf_sinks', 4007),
+        ('mz_catalog', 'mz_databases', 4009),
+        ('mz_catalog', 'mz_schemas', 4011),
+        ('mz_catalog', 'mz_columns', 4013),
+        ('mz_catalog', 'mz_indexes', 4015),
+        ('mz_catalog', 'mz_index_columns', 4017),
+        ('mz_catalog', 'mz_tables', 4019),
+        ('mz_catalog', 'mz_sources', 4021),
+        ('mz_catalog', 'mz_sinks', 4023),
+        ('mz_catalog', 'mz_views', 4025),
+        ('mz_catalog', 'mz_types', 4027),
+        ('mz_catalog', 'mz_array_types', 4029),
+        ('mz_catalog', 'mz_base_types', 4031),
+        ('mz_catalog', 'mz_list_types', 4033),
+        ('mz_catalog', 'mz_map_types', 4035),
+        ('mz_catalog', 'mz_roles', 4037),
+        ('mz_catalog', 'mz_pseudo_types', 4039),
+        ('mz_catalog', 'mz_functions', 4041),
+        ('mz_catalog', 'mz_metrics', 4043),
+        ('mz_catalog', 'mz_metrics_meta', 4045),
+        ('mz_catalog', 'mz_metric_histograms', 4047),
+        ('mz_catalog', 'mz_clusters', 4049),
+        ('mz_catalog', 'mz_secrets', 4050),
+        -- Views
+        ('mz_catalog', 'mz_relations', 5000),
+        ('mz_catalog', 'mz_objects', 5001),
+        ('mz_catalog', 'mz_catalog_names', 5002),
+        ('mz_catalog', 'mz_dataflow_names', 5003),
+        ('mz_catalog', 'mz_dataflow_operator_dataflows', 5004),
+        ('mz_catalog', 'mz_materialization_frontiers', 5005),
+        ('mz_catalog', 'mz_records_per_dataflow_operator', 5006),
+        ('mz_catalog', 'mz_records_per_dataflow', 5007),
+        ('mz_catalog', 'mz_records_per_dataflow_global', 5008),
+        ('mz_catalog', 'mz_perf_arrangement_records', 5009),
+        ('mz_catalog', 'mz_perf_peek_durations_core', 5010),
+        ('mz_catalog', 'mz_perf_peek_durations_bucket', 5011),
+        ('mz_catalog', 'mz_perf_peek_durations_aggregates', 5012),
+        ('mz_catalog', 'mz_perf_dependency_frontiers', 5013),
+        ('pg_catalog', 'pg_namespace', 5014),
+        ('pg_catalog', 'pg_class', 5015),
+        ('pg_catalog', 'pg_database', 5016),
+        ('pg_catalog', 'pg_index', 5017),
+        ('pg_catalog', 'pg_description', 5018),
+        ('pg_catalog', 'pg_type', 5019),
+        ('pg_catalog', 'pg_attribute', 5020),
+        ('pg_catalog', 'pg_proc', 5021),
+        ('pg_catalog', 'pg_range', 5022),
+        ('pg_catalog', 'pg_enum', 5023),
+        ('pg_catalog', 'pg_attrdef', 5025),
+        ('pg_catalog', 'pg_settings', 5026),
+        ('mz_catalog', 'mz_scheduling_elapsed', 5027),
+        ('mz_catalog', 'mz_scheduling_histogram', 5028),
+        ('mz_catalog', 'mz_scheduling_parks', 5029),
+        ('mz_catalog', 'mz_message_counts', 5030),
+        ('mz_catalog', 'mz_dataflow_operator_reachability', 5031),
+        ('mz_catalog', 'mz_arrangement_sizes', 5032),
+        ('mz_catalog', 'mz_arrangement_sharing', 5033),
+        ('pg_catalog', 'pg_constraint', 5034),
+        ('pg_catalog', 'pg_tables', 5035),
+        ('pg_catalog', 'pg_am', 5036),
+        ('pg_catalog', 'pg_roles', 5037),
+        ('pg_catalog', 'pg_views', 5038),
+        ('information_schema', 'columns', 5039),
+        ('information_schema', 'tables', 5040),
+        ('pg_catalog', 'pg_collation', 5041),
+        ('pg_catalog', 'pg_policy', 5042),
+        ('pg_catalog', 'pg_inherits', 5043);
+
+    CREATE TABLE compute_introspection_source_indexes (
+        compute_id integer NOT NULL,
+        name text NOT NULL,
+        index_id integer NOT NULL,
+        PRIMARY KEY (compute_id, name)
+    );
+    CREATE INDEX compute_introspection_source_indexes_ind
+        ON compute_introspection_source_indexes(compute_id);",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -475,19 +599,115 @@ impl Connection {
             .collect()
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
+    pub fn load_system_gids(&self) -> Result<BTreeMap<(String, String), GlobalId>, Error> {
+        self.inner
+            .prepare("SELECT schema_name, object_name, id FROM system_gid_mapping")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let schema_name: String = row.get(0)?;
+                let object_name: String = row.get(1)?;
+                let id: i64 = row.get(2)?;
+                let id = id as u64;
+                Ok(((schema_name, object_name), GlobalId::System(id)))
+            })?
+            .collect()
+    }
+
+    pub fn load_introspection_source_index_gids(
+        &self,
+        compute_id: i64,
+    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+        self.inner
+            .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
+            .query_and_then(params![compute_id], |row| -> Result<_, Error> {
+                let name: String = row.get(0)?;
+                let index_id: i64 = row.get(1)?;
+                Ok((name, GlobalId::System(index_id as u64)))
+            })?
+            .collect()
+    }
+
+    /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
+    /// (schema-name, object-name, global-id).
+    ///
+    /// Panics if provided id is not a system id
+    pub fn set_system_gids(&mut self, mappings: Vec<(&str, &str, GlobalId)>) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (schema_name, object_name, id) in mappings {
+            let id = if let GlobalId::System(id) = id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO system_gid_mapping (schema_name, object_name, id) VALUES (?, ?, ?)",
+                params![schema_name, object_name, id as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Panics if provided id is not a system id
+    pub fn set_introspection_source_index_gids(
+        &mut self,
+        mappings: Vec<(i64, &str, GlobalId)>,
+    ) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (compute_id, name, index_id) in mappings {
+            let index_id = if let GlobalId::System(id) = index_id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)",
+                params![compute_id, name, index_id as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        let id = self.allocate_global_id("system", amount)?;
+
+        Ok(id.into_iter().map(GlobalId::System).collect())
+    }
+
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.allocate_global_id("user", 1)?;
+        let id = id.into_element();
+        Ok(GlobalId::User(id))
+    }
+
+    fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
         // limited range of positive i64s.
-        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
-            row.get(0)
-        })?;
-        if id == i64::max_value() {
+        let id: i64 = tx.query_row(
+            format!("SELECT next_gid FROM {id_type}_gid_alloc").as_str(),
+            params![],
+            |row| row.get(0),
+        )?;
+        if id == i64::MAX {
             return Err(Error::new(ErrorKind::IdExhaustion));
         }
-        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
+        let id = id as u64;
+        tx.execute(
+            format!("UPDATE {id_type}_gid_alloc SET next_gid = ?").as_str(),
+            params![(id + amount) as i64],
+        )?;
         tx.commit()?;
-        Ok(GlobalId::User(id as u64))
+        Ok((id..id + amount).collect())
     }
 
     pub fn transaction(&mut self) -> Result<Transaction, Error> {
@@ -587,24 +807,43 @@ impl Transaction<'_> {
         }
     }
 
+    /// Panics if any introspection source id is not a system id
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
         config: &ComputeInstanceConfig,
+        introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<i64, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        match self
+        let id = match self
             .inner
             .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
             .execute(params![cluster_name, config])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+            Ok(_) => self.inner.last_insert_rowid(),
+            Err(err) if is_constraint_violation(&err) => {
+                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                    cluster_name.to_owned(),
+                )))
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        for (builtin, index_id) in introspection_sources {
+            let index_id = if let GlobalId::System(id) = index_id {
+                *id
+            } else {
+                panic!("non-system id provided")
+            };
+            self
+                .inner
+                .prepare_cached(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)")?
+                .execute(params![id, builtin.name, index_id as i64])?;
         }
+
+        Ok(id)
     }
 
     pub fn update_compute_instance_config(
