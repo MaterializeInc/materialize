@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
 use clap::{AppSettings, ArgEnum, Parser};
@@ -164,6 +164,12 @@ pub struct Args {
     /// The service orchestrator implementation to use, if any.
     #[structopt(long, hide = true, arg_enum)]
     orchestrator: Option<Orchestrator>,
+    /// Labels to apply to all services created by the orchestrator in the form
+    /// `KEY=VALUE`.
+    ///
+    /// Only valid when `--orchestrator` is specified.
+    #[structopt(long, hide = true)]
+    orchestrator_service_label: Vec<OrchestratorLabel>,
     /// The Kubernetes context to use with the Kubernetes orchestrator.
     ///
     /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
@@ -437,6 +443,27 @@ enum Orchestrator {
     Kubernetes,
 }
 
+#[derive(Debug)]
+struct OrchestratorLabel {
+    key: String,
+    value: String,
+}
+
+impl FromStr for OrchestratorLabel {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<OrchestratorLabel, anyhow::Error> {
+        let mut parts = s.splitn(2, '=');
+        let key = parts.next().expect("always one part");
+        let value = parts
+            .next()
+            .ok_or_else(|| anyhow!("must have format KEY=VALUE"))?;
+        Ok(OrchestratorLabel {
+            key: key.into(),
+            value: value.into(),
+        })
+    }
+}
+
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
 /// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
@@ -602,10 +629,20 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Configure orchestrator.
     let orchestrator = match args.orchestrator {
-        None => None,
+        None => {
+            if !args.orchestrator_service_label.is_empty() {
+                bail!("--orchestrator-label is only valid with --orchestrator");
+            }
+            None
+        }
         Some(Orchestrator::Kubernetes) => Some(OrchestratorConfig::Kubernetes {
             config: KubernetesOrchestratorConfig {
                 context: args.kubernetes_context,
+                service_labels: args
+                    .orchestrator_service_label
+                    .into_iter()
+                    .map(|l| (l.key, l.value))
+                    .collect(),
             },
             dataflowd_image: args.dataflowd_image.expect("clap enforced"),
         }),

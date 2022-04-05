@@ -74,6 +74,8 @@ spec:
             - --data-directory=/data
             - --dev
             - --orchestrator=kubernetes
+            - --orchestrator-service-label=materialize.cloud/example1=label1
+            - --orchestrator-service-label=materialize.cloud/example2=label2
             - --experimental
         ports:
         - containerPort: 6875

@@ -40,12 +40,12 @@ enum RuntimeType {
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
 struct Args {
-    /// The address on which to listen for a connection from the coordinator.
+    /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
         env = "DATAFLOWD_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6876"
+        default_value = "127.0.0.1:2100"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
@@ -92,7 +92,7 @@ struct Args {
         long,
         env = "DATAFLOWD_STORAGE_ADDR",
         value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6877"
+        default_value = "127.0.0.1:2101"
     )]
     storage_addr: String,
     #[clap(long)]
@@ -120,7 +120,7 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
         let mut addresses = Vec::new();
         if args.hosts.is_empty() {
             for index in 0..processes {
-                addresses.push(format!("localhost:{}", 2101 + index));
+                addresses.push(format!("localhost:{}", 2102 + index));
             }
         } else {
             if let Ok(file) = ::std::fs::File::open(args.hosts[0].clone()) {
