@@ -677,25 +677,30 @@ impl BlobMulti for MemBlobMulti {
 /// An in-memory implementation of [Consensus].
 #[derive(Debug)]
 pub struct MemConsensus {
-    data: Arc<TokioMutex<Option<VersionedData>>>,
+    data: Arc<TokioMutex<HashMap<String, VersionedData>>>,
 }
 
 impl Default for MemConsensus {
     fn default() -> Self {
         Self {
-            data: Arc::new(TokioMutex::new(None)),
+            data: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 }
 
 #[async_trait]
 impl Consensus for MemConsensus {
-    async fn head(&self, _deadline: Instant) -> Result<Option<VersionedData>, ExternalError> {
-        Ok(self.data.lock().await.clone())
+    async fn head(
+        &self,
+        key: &str,
+        _deadline: Instant,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        Ok(self.data.lock().await.get(key).cloned())
     }
 
     async fn compare_and_set(
         &self,
+        key: &str,
         _deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -707,14 +712,16 @@ impl Consensus for MemConsensus {
                                  new.seqno, expected)));
             }
         }
-        let mut data = self.data.lock().await;
+        let mut store = self.data.lock().await;
+
+        let data = store.get(key);
         let seqno = data.as_ref().map(|data| data.seqno);
 
         if seqno != expected {
-            return Ok(Err(data.clone()));
+            return Ok(Err(data.cloned()));
         }
 
-        *data = Some(new);
+        store.insert(key.to_string(), new);
 
         Ok(Ok(()))
     }

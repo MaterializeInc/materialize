@@ -282,7 +282,11 @@ pub struct VersionedData {
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
-    async fn head(&self, deadline: Instant) -> Result<Option<VersionedData>, ExternalError>;
+    async fn head(
+        &self,
+        key: &str,
+        deadline: Instant,
+    ) -> Result<Option<VersionedData>, ExternalError>;
 
     /// Update the [VersionedData] stored at this location to `new`, iff the current
     /// sequence number is exactly `expected` and `new`'s sequence number > the current
@@ -297,6 +301,7 @@ pub trait Consensus: std::fmt::Debug {
     /// happen with None as the expected value to set the state.
     async fn compare_and_set(
         &self,
+        key: &str,
         deadline: Instant,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -875,11 +880,13 @@ pub mod tests {
     ) -> Result<(), Error> {
         let consensus = new_fn()?;
 
+        let key = "heyo!";
+
         // Enforce that this entire test completes within 10 minutes.
         let deadline = Instant::now() + Duration::from_secs(600);
 
         // Starting value of consensus data is None.
-        assert_eq!(consensus.head(deadline).await, Ok(None));
+        assert_eq!(consensus.head(key, deadline).await, Ok(None));
 
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -889,7 +896,7 @@ pub mod tests {
         // Incorrectly setting the data with a non-None expected should fail.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(SeqNo(0)), state.clone())
+                .compare_and_set(key, deadline, Some(SeqNo(0)), state.clone())
                 .await,
             Ok(Err(None))
         );
@@ -897,13 +904,13 @@ pub mod tests {
         // Correctly updating the state with the correct expected value should succeed.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, None, state.clone())
+                .compare_and_set(key, deadline, None, state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(consensus.head(deadline).await, Ok(Some(state.clone())));
+        assert_eq!(consensus.head(key, deadline).await, Ok(Some(state.clone())));
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -913,7 +920,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected > current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(SeqNo(7)), new_state.clone())
+                .compare_and_set(key, deadline, Some(SeqNo(7)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -921,7 +928,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected < current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(SeqNo(3)), new_state.clone())
+                .compare_and_set(key, deadline, Some(SeqNo(3)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -935,7 +942,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(state.seqno), invalid_constant_seqno)
+                .compare_and_set(key, deadline, Some(state.seqno), invalid_constant_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
         );
@@ -949,7 +956,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(state.seqno), invalid_regressing_seqno)
+                .compare_and_set(key, deadline, Some(state.seqno), invalid_regressing_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
         );
@@ -957,13 +964,44 @@ pub mod tests {
         // Can correctly update to a new state if we provide the right expected seqno
         assert_eq!(
             consensus
-                .compare_and_set(deadline, Some(state.seqno), new_state.clone())
+                .compare_and_set(key, deadline, Some(state.seqno), new_state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(consensus.head(deadline).await, Ok(Some(new_state.clone())));
+        assert_eq!(
+            consensus.head(key, deadline).await,
+            Ok(Some(new_state.clone()))
+        );
+
+        // Make sure entries under different keys don't clash.
+        let other_key = "heyo_two!";
+
+        assert_eq!(consensus.head(other_key, deadline).await, Ok(None));
+
+        let state = VersionedData {
+            seqno: SeqNo(1),
+            data: "einszweidrei".as_bytes().to_vec(),
+        };
+
+        assert_eq!(
+            consensus
+                .compare_and_set(other_key, deadline, None, state.clone())
+                .await,
+            Ok(Ok(()))
+        );
+
+        assert_eq!(
+            consensus.head(other_key, deadline).await,
+            Ok(Some(state.clone()))
+        );
+
+        // State for the first key is still as expected.
+        assert_eq!(
+            consensus.head(key, deadline).await,
+            Ok(Some(new_state.clone()))
+        );
 
         Ok(())
     }
