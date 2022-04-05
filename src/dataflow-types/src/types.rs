@@ -905,7 +905,10 @@ pub mod sources {
         pub tx_metadata_global_id: GlobalId,
         pub tx_status_idx: usize,
         pub tx_transaction_id_idx: usize,
-        pub tx_event_count_idx: usize,
+        pub tx_data_collections_idx: usize,
+        pub tx_data_collections_data_collection_idx: usize,
+        pub tx_data_collections_event_count_idx: usize,
+        pub tx_data_collection_name: String,
         pub data_transaction_id_idx: usize,
     }
 

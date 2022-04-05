@@ -166,10 +166,12 @@ $ kafka-create-topic topic=data-txdata
 
 $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=4
 {"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
-{"status": "END", "id": "1", "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
+{"status": "END", "id": "1", "event_count": {"long": 4}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}, {"event_count": 1, "data_collection": "testdrive-data2-${testdrive.seed}"}]}}
 
 
 $ kafka-create-topic topic=data
+
+$ kafka-create-topic topic=data2
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
@@ -184,9 +186,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
+> CREATE MATERIALIZED SOURCE data2_schema_inline
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
+  WITH(tx_metadata = data_txdata)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 5}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 
+# Note that this should still work even if data2 (which shares the tx_metadata topic) isn't able to progress!
 > SELECT a, b FROM data_schema_inline
 a  b
 -----
@@ -220,6 +229,16 @@ a  b
 2  3
 4  5
 8  9
+
+# Now do data2
+$ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 101, "b": 101}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
+
+> SELECT a, b FROM data2_schema_inline
+a    b
+---------
+101  101
+
 
 #
 # Create a source using a file schema

@@ -225,22 +225,30 @@ where
                                 }
 
                                 let tx_id = row.iter().nth(tx_metadata_description.tx_transaction_id_idx).unwrap().unwrap_str().to_owned();
-                                let event_count = match row.iter().nth(tx_metadata_description.tx_event_count_idx).unwrap() {
-                                        Datum::Int16(i) => i.into(),
-                                        Datum::Int32(i) => i.into(),
-                                        Datum::Int64(i) => i,
-                                        Datum::Null => {
-                                            output.session(&tx_metadata_cap).give((
-                                                Err(DataflowError::EvalError(EvalError::Internal(
-                                                    String::from("Need event_count in END record"),
-                                                ))),
-                                                time,
-                                                1,
-                                            ));
-                                            continue;
-                                        },
-                                        d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
-                                };
+
+                                let event_count = match row.iter().nth(tx_metadata_description.tx_data_collections_idx).unwrap() {
+                                    Datum::List(dl) => dl,
+                                    Datum::Array(dl) => dl.elements(),
+                                    _ => panic!("data_collections previously validated to be array or list"),
+                                }.iter()
+                                .find(|datum| datum.unwrap_list().iter().nth(tx_metadata_description.tx_data_collections_data_collection_idx).unwrap().unwrap_str() == &tx_metadata_description.tx_data_collection_name)
+                                .map(|datum| match datum.unwrap_list().iter().nth(tx_metadata_description.tx_data_collections_event_count_idx).unwrap() {
+                                    Datum::Int16(i) => i.into(),
+                                    Datum::Int32(i) => i.into(),
+                                    Datum::Int64(i) => i,
+                                    Datum::Null => 0,
+                                    d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
+                                }).unwrap_or(0);
+
+                                // It's okay for event_count to equal zero here!  This occurs when there is transaction
+                                // metadata for other collections but not this particular one.  If that happens, let's
+                                // just move on with our lives.
+                                //
+                                // We do have panics / unwraps above though because we still ought to validate that the
+                                // shape of the data is correct -- or else we might be unintentionally missing data!
+                                if event_count == 0 {
+                                    continue;
+                                }
 
                                 match tx_mapping.insert(tx_id.clone(), time) {
                                     None => {

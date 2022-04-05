@@ -654,10 +654,16 @@ pub fn plan_create_source(
                             depends_on.push(item.id());
                             depends_on.extend(item.uses());
 
+                            let data_collection_name = match external_connector {
+                                ExternalSourceConnector::Kafka(KafkaSourceConnector{ref topic, .. }) => topic.clone(),
+                                _ => bail!("Only kafka connector currently supported for debezium tx_metadata sources"),
+                            };
+
                             Some(typecheck_debezium_transaction_metadata(
                                 tx_value_desc,
                                 &value_desc,
                                 item.id(),
+                                data_collection_name,
                             )?)
                         }
                         Some(v) => bail!("tx_metadata must be an Object but found {:?}", v),
@@ -1070,6 +1076,7 @@ fn typecheck_debezium_transaction_metadata(
     tx_value_desc: &RelationDesc,
     data_value_desc: &RelationDesc,
     tx_metadata_global_id: GlobalId,
+    tx_data_collection_name: String,
 ) -> Result<DebeziumTransactionMetadata, anyhow::Error> {
     let (tx_status_idx, tx_status_ty) = tx_value_desc
         .get_by_name(&"status".into())
@@ -1077,10 +1084,10 @@ fn typecheck_debezium_transaction_metadata(
     let (tx_transaction_id_idx, tx_transaction_id_ty) = tx_value_desc
         .get_by_name(&"id".into())
         .ok_or_else(|| anyhow!("'id' column missing from debezium transaction metadata"))?;
-    let (tx_event_count_idx, tx_event_count_ty) = tx_value_desc
-        .get_by_name(&"event_count".into())
+    let (tx_data_collections_idx, tx_data_collections_ty) = tx_value_desc
+        .get_by_name(&"data_collections".into())
         .ok_or_else(|| {
-            anyhow!("'event_count' column missing from debezium transaction metadata")
+            anyhow!("'data_collections' column missing from debezium transaction metadata")
         })?;
     if &(ColumnType {
         scalar_type: ScalarType::String,
@@ -1096,11 +1103,48 @@ fn typecheck_debezium_transaction_metadata(
     {
         bail!("'id' column must be of type non-nullable string");
     }
-    // Don't care about nullability of event_count
-    match tx_event_count_ty.scalar_type {
-        ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64 => (),
-        _ => bail!("'event_count' column must be of integer type"),
-    }
+
+    // Don't care about nullability of data_collections or subtypes
+    let (tx_data_collections_data_collection, tx_data_collections_event_count) =
+        match tx_data_collections_ty.scalar_type {
+            ScalarType::Array(ref element_type)
+            | ScalarType::List {
+                ref element_type, ..
+            } => match **element_type {
+                ScalarType::Record { ref fields, .. } => {
+                    let data_collections_data_collection = fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, f)| f.0.as_str() == "data_collection");
+                    let data_collections_event_count = fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, f)| f.0.as_str() == "event_count");
+                    (
+                        data_collections_data_collection,
+                        data_collections_event_count,
+                    )
+                }
+                _ => bail!("'data_collections' array must contain records"),
+            },
+            _ => bail!("'data_collections' column must be of array or list type",),
+        };
+
+    let tx_data_collections_data_collection_idx = match tx_data_collections_data_collection {
+        Some((idx, (_, ty))) => match ty.scalar_type {
+            ScalarType::String => idx,
+            _ => bail!("'data_collections.data_collection' must be of type string"),
+        },
+        _ => bail!("'data_collections.data_collection' missing from debezium transaction metadata"),
+    };
+
+    let tx_data_collections_event_count_idx = match tx_data_collections_event_count {
+        Some((idx, (_, ty))) => match ty.scalar_type {
+            ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64 => idx,
+            _ => bail!("'data_collections.event_count' must be of type string"),
+        },
+        _ => bail!("'data_collections.event_count' missing from debezium transaction metadata"),
+    };
 
     let (_data_transaction_idx, data_transaction_ty) = data_value_desc
         .get_by_name(&"transaction".into())
@@ -1121,11 +1165,15 @@ fn typecheck_debezium_transaction_metadata(
         },
         None => bail!("'transaction.id' column missing from debezium input"),
     };
+
     Ok(DebeziumTransactionMetadata {
         tx_metadata_global_id,
         tx_status_idx,
         tx_transaction_id_idx,
-        tx_event_count_idx,
+        tx_data_collections_idx,
+        tx_data_collections_data_collection_idx,
+        tx_data_collections_event_count_idx,
+        tx_data_collection_name,
         data_transaction_id_idx,
     })
 }
