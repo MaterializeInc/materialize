@@ -139,7 +139,7 @@ Query a view `my_view` with a select statement:
 // Include the Postgres connection details
 require 'connect.php';
 
-$sql = 'SELECT * FROM my_view LIMIT';
+$sql = 'SELECT * FROM my_view';
 $statement = $connection->query($sql);
 
 while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
@@ -147,7 +147,7 @@ while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
 }
 ```
 
-For more details, see the  [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
+For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
 
 ## Insert data into tables
 
@@ -227,4 +227,4 @@ For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## PHP ORMs
 
-Materialize doesn't currently support the full catalog of PostgreSQL system metadata API endpoints, including the system calls that object relational mapping systems (ORMs) like **Eloquent** use to introspect databases and do extra work behind the scenes. This means that some ORM system attempts to interact with Materialize will currently fail. Once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented, the features that depend on  `pg_catalog` may work properly.
+Materialize doesn't currently support the full catalog of PostgreSQL system metadata API endpoints, including the system calls that object relational mapping systems (ORMs) like **Eloquent** use to introspect databases and do extra work behind the scenes. This means that some ORM system attempts to interact with Materialize will currently fail. Once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented, the features that depend on `pg_catalog` may work properly.
