@@ -998,15 +998,6 @@ lazy_static! {
             .with_column("key_group", ScalarType::Int64.nullable(false)),
         persistent: false,
     };
-    pub static ref TEMP_TABLE: BuiltinTable = BuiltinTable {
-        name: "temp_table_exp",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
-            .with_column("column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false)),
-        persistent: false,
-    };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_foreign_keys",
         schema: MZ_CATALOG_SCHEMA,
@@ -2192,7 +2183,6 @@ lazy_static! {
             BuiltinInner::Table(&MZ_PROMETHEUS_METRICS),
             BuiltinInner::Table(&MZ_CLUSTERS),
             BuiltinInner::Table(&MZ_SECRETS),
-            BuiltinInner::Table(&TEMP_TABLE),
             BuiltinInner::View(&MZ_RELATIONS),
             BuiltinInner::View(&MZ_OBJECTS),
             BuiltinInner::View(&MZ_CATALOG_NAMES),
