@@ -59,7 +59,7 @@ use crate::ast::{
     AlterSecretStatement, AstInfo, AvroSchema, ClusterOption, ColumnOption, Compression,
     CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
-    CreateSinkStatement, CreateSourceFormat, CreateSourceInstance, CreateSourceStatement,
+    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
     CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
@@ -325,6 +325,7 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
+<<<<<<< HEAD
 
     if !matches!(connector, CreateSourceConnector::Kafka { .. })
         && include_metadata
@@ -334,12 +335,14 @@ pub fn plan_create_source(
         // TODO(guswynn): should this be `bail_unsupported!`?
         bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
+=======
+>>>>>>> more feedback
     if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
     let (external_connector, encoding) = match connector {
-        CreateSourceInstance::Kafka { broker, topic, .. } => {
+        CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -453,7 +456,7 @@ pub fn plan_create_source(
 
             (connector, encoding)
         }
-        CreateSourceInstance::Kinesis { arn, .. } => {
+        CreateSourceConnector::Kinesis { arn, .. } => {
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
@@ -475,7 +478,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding)
         }
-        CreateSourceInstance::File { path, compression } => {
+        CreateSourceConnector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -496,7 +499,7 @@ pub fn plan_create_source(
             }
             (connector, encoding)
         }
-        CreateSourceInstance::S3 {
+        CreateSourceConnector::S3 {
             key_sources,
             pattern,
             compression,
@@ -541,7 +544,7 @@ pub fn plan_create_source(
             }
             (connector, encoding)
         }
-        CreateSourceInstance::Postgres {
+        CreateSourceConnector::Postgres {
             conn,
             publication,
             slot,
@@ -564,7 +567,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
             (connector, encoding)
         }
-        CreateSourceInstance::PubNub {
+        CreateSourceConnector::PubNub {
             subscribe_key,
             channel,
         } => {
@@ -578,7 +581,7 @@ pub fn plan_create_source(
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
-        CreateSourceInstance::AvroOcf { path, .. } => {
+        CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -742,7 +745,7 @@ pub fn plan_create_source(
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             //TODO check that key envelope is not set
-            if let CreateSourceInstance::AvroOcf { .. } = connector {
+            if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
                 bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")

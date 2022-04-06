@@ -119,7 +119,7 @@ use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage, FetchStatement,
-    Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, SourceInstanceType, Statement,
+    Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, SourceConnectorType, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
@@ -5055,24 +5055,24 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
             connector,
             with_options,
             ..
-        }) => ("source", SourceInstanceType::from(connector), with_options),
+        }) => ("source", SourceConnectorType::from(connector), with_options),
         Statement::CreateSink(CreateSinkStatement {
             connector,
             with_options,
             ..
-        }) => ("sink", SourceInstanceType::from(connector), with_options),
+        }) => ("sink", SourceConnectorType::from(connector), with_options),
         _ => return Ok(()),
     };
     match typ {
         // File sources and sinks are prohibited in safe mode because they allow
         // reading ƒrom and writing to arbitrary files on disk.
-        SourceInstanceType::File => {
+        SourceConnectorType::File => {
             return Err(CoordError::SafeModeViolation(format!(
                 "file {}",
                 source_or_sink
             )));
         }
-        SourceInstanceType::AvroOcf => {
+        SourceConnectorType::AvroOcf => {
             return Err(CoordError::SafeModeViolation(format!(
                 "Avro OCF {}",
                 source_or_sink
@@ -5081,7 +5081,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
         // Kerberos-authenticated Kafka sources and sinks are prohibited in
         // safe mode because librdkafka will blindly execute the string passed
         // as `sasl_kerberos_kinit_cmd`.
-        SourceInstanceType::Kafka => {
+        SourceConnectorType::Kafka => {
             // It's too bad that we have to reinvent so much of librdkafka's
             // option parsing and hardcode some of its defaults here. But there
             // isn't an obvious alternative; asking librdkafka about its =

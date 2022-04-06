@@ -27,8 +27,8 @@ use mz_repr::strconv;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::{self, VisitMut};
 use mz_sql::ast::{
-    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
-    CreateSourceInstance, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
+    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, Format, Function, Ident,
     ProtobufSchema, Raw, RawIdent, RawObjectName, SqlOption, Statement, TableFunction,
@@ -158,7 +158,7 @@ fn ast_rewrite_pgcdc_with_details_0_23_0(
 ) -> Result<(), anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement { connector, .. }) = stmt {
         match connector {
-            CreateSourceInstance::Postgres {
+            CreateSourceConnector::Postgres {
                 conn,
                 publication,
                 slot,
@@ -751,7 +751,7 @@ fn ast_rewrite_csv_column_aliases_0_9_2(
 
     // Try to load actual columns from existing file if we don't have correct data
     let result = (|| -> anyhow::Result<()> {
-        if let CreateSourceInstance::File { path, .. } = &connector {
+        if let CreateSourceConnector::File { path, .. } = &connector {
             let file = block_on(async {
                 let f = File::open(&path).await?;
 
