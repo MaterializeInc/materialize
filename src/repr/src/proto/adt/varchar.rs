@@ -14,16 +14,16 @@ include!(concat!(env!("OUT_DIR"), "/adt.varchar.rs"));
 use crate::adt::varchar::VarCharMaxLength;
 use crate::proto::TryFromProtoError;
 
+impl From<&VarCharMaxLength> for ProtoVarCharMaxLength {
+    fn from(value: &VarCharMaxLength) -> Self {
+        ProtoVarCharMaxLength { value: value.0 }
+    }
+}
+
 impl TryFrom<ProtoVarCharMaxLength> for VarCharMaxLength {
     type Error = TryFromProtoError;
 
     fn try_from(repr: ProtoVarCharMaxLength) -> Result<Self, Self::Error> {
         Ok(VarCharMaxLength(repr.value))
-    }
-}
-
-impl From<&VarCharMaxLength> for ProtoVarCharMaxLength {
-    fn from(value: &VarCharMaxLength) -> Self {
-        ProtoVarCharMaxLength { value: value.0 }
     }
 }

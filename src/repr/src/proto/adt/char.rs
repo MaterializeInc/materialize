@@ -14,16 +14,16 @@ include!(concat!(env!("OUT_DIR"), "/adt.char.rs"));
 use crate::adt::char::CharLength;
 use crate::proto::TryFromProtoError;
 
+impl From<&CharLength> for ProtoCharLength {
+    fn from(x: &CharLength) -> Self {
+        ProtoCharLength { value: x.0 }
+    }
+}
+
 impl TryFrom<ProtoCharLength> for CharLength {
     type Error = TryFromProtoError;
 
     fn try_from(repr: ProtoCharLength) -> Result<Self, Self::Error> {
         Ok(CharLength(repr.value))
-    }
-}
-
-impl From<&CharLength> for ProtoCharLength {
-    fn from(x: &CharLength) -> Self {
-        ProtoCharLength { value: x.0 }
     }
 }

@@ -14,18 +14,18 @@ include!(concat!(env!("OUT_DIR"), "/adt.numeric.rs"));
 use crate::adt::numeric::NumericMaxScale;
 use crate::proto::{ProtoRepr, TryFromProtoError};
 
-impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
-    type Error = TryFromProtoError;
-
-    fn try_from(repr: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
-        Ok(NumericMaxScale(u8::from_proto(repr.value)?))
-    }
-}
-
 impl From<&NumericMaxScale> for ProtoNumericMaxScale {
     fn from(value: &NumericMaxScale) -> Self {
         ProtoNumericMaxScale {
             value: value.0.into_proto(),
         }
+    }
+}
+
+impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
+    type Error = TryFromProtoError;
+
+    fn try_from(repr: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
+        Ok(NumericMaxScale(u8::from_proto(repr.value)?))
     }
 }
