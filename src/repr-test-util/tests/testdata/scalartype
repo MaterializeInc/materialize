@@ -54,7 +54,7 @@ List { element_type: Jsonb, custom_id: Some(User(100)) }
 build-scalar-type
 (record
     [["col1name" (date true)]
-     ["col2name" ((list (map bytes (user 98))) false)]
+     ["col2name" ((list (map bytes (user 98)) null) false)]
      ["col3name" ((list interval (user 34234)) false) ]]
      (user 0) "recordname")
 ----

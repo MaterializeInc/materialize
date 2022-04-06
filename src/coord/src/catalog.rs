@@ -116,7 +116,6 @@ pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
     database_by_id: BTreeMap<DatabaseId, Database>,
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
-    entry_by_oid: HashMap<u32, GlobalId>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -229,11 +228,6 @@ impl CatalogState {
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        &self.entry_by_id[id]
-    }
-
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        let id = &self.entry_by_oid[oid];
         &self.entry_by_id[id]
     }
 
@@ -372,7 +366,6 @@ impl CatalogState {
             schema.items.insert(entry.name.item.clone(), entry.id);
         }
 
-        self.entry_by_oid.insert(oid, entry.id);
         self.entry_by_id.insert(entry.id, entry.clone());
     }
 
@@ -1110,7 +1103,6 @@ impl Catalog {
                 database_by_name: BTreeMap::new(),
                 database_by_id: BTreeMap::new(),
                 entry_by_id: BTreeMap::new(),
-                entry_by_oid: HashMap::new(),
                 ambient_schemas_by_name: BTreeMap::new(),
                 ambient_schemas_by_id: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
@@ -1982,10 +1974,6 @@ impl Catalog {
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         self.state.get_entry(id)
-    }
-
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        self.state.get_entry_by_oid(oid)
     }
 
     pub fn get_schema(
@@ -3365,11 +3353,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
         self.catalog.get_entry(id)
-    }
-
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn mz_sql::catalog::CatalogItem {
-        let id = self.catalog.state.entry_by_oid[oid];
-        self.catalog.get_entry(&id)
     }
 
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {

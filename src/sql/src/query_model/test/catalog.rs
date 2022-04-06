@@ -283,10 +283,6 @@ impl SessionCatalog for TestCatalog {
         unimplemented!();
     }
 
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
     }
