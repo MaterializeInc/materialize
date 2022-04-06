@@ -20,13 +20,17 @@ use std::{char::CharTryFromError, num::TryFromIntError};
 /// `Proto$T` to `$T`.
 #[derive(Debug)]
 pub enum TryFromProtoError {
+    /// A wrapped [`TryFromIntError`] due to failed integer downcast.
     TryFromIntError(TryFromIntError),
+    /// A wrapped [`TryFromIntError`] due to failed [`char`] conversion.
     CharTryFromError(CharTryFromError),
+    /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
+    /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
-    InvalidChar(String),
 }
 
 impl TryFromProtoError {
+    // Construct a new [`TryFromProtoError::MissingField`] instance.
     pub fn missing_field<T: ToString>(s: T) -> TryFromProtoError {
         TryFromProtoError::MissingField(s.to_string())
     }
@@ -51,7 +55,6 @@ impl std::fmt::Display for TryFromProtoError {
             TryFromIntError(error) => error.fmt(f),
             CharTryFromError(error) => error.fmt(f),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
-            InvalidChar(str) => write!(f, "String '{}' does not encode a single UTF8 char", str),
         }
     }
 }
@@ -62,7 +65,7 @@ impl std::error::Error for TryFromProtoError {
         match self {
             TryFromIntError(error) => Some(error),
             CharTryFromError(error) => Some(error),
-            MissingField(_) | InvalidChar(_) => None,
+            MissingField(_) => None,
         }
     }
 }
