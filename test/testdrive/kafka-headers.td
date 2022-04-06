@@ -41,11 +41,11 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
   ENVELOPE UPSERT
 
 # empty case + has headers case
-> SELECT key, f1, f2, list_length(headers) from headers_src
-key     f1       f2     list_length
--------------------------------------------
-fish    fishval  1000   2
-fish2   fishval  1000   0
+> SELECT key, f1, f2, list_length(headers), headers::text from headers_src
+key     f1       f2     list_length    headers
+----------------------------------------------
+fish    fishval  1000   2              "{\"(gus,\\\\x67757366697665)\",\"(gus2,\\\\x67757333)\"}"
+fish2   fishval  1000   0              "{}"
 
 # unpacking works
 > SELECT key, f1, f2, headers[1].value as gus from headers_src
@@ -151,12 +151,18 @@ headers    false     list
 headers    false     text
 key        false     text
 
-# No meaningful way to get data out in td because its a list
-# TODO(guswynn): actually check against this error message
-# when https://github.com/MaterializeInc/materialize/pull/11003
-# lands
-# ! SELECT * from headers_conflict
-# contains:???
+$ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${keyschema} schema=${schemaheaders} headers={"gus": "hmm"}
+{"key": "fish"} {"headers": "value"}
+
+> SELECT count(*) from headers_conflict
+count
+-----
+1
+
+# No meaningful way to get data out in td because of the ambiguous name
+# + weird type
+# > SELECT * from headers_conflict
+
 
 $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${keyschema} schema=${schemaheaders} headers={"gus": "gusfive"}
 {"key": "fish"} {"headers": "value"}
