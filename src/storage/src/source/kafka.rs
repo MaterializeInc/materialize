@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use mz_dataflow_types::sources::{KafkaSourceConnector, KafkaSourceConnectorLiteral};
+use mz_dataflow_types::sources::{KafkaConnector, KafkaConnectorLiteral};
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset,
-    KafkaSourceInstance, MzOffset,
+    KafkaSourceConnector, MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
@@ -102,7 +102,7 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
 
-        let KafkaSourceInstance {
+        let KafkaSourceConnector {
             connector,
             topic,
             group_id_prefix,
@@ -110,13 +110,11 @@ impl SourceReader for KafkaSourceReader {
             ..
         } = kc;
         let (addrs, config_options) = match connector {
-            KafkaSourceConnector::Literal(KafkaSourceConnectorLiteral {
+            KafkaConnector::Literal(KafkaConnectorLiteral {
                 addrs,
                 config_options,
             }) => (addrs, config_options),
-            _ => panic!(
-                "Invalid KafkaSourceConnector form, only Literal is allowed in Dataflow layer"
-            ),
+            _ => unreachable!("Only Literal is allowed in Dataflow layer"),
         };
         let kafka_config = create_kafka_config(
             &source_name,

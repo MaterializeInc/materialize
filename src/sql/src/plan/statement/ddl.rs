@@ -41,7 +41,7 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
     DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-    KafkaSourceConnector, KafkaSourceConnectorLiteral, KafkaSourceInstance, KeyEnvelope,
+    KafkaConnector, KafkaConnectorLiteral, KafkaSourceConnector, KeyEnvelope,
     KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -376,11 +376,9 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
-            let mut connector = KafkaSourceInstance {
-                // addrs: broker.parse()?,
+            let mut connector = KafkaSourceConnector {
                 topic: topic.clone(),
-                // config_options: config_options.clone(),
-                connector: KafkaSourceConnector::Literal(KafkaSourceConnectorLiteral {
+                connector: KafkaConnector::Literal(KafkaConnectorLiteral {
                     addrs: broker.parse()?,
                     config_options,
                 }),
