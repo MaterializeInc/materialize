@@ -11,15 +11,17 @@
 
 pub mod adt;
 pub mod row;
+pub mod strconv;
 
 use mz_ore::cast::CastFrom;
-use std::num::TryFromIntError;
+use std::{char::CharTryFromError, num::TryFromIntError};
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
 /// `Proto$T` to `$T`.
 #[derive(Debug)]
 pub enum TryFromProtoError {
     TryFromIntError(TryFromIntError),
+    CharTryFromError(CharTryFromError),
     MissingField(String),
     InvalidChar(String),
 }
@@ -36,11 +38,18 @@ impl From<TryFromIntError> for TryFromProtoError {
     }
 }
 
+impl From<CharTryFromError> for TryFromProtoError {
+    fn from(error: CharTryFromError) -> Self {
+        TryFromProtoError::CharTryFromError(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
         match self {
             TryFromIntError(error) => error.fmt(f),
+            CharTryFromError(error) => error.fmt(f),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
             InvalidChar(str) => write!(f, "String '{}' does not encode a single UTF8 char", str),
         }
@@ -52,6 +61,7 @@ impl std::error::Error for TryFromProtoError {
         use TryFromProtoError::*;
         match self {
             TryFromIntError(error) => Some(error),
+            CharTryFromError(error) => Some(error),
             MissingField(_) | InvalidChar(_) => None,
         }
     }
@@ -95,17 +105,14 @@ impl ProtoRepr for usize {
 }
 
 impl ProtoRepr for char {
-    type Repr = String;
+    type Repr = u32;
 
     fn into_proto(self: Self) -> Self::Repr {
-        self.to_string()
+        self.into()
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        match repr.len() {
-            1 => Ok(repr.chars().next().unwrap()),
-            _ => Err(TryFromProtoError::InvalidChar(repr)),
-        }
+        char::try_from(repr).map_err(|err| err.into())
     }
 }
 

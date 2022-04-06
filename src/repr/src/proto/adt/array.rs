@@ -14,8 +14,8 @@ include!(concat!(env!("OUT_DIR"), "/adt.array.rs"));
 use super::super::{ProtoRepr, TryFromProtoError};
 use crate::adt::array::InvalidArrayError;
 
-impl From<InvalidArrayError> for ProtoInvalidArrayError {
-    fn from(error: InvalidArrayError) -> Self {
+impl From<&InvalidArrayError> for ProtoInvalidArrayError {
+    fn from(error: &InvalidArrayError) -> Self {
         use proto_invalid_array_error::*;
         use Kind::*;
         let kind = match error {
