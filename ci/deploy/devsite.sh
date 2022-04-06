@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-aws s3 cp misc/www/index.html s3://materialize-dev-website/index.html
+aws s3 cp --recursive misc/www/ s3://materialize-dev-website/
 
 bin/doc
 aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust
