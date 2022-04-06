@@ -15,7 +15,7 @@ use std::time::Duration;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
-use rdkafka::message::{BorrowedHeaders, BorrowedMessage};
+use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
@@ -609,28 +609,6 @@ fn create_kafka_config(
     kafka_config
 }
 
-fn construct_headers(headers: Option<&BorrowedHeaders>) -> Vec<(String, Option<Vec<u8>>)> {
-    let mut out = Vec::new();
-    use rdkafka::message::Headers;
-
-    if let Some(headers) = headers {
-        for idx in 0..headers.count() {
-            let header = headers.get(idx);
-
-            let k = header.key.to_string();
-            out.push((
-                k,
-                if let Some(value) = header.value {
-                    Some(value.to_vec())
-                } else {
-                    None
-                },
-            ));
-        }
-    }
-    out
-}
-
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
@@ -638,10 +616,14 @@ fn construct_source_message(
     let kafka_offset = KafkaOffset {
         offset: msg.offset(),
     };
-    let headers = if include_headers {
-        Some(construct_headers(msg.headers()))
-    } else {
-        None
+    let headers = match msg.headers() {
+        Some(headers) if include_headers => Some(
+            headers
+                .iter()
+                .map(|h| (h.key.into(), h.value.map(|v| v.to_vec())))
+                .collect::<Vec<_>>(),
+        ),
+        _ => None,
     };
     SourceMessage {
         partition: PartitionId::Kafka(msg.partition()),

@@ -40,7 +40,7 @@ pub struct IngestAction {
     rows: Vec<String>,
     start_iteration: isize,
     repeat: isize,
-    headers: Vec<(String, Option<String>)>,
+    headers: Option<Vec<(String, Option<String>)>>,
 }
 
 #[derive(Clone)]
@@ -228,8 +228,8 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
     let timestamp = cmd.args.opt_parse("timestamp")?;
 
     use serde_json::Value;
-    let mut headers = Vec::new();
-    if let Some(headers_val) = cmd.args.opt_parse::<serde_json::Value>("headers")? {
+    let headers = if let Some(headers_val) = cmd.args.opt_parse::<serde_json::Value>("headers")? {
+        let mut headers = Vec::new();
         let headers_maps = match headers_val {
             Value::Array(values) => {
                 let mut headers_map = Vec::new();
@@ -237,13 +237,13 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
                     if let Value::Object(m) = value {
                         headers_map.push(m)
                     } else {
-                        bail!("lalala")
+                        bail!("`headers` array values must be maps")
                     }
                 }
                 headers_map
             }
             Value::Object(v) => vec![v],
-            _ => bail!("lalala"),
+            _ => bail!("`headers` must be a map or an array"),
         };
 
         for headers_map in headers_maps {
@@ -253,11 +253,14 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
                 } else if let Value::Null = v {
                     headers.push((k.clone(), None));
                 } else {
-                    bail!("lalala")
+                    bail!("`headers` must have string or null values")
                 }
             }
         }
-    }
+        Some(headers)
+    } else {
+        None
+    };
 
     cmd.args.done()?;
 
@@ -424,7 +427,7 @@ impl Action for IngestAction {
                     if let Some(timestamp) = self.timestamp {
                         record = record.timestamp(timestamp);
                     }
-                    if !headers.is_empty() {
+                    if let Some(headers) = headers {
                         let mut rd_meta = OwnedHeaders::new();
                         for (k, v) in &headers {
                             rd_meta = rd_meta.insert(Header {
