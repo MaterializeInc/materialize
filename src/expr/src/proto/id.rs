@@ -121,3 +121,20 @@ impl mz_persist_types::Codec for PartitionId {
             .map_err(|err: TryFromProtoError| err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn id_serialization_roundtrip(original in any::<Id>()) {
+            let proto = ProtoId::from(&original);
+            let serialized = proto.encode_to_vec();
+            let proto = ProtoId::decode(&*serialized).unwrap();
+            let id = Id::try_from(proto).unwrap();
+            assert_eq!(id, original);
+        }
+    }
+}

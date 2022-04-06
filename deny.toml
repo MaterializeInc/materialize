@@ -183,6 +183,9 @@ allow-git = [
     # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
     "https://github.com/MaterializeInc/parquet-format-rs.git",
 
+    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
+    "https://github.com/materializeInc/proptest.git",
+
     # Dependencies that we control upstream whose official releases we don't
     # care about.
     "https://github.com/MaterializeInc/cloud-sdks.git",

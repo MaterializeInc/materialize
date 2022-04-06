@@ -3429,6 +3429,8 @@ dependencies = [
  "ordered-float",
  "paste",
  "proc-macro2",
+ "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "regex",
@@ -5007,8 +5009,7 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0d9cc07f18492d879586c92b485def06bc850da3118075cd45d50e9c95b0e5"
+source = "git+https://github.com/materializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -5019,6 +5020,16 @@ dependencies = [
  "rand_chacha",
  "rand_xorshift",
  "regex-syntax",
+]
+
+[[package]]
+name = "proptest-derive"
+version = "0.3.0"
+source = "git+https://github.com/materializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
