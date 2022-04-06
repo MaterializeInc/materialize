@@ -56,5 +56,9 @@ datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.36"
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = "0.2.0"
+proptest-derive = { git = "https://github.com/materializeInc/proptest.git" }
+
+[dev-dependencies.proptest]
+git = "https://github.com/materializeInc/proptest.git"
+default-features = false
+features = ["std"]
