@@ -65,7 +65,7 @@ where
 {
     pub(crate) writer_id: WriterId,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) blob: Arc<dyn BlobMulti>,
+    pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
     pub(crate) upper: Antichain<T>,
 }
