@@ -30,3 +30,16 @@ pub fn mzdata_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
     )?;
     Ok(temp_dir)
 }
+
+/// Creates a temporary copy of Materialize's mzdata's catalog databases
+///
+/// This is useful because running validations against the catalog can conflict with the running
+/// Materialize instance. Therefore it's better to run validations on a copy of the catalog.
+pub fn catalog_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
+    let temp_dir = tempfile::tempdir()?;
+    fs::copy(
+        catalog_path.join(CATALOG_DB_NAME),
+        temp_dir.path().join(CATALOG_DB_NAME),
+    )?;
+    Ok(temp_dir)
+}
