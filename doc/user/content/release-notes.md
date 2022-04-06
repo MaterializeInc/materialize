@@ -1220,7 +1220,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 - Support [multi-partition](/sql/create-sink/#with-options) Kafka sinks {{% gh 5537 %}}.
 
-- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
+- Support [gzip-compressed](/sql/create-source/file/#compression) file sources {{% gh 5392 %}}.
 
 {{% version-header v0.6.1 %}}
 
@@ -2018,11 +2018,11 @@ a problem with PostgreSQL JDBC 42.3.0.
   strings `NaN`, and `[+-]Infinity` are accepted as input, to select the special
   not-a-number and infinity states, respectively,  of floating-point numbers.
 
-- Allow [CSV-formatted sources](/sql/create-source/csv-file/#csv-format-details)
+- Allow CSV-formatted sources
   to include a header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
 
-- Provide the option to name columns in sources (e.g. [`CREATE SOURCE foo
-  (col_foo, col_bar)...`](/sql/create-source/csv-file/#creating-a-source-from-a-dynamic-csv)).
+- Provide the option to name columns in sources (e.g. `CREATE SOURCE foo
+  (col_foo, col_bar)...`).
 
 - Support [offsets](/sql/create-source/) for partitions on Kafka sources {{% gh 2169 %}}.
 
