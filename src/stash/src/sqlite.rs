@@ -38,8 +38,7 @@ CREATE TABLE data (
     key blob NOT NULL,
     value blob NOT NULL,
     time integer NOT NULL,
-    diff integer NOT NULL,
-    UNIQUE (collection_id, key, value, time)
+    diff integer NOT NULL
 );
 
 CREATE INDEX data_time_idx ON data (collection_id, time);
@@ -253,12 +252,7 @@ impl Stash for Sqlite {
         let upper = self.upper_tx(&tx, collection.id)?;
         let mut insert_stmt = tx.prepare(
             "INSERT INTO data (collection_id, key, value, time, diff)
-             VALUES ($collection_id, $key, $value, $time, $diff)
-             ON CONFLICT (collection_id, key, value, time) DO UPDATE SET diff = diff + excluded.diff",
-        )?;
-        let mut delete_stmt = tx.prepare(
-            "DELETE FROM data
-             WHERE collection_id = $collection_id AND key = $key AND value = $value AND time = $time AND diff = 0",
+             VALUES ($collection_id, $key, $value, $time, $diff)",
         )?;
         let mut key_buf = vec![];
         let mut value_buf = vec![];
@@ -281,15 +275,8 @@ impl Stash for Sqlite {
                 "$time": time,
                 "$diff": diff,
             })?;
-            delete_stmt.execute(named_params! {
-                "$collection_id": collection.id,
-                "$key": key_buf,
-                "$value": value_buf,
-                "$time": time,
-            })?;
         }
         drop(insert_stmt);
-        drop(delete_stmt);
         tx.commit()?;
         Ok(())
     }
@@ -380,27 +367,46 @@ impl Stash for Sqlite {
     ) -> Result<(), StashError> {
         let mut conn = self.conn.lock().expect("lock poisoned");
         let tx = conn.transaction()?;
+
         let mut consolidation_stmt = tx.prepare(
-                        "INSERT INTO data (collection_id, key, value, time, diff)
-                         SELECT collection_id, key, value, $since, sum(diff) FROM data
-                         WHERE collection_id = $collection_id AND time < $since
-                         GROUP BY key, value
-                         ON CONFLICT (collection_id, key, value, time) DO UPDATE SET diff = diff + excluded.diff")?;
-        let mut cleanup_stmt =
-            tx.prepare("DELETE FROM data WHERE collection_id = $collection_id AND time < $since")?;
+            "DELETE FROM data
+             WHERE collection_id = $collection_id AND time <= $since
+             RETURNING key, value, diff",
+        )?;
+        let mut insert_stmt = tx.prepare(
+            "INSERT INTO data (collection_id, key, value, time, diff)
+             VALUES ($collection_id, $key, $value, $time, $diff)",
+        )?;
         let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
+
         for collection in collections {
             let since = self.since_tx(&tx, collection.id)?.into_option();
             match since {
                 Some(since) => {
-                    consolidation_stmt.execute(named_params! {
-                        "$collection_id": collection.id,
-                        "$since": since,
-                    })?;
-                    cleanup_stmt.execute(named_params! {
-                        "$collection_id": collection.id,
-                        "$since": since,
-                    })?;
+                    let mut updates = consolidation_stmt
+                        .query_and_then(
+                            named_params! {
+                                "$collection_id": collection.id,
+                                "$since": since,
+                            },
+                            |row| {
+                                let key = row.get("key")?;
+                                let value = row.get("value")?;
+                                let diff = row.get("diff")?;
+                                Ok::<_, StashError>(((key, value), since, diff))
+                            },
+                        )?
+                        .collect::<Result<Vec<((Vec<u8>, Vec<u8>), i64, i64)>, _>>()?;
+                    differential_dataflow::consolidation::consolidate_updates(&mut updates);
+                    for ((key, value), time, diff) in updates {
+                        insert_stmt.execute(named_params! {
+                            "$collection_id": collection.id,
+                            "$key": key,
+                            "$value": value,
+                            "$time": time,
+                            "$diff": diff,
+                        })?;
+                    }
                 }
                 None => {
                     drop_stmt.execute(named_params! {
@@ -409,7 +415,7 @@ impl Stash for Sqlite {
                 }
             }
         }
-        drop((consolidation_stmt, cleanup_stmt, drop_stmt));
+        drop((consolidation_stmt, insert_stmt, drop_stmt));
         tx.commit()?;
         Ok(())
     }

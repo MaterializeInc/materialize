@@ -4059,6 +4059,7 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "criterion",
  "differential-dataflow",
  "mz-persist-types",
  "rusqlite",
