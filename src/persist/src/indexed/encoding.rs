@@ -13,7 +13,6 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::Cursor;
@@ -551,7 +550,6 @@ impl TraceBatchMeta {
 
     /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
     pub fn validate_data<B: BlobRead>(&self, cache: &BlobCache<B>) -> Result<(), Error> {
-        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, u64)> = None;
         let mut batches = vec![];
         for (idx, key) in self.keys.iter().enumerate() {
             let batch = cache
@@ -581,18 +579,7 @@ impl TraceBatchMeta {
             .iter()
             .flat_map(|batch| batch.updates.iter().flat_map(|u| u.iter()))
         {
-            let ((key, val), ts, diff) = update;
-            let this = (PrettyBytes(&key), PrettyBytes(&val), ts);
-            if let Some(prev) = prev {
-                match prev.cmp(&this) {
-                    Ordering::Less => {} // Correct.
-                    Ordering::Equal => return Err(format!("unconsolidated: {:?}", this).into()),
-                    Ordering::Greater => {
-                        return Err(format!("unsorted: {:?} was before {:?}", prev, this).into())
-                    }
-                }
-            }
-            prev = Some(this);
+            let ((_key, _val), _ts, diff) = update;
 
             // Check data invariants.
             if diff == 0 {
@@ -655,9 +642,8 @@ impl BlobTraceBatchPart {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
-        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, u64)> = None;
         for update in self.updates.iter().flat_map(|u| u.iter()) {
-            let ((key, val), ts, diff) = update;
+            let ((_key, _val), ts, diff) = update;
             // Check ts against desc.
             if !self.desc.lower().less_equal(&ts) {
                 return Err(format!(
@@ -682,19 +668,6 @@ impl BlobTraceBatchPart {
                 )
                 .into());
             }
-
-            // Check ordering.
-            let this = (PrettyBytes(&key), PrettyBytes(&val), ts);
-            if let Some(prev) = prev {
-                match prev.cmp(&this) {
-                    Ordering::Less => {} // Correct.
-                    Ordering::Equal => return Err(format!("unconsolidated: {:?}", this).into()),
-                    Ordering::Greater => {
-                        return Err(format!("unsorted: {:?} was before {:?}", prev, this).into())
-                    }
-                }
-            }
-            prev = Some(this);
 
             // Check data invariants.
             if diff == 0 {
@@ -1165,30 +1138,6 @@ mod tests {
             ))
         );
 
-        // Not sorted by key
-        let b = BlobTraceBatchPart {
-            desc: u64_desc(0, 2),
-            index: 0,
-            updates: columnar_records(vec![update_with_key(0, "1"), update_with_key(1, "0")]),
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "unsorted: (\"1\", \"\", 0) was before (\"0\", \"\", 1)"
-            ))
-        );
-
-        // Not consolidated
-        let b = BlobTraceBatchPart {
-            desc: u64_desc(0, 2),
-            index: 0,
-            updates: columnar_records(vec![update_with_key(0, "0"), update_with_key(0, "0")]),
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from("unconsolidated: (\"0\", \"\", 0)"))
-        );
-
         // Update "before" desc
         let b = BlobTraceBatchPart {
             desc: u64_desc(1, 2),
@@ -1339,7 +1288,7 @@ mod tests {
         let batch_meta = TraceBatchMeta {
             keys: vec!["b1".into(), "b0".into()],
             format,
-            desc: batch_desc.clone(),
+            desc: batch_desc,
             level: 0,
             size_bytes,
         };
@@ -1348,59 +1297,6 @@ mod tests {
             Err(Error::from(
                 "invalid index for blob trace batch part at key b1 expected 0 got 1"
             ))
-        );
-
-        // Unsorted updates across trace batch parts.
-        let batch1_unsorted = BlobTraceBatchPart {
-            desc: batch_desc.clone(),
-            index: 1,
-            updates: vec![
-                (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
-                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
-            ]
-            .iter()
-            .collect::<ColumnarRecordsVec>()
-            .into_inner(),
-        };
-        let batch1_unsorted_size_bytes =
-            blob.set_trace_batch("b1_unsorted".into(), batch1_unsorted, format)?;
-        let batch_meta = TraceBatchMeta {
-            keys: vec!["b0".into(), "b1_unsorted".into()],
-            format,
-            desc: batch_desc.clone(),
-            level: 0,
-            size_bytes: batch0_size_bytes + batch1_unsorted_size_bytes,
-        };
-        assert_eq!(
-            batch_meta.validate_data(&blob),
-            Err(Error::from(
-                "unsorted: (\"k3\", \"v3\", 2) was before (\"k2\", \"v2\", 2)"
-            ))
-        );
-        // Unconsolidated updates across trace batch parts.
-        let batch1_unconsolidated = BlobTraceBatchPart {
-            desc: batch_desc.clone(),
-            index: 1,
-            updates: vec![
-                (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
-            ]
-            .iter()
-            .collect::<ColumnarRecordsVec>()
-            .into_inner(),
-        };
-        let batch1_unconsolidated_size_bytes =
-            blob.set_trace_batch("b1_unconsolidated".into(), batch1_unconsolidated, format)?;
-        let batch_meta = TraceBatchMeta {
-            keys: vec!["b0".into(), "b1_unconsolidated".into()],
-            format,
-            desc: batch_desc,
-            level: 0,
-            size_bytes: batch0_size_bytes + batch1_unconsolidated_size_bytes,
-        };
-        assert_eq!(
-            batch_meta.validate_data(&blob),
-            Err(Error::from("unconsolidated: (\"k3\", \"v3\", 2)"))
         );
 
         Ok(())
