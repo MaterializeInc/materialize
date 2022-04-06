@@ -26,9 +26,6 @@ pub trait SecretsController {
     /// Implementations are permitted to reject combinations of operations which
     /// they cannot apply atomically.
     fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
-
-    /// Returns the IDs of all known secrets.
-    fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error>;
 }
 
 /// An operation on a [`SecretsController`].
@@ -76,9 +73,5 @@ impl SecretsController for FilesystemSecretsController {
         }
 
         return Ok(());
-    }
-
-    fn list(&self) -> Result<Vec<GlobalId>, Error> {
-        todo!()
     }
 }
