@@ -22,7 +22,9 @@
 //! More information about builtin system tables and types can be found in
 //! <https://materialize.com/docs/sql/system-tables/>.
 
+use differential_dataflow::Hashable;
 use lazy_static::lazy_static;
+use std::hash::Hash;
 
 use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
@@ -64,13 +66,14 @@ impl<T: TypeReference> Builtin<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub struct BuiltinLog {
     pub variant: LogVariant,
     pub name: &'static str,
     pub schema: &'static str,
 }
 
+#[derive(Hash)]
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
@@ -78,6 +81,7 @@ pub struct BuiltinTable {
     pub persistent: bool,
 }
 
+#[derive(Hash)]
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
@@ -100,6 +104,40 @@ pub struct BuiltinFunc {
 pub struct BuiltinRole {
     pub name: &'static str,
     pub id: i64,
+}
+
+pub trait Fingerprint {
+    fn fingerprint(&self) -> u64;
+}
+
+impl<T: Hash> Fingerprint for &T {
+    fn fingerprint(&self) -> u64 {
+        self.hashed()
+    }
+}
+
+// Types and Funcs never change fingerprints so we just return constant 0
+impl<T: TypeReference> Fingerprint for &BuiltinType<T> {
+    fn fingerprint(&self) -> u64 {
+        0
+    }
+}
+impl Fingerprint for BuiltinFunc {
+    fn fingerprint(&self) -> u64 {
+        0
+    }
+}
+
+impl<T: TypeReference> Fingerprint for &Builtin<T> {
+    fn fingerprint(&self) -> u64 {
+        match self {
+            Builtin::Log(log) => log.fingerprint(),
+            Builtin::Table(table) => table.fingerprint(),
+            Builtin::View(view) => view.fingerprint(),
+            Builtin::Type(typ) => typ.fingerprint(),
+            Builtin::Func(func) => func.fingerprint(),
+        }
+    }
 }
 
 // Builtin definitions below. Ensure you add new builtins to the `BUILTINS` map.
