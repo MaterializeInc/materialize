@@ -2411,7 +2411,7 @@ pub fn plan_create_type(
     let inner = match as_type {
         CreateTypeAs::List { .. } => CatalogType::List {
             // works because you can't create a nested List without intermediate custom types
-            element_id: *depends_on.get(0).expect("custom type to have element id"),
+            element_reference: *depends_on.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map { .. } => {
             // works because you can't create a nested Map without intermediate custom types
@@ -2430,7 +2430,10 @@ pub fn plan_create_type(
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
 
-            CatalogType::Map { key_id, value_id }
+            CatalogType::Map {
+                key_reference: key_id,
+                value_reference: value_id,
+            }
         }
         CreateTypeAs::Record { .. } => CatalogType::Record {
             fields: record_fields,

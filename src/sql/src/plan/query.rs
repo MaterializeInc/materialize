@@ -4393,16 +4393,22 @@ fn scalar_type_from_catalog(
                 );
             }
             match t {
-                CatalogType::Array { element_id } => Ok(ScalarType::Array(Box::new(
-                    scalar_type_from_catalog(scx, *element_id, modifiers)?,
-                ))),
-                CatalogType::List { element_id } => Ok(ScalarType::List {
+                CatalogType::Array {
+                    element_reference: element_id,
+                } => Ok(ScalarType::Array(Box::new(scalar_type_from_catalog(
+                    scx,
+                    *element_id,
+                    modifiers,
+                )?))),
+                CatalogType::List {
+                    element_reference: element_id,
+                } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
                     custom_oid: Some(scx.catalog.get_item(&id).oid()),
                 }),
                 CatalogType::Map {
-                    key_id: _,
-                    value_id,
+                    key_reference: _,
+                    value_reference: value_id,
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
                     custom_oid: Some(scx.catalog.get_item(&id).oid()),

@@ -44,7 +44,7 @@ use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
     TransactionAccessMode,
 };
-use crate::catalog::CatalogType;
+use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
     Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
 };
@@ -485,7 +485,7 @@ pub struct Index {
 #[derive(Clone, Debug)]
 pub struct Type {
     pub create_sql: String,
-    pub inner: CatalogType,
+    pub inner: CatalogType<IdReference>,
     pub depends_on: Vec<GlobalId>,
 }
 

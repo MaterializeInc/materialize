@@ -390,15 +390,22 @@ impl CatalogState {
         };
 
         let (index_id, update) = match typ.details.typ {
-            CatalogType::Array { element_id } => (
+            CatalogType::Array {
+                element_reference: element_id,
+            } => (
                 self.resolve_builtin_table(&MZ_ARRAY_TYPES),
                 vec![id.to_string(), element_id.to_string()],
             ),
-            CatalogType::List { element_id } => (
+            CatalogType::List {
+                element_reference: element_id,
+            } => (
                 self.resolve_builtin_table(&MZ_LIST_TYPES),
                 vec![id.to_string(), element_id.to_string()],
             ),
-            CatalogType::Map { key_id, value_id } => (
+            CatalogType::Map {
+                key_reference: key_id,
+                value_reference: value_id,
+            } => (
                 self.resolve_builtin_table(&MZ_MAP_TYPES),
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
