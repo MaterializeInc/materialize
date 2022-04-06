@@ -107,6 +107,7 @@ pub fn describe(
     // most statements can be described with a raw statement
     let desc = match &stmt {
         // DDL statements.
+        Statement::CreateConnector(stmt) => Some(ddl::describe_create_connector(&scx, stmt)?),
         Statement::CreateDatabase(stmt) => Some(ddl::describe_create_database(&scx, stmt)?),
         Statement::CreateSchema(stmt) => Some(ddl::describe_create_schema(&scx, stmt)?),
         Statement::CreateTable(stmt) => Some(ddl::describe_create_table(&scx, stmt)?),
@@ -315,6 +316,10 @@ pub fn plan(
         stmt @ Statement::CreateSecret(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateSecret, scx, stmt);
             ddl::plan_create_secret(scx, stmt)
+        }
+        stmt @ Statement::CreateConnector(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::CreateConnector, scx, stmt);
+            ddl::plan_create_connector(scx, stmt)
         }
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),

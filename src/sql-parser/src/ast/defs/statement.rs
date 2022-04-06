@@ -22,9 +22,10 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceFormat,
+    CreateSourceConnector, Envelope, Expr, Format, Ident, KeyConstraint, Query,
+    SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -36,6 +37,7 @@ pub enum Statement<T: AstInfo> {
     Copy(CopyStatement<T>),
     Update(UpdateStatement<T>),
     Delete(DeleteStatement<T>),
+    CreateConnector(CreateConnectorStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
@@ -93,6 +95,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Copy(stmt) => f.write_node(stmt),
             Statement::Update(stmt) => f.write_node(stmt),
             Statement::Delete(stmt) => f.write_node(stmt),
+            Statement::CreateConnector(stmt) => f.write_node(stmt),
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
@@ -375,6 +378,37 @@ impl AstDisplay for CreateSchemaStatement {
     }
 }
 impl_display!(CreateSchemaStatement);
+/// `CREATE CONNECTOR`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateConnectorStatement<T: AstInfo> {
+    pub name: UnresolvedObjectName,
+    pub connector: CreateConnector<T>,
+    pub if_not_exists: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CONNECTOR ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" FOR ");
+        match &self.connector {
+            CreateConnector::KafkaBroker {
+                broker,
+                with_options,
+            } => {
+                f.write_str("KAFKA BROKER ");
+                f.write_node(&display::escape_single_quote_string(&broker));
+                f.write_str(" WITH (");
+                f.write_node(&display::comma_separated(&with_options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(CreateConnectorStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1332,6 +1366,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::Cluster => "CLUSTERS",
             ObjectType::Object => "OBJECTS",
             ObjectType::Secret => "SECRETS",
+            ObjectType::Connector => "CONNECTORS",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -1643,6 +1678,7 @@ pub enum ObjectType {
     Cluster,
     Object,
     Secret,
+    Connector,
 }
 
 impl AstDisplay for ObjectType {
@@ -1658,6 +1694,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Cluster => "CLUSTER",
             ObjectType::Object => "OBJECT",
             ObjectType::Secret => "SECRET",
+            ObjectType::Connector => "CONNECTOR",
         })
     }
 }

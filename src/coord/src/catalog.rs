@@ -27,7 +27,7 @@ use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ExternalSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ConnectorLiteral, ExternalSourceConnector, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -190,7 +190,8 @@ impl CatalogState {
             | CatalogItem::Func(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
-            | CatalogItem::Secret(_) => false,
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => false,
         }
     }
 
@@ -616,6 +617,7 @@ impl CatalogState {
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
             CatalogItem::Secret(_) => Nonvolatile,
+            CatalogItem::Connector(_) => Unknown,
         }
     }
 
@@ -698,6 +700,7 @@ pub enum CatalogItem {
     Type(Type),
     Func(Func),
     Secret(Secret),
+    Connector(Connector),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -793,6 +796,12 @@ pub struct Secret {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Connector {
+    pub create_sql: String,
+    pub connector: ConnectorLiteral,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum Volatility {
     Volatile,
     Nonvolatile,
@@ -821,6 +830,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
+            CatalogItem::Connector(_) => mz_sql::catalog::CatalogItemType::Connector,
         }
     }
 
@@ -833,7 +843,8 @@ impl CatalogItem {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
-            | CatalogItem::Secret(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -872,6 +883,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
             CatalogItem::Secret(_) => &[],
+            CatalogItem::Connector(_) => &[],
         }
     }
 
@@ -885,7 +897,8 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
-            | CatalogItem::Secret(_) => false,
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -905,6 +918,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => None,
             CatalogItem::Type(_) => None,
             CatalogItem::Func(_) => None,
+            CatalogItem::Connector(_) => None,
         }
     }
 
@@ -965,6 +979,11 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
+            }
+            CatalogItem::Connector(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Connector(i))
             }
         }
     }
@@ -2704,6 +2723,12 @@ impl Catalog {
                 create_sql: secret.create_sql.clone(),
                 eval_env: None,
             },
+            CatalogItem::Connector(connector) => SerializedCatalogItem::V1 {
+                create_sql: connector.create_sql.clone(),
+                eval_env: None,
+                table_persist_name: None,
+                source_persist_details: None,
+            },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
@@ -3316,6 +3341,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
+            CatalogItem::Connector(Connector { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
         }
     }

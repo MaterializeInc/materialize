@@ -26,6 +26,7 @@ use itertools::Itertools;
 use mz_postgres_util::TableInfo;
 use mz_repr::adt::interval::Interval;
 use mz_sql_parser::ast::WithOptionValue;
+use mz_sql_parser::ast::{CreateConnector, CreateConnectorStatement};
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -87,12 +88,12 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
     AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan,
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table,
-    Type, View,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, Connector,
+    CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
+    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2811,6 +2812,49 @@ pub fn plan_create_secret(
     }))
 }
 
+pub fn describe_create_connector(
+    _: &StatementContext,
+    _: &CreateConnectorStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_connector(
+    scx: &StatementContext,
+    stmt: CreateConnectorStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("CREATE CONNECTOR")?;
+
+    let create_sql = stmt.to_string();
+    let CreateConnectorStatement {
+        name,
+        connector,
+        if_not_exists,
+    } = stmt;
+    let connector_literal = match connector {
+        CreateConnector::KafkaBroker {
+            broker,
+            with_options,
+        } => {
+            let mut with_options = normalize::options(&with_options);
+            ConnectorLiteral::Kafka(KafkaSourceConnectorLiteral {
+                addrs: broker.parse()?,
+                config_options: kafka_util::extract_config(&mut with_options)?,
+            })
+        }
+    };
+    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let plan = CreateConnectorPlan {
+        name,
+        if_not_exists,
+        connector: Connector {
+            create_sql,
+            connector: connector_literal,
+        },
+    };
+    Ok(Plan::CreateConnector(plan))
+}
+
 pub fn describe_drop_database(
     _: &StatementContext,
     _: &DropDatabaseStatement<Raw>,
@@ -2891,7 +2935,8 @@ pub fn plan_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
-        | ObjectType::Secret => plan_drop_items(scx, object_type, names, cascade),
+        | ObjectType::Secret
+        | ObjectType::Connector => plan_drop_items(scx, object_type, names, cascade),
         ObjectType::Role => unreachable!("DROP ROLE handled separately"),
         ObjectType::Cluster => unreachable!("DROP CLUSTER handled separately"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
@@ -3091,7 +3136,8 @@ pub fn plan_drop_item(
                     | CatalogItemType::View
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
-                    | CatalogItemType::Secret => {
+                    | CatalogItemType::Secret
+                    | CatalogItemType::Connector => {
                         bail!(
                             "cannot drop {}: still depended upon by catalog item '{}'",
                             scx.catalog.resolve_full_name(catalog_entry.name()),

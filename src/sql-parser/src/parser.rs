@@ -1578,6 +1578,8 @@ impl<'a> Parser<'a> {
             self.parse_create_table()
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
+        } else if self.peek_keyword(CONNECTOR) {
+            self.parse_create_connector()
         } else {
             let index = self.index;
 
@@ -1857,6 +1859,29 @@ impl<'a> Parser<'a> {
             return self.expected(self.peek_pos(), "NONE or GZIP", self.peek_token());
         };
         Ok(compression)
+    }
+
+    fn parse_create_connector(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTOR)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+        self.expect_keyword(FOR)?;
+        let connector = if self.parse_keyword(KAFKA) {
+            self.expect_keyword(BROKER)?;
+            let broker = self.parse_literal_string()?;
+            let with_options = self.parse_opt_with_sql_options()?;
+            CreateConnector::KafkaBroker {
+                broker,
+                with_options,
+            }
+        } else {
+            return self.expected(self.peek_pos(), "KAFKA", self.peek_token());
+        };
+        Ok(Statement::CreateConnector(CreateConnectorStatement {
+            name,
+            connector,
+            if_not_exists,
+        }))
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2569,7 +2594,7 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW, CONNECTOR,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2625,6 +2650,7 @@ impl<'a> Parser<'a> {
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
             Some(SECRET) => ObjectType::Secret,
+            Some(CONNECTOR) => ObjectType::Connector,
             _ => {
                 return self.expected(
                     self.peek_pos(),

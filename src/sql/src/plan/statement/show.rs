@@ -275,7 +275,33 @@ pub fn show_objects<'a>(
         ObjectType::Cluster => show_clusters(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
+        ObjectType::Connector => show_connectors(scx, extended, full, from, filter), 
     }
+}
+
+fn show_connectors<'a>(
+    scx: &'a StatementContext<'a>,
+    extended: bool,
+    full: bool,
+    from: Option<ResolvedSchemaName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+)-> Result<ShowSelect<'a>, anyhow::Error> {
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+    let mut query = format!(
+        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        FROM mz_catalog.mz_connectors t
+        JOIN mz_catalog.mz_schemas on t.schema_id = s.id
+        WHERE schema_id = {}",
+        schema_spec,
+    );
+    if extended {
+        query += " OR s.database_id IS NULL";
+    }
+    if !full {
+        query = format!("SELECT name FROM ({})", query);
+    }
+    ShowSelect::new(scx, query, filter, None, None)
+
 }
 
 fn show_tables<'a>(

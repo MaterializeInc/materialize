@@ -345,6 +345,8 @@ pub enum CatalogItemType {
     Func,
     /// A Secret.
     Secret,
+    /// A Connector.
+    Connector,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -358,6 +360,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
+            CatalogItemType::Connector => f.write_str("connector"),
         }
     }
 }
