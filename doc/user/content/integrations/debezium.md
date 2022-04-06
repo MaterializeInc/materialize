@@ -1,6 +1,13 @@
 ---
-title: "Using Debezium"
+title: "Working with Debezium CDC Records in Materialize"
 description: "Get details about using Materialize with Debezium"
+aliases:
+  - /third-party/debezium/
+menu:
+  main:
+    parent: "integration-guides"
+    name: "Debezium"
+    weight: 35
 ---
 
 You can use [Debezium](https://debezium.io/) to propagate Change Data Capture (CDC) data from a database to Materialize, for example MySQL or PostgreSQL.

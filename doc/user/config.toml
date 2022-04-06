@@ -118,6 +118,12 @@ weight= 50
 
 
 [[menu.main]]
+identifier = "integration-guides"
+name = "Integration Guides"
+parent = "integrations"
+weight = 40
+
+[[menu.main]]
 identifier = "advanced"
 name = "Advanced Concepts"
 weight = 80

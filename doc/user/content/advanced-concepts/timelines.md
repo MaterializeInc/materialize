@@ -2,6 +2,8 @@
 title: "Timelines"
 description: "Timelines describe sources' meaning of time."
 weight: 20
+aliases:
+  - /sql/timelines/
 menu:
   main:
     parent: advanced

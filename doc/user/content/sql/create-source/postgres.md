@@ -5,6 +5,7 @@ menu:
   main:
     parent: 'create-source'
     name: Postgres
+    weight: 20
 aliases:
   - /sql/create-source/postgresql
 ---

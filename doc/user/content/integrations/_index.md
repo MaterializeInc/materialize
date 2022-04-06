@@ -1,6 +1,8 @@
 ---
 title: Tools and Integrations
 description: "Get details about third-party tools and integrations support with Materialize"
+aliases:
+  - /third-party/supported-tools/
 menu:
   main:
     identifier: integrations

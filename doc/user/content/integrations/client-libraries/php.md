@@ -1,11 +1,12 @@
 ---
-title: "PHP"
+title: "PHP Cheatsheet"
 description: "Use PHP PDO to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/php-pdo/
 menu:
   main:
     parent: 'client-libraries'
+    name: "PHP"
 ---
 
 Materialize is **PostgreSQL-compatible**, which means that PHP applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use [PDO_PGSQL driver](https://www.php.net/manual/en/ref.pdo-pgsql.php) to connect to Materialize and issue PostgreSQL commands.

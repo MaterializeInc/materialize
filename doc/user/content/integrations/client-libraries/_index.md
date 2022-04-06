@@ -5,4 +5,5 @@ menu:
   main:
     parent: integrations
     identifier: 'client-libraries'
+    weight: 20
 ---

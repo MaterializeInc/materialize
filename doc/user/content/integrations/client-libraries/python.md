@@ -1,11 +1,12 @@
 ---
-title: "Python and Materialize"
+title: "Python Cheatsheet"
 description: "Use Python to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/python/
 menu:
   main:
-    parent: guides
+    parent: "client-libraries"
+    name: "Python"
 ---
 
 Materialize is **PostgreSQL-compatible**, which means that Python applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use [psycopg2 PostgreSQL database adapter](https://pypi.org/project/psycopg2/) to connect to Materialize and issue PostgreSQL commands.

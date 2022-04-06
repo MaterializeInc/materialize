@@ -6,7 +6,7 @@ menu:
     parent: advanced
     weight: 5
 aliases:
-  - /overview/volatility
+  - /overview/volatility/
 ---
 
 Materialize strives to be a correct, deterministic system. But because

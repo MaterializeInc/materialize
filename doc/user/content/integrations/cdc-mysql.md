@@ -1,6 +1,13 @@
 ---
-title: "Materialized Views for MySQL"
+title: "Materialized Views for MySQL via CDC"
 description: "How to create real-time materialized views from MySQL changelog data with Materialize."
+aliases:
+  - /guides/cdc-mysql/
+menu:
+  main:
+    parent: "integration-guides"
+    name: "MySQL"
+    weight: 30
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL database to downstream consumers based on its binary log (`binlog`). In this guide, we'll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data.

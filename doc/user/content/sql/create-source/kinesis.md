@@ -5,6 +5,7 @@ menu:
   main:
     parent: 'create-source'
     name: Kinesis
+    weight: 40
 aliases:
     - /sql/create-source/kinesis-source
     - /sql/create-source/json-kinesis

@@ -2,11 +2,11 @@
 title: "CLI Connections"
 description: "You can connect to Materialize from your favorite shell using compatible tools, like mzcli or psql."
 aliases:
-  - '/connect/cli'
+  - /connect/cli/
 menu:
   main:
     parent: "integrations"
-    weight: 1
+    weight: 50
 ---
 
 You can connect to a running `materialized` process from your favorite shell

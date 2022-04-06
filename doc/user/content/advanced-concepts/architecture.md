@@ -6,7 +6,7 @@ menu:
     parent: advanced
     weight: 2
 aliases:
-  - /overview/architecture
+  - /overview/architecture/
 ---
 
 Everything in Materialize is currently handled by the `materialized` process

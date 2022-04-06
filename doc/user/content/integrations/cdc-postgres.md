@@ -1,6 +1,13 @@
 ---
 title: "Materialized Views for PostgreSQL"
 description: "How to create real-time materialized views from PostgreSQL changelog data with Materialize."
+aliases:
+  - /guides/cdc-postgres/
+menu:
+  main:
+    parent: "integration-guides"
+    name: "PostgreSQL"
+    weight: 20
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL). In this guide, we'll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data.

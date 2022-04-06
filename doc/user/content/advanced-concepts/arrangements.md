@@ -6,7 +6,7 @@ menu:
     parent: advanced
     weight: 4
 aliases:
-  - /overview/arrangements
+  - /overview/arrangements/
 ---
 
 The mechanisms that maintain materialized views for Materialize dataflows are called **arrangements**. Understanding arrangements better can help you make decisions that will reduce memory usage while maintaining performance.

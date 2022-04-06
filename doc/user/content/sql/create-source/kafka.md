@@ -5,6 +5,7 @@ menu:
   main:
     parent: 'create-source'
     name: Kafka
+    weight: 10
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka

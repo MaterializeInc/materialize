@@ -1,11 +1,12 @@
 ---
-title: "Golang and Materialize"
+title: "Golang Cheatsheet"
 description: "Use Go to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/golang/
 menu:
   main:
-    parent: guides
+    parent: "client-libraries"
+    name: Go
 ---
 
 Materialize is **PostgreSQL-compatible**, which means that Go applications can use the standard library's [`database/sql`](https://pkg.go.dev/database/sql) package with a PostgreSQL driver to access Materialize as if it were a PostgreSQL database.

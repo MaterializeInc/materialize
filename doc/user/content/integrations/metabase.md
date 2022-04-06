@@ -1,6 +1,11 @@
 ---
-title: "Using Metabase"
+title: "How to connect Metabase to Materialize"
 description: "Get details about using Materialize with Metabase"
+aliases:
+  - /third-party/metabase/
+menu:
+  main:
+    parent: "integration-guides"
 ---
 
 You can use [Metabase] to create business intelligence dashboards using the
