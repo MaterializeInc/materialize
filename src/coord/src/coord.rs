@@ -95,7 +95,6 @@ use mz_dataflow_types::client::{
     Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
     DEFAULT_COMPUTE_INSTANCE_ID,
 };
-use mz_dataflow_types::logging::LogVariant;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
@@ -144,8 +143,8 @@ use mz_transform::Optimizer;
 
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{
-    MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    BUILTINS, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
@@ -467,7 +466,6 @@ impl Coordinator {
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
-        logs: BTreeMap<GlobalId, LogVariant>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -481,6 +479,10 @@ impl Coordinator {
         }
 
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
+        let logs: HashSet<_> = BUILTINS
+            .logs()
+            .map(|log| self.catalog.resolve_builtin_log(log))
+            .collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
@@ -553,7 +555,7 @@ impl Coordinator {
                     .await;
                 }
                 CatalogItem::Index(idx) => {
-                    if logs.contains_key(&idx.on) {
+                    if logs.contains(&idx.on) {
                         // TODO: make this one call, not many.
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
@@ -606,10 +608,10 @@ impl Coordinator {
         // Announce primary and foreign key relationships.
         if self.logging.is_some() {
             let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
-            for (log_id, log_variant) in &logs {
-                let log_id = &log_id.to_string();
+            for log in BUILTINS.logs() {
+                let log_id = &self.catalog.resolve_builtin_log(log).to_string();
                 self.send_builtin_table_updates(
-                    log_variant
+                    log.variant
                         .desc()
                         .typ()
                         .keys
@@ -635,17 +637,15 @@ impl Coordinator {
 
                 let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
                 self.send_builtin_table_updates(
-                    log_variant
+                    log.variant
                         .foreign_keys()
                         .into_iter()
                         .enumerate()
                         .flat_map(|(index, (parent, pairs))| {
-                            let parent_id = logs
-                                .iter()
-                                .find(|src| *src.1 == parent)
-                                .unwrap()
-                                .0
-                                .to_string();
+                            let parent_log =
+                                BUILTINS.logs().find(|src| src.variant == parent).unwrap();
+                            let parent_id =
+                                self.catalog.resolve_builtin_log(parent_log).to_string();
                             pairs.into_iter().map(move |(c, p)| {
                                 let row = Row::pack_slice(&[
                                     Datum::String(&log_id),
@@ -4844,7 +4844,7 @@ pub async fn serve(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
-    let (catalog, builtin_table_updates, builtin_logs) = Catalog::open(catalog::Config {
+    let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
@@ -4909,7 +4909,7 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
             };
-            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates, builtin_logs));
+            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
