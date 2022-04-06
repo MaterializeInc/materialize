@@ -35,7 +35,7 @@ pub struct Char<S: AsRef<str>>(pub S);
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
-pub struct CharLength(u32);
+pub struct CharLength(pub(crate) u32);
 
 impl CharLength {
     /// A length of one.

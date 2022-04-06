@@ -35,7 +35,7 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
-pub struct VarCharMaxLength(u32);
+pub struct VarCharMaxLength(pub(crate) u32);
 
 impl VarCharMaxLength {
     /// Consumes the newtype wrapper, returning the inner `u32`.

@@ -80,7 +80,7 @@ lazy_static! {
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
-pub struct NumericMaxScale(u8);
+pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
     /// A max scale of zero.

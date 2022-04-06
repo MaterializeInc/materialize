@@ -10,7 +10,14 @@
 fn main() {
     prost_build::Config::new()
         .compile_protos(
-            &["adt/array.proto", "row.proto", "strconv.proto"],
+            &[
+                "row.proto",
+                "strconv.proto",
+                "adt/array.proto",
+                "adt/char.proto",
+                "adt/numeric.proto",
+                "adt/varchar.proto",
+            ],
             &["src/proto"],
         )
         .unwrap();
