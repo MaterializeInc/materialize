@@ -13,6 +13,10 @@ use std::str::FromStr;
 use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
+// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
+// for guidance on using `derive(Arbitrary)` outside of test code.
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 
