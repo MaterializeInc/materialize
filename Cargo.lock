@@ -3344,6 +3344,7 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
+ "maplit",
  "mz-aws-util",
  "mz-ccsr",
  "mz-expr",
@@ -3662,7 +3663,6 @@ dependencies = [
  "dyn-clonable",
  "k8s-openapi",
  "kube",
- "maplit",
  "mz-orchestrator",
 ]
 

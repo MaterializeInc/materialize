@@ -32,9 +32,50 @@ The STORAGE and COMPUTE layers each turn on instances by creating services in
 an [`Orchestrator`]. An `Orchestrator` is backed by Kubernetes in the cloud,
 and a service corresponds directly to a `StatefulSet`. This may evolve soon.
 
+All ports created by the orchestrator have names.
+
+The Kubernetes orchestrator installs the following labels on all services and
+pods that it creates:
+
+  * `materialized.materialize.cloud/namespace`: the orchestrator "subnamespace"
+    in which the service is created. Either `storage` or `compute` at present.
+
+  * `materialized.materialize.cloud/service-id`: the namespace-provided
+    identifier for the service, like "cluster-0" or "runtime".
+
+  * `materialized.materialize.cloud/port-PORT=true`: A label for each named port
+    exposed by the service.
+
+  * `NAMESPACE.materialized.materialize.cloud/KEY`: arbitrary labels assigned
+    at service creation time, prefixed with the `NamespacedOrchestrator`
+    that created the label.
+
+Additionally, the service that invokes `materialized` can pass
+`--orchestrator-service-label` to specify additional labels that should be
+attached to *all* pods and services created by the Kubernetes orchestrator.
+
 ### Secrets
 
 See the [secret design doc](../design/20220303_secrets.md).
+
+## Binaries
+
+There are presently two binaries involved in Materialize Platform:
+
+  * `materialized`, which hosts the controller
+  * `dataflowd`, which hosts either a storage runtime or a compute runtime
+    depending on the `--runtime` option
+
+There are three separate network protocols:
+
+  * The **controller** protocol, which is how `materialized` communicates with
+    `dataflowd`. This protocol is conventionally hosted on port 2100.
+
+  * The **storage** protocol, which is how the compute runtime communicates with
+    the storage runtime. This protocol is conventionally hosted on port 2101.
+
+  * The **compute** protocol, which is how compute nodes communicate with one
+    another. This protocol is conventionally hosted on port 2102.
 
 ## Terraform provider
 

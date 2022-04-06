@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use anyhow::bail;
@@ -23,7 +23,6 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
-use maplit::btreemap;
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
 
@@ -35,6 +34,8 @@ pub struct KubernetesOrchestratorConfig {
     /// The name of a Kubernetes context to use, if the Kubernetes configuration
     /// is loaded from the local kubeconfig.
     pub context: String,
+    /// Labels to install on every service created by the orchestrator.
+    pub service_labels: HashMap<String, String>,
 }
 
 /// An orchestrator backed by Kubernetes.
@@ -42,6 +43,7 @@ pub struct KubernetesOrchestratorConfig {
 pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
+    service_labels: HashMap<String, String>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -59,7 +61,7 @@ impl KubernetesOrchestrator {
             context: Some(config.context),
             ..Default::default()
         };
-        let config = match Config::from_kubeconfig(&kubeconfig_options).await {
+        let kubeconfig = match Config::from_kubeconfig(&kubeconfig_options).await {
             Ok(config) => config,
             Err(kubeconfig_err) => match Config::from_cluster_env() {
                 Ok(config) => config,
@@ -68,11 +70,12 @@ impl KubernetesOrchestrator {
                 }
             },
         };
-        let kubernetes_namespace = config.default_namespace.clone();
-        let client = Client::try_from(config)?;
+        let kubernetes_namespace = kubeconfig.default_namespace.clone();
+        let client = Client::try_from(kubeconfig)?;
         Ok(KubernetesOrchestrator {
             client,
             kubernetes_namespace,
+            service_labels: config.service_labels,
         })
     }
 }
@@ -84,6 +87,7 @@ impl Orchestrator for KubernetesOrchestrator {
             stateful_set_api: Api::default_namespaced(self.client.clone()),
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
+            service_labels: self.service_labels.clone(),
         })
     }
 }
@@ -94,12 +98,15 @@ struct NamespacedKubernetesOrchestrator {
     stateful_set_api: Api<StatefulSet>,
     kubernetes_namespace: String,
     namespace: String,
+    service_labels: HashMap<String, String>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("NamespacedKubernetesOrchestrator")
+            .field("kubernetes_namespace", &self.kubernetes_namespace)
             .field("namespace", &self.namespace)
+            .field("service_labels", &self.service_labels)
             .finish()
     }
 }
@@ -116,12 +123,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             memory_limit,
             cpu_limit,
             processes,
+            labels: labels_in,
         }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
-        let labels = btreemap! {
-            "service".into() => id.into(),
-        };
+        let mut labels = BTreeMap::new();
+        for (key, value) in labels_in {
+            labels.insert(
+                format!("{}.materialized.materialize.cloud/{}", self.namespace, key),
+                value,
+            );
+        }
+        for port in &ports {
+            labels.insert(
+                format!("materialized.materialize.cloud/port-{}", port.name),
+                "true".into(),
+            );
+        }
+        labels.insert(
+            "materialized.materialize.cloud/namespace".into(),
+            self.namespace.clone(),
+        );
+        labels.insert(
+            "materialized.materialize.cloud/service-id".into(),
+            id.into(),
+        );
+        for (key, value) in &self.service_labels {
+            labels.insert(key.clone(), value.clone());
+        }
         let mut limits = BTreeMap::new();
         if let Some(memory_limit) = memory_limit {
             limits.insert(
@@ -145,8 +174,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ports
                         .iter()
                         .map(|port| ServicePort {
-                            port: *port,
-                            name: Some(format!("port-{port}")),
+                            port: port.port,
+                            name: Some(port.name.clone()),
                             ..Default::default()
                         })
                         .collect(),
@@ -183,7 +212,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                 ports
                                     .iter()
                                     .map(|port| ContainerPort {
-                                        container_port: *port,
+                                        container_port: port.port,
+                                        name: Some(port.name.clone()),
                                         ..Default::default()
                                     })
                                     .collect(),

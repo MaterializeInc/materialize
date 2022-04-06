@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -27,7 +28,7 @@ use mz_coord::PersistConfig;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::{Orchestrator, ServiceConfig};
+use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -324,26 +325,36 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 let service = orchestrator
                     .namespace("storage")
                     .ensure_service(
-                        &format!("dataflow"),
+                        "runtime",
                         ServiceConfig {
                             image: dataflowd_image.clone(),
                             args: vec![
                                 format!("--workers={storage_workers}"),
                                 "--runtime=storage".into(),
-                                format!("--storage-addr=0.0.0.0:2102"),
+                                format!("--storage-addr=0.0.0.0:2101"),
                             ],
-                            ports: vec![2102, 6876],
+                            ports: vec![
+                                ServicePort {
+                                    name: "controller".into(),
+                                    port: 2100,
+                                },
+                                ServicePort {
+                                    name: "storage".into(),
+                                    port: 2101,
+                                },
+                            ],
                             // TODO: limits?
                             cpu_limit: None,
                             memory_limit: None,
                             processes: 1,
+                            labels: HashMap::new(),
                         },
                     )
                     .await?;
                 let storage_host = service.hosts().into_element();
                 config.storage = StorageConfig::Remote(RemoteStorageConfig {
-                    compute_addr: format!("{storage_host}:2102"),
-                    controller_addr: format!("{storage_host}:6876"),
+                    compute_addr: format!("{storage_host}:2101"),
+                    controller_addr: format!("{storage_host}:2100"),
                 });
             }
 

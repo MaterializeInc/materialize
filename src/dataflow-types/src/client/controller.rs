@@ -27,11 +27,12 @@ use anyhow::bail;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
+use maplit::hashmap;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
-use mz_orchestrator::{Orchestrator, ServiceConfig};
+use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -122,27 +123,40 @@ where
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(
-                        &format!("instance-{instance}"),
+                        &format!("cluster-{instance}"),
                         ServiceConfig {
                             image: dataflowd_image.clone(),
                             args: vec![
                                 "--runtime=compute".into(),
                                 format!("--storage-addr={storage_addr}"),
-                                "0.0.0.0:2101".into(),
+                                "0.0.0.0:2102".into(),
                             ],
-                            ports: vec![2101, 6876],
+                            ports: vec![
+                                ServicePort {
+                                    name: "controller".into(),
+                                    port: 2100,
+                                },
+                                ServicePort {
+                                    name: "compute".into(),
+                                    port: 2102,
+                                },
+                            ],
                             // TODO: use `size` to set these.
                             cpu_limit: None,
                             memory_limit: None,
                             // TODO: support sizes large enough to warrant multiple processes.
                             processes: 1,
+                            labels: hashmap! {
+                                "cluster-id".into() => instance.to_string(),
+                                "type".into() => "cluster".into(),
+                            },
                         },
                     )
                     .await?;
                 let addrs: Vec<_> = service
                     .hosts()
                     .iter()
-                    .map(|h| format!("{h}:6876"))
+                    .map(|h| format!("{h}:2100"))
                     .collect();
                 let client = RemoteClient::new(&addrs);
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);

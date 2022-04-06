@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use async_trait::async_trait;
@@ -69,13 +70,29 @@ pub struct ServiceConfig {
     /// Arguments for the process.
     pub args: Vec<String>,
     /// Ports to expose.
-    pub ports: Vec<i32>,
+    pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of processes to run.
     pub processes: usize,
+    /// Arbitrary key–value pairs to attach to the service in the orchestrator
+    /// backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub labels: HashMap<String, String>,
+}
+
+/// A named port associated with a service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServicePort {
+    /// A descriptive name for the port.
+    ///
+    /// Note that not all orchestrator backends make use of port names.
+    pub name: String,
+    /// The port number.
+    pub port: i32,
 }
 
 /// Describes a limit on memory resources.

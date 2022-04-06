@@ -26,31 +26,31 @@ SERVICES = [
     SchemaRegistry(),
     Dataflowd(
         name="dataflowd_compute_1",
-        options="--workers 2 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
-        ports=[6876, 2101],
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr dataflowd_storage:2101 --runtime compute",
+        ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_2",
-        options="--workers 2 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
-        ports=[6876, 2101],
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr dataflowd_storage:2101 --runtime compute",
+        ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_3",
-        options="--workers 2 --processes 2 --process 0 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
-        ports=[6876, 2101],
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr dataflowd_storage:2101 --runtime compute --linger --reconcile",
+        ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_4",
-        options="--workers 2 --processes 2 --process 1 dataflowd_compute_3:2101 dataflowd_compute_4:2101 --storage-addr dataflowd_storage:2102 --runtime compute --linger --reconcile",
-        ports=[6876, 2101],
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr dataflowd_storage:2101 --runtime compute --linger --reconcile",
+        ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_storage",
-        options="--workers 2 --storage-addr dataflowd_storage:2102 --runtime storage",
-        ports=[6876, 2102],
+        options="--workers 2 --storage-addr dataflowd_storage:2101 --runtime storage",
+        ports=[2100, 2101],
     ),
     Materialized(
-        options="--storage-compute-addr=dataflowd_storage:2102 --storage-controller-addr=dataflowd_storage:6876",
+        options="--storage-compute-addr=dataflowd_storage:2101 --storage-controller-addr=dataflowd_storage:2100",
     ),
     Testdrive(
         volumes=[
@@ -92,7 +92,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_compute_1")
     c.up("dataflowd_compute_2")
     c.sql(
-        "CREATE CLUSTER c REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
+        "CREATE CLUSTER c REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100');"
     )
     c.run("testdrive", *glob)
 
@@ -102,8 +102,8 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.sql(
         """
         ALTER CLUSTER c
-            REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876'),
-            REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
+            REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100'),
+            REMOTE replica2 ('dataflowd_compute_3:2100', 'dataflowd_compute_4:2100')
         """
     )
     c.run("testdrive", *glob)
@@ -118,13 +118,13 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.sql(
         """
         ALTER CLUSTER c
-            REMOTE replica1 ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876')
+            REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100')
         """
     )
     c.sql(
         """
         ALTER CLUSTER c
-            REMOTE replica2 ('dataflowd_compute_3:6876', 'dataflowd_compute_4:6876')
+            REMOTE replica2 ('dataflowd_compute_3:2100', 'dataflowd_compute_4:2100')
         """
     )
     c.run("testdrive", "smoke/insert-select.td")
