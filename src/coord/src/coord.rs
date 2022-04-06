@@ -68,6 +68,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -78,6 +79,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use rand::Rng;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -157,6 +159,7 @@ use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprP
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
+use crate::secrets::{FilesystemSecretsController, SecretOp, SecretsController};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
     TransactionStatus, WriteOp,
@@ -257,6 +260,7 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     pub persister: PersisterWithConfig,
     pub now: NowFn,
+    pub secrets_storage_path: PathBuf,
 }
 
 struct PendingPeek {
@@ -328,6 +332,8 @@ pub struct Coordinator {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
+
+    secrets_controller: Box<dyn SecretsController>,
 }
 
 /// Metadata about an active connection.
@@ -2121,14 +2127,18 @@ impl Coordinator {
             return Err(CoordError::Eval(EvalError::NullCharacterNotPermitted));
         }
 
-        // TODO martin: hook the payload into a secrets backend
-        let _payload = evaled.unwrap_bytes();
+        let payload = evaled.unwrap_bytes();
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
+
+        self.secrets_controller.apply(vec![SecretOp::Ensure {
+            id,
+            contents: Vec::from(payload),
+        }])?;
 
         let ops = vec![catalog::Op::CreateItem {
             id,
@@ -2143,7 +2153,11 @@ impl Coordinator {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
-            Err(err) => Err(err),
+            Err(err) => {
+                // best-effort attempt to drop the newly created secret, ignore any failures
+                let _ = self.secrets_controller.apply(vec![SecretOp::Delete { id }]);
+                Err(err)
+            }
         }
     }
 
@@ -4353,6 +4367,7 @@ impl Coordinator {
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
+        let mut secrets_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -4389,6 +4404,9 @@ impl Coordinator {
                         compute_instance, ..
                     }) => {
                         indexes_to_drop.push((*compute_instance, *id));
+                    }
+                    CatalogItem::Secret(_) => {
+                        secrets_to_drop.push(*id);
                     }
                     _ => (),
                 }
@@ -4437,6 +4455,9 @@ impl Coordinator {
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
+            }
+            if !secrets_to_drop.is_empty() {
+                self.drop_secrets(secrets_to_drop).await;
             }
 
             // We don't want to block the coordinator on an external postgres server, so
@@ -4611,6 +4632,15 @@ impl Coordinator {
             }
         }
         Ok(())
+    }
+
+    async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
+        let ops = secrets
+            .into_iter()
+            .map(|id| SecretOp::Delete { id })
+            .collect_vec();
+
+        self.secrets_controller.apply(ops).unwrap();
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -4839,6 +4869,7 @@ pub async fn serve(
         metrics_registry,
         persister,
         now,
+        secrets_storage_path,
     }: Config,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4885,6 +4916,8 @@ pub async fn serve(
     // for bootstrap completion before proceeding.
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
+    let secrets_controller = Box::new(FilesystemSecretsController::new(secrets_storage_path));
+
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
@@ -4908,6 +4941,7 @@ pub async fn serve(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
+                secrets_controller,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

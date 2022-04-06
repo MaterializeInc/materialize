@@ -289,6 +289,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         Some(config.experimental_mode),
     )?;
 
+    let secrets_storage = config.data_directory.join("secrets");
+    fs::create_dir_all(&secrets_storage)
+        .with_context(|| format!("creating secrets directory: {}", secrets_storage.display()))?;
+
     // Initialize persistence runtime.
     let persister = config
         .persist
@@ -442,6 +446,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         persister,
         now: config.now,
+        secrets_storage_path: secrets_storage,
     })
     .await?;
 
