@@ -138,7 +138,7 @@ pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
-    pub(super) stash: Stash<S>,
+    pub(super) stash: S,
 }
 
 /// A storage controller for a storage instance.
@@ -205,7 +205,7 @@ impl<T> StorageControllerState<T> {
         Self {
             client,
             collections: BTreeMap::default(),
-            stash: Stash::new(stash),
+            stash,
         }
     }
 }
@@ -267,7 +267,7 @@ where
 
             let mut ts_bindings = Vec::new();
             let mut last_bindings: HashMap<_, MzOffset> = HashMap::new();
-            for ((pid, _), time, diff) in ts_binding_collection.iter()? {
+            for ((pid, _), time, diff) in self.state.stash.iter(ts_binding_collection)? {
                 let prev_offset = last_bindings.entry(pid.clone()).or_default();
                 ts_bindings.push((
                     pid,
@@ -379,14 +379,14 @@ where
         feedback: &TimestampBindingFeedback<T>,
     ) -> Result<(), StorageError> {
         for (id, bindings) in &feedback.bindings {
-            let mut ts_binding_collection = self
+            let ts_binding_collection = self
                 .state
                 .stash
                 .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
 
-            let collection_state = self.collection_mut(*id).expect("missing source id");
+            let upper = self.state.stash.upper(ts_binding_collection)?;
 
-            let upper = ts_binding_collection.upper()?;
+            let collection_state = self.collection_mut(*id).expect("missing source id");
 
             // Here we differentialize the bindings we got from workers
             // Timestamp bindings as represented as a TVC whose data, time, and diff types
@@ -428,10 +428,13 @@ where
                     updates.push(update);
                 }
             }
-            ts_binding_collection.update_many(updates)?;
+            self.state
+                .stash
+                .update_many(ts_binding_collection, updates)?;
         }
 
         let mut durability_updates = vec![];
+        let mut seals = vec![];
         for (id, _changes) in &feedback.changes {
             let ts_binding_collection = self
                 .state
@@ -444,14 +447,15 @@ where
                     .as_option()
                     .map(|ts| ts.clone().try_into().expect("negative timestamp")),
             );
-            let upper = ts_binding_collection.upper()?;
+            let upper = self.state.stash.upper(ts_binding_collection)?;
             // TODO(petrosagg): This guard should go away by ensuring storage workers never re-send
             // the bindings and frontiers they were initialized with
             if PartialOrder::less_than(&upper, &seal_frontier) {
-                ts_binding_collection.seal(seal_frontier.borrow())?;
+                seals.push((ts_binding_collection, seal_frontier));
             }
             durability_updates.push((*id, write_frontier));
         }
+        self.state.stash.seal_batch(&seals)?;
 
         self.update_durability_frontiers(durability_updates).await?;
 
@@ -514,6 +518,8 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands.
         let mut compaction_commands = Vec::new();
+        let mut stash_compactions = vec![];
+        let mut stash_consolidations = vec![];
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
@@ -523,23 +529,25 @@ where
                     .frontier()
                     .to_owned();
 
-                let mut ts_binding_collection = self
+                let ts_binding_collection = self
                     .state
                     .stash
                     .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
 
-                let mut since = ts_binding_collection.since()?;
+                let mut since = self.state.stash.since(ts_binding_collection)?;
                 since.extend(
                     frontier
                         .iter()
                         .map(|t| t.clone().try_into().expect("timestamp overflowed i64")),
                 );
-                ts_binding_collection.compact(since.borrow())?;
-                ts_binding_collection.consolidate()?;
-
+                stash_compactions.push((ts_binding_collection, since));
+                stash_consolidations.push(ts_binding_collection);
                 compaction_commands.push((*id, frontier));
             }
         }
+        self.state.stash.compact_batch(&stash_compactions)?;
+        self.state.stash.consolidate_batch(&stash_consolidations)?;
+
         if !compaction_commands.is_empty() {
             self.state
                 .client

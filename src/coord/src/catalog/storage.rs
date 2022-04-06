@@ -177,10 +177,9 @@ const MIGRATIONS: &[&dyn Migration] = &[
             .query_and_then([], |row| Ok(row.get::<_, SqlVal<GlobalId>>(0)?.0))?
             .collect::<Result<Vec<_>, Error>>()?;
 
-        let stash = Stash::new(
-            mz_stash::Sqlite::open(&data_dir_path.join("storage"))
-                .expect("unable to open STORAGE stash"),
-        );
+        let stash = mz_stash::Sqlite::open(&data_dir_path.join("storage"))
+            .expect("unable to open STORAGE stash");
+
         let mut statement = tx.prepare(
             "SELECT pid, timestamp, offset FROM timestamps WHERE sid = ? ORDER BY pid, timestamp",
         )?;
@@ -201,7 +200,7 @@ const MIGRATIONS: &[&dyn Migration] = &[
                 })?
                 .collect::<Result<Vec<_>, Error>>()?;
 
-            let mut ts_binding_stash = stash
+            let ts_binding_stash = stash
                 .collection::<PartitionId, ()>(&format!("timestamp-bindings-{source_id}"))
                 .expect("failed to read timestamp bindings");
 
@@ -210,17 +209,20 @@ const MIGRATIONS: &[&dyn Migration] = &[
             // for an explanation of the logic
             let mut last_reported_ts_bindings: HashMap<_, MzOffset> = HashMap::new();
             let seal_ts = bindings.iter().map(|(_, ts, _)| *ts).max();
-            ts_binding_stash
-                .update_many(bindings.into_iter().map(|(pid, ts, offset)| {
-                    let prev_offset = last_reported_ts_bindings.entry(pid.clone()).or_default();
-                    let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
-                    prev_offset.offset = offset.offset;
-                    update
-                }))
+            stash
+                .update_many(
+                    ts_binding_stash,
+                    bindings.into_iter().map(|(pid, ts, offset)| {
+                        let prev_offset = last_reported_ts_bindings.entry(pid.clone()).or_default();
+                        let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
+                        prev_offset.offset = offset.offset;
+                        update
+                    }),
+                )
                 .expect("failed to write timestamp bindings");
 
-            ts_binding_stash
-                .seal(Antichain::from_iter(seal_ts).borrow())
+            stash
+                .seal(ts_binding_stash, Antichain::from_iter(seal_ts).borrow())
                 .expect("failed to write timestamp bindings");
         }
 

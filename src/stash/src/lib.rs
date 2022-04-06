@@ -27,44 +27,6 @@ pub type Diff = i64;
 pub type Timestamp = i64;
 pub type Id = i64;
 
-pub trait StashConn: std::fmt::Debug + Send {
-    fn collection<K, V>(&self, name: &str) -> Result<StashCollection<Self, K, V>, StashError>
-    where
-        Self: Sized,
-        K: Codec + Ord,
-        V: Codec + Ord;
-
-    fn iter(
-        &self,
-        collection_id: Id,
-    ) -> Result<Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>, StashError>;
-
-    fn iter_key(
-        &self,
-        collection_id: Id,
-        key: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Timestamp, Diff)>, StashError>;
-
-    fn update_many<I>(&self, collection_id: Id, entries: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>;
-
-    fn seal(&self, collection_id: Id, new_upper: AntichainRef<Timestamp>)
-        -> Result<(), StashError>;
-
-    fn compact(
-        &self,
-        collection_id: Id,
-        new_since: AntichainRef<Timestamp>,
-    ) -> Result<(), StashError>;
-
-    fn consolidate(&self, collection_id: Id) -> Result<(), StashError>;
-
-    fn since(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError>;
-
-    fn upper(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError>;
-}
-
 /// A durable metadata store.
 ///
 /// A stash manages any number of named [`StashCollection`]s.
@@ -78,19 +40,7 @@ pub trait StashConn: std::fmt::Debug + Send {
 /// truth, the intent is to swap all stashes for STORAGE collections.
 ///
 /// [STORAGE]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-db.md#STORAGE
-#[derive(Debug)]
-pub struct Stash<C> {
-    conn: C,
-}
-
-impl<C> Stash<C>
-where
-    C: StashConn,
-{
-    pub fn new(conn: C) -> Stash<C> {
-        Stash { conn }
-    }
-
+pub trait Stash {
     /// Loads or creates the named collection.
     ///
     /// If the collection with the specified name does not yet exist, it is
@@ -102,13 +52,158 @@ where
     ///
     /// It is valid to construct multiple handles to the same named collection
     /// and use them simultaneously.
-    pub fn collection<K, V>(&self, name: &str) -> Result<StashCollection<C, K, V>, StashError>
+    fn collection<K, V>(&self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Codec + Ord,
-        V: Codec + Ord,
-    {
-        self.conn.collection(name)
+        V: Codec + Ord;
+
+    /// Iterates over all entries in the stash.
+    ///
+    /// Entries are iterated in `(key, value, time)` order and are guaranteed
+    /// to be consolidated.
+    ///
+    /// Each entry's time is guaranteed to be greater than or equal to the since
+    /// frontier. The time may also be greater than the upper frontier,
+    /// indicating data that has not yet been made definite.
+    fn iter<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
+    where
+        K: Codec + Ord,
+        V: Codec + Ord;
+
+    /// Iterates over entries in the stash for the given key.
+    ///
+    /// Entries are iterated in `(value, timestamp)` order and are guaranteed
+    /// to be consolidated.
+    ///
+    /// Each entry's time is guaranteed to be greater than or equal to the since
+    /// frontier. The time may also be greater than the upper frontier,
+    /// indicating data that has not yet been made definite.
+    fn iter_key<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+        key: &K,
+    ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
+    where
+        K: Codec + Ord,
+        V: Codec + Ord;
+
+    /// Adds a single entry to the arrangement.
+    ///
+    /// The entry's time must be greater than or equal to the upper frontier.
+    ///
+    /// If this method returns `Ok`, the entry has been made durable.
+    fn update<K: Codec, V: Codec>(
+        &mut self,
+        collection: StashCollection<K, V>,
+        data: (K, V),
+        time: Timestamp,
+        diff: Diff,
+    ) -> Result<(), StashError> {
+        self.update_many(collection, iter::once((data, time, diff)))
     }
+
+    /// Atomically adds multiple entries to the arrangement.
+    ///
+    /// Each entry's time must be greater than or equal to the upper frontier.
+    ///
+    /// If this method returns `Ok`, the entries have been made durable.
+    fn update_many<K: Codec, V: Codec, I>(
+        &self,
+        collection: StashCollection<K, V>,
+        entries: I,
+    ) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = ((K, V), Timestamp, Diff)>;
+
+    /// Advances the upper frontier to the specified value.
+    ///
+    /// The provided `upper` must be greater than or equal to the current upper
+    /// frontier.
+    ///
+    /// Intuitively, this method declares that all times less than `upper` are
+    /// definite.
+    fn seal<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+        upper: AntichainRef<Timestamp>,
+    ) -> Result<(), StashError>;
+
+    /// Performs multiple seals at once, potentially in a more performant way than
+    /// performing the individual seals one by one.
+    ///
+    /// See [Stash::seal]
+    fn seal_batch<K, V>(
+        &self,
+        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
+    ) -> Result<(), StashError> {
+        for (id, new_upper) in seals {
+            self.seal(*id, new_upper.borrow())?;
+        }
+        Ok(())
+    }
+
+    /// Advances the since frontier to the specified value.
+    ///
+    /// The provided `since` must be greater than or equal to the current since
+    /// frontier but less than or equal to the current upper frontier.
+    ///
+    /// Intuitively, this method performs logical compaction. Existing entries
+    /// whose time is less than `since` are fast-forwarded to `since`.
+    fn compact<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+        since: AntichainRef<Timestamp>,
+    ) -> Result<(), StashError>;
+
+    /// Performs multiple compactions at once, potentially in a more performant way than
+    /// performing the individual compactions one by one.
+    ///
+    /// See [Stash::compact]
+    fn compact_batch<K, V>(
+        &self,
+        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
+    ) -> Result<(), StashError> {
+        for (id, since) in compactions {
+            self.compact(*id, since.borrow())?;
+        }
+        Ok(())
+    }
+
+    /// Consolidates entries less than the since frontier.
+    ///
+    /// Intuitively, this method performs physical compaction. Existing
+    /// key–value pairs whose time is less than the since frontier are
+    /// consolidated together when possible.
+    fn consolidate<K, V>(&self, collection: StashCollection<K, V>) -> Result<(), StashError>;
+
+    /// Performs multiple consolidations at once, potentially in a more performant way than
+    /// performing the individual consolidations one by one.
+    ///
+    /// See [Stash::consolidate]
+    fn consolidate_batch<K, V>(
+        &self,
+        collections: &[StashCollection<K, V>],
+    ) -> Result<(), StashError> {
+        for collection in collections {
+            self.consolidate(*collection)?;
+        }
+        Ok(())
+    }
+
+    /// Reports the current since frontier.
+    fn since<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Antichain<Timestamp>, StashError>;
+
+    /// Reports the current upper frontier.
+    fn upper<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Antichain<Timestamp>, StashError>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
@@ -124,154 +219,26 @@ where
 /// frontier, call [`compact`]. To advance the upper frontier, call [`seal`]. To
 /// physically compact data beneath the since frontier, call [`consolidate`].
 ///
-/// [`compact`]: StashCollection::compact
-/// [`consolidate`]: StashCollection::consolidate
-/// [`seal`]: StashCollection::seal
+/// [`compact`]: Stash::compact
+/// [`consolidate`]: Stash::consolidate
+/// [`seal`]: Stash::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
-pub struct StashCollection<C, K, V>
-where
-    K: Codec + Ord,
-    V: Codec + Ord,
-{
-    conn: C,
-    collection_id: Id,
+pub struct StashCollection<K, V> {
+    id: Id,
     _kv: PhantomData<(K, V)>,
 }
 
-impl<C, K, V> StashCollection<C, K, V>
-where
-    C: StashConn,
-    K: Codec + Ord,
-    V: Codec + Ord,
-{
-    /// Iterates over all entries in the stash.
-    ///
-    /// Entries are iterated in `(key, value, time)` order and are guaranteed
-    /// to be consolidated.
-    ///
-    /// Each entry's time is guaranteed to be greater than or equal to the since
-    /// frontier. The time may also be greater than the upper frontier,
-    /// indicating data that has not yet been made definite.
-    ///
-    /// [`consolidate`]: StashCollection::consolidate
-    /// [`update`]: StashCollection::update
-    /// [`update_many`]: StashCollection::update_many
-    pub fn iter(&self) -> Result<impl Iterator<Item = ((K, V), Timestamp, Diff)>, StashError> {
-        let mut rows = self
-            .conn
-            .iter(self.collection_id)?
-            .into_iter()
-            .map(|((k, v), ts, diff)| {
-                let k = K::decode(&k)?;
-                let v = V::decode(&v)?;
-                Ok(((k, v), ts, diff))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        differential_dataflow::consolidation::consolidate_updates(&mut rows);
-        Ok(rows.into_iter())
-    }
-
-    /// Iterates over entries in the stash for the given key.
-    ///
-    /// Entries are iterated in `(value, timestamp)` order and are guaranteed
-    /// to be consolidated.
-    ///
-    /// Each entry's time is guaranteed to be greater than or equal to the since
-    /// frontier. The time may also be greater than the upper frontier,
-    /// indicating data that has not yet been made definite.
-    ///
-    /// [`consolidate`]: StashCollection::consolidate
-    /// [`update`]: StashCollection::update
-    /// [`update_many`]: StashCollection::update_many
-    pub fn iter_key(
-        &self,
-        key: K,
-    ) -> Result<impl Iterator<Item = (V, Timestamp, Diff)>, StashError> {
-        let mut key_buf = vec![];
-        key.encode(&mut key_buf);
-        let mut rows = self
-            .conn
-            .iter_key(self.collection_id, &key_buf)?
-            .into_iter()
-            .map(|(v, ts, diff)| {
-                let v = V::decode(&v)?;
-                Ok((v, ts, diff))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        differential_dataflow::consolidation::consolidate_updates(&mut rows);
-        Ok(rows.into_iter())
-    }
-
-    /// Adds a single entry to the arrangement.
-    ///
-    /// The entry's time must be greater than or equal to the upper frontier.
-    ///
-    /// If this method returns `Ok`, the entry has been made durable.
-    pub fn update(&mut self, data: (K, V), time: Timestamp, diff: Diff) -> Result<(), StashError> {
-        self.update_many(iter::once((data, time, diff)))
-    }
-
-    /// Atomically adds multiple entries to the arrangement.
-    ///
-    /// Each entry's time must be greater than or equal to the upper frontier.
-    ///
-    /// If this method returns `Ok`, the entries have been made durable.
-    pub fn update_many<I>(&mut self, entries: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = ((K, V), Timestamp, Diff)>,
-    {
-        let entries = entries.into_iter().map(|((key, value), ts, diff)| {
-            let mut key_buf = vec![];
-            let mut value_buf = vec![];
-            key.encode(&mut key_buf);
-            value.encode(&mut value_buf);
-            ((key_buf, value_buf), ts, diff)
-        });
-        self.conn.update_many(self.collection_id, entries)
-    }
-
-    /// Advances the upper frontier to the specified value.
-    ///
-    /// The provided `upper` must be greater than or equal to the current upper
-    /// frontier.
-    ///
-    /// Intuitively, this method declares that all times less than `upper` are
-    /// definite.
-    pub fn seal(&self, new_upper: AntichainRef<Timestamp>) -> Result<(), StashError> {
-        self.conn.seal(self.collection_id, new_upper)
-    }
-
-    /// Advances the since frontier to the specified value.
-    ///
-    /// The provided `since` must be greater than or equal to the current since
-    /// frontier but less than or equal to the current upper frontier.
-    ///
-    /// Intuitively, this method performs logical compaction. Existing entries
-    /// whose time is less than `since` are fast-forwarded to `since`.
-    pub fn compact(&self, new_since: AntichainRef<Timestamp>) -> Result<(), StashError> {
-        self.conn.compact(self.collection_id, new_since)
-    }
-
-    /// Consolidates entries less than the since frontier.
-    ///
-    /// Intuitively, this method performs physical compaction. Existing
-    /// key–value pairs whose time is less than the since frontier are
-    /// consolidated together when possible.
-    pub fn consolidate(&mut self) -> Result<(), StashError> {
-        self.conn.consolidate(self.collection_id)
-    }
-
-    /// Reports the current since frontier.
-    pub fn since(&self) -> Result<Antichain<Timestamp>, StashError> {
-        self.conn.since(self.collection_id)
-    }
-
-    /// Reports the current upper frontier.
-    pub fn upper(&self) -> Result<Antichain<Timestamp>, StashError> {
-        self.conn.upper(self.collection_id)
+impl<K, V> Clone for StashCollection<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            _kv: PhantomData,
+        }
     }
 }
+
+impl<K, V> Copy for StashCollection<K, V> {}
 
 struct AntichainFormatter<'a, T>(&'a [T]);
 
