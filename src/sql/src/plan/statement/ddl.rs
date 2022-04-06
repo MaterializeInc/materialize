@@ -636,6 +636,7 @@ pub fn plan_create_source(
                             name: _,
                             object_name: tx_metadata,
                         }) => {
+                            scx.require_experimental_mode("DEBEZIUM TX_METADATA")?;
                             // `with_option_objects` and `with_options` should correspond.  We want
                             // to keep the `ObjectName` information but we also need to remove the
                             // key from `with_options` so pass our validation below that all keys
