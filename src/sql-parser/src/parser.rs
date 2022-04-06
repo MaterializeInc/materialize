@@ -2015,7 +2015,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceInstance, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -2023,7 +2023,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(CHANNEL)?;
                 let channel = self.parse_literal_string()?;
 
-                Ok(CreateSourceConnector::PubNub {
+                Ok(CreateSourceInstance::PubNub {
                     subscribe_key,
                     channel,
                 })
@@ -2044,7 +2044,7 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                Ok(CreateSourceConnector::Postgres {
+                Ok(CreateSourceInstance::Postgres {
                     conn,
                     publication,
                     slot,
@@ -2058,7 +2058,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(CreateSourceConnector::File { path, compression })
+                Ok(CreateSourceInstance::File { path, compression })
             }
             KAFKA => {
                 self.expect_keyword(BROKER)?;
@@ -2076,17 +2076,17 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(CreateSourceConnector::Kafka { broker, topic, key })
+                Ok(CreateSourceInstance::Kafka { broker, topic, key })
             }
             KINESIS => {
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::Kinesis { arn })
+                Ok(CreateSourceInstance::Kinesis { arn })
             }
             AVRO => {
                 self.expect_keyword(OCF)?;
                 let path = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::AvroOcf { path })
+                Ok(CreateSourceInstance::AvroOcf { path })
             }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS
@@ -2127,7 +2127,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(CreateSourceConnector::S3 {
+                Ok(CreateSourceInstance::S3 {
                     key_sources,
                     pattern,
                     compression,

@@ -41,9 +41,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
     DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
-    UnplannedSourceEnvelope, UpsertStyle,
+    KafkaSourceConnector, KafkaSourceConnectorLiteral, KafkaSourceInstance, KeyEnvelope,
+    KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
+    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -59,7 +59,7 @@ use crate::ast::{
     AlterSecretStatement, AstInfo, AvroSchema, ClusterOption, ColumnOption, Compression,
     CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
-    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateSinkStatement, CreateSourceFormat, CreateSourceInstance, CreateSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
     CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
@@ -339,7 +339,7 @@ pub fn plan_create_source(
     }
 
     let (external_connector, encoding) = match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
+        CreateSourceInstance::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -376,10 +376,14 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
-            let mut connector = KafkaSourceConnector {
-                addrs: broker.parse()?,
+            let mut connector = KafkaSourceInstance {
+                // addrs: broker.parse()?,
                 topic: topic.clone(),
-                config_options,
+                // config_options: config_options.clone(),
+                connector: KafkaSourceConnector::Literal(KafkaSourceConnectorLiteral {
+                    addrs: broker.parse()?,
+                    config_options,
+                }),
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
@@ -451,7 +455,7 @@ pub fn plan_create_source(
 
             (connector, encoding)
         }
-        CreateSourceConnector::Kinesis { arn, .. } => {
+        CreateSourceInstance::Kinesis { arn, .. } => {
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
@@ -473,7 +477,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding)
         }
-        CreateSourceConnector::File { path, compression } => {
+        CreateSourceInstance::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -494,7 +498,7 @@ pub fn plan_create_source(
             }
             (connector, encoding)
         }
-        CreateSourceConnector::S3 {
+        CreateSourceInstance::S3 {
             key_sources,
             pattern,
             compression,
@@ -539,7 +543,7 @@ pub fn plan_create_source(
             }
             (connector, encoding)
         }
-        CreateSourceConnector::Postgres {
+        CreateSourceInstance::Postgres {
             conn,
             publication,
             slot,
@@ -562,7 +566,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
             (connector, encoding)
         }
-        CreateSourceConnector::PubNub {
+        CreateSourceInstance::PubNub {
             subscribe_key,
             channel,
         } => {
@@ -576,7 +580,7 @@ pub fn plan_create_source(
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
-        CreateSourceConnector::AvroOcf { path, .. } => {
+        CreateSourceInstance::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -740,7 +744,7 @@ pub fn plan_create_source(
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             //TODO check that key envelope is not set
-            if let CreateSourceConnector::AvroOcf { .. } = connector {
+            if let CreateSourceInstance::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
                 bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")

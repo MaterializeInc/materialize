@@ -22,7 +22,7 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceFormat, CreateSourceInstance, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
     TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
@@ -381,7 +381,7 @@ impl_display!(CreateSchemaStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: CreateSourceConnector,
+    pub connector: CreateSourceInstance,
     pub with_options: Vec<SqlOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,

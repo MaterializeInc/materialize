@@ -34,7 +34,7 @@ use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
 use mz_repr::strconv;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnectorAvro,
+    AvroSchema, CreateSourceFormat, CreateSourceInstance, CreateSourceStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, SqlOption, Value,
     WithOption, WithOptionValue,
@@ -70,7 +70,7 @@ pub async fn purify_create_source(
 
     let mut file = None;
     match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
+        CreateSourceInstance::Kafka { broker, topic, .. } => {
             if !broker.contains(':') {
                 *broker += ":9092";
             }
@@ -113,7 +113,7 @@ pub async fn purify_create_source(
                 _ => {}
             }
         }
-        CreateSourceConnector::AvroOcf { path, .. } => {
+        CreateSourceInstance::AvroOcf { path, .. } => {
             let path = path.clone();
             task::block_in_place(|| {
                 // mz_avro::Reader has no async equivalent, so we're stuck
@@ -131,18 +131,18 @@ pub async fn purify_create_source(
             })?;
         }
         // Report an error if a file cannot be opened, or if it is a directory.
-        CreateSourceConnector::File { path, .. } => {
+        CreateSourceInstance::File { path, .. } => {
             let f = File::open(&path).await?;
             if f.metadata().await?.is_dir() {
                 bail!("Expected a regular file, but {} is a directory.", path);
             }
             file = Some(f);
         }
-        CreateSourceConnector::S3 { .. } => {
+        CreateSourceInstance::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
         }
-        CreateSourceConnector::Kinesis { arn } => {
+        CreateSourceInstance::Kinesis { arn } => {
             let region = arn
                 .parse::<ARN>()
                 .context("Unable to parse provided ARN")?
@@ -152,7 +152,7 @@ pub async fn purify_create_source(
             let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
         }
-        CreateSourceConnector::Postgres {
+        CreateSourceInstance::Postgres {
             conn,
             publication,
             slot,
@@ -174,7 +174,7 @@ pub async fn purify_create_source(
             };
             *details = Some(hex::encode(details_proto.encode_to_vec()));
         }
-        CreateSourceConnector::PubNub { .. } => (),
+        CreateSourceInstance::PubNub { .. } => (),
     }
 
     purify_source_format(
@@ -192,14 +192,14 @@ pub async fn purify_create_source(
 
 async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceInstance,
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(connector, CreateSourceConnector::Kafka { .. })
+        && !matches!(connector, CreateSourceInstance::Kafka { .. })
     {
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
@@ -212,7 +212,7 @@ async fn purify_source_format(
     // deprecate this.
     match (&connector, &envelope, &*format) {
         (
-            CreateSourceConnector::Kafka { .. },
+            CreateSourceInstance::Kafka { .. },
             Envelope::Upsert,
             CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
         ) => {
@@ -269,7 +269,7 @@ async fn purify_source_format(
 
 async fn purify_source_format_single(
     format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceInstance,
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
@@ -336,12 +336,12 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceInstance,
     csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceInstance::Kafka { topic, .. } = connector {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -387,12 +387,12 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceInstance,
     csr_connector: &mut CsrConnectorAvro<Raw>,
     envelope: &Envelope,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceInstance::Kafka { topic, .. } = connector {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -434,14 +434,14 @@ async fn purify_csr_connector_avro(
 
 pub async fn purify_csv(
     file: Option<File>,
-    connector: &CreateSourceConnector,
+    connector: &CreateSourceInstance,
     delimiter: char,
     columns: &mut CsvColumns,
 ) -> anyhow::Result<()> {
     if matches!(columns, CsvColumns::Header { .. })
         && !matches!(
             connector,
-            CreateSourceConnector::File { .. } | CreateSourceConnector::S3 { .. }
+            CreateSourceInstance::File { .. } | CreateSourceInstance::S3 { .. }
         )
     {
         bail_unsupported!("CSV WITH HEADER with non-file or S3 sources");
@@ -528,10 +528,10 @@ pub async fn purify_csv(
             }
         }
         (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
-            CreateSourceConnector::File { .. } => {
+            CreateSourceInstance::File { .. } => {
                 bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
             }
-            CreateSourceConnector::S3 { .. } => {
+            CreateSourceInstance::S3 { .. } => {
                 bail!("CSV WITH HEADER for S3 sources requiers specifying the header columns")
             }
             _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),

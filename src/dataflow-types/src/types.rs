@@ -1146,12 +1146,28 @@ pub mod sources {
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct KafkaSourceConnector {
+    pub enum ConnectorLiteral {
+        Kafka(KafkaSourceConnectorLiteral),
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct KafkaSourceConnectorLiteral {
         pub addrs: KafkaAddrs,
-        pub topic: String,
         // Represents options specified by user when creating the source, e.g.
         // security settings.
         pub config_options: BTreeMap<String, String>,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub enum KafkaSourceConnector {
+        Literal(KafkaSourceConnectorLiteral),
+        Reference(String),
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct KafkaSourceInstance {
+        pub connector: KafkaSourceConnector,
+        pub topic: String,
         // Map from partition -> starting offset
         pub start_offsets: HashMap<i32, i64>,
         pub group_id_prefix: Option<String>,
@@ -1281,7 +1297,7 @@ pub mod sources {
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum ExternalSourceConnector {
-        Kafka(KafkaSourceConnector),
+        Kafka(KafkaSourceInstance),
         Kinesis(KinesisSourceConnector),
         File(FileSourceConnector),
         AvroOcf(FileSourceConnector),
@@ -1304,7 +1320,7 @@ pub mod sources {
             let mut columns = Vec::new();
             let default_col = |name| (name, ScalarType::Int64.nullable(false));
             match self {
-                Self::Kafka(KafkaSourceConnector {
+                Self::Kafka(KafkaSourceInstance {
                     include_partition: part,
                     include_timestamp: time,
                     include_topic: topic,
@@ -1402,7 +1418,7 @@ pub mod sources {
 
         pub fn metadata_column_types(&self, include_defaults: bool) -> Vec<IncludedColumnSource> {
             match self {
-                ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                ExternalSourceConnector::Kafka(KafkaSourceInstance {
                     include_partition: part,
                     include_timestamp: time,
                     include_topic: topic,
@@ -1466,7 +1482,7 @@ pub mod sources {
         ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
         pub fn upstream_name(&self) -> Option<&str> {
             match self {
-                ExternalSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) => {
+                ExternalSourceConnector::Kafka(KafkaSourceInstance { topic, .. }) => {
                     Some(topic.as_str())
                 }
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector {

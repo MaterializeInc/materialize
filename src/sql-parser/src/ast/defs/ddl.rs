@@ -458,7 +458,16 @@ impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
-pub enum CreateSourceConnector {
+pub enum CreateConnector<T: AstInfo> {
+    KafkaBroker {
+        broker: String,
+        with_options: Vec<SqlOption<T>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(SourceInstanceType)]
+pub enum CreateSourceInstance {
     File {
         path: String,
         compression: Compression,
@@ -500,17 +509,17 @@ pub enum CreateSourceConnector {
     },
 }
 
-impl AstDisplay for CreateSourceConnector {
+impl AstDisplay for CreateSourceInstance {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnector::File { path, compression } => {
+            CreateSourceInstance::File { path, compression } => {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka { broker, topic, key } => {
+            CreateSourceInstance::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
@@ -523,17 +532,17 @@ impl AstDisplay for CreateSourceConnector {
                     f.write_str(")");
                 }
             }
-            CreateSourceConnector::Kinesis { arn } => {
+            CreateSourceInstance::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
-            CreateSourceConnector::AvroOcf { path } => {
+            CreateSourceInstance::AvroOcf { path } => {
                 f.write_str("AVRO OCF '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            CreateSourceConnector::S3 {
+            CreateSourceInstance::S3 {
                 key_sources,
                 pattern,
                 compression,
@@ -549,7 +558,7 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Postgres {
+            CreateSourceInstance::Postgres {
                 conn,
                 publication,
                 slot,
@@ -569,7 +578,7 @@ impl AstDisplay for CreateSourceConnector {
                 }
                 f.write_str("'");
             }
-            CreateSourceConnector::PubNub {
+            CreateSourceInstance::PubNub {
                 subscribe_key,
                 channel,
             } => {
@@ -582,13 +591,13 @@ impl AstDisplay for CreateSourceConnector {
         }
     }
 }
-impl_display!(CreateSourceConnector);
+impl_display!(CreateSourceInstance);
 
-impl<T: AstInfo> From<&CreateSinkConnector<T>> for ConnectorType {
-    fn from(connector: &CreateSinkConnector<T>) -> ConnectorType {
+impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceInstanceType {
+    fn from(connector: &CreateSinkConnector<T>) -> SourceInstanceType {
         match connector {
-            CreateSinkConnector::Kafka { .. } => ConnectorType::Kafka,
-            CreateSinkConnector::AvroOcf { .. } => ConnectorType::AvroOcf,
+            CreateSinkConnector::Kafka { .. } => SourceInstanceType::Kafka,
+            CreateSinkConnector::AvroOcf { .. } => SourceInstanceType::AvroOcf,
         }
     }
 }
