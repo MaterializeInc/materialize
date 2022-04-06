@@ -10,13 +10,21 @@
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 
-use mz_stash::{Postgres, Sqlite, Stash, StashCollection, Timestamp};
+use mz_stash::{Append, Postgres, Sqlite, Stash, StashCollection, Timestamp};
 
 #[test]
 fn test_stash_sqlite() -> Result<(), anyhow::Error> {
-    let file = NamedTempFile::new()?;
-    let conn = Sqlite::open(file.path())?;
-    test_stash(conn)
+    {
+        let file = NamedTempFile::new()?;
+        let mut conn = Sqlite::open(file.path())?;
+        test_stash(&mut conn)?;
+    }
+    {
+        let file = NamedTempFile::new()?;
+        let mut conn = Sqlite::open(file.path())?;
+        test_append(&mut conn)?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -46,8 +54,14 @@ fn test_stash_postgres() -> Result<(), anyhow::Error> {
     {
         let mut client = Client::connect(&connstr, NoTls)?;
         clear(&mut client);
-        let conn = Postgres::open(client)?;
-        test_stash(conn)?;
+        let mut conn = Postgres::open(client)?;
+        test_stash(&mut conn)?;
+    }
+    {
+        let mut client = Client::connect(&connstr, NoTls)?;
+        clear(&mut client);
+        let mut conn = Postgres::open(client)?;
+        test_append(&mut conn)?;
     }
     // Test the fence.
     {
@@ -65,7 +79,49 @@ fn test_stash_postgres() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn test_stash<S: Stash>(mut stash: S) -> Result<(), anyhow::Error> {
+fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
+    // Test append across collections.
+    let orders = stash.collection::<String, String>("orders")?;
+    let other = stash.collection::<String, String>("other")?;
+    // Seal so we can invalidate the upper below.
+    stash.seal(other, Antichain::from_elem(1).borrow())?;
+    let mut orders_batch = orders.make_batch(stash)?;
+    orders.append_to_batch(&mut orders_batch, &"k1".to_string(), &"v1".to_string(), 1);
+    let mut other_batch = other.make_batch(stash)?;
+    other.append_to_batch(&mut other_batch, &"k2".to_string(), &"v2".to_string(), 1);
+
+    // Invalidate one upper and ensure append doesn't commit partial batches.
+    let other_upper = other_batch.upper;
+    other_batch.upper = Antichain::from_elem(Timestamp::MIN);
+    assert_eq!(
+        stash
+            .append(vec![orders_batch.clone(), other_batch.clone()])
+            .unwrap_err()
+            .to_string(),
+        "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
+    );
+    // Test batches in the other direction too.
+    assert_eq!(
+        stash
+            .append(vec![other_batch.clone(),orders_batch.clone() ])
+            .unwrap_err()
+            .to_string(),
+        "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
+    );
+
+    // Fix the upper, append should work now.
+    other_batch.upper = other_upper;
+    stash.append(vec![other_batch, orders_batch])?;
+    assert_eq!(
+        stash.iter(orders)?,
+        &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
+    );
+    assert_eq!(stash.iter(other)?, &[(("k2".into(), "v2".into()), 1, 1),]);
+
+    Ok(())
+}
+
+fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
     // Create an arrangement, write some data into it, then read it back.
     let orders = stash.collection::<String, String>("orders")?;
     stash.update(orders, ("widgets".into(), "1".into()), 1, 1)?;

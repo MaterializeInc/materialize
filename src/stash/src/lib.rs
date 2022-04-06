@@ -141,8 +141,8 @@ pub trait Stash {
         &mut self,
         seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
-        for (id, new_upper) in seals {
-            self.seal(*id, new_upper.borrow())?;
+        for (id, upper) in seals {
+            self.seal(*id, upper.borrow())?;
         }
         Ok(())
     }
@@ -323,6 +323,65 @@ impl From<&str> for StashError {
     fn from(e: &str) -> StashError {
         StashError {
             inner: InternalStashError::Other(e.into()),
+        }
+    }
+}
+
+pub trait Append: Stash {
+    fn append<I: IntoIterator<Item = AppendBatch>>(&mut self, batches: I)
+        -> Result<(), StashError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct AppendBatch {
+    pub collection_id: Id,
+    pub lower: Antichain<Timestamp>,
+    pub upper: Antichain<Timestamp>,
+    pub timestamp: Timestamp,
+    pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+}
+
+impl<K, V> StashCollection<K, V>
+where
+    K: Codec + Ord,
+    V: Codec + Ord,
+{
+    /// Create a new AppendBatch for this collection from its current upper.
+    pub fn make_batch<S: Stash>(&self, stash: &mut S) -> Result<AppendBatch, StashError> {
+        let lower = stash.upper(*self)?;
+        let timestamp: Timestamp = match lower.elements() {
+            [ts] => *ts,
+            _ => return Err("cannot determine batch timestamp".into()),
+        };
+        let upper = match timestamp.checked_add(1) {
+            Some(ts) => Antichain::from_elem(ts),
+            None => return Err("cannot determine new upper".into()),
+        };
+        Ok(AppendBatch {
+            collection_id: self.id,
+            lower,
+            upper,
+            timestamp,
+            entries: Vec::new(),
+        })
+    }
+
+    pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
+        let mut key_buf = vec![];
+        let mut value_buf = vec![];
+        key.encode(&mut key_buf);
+        value.encode(&mut value_buf);
+        batch
+            .entries
+            .push(((key_buf, value_buf), batch.timestamp, diff));
+    }
+}
+
+impl<K, V> From<Id> for StashCollection<K, V> {
+    fn from(id: Id) -> Self {
+        Self {
+            id,
+            _kv: PhantomData,
         }
     }
 }
