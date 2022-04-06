@@ -121,3 +121,35 @@ impl mz_persist_types::Codec for PartitionId {
             .map_err(|err: TryFromProtoError| err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn id(value in any::<Id>()) {
+            let proto = ProtoId::from(&value);
+            assert_eq!(Id::try_from(proto).unwrap(), value);
+        }
+
+        #[test]
+        fn global_id(value in any::<GlobalId>()) {
+            let proto = ProtoGlobalId::from(&value);
+            assert_eq!(GlobalId::try_from(proto).unwrap(), value);
+        }
+
+        #[test]
+        fn local_id(value in any::<LocalId>()) {
+            let proto = ProtoLocalId::from(&value);
+            assert_eq!(LocalId::try_from(proto).unwrap(), value);
+        }
+
+        #[test]
+        fn partition_id(value in any::<PartitionId>()) {
+            let proto = ProtoPartitionId::from(&value);
+            assert_eq!(PartitionId::try_from(proto).unwrap(), value);
+        }
+    }
+}

@@ -13,9 +13,13 @@ use std::str::FromStr;
 use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use proptest_derive::Arbitrary;
+
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
     Local(LocalId),
@@ -34,6 +38,7 @@ impl fmt::Display for Id {
 
 /// The identifier for a local component of a dataflow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct LocalId(pub(crate) u64);
 
 impl LocalId {
@@ -52,6 +57,7 @@ impl fmt::Display for LocalId {
 
 /// The identifier for a global dataflow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum GlobalId {
     /// System namespace.
     System(u64),
@@ -128,6 +134,7 @@ impl fmt::Display for SourceInstanceId {
 ///     Kafka -> partition
 ///     None -> sources that have no notion of partitioning (e.g file sources)
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum PartitionId {
     Kafka(i32),
     None,
