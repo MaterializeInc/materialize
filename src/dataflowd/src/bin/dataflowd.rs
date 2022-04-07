@@ -144,7 +144,7 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
 
         assert!(
             matches!(args.runtime, RuntimeType::Compute),
-            "Storage runtime with TCP boundary doesn't yet horizontally scaled Timely"
+            "Storage runtime with TCP boundary doesn't yet support horizontally scaled Timely"
         );
         assert_eq!(processes, addresses.len());
         Ok(timely::CommunicationConfig::Cluster {
