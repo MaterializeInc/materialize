@@ -193,7 +193,7 @@ The concept of a cluster
 {{< /experimental >}}
 
 A cluster is a set of compute resources that have been allocated to maintain
-indexes and sinks. The `materialized` process provides one virtual cluster named
+indexes and sinks. The `materialized` process provides one local cluster named
 `default` that represents the compute resources of the local machine. In
 a forthcoming version of [Materialize Cloud](/cloud), you will be able to
 dynamically create and drop clusters to allocate and deallocate compute
