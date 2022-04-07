@@ -65,6 +65,7 @@ impl SecretsController for FilesystemSecretsController {
                     // create will override an existing file
                     let mut file = File::create(self.secrets_storage_path.join(format!("{}", id)))?;
                     file.write_all(contents)?;
+                    file.sync_all()?;
                 }
                 SecretOp::Delete { id } => {
                     fs::remove_file(self.secrets_storage_path.join(format!("{}", id)))?;

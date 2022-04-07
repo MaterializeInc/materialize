@@ -333,6 +333,8 @@ pub struct Coordinator {
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
 
+    /// Handle to secret manager that can create and delete secrets from
+    /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
 }
 
@@ -2154,8 +2156,15 @@ impl Coordinator {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => {
-                // best-effort attempt to drop the newly created secret, ignore any failures
-                let _ = self.secrets_controller.apply(vec![SecretOp::Delete { id }]);
+                match self.secrets_controller.apply(vec![SecretOp::Delete { id }]) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(
+                            "Dropping newly created secrets has encountered an error: {}",
+                            e
+                        );
+                    }
+                }
                 Err(err)
             }
         }
@@ -4640,7 +4649,12 @@ impl Coordinator {
             .map(|id| SecretOp::Delete { id })
             .collect_vec();
 
-        self.secrets_controller.apply(ops).unwrap();
+        match self.secrets_controller.apply(ops) {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Dropping secrets has encountered an error: {}", e);
+            }
+        }
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
