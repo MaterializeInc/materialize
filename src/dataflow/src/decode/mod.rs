@@ -38,11 +38,12 @@ use tracing::error;
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
-use crate::metrics::Metrics;
 use crate::source::{DecodeResult, SourceOutput};
+use metrics::DecodeMetrics as Metrics;
 
 mod avro;
 mod csv;
+pub mod metrics;
 mod protobuf;
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
