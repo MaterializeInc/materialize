@@ -22,12 +22,12 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
-use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::trace;
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 use crate::r#impl::machine::Machine;
@@ -78,11 +78,37 @@ pub(crate) mod r#impl {
 // - Test coverage of every `PartialOrder::less_*` call
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
-/// by persist. This location can contain any number of persist shards.
+/// by persist.
+///
+/// This structure can be durably written down or transmitted for use by other
+/// processes. This location can contain any number of persist shards.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Location {
-    bucket: String,
-    prefix: String,
+    blob_uri: String,
+    consensus_uri: String,
+}
+
+impl Location {
+    /// Opens the associated implementations of [BlobMulti] and [Consensus].
+    pub async fn open(
+        &self,
+        timeout: Duration,
+    ) -> Result<(Arc<dyn BlobMulti>, Arc<dyn Consensus>), ExternalError> {
+        let deadline = Instant::now() + timeout;
+        debug!(
+            "Location::open timeout={:?} blob={} consensus={}",
+            timeout, self.blob_uri, self.consensus_uri,
+        );
+        let blob = BlobMultiConfig::try_from(&self.blob_uri)
+            .await?
+            .open(deadline)
+            .await?;
+        let consensus = ConsensusConfig::try_from(&self.consensus_uri)
+            .await?
+            .open(deadline)
+            .await?;
+        Ok((blob, consensus))
+    }
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
@@ -120,21 +146,18 @@ impl Client {
     /// methods (mostly [WriteHandle::append]).
     pub async fn new(
         timeout: Duration,
-        location: Location,
-        role_arn: Option<String>,
+        blob: Arc<dyn BlobMulti + Send + Sync>,
+        consensus: Arc<dyn Consensus + Send + Sync>,
     ) -> Result<Self, ExternalError> {
         trace!(
-            "Client::new timeout={:?} location={:?} role_arn={:?}",
+            "Client::new timeout={:?} blob={:?} consensus={:?}",
             timeout,
-            location,
-            role_arn
+            blob,
+            consensus
         );
-        let blob = MemBlobMulti::open(MemBlobMultiConfig::default());
-        let consensus = MemConsensus::default();
-        Ok(Client {
-            blob: Arc::new(blob),
-            consensus: Arc::new(consensus),
-        })
+        // TODO: Verify somehow that blob matches consensus to prevent
+        // accidental misuse.
+        Ok(Client { blob, consensus })
     }
 
     /// Provides capabilities for the durable TVC identified by `id` at its
@@ -188,6 +211,7 @@ const NO_TIMEOUT: Duration = Duration::from_secs(1_000_000);
 
 #[cfg(test)]
 mod tests {
+    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use timely::progress::Antichain;
 
     use crate::read::ListenEvent;
@@ -195,11 +219,9 @@ mod tests {
     use super::*;
 
     async fn new_test_client() -> Result<Client, ExternalError> {
-        let location = Location {
-            bucket: "unused".into(),
-            prefix: "unused".into(),
-        };
-        Client::new(NO_TIMEOUT, location, None).await
+        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
+        let consensus = Arc::new(MemConsensus::default());
+        Client::new(NO_TIMEOUT, blob, consensus).await
     }
 
     fn all_ok<'a, K, V, T, D, I>(

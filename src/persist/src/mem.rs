@@ -769,7 +769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mem_consensus() -> Result<(), Error> {
+    async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| Ok(MemConsensus::default())).await
     }
 

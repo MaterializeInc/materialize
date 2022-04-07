@@ -20,6 +20,7 @@
 
 use std::fmt;
 
+pub mod cfg;
 pub mod client;
 pub mod error;
 pub mod file;
