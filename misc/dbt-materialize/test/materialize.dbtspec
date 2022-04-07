@@ -77,7 +77,7 @@ sequences:
       - type: dbt
         cmd: run
       - type: relations_equal
-        relations: [test_materialized_view, test_source_index]
+        relations: [test_materialized_view, test_view_index, test_source_index]
       - type: relations_equal
         relations: [actual_indexes, expected_indexes]
       # TODO(benesch): figure out how to test that the sink emits the correct
