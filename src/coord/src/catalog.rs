@@ -24,7 +24,7 @@ use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
-use mz_dataflow_types::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
+use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
@@ -1069,16 +1069,7 @@ impl Catalog {
     /// Returns the catalog, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and a map of all
     /// introspections sources with allocated global IDs for their indexes.
-    pub async fn open(
-        mut config: Config<'_>,
-    ) -> Result<
-        (
-            Catalog,
-            Vec<BuiltinTableUpdate>,
-            BTreeMap<GlobalId, LogVariant>,
-        ),
-        Error,
-    > {
+    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1186,7 +1177,6 @@ impl Catalog {
 
         let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
 
-        let mut builtin_logs = BTreeMap::new();
         let builtin_ids = catalog.storage().load_system_gids()?;
         let new_system_id_amount = BUILTINS
             .iter()
@@ -1262,7 +1252,6 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
-                    builtin_logs.insert(builtin.id(), log.variant.clone());
                 }
 
                 BuiltinInner::Table(table) => {
@@ -1452,7 +1441,7 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
         }
 
-        Ok((catalog, builtin_table_updates, builtin_logs))
+        Ok((catalog, builtin_table_updates))
     }
 
     /// Retuns the catalog's transient revision, which starts at 1 and is
@@ -1520,7 +1509,7 @@ impl Catalog {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
         let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
-        let (catalog, _, _) = Self::open(Config {
+        let (catalog, _) = Self::open(Config {
             storage,
             local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
                 granularity: Duration::from_secs(1),
@@ -1682,6 +1671,11 @@ impl Catalog {
     /// Resolves a `BuiltinTable`.
     pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
         self.state.resolve_builtin_table(builtin)
+    }
+
+    /// Resolves a `BuiltinLog`.
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
+        self.state.resolve_builtin_log(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
