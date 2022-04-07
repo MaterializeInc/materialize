@@ -395,7 +395,7 @@ FORMAT BYTES
 ----
 CREATE SOURCE foo FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz", key: None }, with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka(Literal { broker: "bar", topic: "baz", key: None }), with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE
