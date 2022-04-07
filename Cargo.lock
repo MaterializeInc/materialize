@@ -3670,6 +3670,8 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

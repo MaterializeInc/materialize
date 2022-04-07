@@ -14,7 +14,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, PodSpec, PodTemplateSpec, ResourceRequirements,
+    Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
     Service as K8sService, ServicePort, ServiceSpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -23,6 +23,8 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
+use kube::ResourceExt;
+use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
 
@@ -85,6 +87,7 @@ impl Orchestrator for KubernetesOrchestrator {
         Box::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
             stateful_set_api: Api::default_namespaced(self.client.clone()),
+            pod_api: Api::default_namespaced(self.client.clone()),
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             service_labels: self.service_labels.clone(),
@@ -96,6 +99,7 @@ impl Orchestrator for KubernetesOrchestrator {
 struct NamespacedKubernetesOrchestrator {
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
+    pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
     service_labels: HashMap<String, String>,
@@ -186,6 +190,54 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }),
             status: None,
         };
+
+        let mut pod_template_spec = PodTemplateSpec {
+            metadata: Some(ObjectMeta {
+                labels: Some(labels.clone()),
+                annotations: Some(BTreeMap::new()), // Do not delete, we insert into it below.
+                ..Default::default()
+            }),
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "default".into(),
+                    image: Some(image),
+                    args: Some(args),
+                    ports: Some(
+                        ports
+                            .iter()
+                            .map(|port| ContainerPort {
+                                container_port: port.port,
+                                name: Some(port.name.clone()),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
+                    resources: Some(ResourceRequirements {
+                        limits: Some(limits),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(pod_template_json);
+        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash_annotation = "materialized.materialize.cloud/pod-template-hash";
+        pod_template_spec
+            .metadata
+            .as_mut()
+            .unwrap()
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(
+                pod_template_hash_annotation.to_owned(),
+                pod_template_hash.clone(),
+            );
+
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
@@ -198,36 +250,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 },
                 service_name: name.clone(),
                 replicas: Some(processes.try_into()?),
-                template: PodTemplateSpec {
-                    metadata: Some(ObjectMeta {
-                        labels: Some(labels.clone()),
-                        ..Default::default()
-                    }),
-                    spec: Some(PodSpec {
-                        containers: vec![Container {
-                            name: "default".into(),
-                            image: Some(image),
-                            args: Some(args),
-                            ports: Some(
-                                ports
-                                    .iter()
-                                    .map(|port| ContainerPort {
-                                        container_port: port.port,
-                                        name: Some(port.name.clone()),
-                                        ..Default::default()
-                                    })
-                                    .collect(),
-                            ),
-                            resources: Some(ResourceRequirements {
-                                limits: Some(limits),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
+                template: pod_template_spec,
                 ..Default::default()
             }),
             status: None,
@@ -246,6 +269,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 &Patch::Apply(stateful_set),
             )
             .await?;
+        for pod_id in 0..processes {
+            let pod_name = format!("{}-{}", &name, pod_id);
+            let pod = self.pod_api.get(&pod_name).await?;
+            if pod.annotations().get(pod_template_hash_annotation) != Some(&pod_template_hash) {
+                match self
+                    .pod_api
+                    .delete(&pod_name, &DeleteParams::default())
+                    .await
+                {
+                    Ok(_) => {}
+                    // object already doesn't exist
+                    Err(kube::Error::Api(e)) if e.code == 404 => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
         let hosts = (0..processes)
             .map(|i| {
                 format!(
