@@ -74,6 +74,7 @@ pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::Config;
+pub use crate::catalog::error::AmbiguousRename;
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
 
@@ -2248,7 +2249,7 @@ impl Catalog {
                             true,
                         )
                         .map_err(|e| {
-                            Error::new(ErrorKind::AmbiguousRename {
+                            Error::new(ErrorKind::from(AmbiguousRename {
                                 depender: self
                                     .resolve_full_name(&entry.name, entry.conn_id())
                                     .to_string(),
@@ -2256,7 +2257,7 @@ impl Catalog {
                                     .resolve_full_name(&entry.name, entry.conn_id())
                                     .to_string(),
                                 message: e,
-                            })
+                            }))
                         })?;
                     let serialized_item = self.serialize_item(&item);
 
@@ -2270,7 +2271,7 @@ impl Catalog {
                                 false,
                             )
                             .map_err(|e| {
-                                Error::new(ErrorKind::AmbiguousRename {
+                                Error::new(ErrorKind::from(AmbiguousRename {
                                     depender: self
                                         .resolve_full_name(
                                             &dependent_item.name,
@@ -2281,7 +2282,7 @@ impl Catalog {
                                         .resolve_full_name(&entry.name, entry.conn_id())
                                         .to_string(),
                                     message: e,
-                                })
+                                }))
                             })?;
 
                         if !item.is_temporary() {

@@ -9,8 +9,6 @@
 
 //! Helpers for working with Kafka's admin API.
 
-use std::error::Error;
-use std::fmt;
 use std::iter;
 use std::time::Duration;
 
@@ -112,58 +110,24 @@ where
 }
 
 /// An error while creating a Kafka topic.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CreateTopicError {
     /// An error from the underlying Kafka library.
-    Kafka(KafkaError),
+    #[error(transparent)]
+    Kafka(#[from] KafkaError),
     /// Topic creation returned the wrong number of results.
+    #[error("kafka topic creation returned {0} results, but exactly one result was expected")]
     TopicCountMismatch(usize),
     /// The topic metadata could not be fetched after the topic was created.
+    #[error("unable to fetch topic metadata after creation")]
     MissingMetadata,
     /// The topic metadata reported a number of partitions that did not match
     /// the number of partitions in the topic creation request.
+    #[error("topic reports {actual} partitions, but expected {expected} partitions")]
     PartitionCountMismatch {
         /// The requested number of partitions.
         expected: i32,
         /// The reported number of partitions.
         actual: i32,
     },
-}
-
-impl fmt::Display for CreateTopicError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CreateTopicError::Kafka(e) => write!(f, "{}", e),
-            CreateTopicError::TopicCountMismatch(n) => write!(
-                f,
-                "kafka topic creation returned {} results, but exactly one result was expected",
-                n
-            ),
-            CreateTopicError::MissingMetadata => {
-                f.write_str("unable to fetch topic metadata after creation")
-            }
-            CreateTopicError::PartitionCountMismatch { expected, actual } => write!(
-                f,
-                "topic reports {} partitions, but expected {} partitions",
-                actual, expected
-            ),
-        }
-    }
-}
-
-impl Error for CreateTopicError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            CreateTopicError::Kafka(e) => Some(e),
-            CreateTopicError::TopicCountMismatch(_)
-            | CreateTopicError::MissingMetadata
-            | CreateTopicError::PartitionCountMismatch { .. } => None,
-        }
-    }
-}
-
-impl From<KafkaError> for CreateTopicError {
-    fn from(e: KafkaError) -> CreateTopicError {
-        CreateTopicError::Kafka(e)
-    }
 }
