@@ -128,3 +128,10 @@ def test_cluster(c: Composition, *glob: str) -> None:
         """
     )
     c.run("testdrive", "smoke/insert-select.td")
+
+    # Kill one of the nodes in the first replica of the compute cluster and
+    # verify that tests still pass.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+    c.run("testdrive-svc", "smoke/insert-select.td")

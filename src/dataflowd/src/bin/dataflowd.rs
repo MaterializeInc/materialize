@@ -25,7 +25,9 @@ use tracing_subscriber::EnvFilter;
 
 use mz_dataflow::Server;
 use mz_dataflow_types::client::{ComputeClient, GenericClient, StorageClient};
-use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
+use mz_dataflow_types::reconciliation::command::{
+    ComputeCommandReconcile, StorageCommandReconcile,
+};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -240,10 +242,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             serve(serve_config, server, client).await
         }
         RuntimeType::Storage => {
-            assert!(
-                !args.reconcile,
-                "Storage runtime does not support command reconciliation."
-            );
             let workers = config.workers;
             let (storage_server, request_rx, _thread) =
                 mz_dataflow::tcp_boundary::server::serve(args.storage_addr, workers).await?;
@@ -256,7 +254,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 mz_dataflow::serve_boundary_requests(config, request_rx, move |index| {
                     boundary.lock().unwrap()[index % workers].take().unwrap()
                 })?;
-            let client: Box<dyn StorageClient> = Box::new(client);
+            let mut client: Box<dyn StorageClient> = Box::new(client);
+            if args.reconcile {
+                client = Box::new(StorageCommandReconcile::new(client))
+            }
             serve(serve_config, server, client).await
         }
     }

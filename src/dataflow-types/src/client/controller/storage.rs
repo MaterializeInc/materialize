@@ -127,6 +127,13 @@ pub trait StorageController: Debug + Send {
     ) -> Result<(), anyhow::Error>;
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
+
+    /// Truncate the tables named by specific identifiers.
+    ///
+    /// Truncate removes all rows from the tables, which is achieved by retracting the current table
+    /// state.
+    async fn truncate_tables(&mut self, truncate_tables: Vec<GlobalId>)
+        -> Result<(), StorageError>;
 }
 
 /// Controller state maintained for each storage instance.
@@ -370,6 +377,17 @@ where
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn truncate_tables(
+        &mut self,
+        truncate_tables: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
+        self.state
+            .client
+            .send(StorageCommand::Truncate(truncate_tables))
+            .await?;
         Ok(())
     }
 
