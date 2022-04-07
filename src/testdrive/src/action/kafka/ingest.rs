@@ -18,6 +18,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use maplit::hashmap;
 use prost::Message;
 use prost_reflect::{DynamicMessage, FileDescriptor, MessageDescriptor};
+use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
@@ -39,6 +40,7 @@ pub struct IngestAction {
     rows: Vec<String>,
     start_iteration: isize,
     repeat: isize,
+    headers: Option<Vec<(String, Option<String>)>>,
 }
 
 #[derive(Clone)]
@@ -222,7 +224,44 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         Some(f) => bail!("unknown key format: {}", f),
         None => None,
     };
+
     let timestamp = cmd.args.opt_parse("timestamp")?;
+
+    use serde_json::Value;
+    let headers = if let Some(headers_val) = cmd.args.opt_parse::<serde_json::Value>("headers")? {
+        let mut headers = Vec::new();
+        let headers_maps = match headers_val {
+            Value::Array(values) => {
+                let mut headers_map = Vec::new();
+                for value in values {
+                    if let Value::Object(m) = value {
+                        headers_map.push(m)
+                    } else {
+                        bail!("`headers` array values must be maps")
+                    }
+                }
+                headers_map
+            }
+            Value::Object(v) => vec![v],
+            _ => bail!("`headers` must be a map or an array"),
+        };
+
+        for headers_map in headers_maps {
+            for (k, v) in headers_map.iter() {
+                if let Value::String(val) = v {
+                    headers.push((k.clone(), Some(val.clone())));
+                } else if let Value::Null = v {
+                    headers.push((k.clone(), None));
+                } else {
+                    bail!("`headers` must have string or null values")
+                }
+            }
+        }
+        Some(headers)
+    } else {
+        None
+    };
+
     cmd.args.done()?;
 
     if publish
@@ -242,6 +281,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         rows: cmd.input,
         start_iteration,
         repeat,
+        headers,
     })
 }
 
@@ -352,7 +392,9 @@ impl Action for IngestAction {
         let mut futs = FuturesUnordered::new();
 
         for iteration in self.start_iteration..(self.start_iteration + self.repeat) {
-            for row in &self.rows {
+            let iter = &mut self.rows.iter().peekable();
+
+            for row in iter {
                 let row = action::substitute_vars(
                     row,
                     &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
@@ -369,6 +411,7 @@ impl Action for IngestAction {
                     .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?;
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
+                let headers = self.headers.clone();
                 futs.push(async move {
                     let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
 
@@ -383,6 +426,16 @@ impl Action for IngestAction {
                     }
                     if let Some(timestamp) = self.timestamp {
                         record = record.timestamp(timestamp);
+                    }
+                    if let Some(headers) = headers {
+                        let mut rd_meta = OwnedHeaders::new();
+                        for (k, v) in &headers {
+                            rd_meta = rd_meta.insert(Header {
+                                key: k,
+                                value: v.as_deref(),
+                            });
+                        }
+                        record = record.headers(rd_meta);
                     }
                     producer.send(record, timeout).await
                 });

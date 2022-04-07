@@ -894,6 +894,7 @@ impl SourceReader for S3SourceReader {
                     upstream_time_millis: None,
                     key: (),
                     value: record,
+                    headers: None,
                 }))
             }
             Some(Some(Err(e))) => match e {

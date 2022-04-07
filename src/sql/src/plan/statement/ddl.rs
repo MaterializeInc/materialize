@@ -325,6 +325,15 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
+
+    if !matches!(connector, CreateSourceConnector::Kafka { .. })
+        && include_metadata
+            .iter()
+            .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
+    {
+        // TODO(guswynn): should this be `bail_unsupported!`?
+        bail!("INCLUDE HEADERS with non-Kafka sources not supported");
+    }
     if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
@@ -378,6 +387,7 @@ pub fn plan_create_source(
                 include_partition: None,
                 include_topic: None,
                 include_offset: None,
+                include_headers: None,
             };
 
             let unwrap_name = |alias: Option<Ident>, default, pos| {
@@ -388,6 +398,15 @@ pub fn plan_create_source(
                     pos,
                 })
             };
+
+            if !matches!(envelope, Envelope::Upsert | Envelope::None)
+                && include_metadata
+                    .iter()
+                    .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
+            {
+                // TODO(guswynn): should this be `bail_unsupported!`?
+                bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
+            }
 
             if !include_metadata.is_empty()
                 && matches!(envelope, Envelope::Debezium(DbzMode::Plain))
@@ -420,6 +439,9 @@ pub fn plan_create_source(
                     }
                     SourceIncludeMetadataType::Offset => {
                         connector.include_offset = unwrap_name(item.alias, "offset", pos);
+                    }
+                    SourceIncludeMetadataType::Headers => {
+                        connector.include_headers = unwrap_name(item.alias, "headers", pos);
                     }
                     SourceIncludeMetadataType::Key => {} // handled below
                 }

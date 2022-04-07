@@ -144,6 +144,9 @@ where
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
     pub partition: PartitionId,
+    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
+    /// passes `Some([])`
+    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
 }
 
 /// The output of the decoding operator
@@ -188,6 +191,7 @@ where
         position: i64,
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
+        headers: Option<Vec<(String, Option<Vec<u8>>)>>,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
@@ -195,6 +199,7 @@ where
             position,
             upstream_time_millis,
             partition,
+            headers,
         }
     }
 }
@@ -385,6 +390,9 @@ pub struct SourceMessage<Key, Value> {
     pub key: Key,
     /// The message value
     pub value: Value,
+    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
+    /// passes `Some([])`
+    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
 }
 
 impl fmt::Debug for SourceMessage<(), MessagePayload> {
@@ -1556,6 +1564,7 @@ fn handle_message<S: SourceReader>(
         offset.offset,
         message.upstream_time_millis,
         message.partition,
+        message.headers,
     )));
 
     match metric_updates.entry(partition) {

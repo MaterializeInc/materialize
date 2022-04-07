@@ -234,6 +234,7 @@ impl SourceReader for KinesisSourceReader {
                             upstream_time_millis: None,
                             key: None,
                             value: Some(data),
+                            headers: None,
                         };
                         self.buffered_messages.push_back(source_message);
                     }

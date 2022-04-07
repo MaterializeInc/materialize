@@ -15,7 +15,7 @@ use std::time::Duration;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
-use rdkafka::message::BorrowedMessage;
+use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
@@ -74,6 +74,8 @@ pub struct KafkaSourceReader {
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaPartitionMetrics,
+    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
+    include_headers: bool,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -188,6 +190,7 @@ impl SourceReader for KafkaSourceReader {
             stats_rx,
             last_stats: None,
             partition_info,
+            include_headers: kc.include_headers.is_some(),
             _metadata_thread_handle: metadata_thread_handle,
             partition_metrics: KafkaPartitionMetrics::new(
                 base_metrics,
@@ -228,7 +231,7 @@ impl SourceReader for KafkaSourceReader {
                     self.source_name, self.topic_name, e
                 ),
                 Ok(message) => {
-                    let source_message = SourceMessage::from(&message);
+                    let source_message = construct_source_message(&message, self.include_headers);
                     next_message = self.handle_message(source_message);
                 }
             }
@@ -343,8 +346,11 @@ impl KafkaSourceReader {
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
         partition_queue.set_nonempty_callback(move || context.activate());
-        self.partition_consumers
-            .push_front(PartitionConsumer::new(partition_id, partition_queue));
+        self.partition_consumers.push_front(PartitionConsumer::new(
+            partition_id,
+            partition_queue,
+            self.include_headers,
+        ));
         assert_eq!(
             self.consumer
                 .assignment()
@@ -603,18 +609,29 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
-    fn from(msg: &BorrowedMessage<'a>) -> Self {
-        let kafka_offset = KafkaOffset {
-            offset: msg.offset(),
-        };
-        Self {
-            partition: PartitionId::Kafka(msg.partition()),
-            offset: kafka_offset.into(),
-            upstream_time_millis: msg.timestamp().to_millis(),
-            key: msg.key().map(|k| k.to_vec()),
-            value: msg.payload().map(|p| p.to_vec()),
-        }
+fn construct_source_message(
+    msg: &BorrowedMessage<'_>,
+    include_headers: bool,
+) -> SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+    let kafka_offset = KafkaOffset {
+        offset: msg.offset(),
+    };
+    let headers = match msg.headers() {
+        Some(headers) if include_headers => Some(
+            headers
+                .iter()
+                .map(|h| (h.key.into(), h.value.map(|v| v.to_vec())))
+                .collect::<Vec<_>>(),
+        ),
+        _ => None,
+    };
+    SourceMessage {
+        partition: PartitionId::Kafka(msg.partition()),
+        offset: kafka_offset.into(),
+        upstream_time_millis: msg.timestamp().to_millis(),
+        key: msg.key().map(|k| k.to_vec()),
+        value: msg.payload().map(|p| p.to_vec()),
+        headers,
     }
 }
 
@@ -624,24 +641,33 @@ struct PartitionConsumer {
     pid: i32,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
+    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
+    include_headers: bool,
 }
 
 impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
-    fn new(pid: i32, partition_queue: PartitionQueue<GlueConsumerContext>) -> Self {
+    fn new(
+        pid: i32,
+        partition_queue: PartitionQueue<GlueConsumerContext>,
+        include_headers: bool,
+    ) -> Self {
         PartitionConsumer {
             pid,
             partition_queue,
+            include_headers,
         }
     }
 
     /// Returns the next message to process for this partition (if any).
+    /// The outer `Result` represents irrecoverable failures, the inner one can and will
+    /// be transformed into empty values
     fn get_next_message(
         &mut self,
     ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let result = SourceMessage::from(&msg);
+                let result = construct_source_message(&msg, self.include_headers);
                 assert_eq!(result.partition, PartitionId::Kafka(self.pid));
                 Ok(Some(result))
             }
