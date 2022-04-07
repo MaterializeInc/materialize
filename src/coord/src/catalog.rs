@@ -1065,11 +1065,8 @@ impl CatalogEntry {
 
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
-    ///
-    /// Returns the catalog, a list of updates to builtin tables that
-    /// describe the initial state of the catalog, and a map of all
-    /// introspections sources with allocated global IDs for their indexes.
-    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn load_catalog(config: &mut Config<'_>) -> Result<Catalog, Error> {
+        let storage = config.storage.take().expect("missing storage connection");
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1086,9 +1083,9 @@ impl Catalog {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    experimental_mode: config.storage.experimental_mode(),
+                    experimental_mode: storage.experimental_mode(),
                     safe_mode: config.safe_mode,
-                    cluster_id: config.storage.cluster_id(),
+                    cluster_id: storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     aws_external_id: config.aws_external_id.clone(),
@@ -1099,7 +1096,7 @@ impl Catalog {
                 oid_counter: FIRST_USER_OID,
             },
             transient_revision: 0,
-            storage: Arc::new(Mutex::new(config.storage)),
+            storage: Arc::new(Mutex::new(storage)),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -1174,6 +1171,21 @@ impl Catalog {
                 },
             );
         }
+
+        let mut storage = catalog.storage();
+        let mut tx = storage.transaction()?;
+        let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
+        tx.commit()?;
+        Ok(catalog)
+    }
+
+    /// Opens or creates a catalog that stores data at `path`.
+    ///
+    /// Returns the catalog, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and a map of all
+    /// introspections sources with allocated global IDs for their indexes.
+    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+        let mut catalog = Self::load_catalog(&mut config).await?;
 
         let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
 
@@ -1404,11 +1416,6 @@ impl Catalog {
                 .set_catalog_content_version(catalog.config().build_info.version)?;
         }
 
-        let mut storage = catalog.storage();
-        let mut tx = storage.transaction()?;
-        let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
-        tx.commit()?;
-
         let mut builtin_table_updates = vec![];
         for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
             let db_spec = ResolvedDatabaseSpecifier::Ambient;
@@ -1508,9 +1515,9 @@ impl Catalog {
     pub async fn open_debug(data_dir_path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
-        let (catalog, _) = Self::open(Config {
-            storage,
+        let storage = storage::Connection::open_debug(data_dir_path, experimental_mode)?;
+        let catalog = Self::load_catalog(&mut Config {
+            storage: Some(storage),
             local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
                 granularity: Duration::from_secs(1),
                 debugging: false,

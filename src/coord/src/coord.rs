@@ -4845,7 +4845,7 @@ pub async fn serve(
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
     let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
-        storage,
+        storage: Some(storage),
         experimental_mode: Some(experimental_mode),
         safe_mode,
         local_compute_introspection: logging.as_ref().map(|logging| {
