@@ -13,29 +13,16 @@ include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
 use crate::proto::TryFromProtoError;
 use crate::scalar::ScalarType;
 
+impl From<&ScalarType> for Box<ProtoScalarType> {
+    fn from(value: &ScalarType) -> Self {
+        Box::new(value.into())
+    }
+}
+
 impl From<&ScalarType> for ProtoScalarType {
     fn from(value: &ScalarType) -> Self {
         use proto_scalar_type::Kind::*;
         use proto_scalar_type::*;
-
-        // Apply .into to contents of &Box<..> returning a Box<..>
-        fn box_into<'a, S, T: 'a>(inp: &'a Box<T>) -> Box<S>
-        where
-            S: From<&'a T>,
-        {
-            Box::new((&**inp).into())
-        }
-
-        // Apply .into to contents of &Option<..> returning a Option<..>
-        fn option_into<'a, S, T: 'a>(inp: &'a Option<T>) -> Option<S>
-        where
-            S: From<&'a T>,
-        {
-            match inp {
-                Some(x) => Some(x.into()),
-                None => None,
-            }
-        }
 
         ProtoScalarType {
             kind: Some(match value {
@@ -62,19 +49,20 @@ impl From<&ScalarType> for ProtoScalarType {
                 ScalarType::Int2Vector => Int2Vector(()),
 
                 ScalarType::Numeric { max_scale } => Numeric(ProtoNumeric {
-                    max_scale: option_into(max_scale),
+                    max_scale: max_scale.as_ref().map(Into::into),
                 }),
                 ScalarType::Char { length } => Char(ProtoChar {
-                    length: option_into(length),
+                    length: length.as_ref().map(Into::into),
                 }),
                 ScalarType::VarChar { max_length } => VarChar(ProtoVarChar {
-                    max_length: option_into(max_length),
+                    max_length: max_length.as_ref().map(Into::into),
                 }),
+
                 ScalarType::List {
                     element_type,
                     custom_oid,
                 } => List(Box::new(ProtoList {
-                    element_type: Some(box_into(element_type)),
+                    element_type: Some(element_type.as_ref().into()),
                     custom_oid: *custom_oid,
                 })),
                 ScalarType::Record {
@@ -86,12 +74,12 @@ impl From<&ScalarType> for ProtoScalarType {
                     fields: vec![], // TODO: Replace me with ProtoRecordField
                     custom_name: custom_name.clone(),
                 }),
-                ScalarType::Array(typ) => Array(box_into(typ)),
+                ScalarType::Array(typ) => Array(typ.as_ref().into()),
                 ScalarType::Map {
                     value_type,
                     custom_oid,
                 } => Map(Box::new(ProtoMap {
-                    value_type: Some(box_into(value_type)),
+                    value_type: Some(value_type.as_ref().into()),
                     custom_oid: *custom_oid,
                 })),
             }),
@@ -148,9 +136,11 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             VarChar(x) => Ok(ScalarType::VarChar {
                 max_length: match x.max_length {
                     Some(x) => Some(x.try_into()?),
-                    None => Err(TryFromProtoError::MissingField(
-                        "ProtoVarChar::max_length".into(),
-                    ))?,
+                    None => {
+                        return Err(TryFromProtoError::MissingField(
+                            "ProtoVarChar::max_length".into(),
+                        ))
+                    }
                 },
             }),
             Array(x) => {
@@ -164,9 +154,11 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         let st: ScalarType = (*x).try_into()?;
                         st.into()
                     }
-                    None => Err(TryFromProtoError::MissingField(
-                        "ProtoList::element_type".into(),
-                    ))?,
+                    None => {
+                        return Err(TryFromProtoError::MissingField(
+                            "ProtoList::element_type".into(),
+                        ))
+                    }
                 },
                 custom_oid: x.custom_oid,
             }),
@@ -184,9 +176,11 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         let st: ScalarType = (*x).try_into()?;
                         st.into()
                     }
-                    None => Err(TryFromProtoError::MissingField(
-                        "ProtoMap::value_type".into(),
-                    ))?,
+                    None => {
+                        return Err(TryFromProtoError::MissingField(
+                            "ProtoMap::value_type".into(),
+                        ))
+                    }
                 },
                 custom_oid: x.custom_oid,
             }),
