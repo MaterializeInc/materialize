@@ -68,7 +68,7 @@
 
 {% macro materialize__drop_index(index_name) -%}
   {% call statement('drop_index') -%}
-    drop index if exists {{ index_name }} cascade
+    drop index if exists {{ index_name }}
   {%- endcall %}
 {% endmacro %}
 

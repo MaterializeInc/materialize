@@ -16,11 +16,40 @@
 {% materialization index, adapter='materialize' %}
     {{ exceptions.warn(
         """
-        The dbt-materialize index custom materialization is no longer actively supported.
-        Define indexes when creating a view, materializedview, or source instead.
+        The custom index materialization is deprecated and will be removed in a future release of dbt-materialize.
+        Please use the `indexes` config instead:
 
-        See: https://materialize.com/docs/sql/create-index for more information about creating indexes
-        with materialize.
+        e.g.
+        {{ config(
+            materialized = 'view',
+            indexes = [ {'columns': ['column_a']} ]
+        )}}
+
+        Documentation for indexes in Materialize can be found in: https://materialize.com/docs/sql/create-index
         """
     )}}
+  {%- set identifier = model['alias'] -%}
+  {%- set target_relation = api.Relation.create(identifier=identifier,
+                                                schema=schema,
+                                                database=database,
+                                                type='index') -%}
+
+  {% set index_name %}
+      {{ mz_generate_name(identifier) }}
+  {% endset %}
+  {{ materialize__drop_index(index_name) }}
+
+  {{ run_hooks(pre_hooks, inside_transaction=False) }}
+  {{ run_hooks(pre_hooks, inside_transaction=True) }}
+
+  {% call statement('main') -%}
+    {{ materialize__create_arbitrary_object(sql) }}
+  {%- endcall %}
+
+  {% do persist_docs(target_relation, model) %}
+
+  {{ run_hooks(post_hooks, inside_transaction=False) }}
+  {{ run_hooks(post_hooks, inside_transaction=True) }}
+
+  {{ return({'relations': [target_relation]}) }}
 {% endmaterialization %}
