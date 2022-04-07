@@ -563,6 +563,7 @@ impl Runner {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
+            cors_allowed_origins: vec![],
             experimental_mode: true,
             disable_user_indexes: false,
             safe_mode: false,

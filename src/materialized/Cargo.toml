@@ -87,6 +87,8 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.17.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
+tower = "0.4.12"
+tower-http = { version = "0.2.5", features = ["cors"] }
 tracing = "0.1.32"
 tracing-subscriber = "0.3.10"
 

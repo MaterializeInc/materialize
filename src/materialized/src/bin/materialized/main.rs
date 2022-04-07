@@ -38,6 +38,7 @@ use backtrace::Backtrace;
 use chrono::Utc;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
+use http::header::HeaderValue;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use sysinfo::{ProcessorExt, SystemExt};
@@ -378,6 +379,10 @@ pub struct Args {
         hide = true
     )]
     frontegg_api_token_url: Option<String>,
+    /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
+    /// specified origin.
+    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", hide = true)]
+    cors_allowed_origin: Vec<HeaderValue>,
 
     // === Storage options. ===
     /// Where to store data.
@@ -851,6 +856,7 @@ max log level: {max_log_level}",
         third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
         frontegg,
+        cors_allowed_origins: args.cors_allowed_origin,
         data_directory,
         orchestrator,
         storage,
