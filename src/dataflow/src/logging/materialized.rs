@@ -25,8 +25,9 @@ use uuid::Uuid;
 
 use super::{LogVariant, MaterializedLog};
 use crate::activator::RcActivator;
-use crate::arrangement::manager::RowSpine;
-use crate::arrangement::KeysValsHandle;
+use mz_dataflow_types::KeysValsHandle;
+use mz_dataflow_types::RowSpine;
+
 use crate::replay::MzReplay;
 use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
 use mz_repr::adt::jsonb::Jsonb;

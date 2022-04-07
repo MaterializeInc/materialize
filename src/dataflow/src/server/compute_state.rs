@@ -28,7 +28,7 @@ use mz_expr::GlobalId;
 use mz_repr::{Diff, Timestamp};
 
 use crate::activator::RcActivator;
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::compute::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
@@ -120,7 +120,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                         }
                     }
 
-                    crate::render::build_compute_dataflow(
+                    crate::compute::render::build_compute_dataflow(
                         self.timely_worker,
                         &mut self.compute_state,
                         dataflow,

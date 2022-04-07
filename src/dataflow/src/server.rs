@@ -41,12 +41,12 @@ use mz_ore::now::NowFn;
 use mz_ore::result::ResultExt;
 use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
-use crate::decode::metrics::DecodeMetrics;
+use crate::compute::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::event::ActivatedEventPusher;
-use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::storage::decode::metrics::DecodeMetrics;
+use crate::storage::render::sources::PersistedSourceManager;
+use crate::storage::source::metrics::SourceBaseMetrics;
 
 use crate::server::boundary::BoundaryHook;
 

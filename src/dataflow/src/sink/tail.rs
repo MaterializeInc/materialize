@@ -27,7 +27,7 @@ use mz_dataflow_types::{
 use mz_expr::GlobalId;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::render::sinks::SinkRender;
+use crate::compute::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for TailSinkConnector
 where
