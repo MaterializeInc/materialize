@@ -298,11 +298,17 @@ where
                                 }
                             };
 
-                            let tx_id = value.iter().nth(transaction_idx).unwrap().unwrap_list().iter().nth(tx_metadata_description.data_transaction_id_idx).unwrap().unwrap_str().to_owned();
-
-                            let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
-                                Some(time) => *time,
-                                None => break,
+                            let tx_id = match value.iter().nth(transaction_idx).unwrap() {
+                                Datum::List(l) => {
+                                    let tx_id = l.iter().nth(tx_metadata_description.data_transaction_id_idx).unwrap().unwrap_str().to_owned();
+                                    let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
+                                        Some(time) => *time,
+                                        None => break,
+                                    };
+                                    Some((tx_id, tx_time))
+                                },
+                                Datum::Null => None,
+                                _ => panic!("Previously validated to be nullable list"),
                             };
 
                             // We're committed to processing it if we have a tx_time
@@ -339,43 +345,68 @@ where
                                 None => true,
                             };
 
-                            if should_use {
-                                let tx_cap_entry = match tx_cap_map.entry(tx_id.clone()) {
-                                    Entry::Occupied(e) => e,
-                                    Entry::Vacant(_) => panic!("Must have cap if using record"),
-                                };
+                            match (should_use, tx_id) {
+                                (true, Some((tx_id, tx_time))) => {
+                                    let tx_cap_entry = match tx_cap_map.entry(tx_id.clone()) {
+                                        Entry::Occupied(e) => e,
+                                        Entry::Vacant(_) => panic!("Must have cap if using record"),
+                                    };
 
-                                let mut session = output.session(tx_cap_entry.get());
-                                match value.iter().nth(before_idx).unwrap() {
-                                    Datum::List(l) => {
-                                        session.give((Ok(Row::pack(&l)), tx_time, -1));
-                                    }
-                                    Datum::Null => {}
-                                    d => {
-                                        panic!("type error: expected record, found {:?}", d)
-                                    }
-                                }
-                                match value.iter().nth(after_idx).unwrap() {
-                                    Datum::List(l) => {
-                                        session.give((Ok(Row::pack(&l)), tx_time, 1));
-                                    }
-                                    Datum::Null => {}
-                                    d => {
-                                        panic!("type error: expected record, found {:?}", d)
-                                    }
-                                }
-                                match tx_event_count.entry(tx_id.clone()) {
-                                    Entry::Occupied(mut e) => {
-                                        let count = e.get_mut();
-                                        *count -= 1;
-                                        if *count == 0 {
-                                            // Must drop the capability to allow the output frontier to progress
-                                            let _ = tx_cap_entry.remove_entry();
-                                            let _ = e.remove_entry();
+                                    let mut session = output.session(tx_cap_entry.get());
+                                    match value.iter().nth(before_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), tx_time, -1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
                                         }
                                     }
-                                    Entry::Vacant(_) => panic!("need event count for tx_id {:?}", tx_id),
-                                }
+                                    match value.iter().nth(after_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), tx_time, 1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                    match tx_event_count.entry(tx_id.clone()) {
+                                        Entry::Occupied(mut e) => {
+                                            let count = e.get_mut();
+                                            *count -= 1;
+                                            if *count == 0 {
+                                                // Must drop the capability to allow the output frontier to progress
+                                                let _ = tx_cap_entry.remove_entry();
+                                                let _ = e.remove_entry();
+                                            }
+                                        }
+                                        Entry::Vacant(_) => panic!("need event count for tx_id {:?}", tx_id),
+                                    }
+                                },
+                                (true, None) => {
+                                    let data_time = *data_cap.time();
+                                    let mut session = output.session(&data_cap);
+                                    match value.iter().nth(before_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), data_time, -1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                    match value.iter().nth(after_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), data_time, 1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                },
+                                (false, _) => (),
                             }
                         }
                     }
