@@ -176,7 +176,7 @@ class Zookeeper(Service):
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
-            name="zookeeper",
+            name=name,
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
