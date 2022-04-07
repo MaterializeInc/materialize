@@ -4,7 +4,7 @@ description = "Command-line tool for interacting with Materialize Cloud."
 version = "0.1.0"
 license = "Apache-2.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
