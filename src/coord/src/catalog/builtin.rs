@@ -1130,7 +1130,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_column("volatility", ScalarType::String.nullable(false))
+            .with_column("definition", ScalarType::String.nullable(false)),
         persistent: false,
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
@@ -1955,7 +1956,8 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_views AS SELECT
     s.name AS schemaname,
     v.name AS viewname,
-    NULL::pg_catalog.oid AS viewowner
+    NULL::pg_catalog.oid AS viewowner,
+    v.definition AS definition
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id

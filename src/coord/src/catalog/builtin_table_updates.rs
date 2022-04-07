@@ -27,7 +27,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
-    Type, SYSTEM_CONN_ID,
+    Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -127,7 +127,7 @@ impl CatalogState {
             CatalogItem::Source(source) => {
                 self.pack_source_update(id, oid, schema_id, name, source, diff)
             }
-            CatalogItem::View(_) => self.pack_view_update(id, oid, schema_id, name, diff),
+            CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
@@ -221,8 +221,22 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let create_sql = mz_sql::parse::parse(&view.create_sql)
+            .expect("create_sql cannot be invalid")
+            .into_element();
+        let query = match create_sql {
+            Statement::CreateView(stmt) => stmt.definition.query,
+            _ => unreachable!(),
+        };
+
+        let mut query_string = query.to_ast_string_stable();
+        // PostgreSQL appends a semicolon in `pg_views.definition`, we
+        // do the same for compatibility's sake.
+        query_string.push(';');
+
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_VIEWS),
             row: Row::pack_slice(&[
@@ -231,6 +245,7 @@ impl CatalogState {
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(self.is_volatile(id).as_str()),
+                Datum::String(&query_string),
             ]),
             diff,
         }]
