@@ -21,10 +21,8 @@ from setuptools import find_packages
 
 setup(
     name="dbt-materialize",
-    # This adapter's version should match the required dbt-postgres version. If
-    # you need to release a new version of this adapter without bumping the
-    # dbt-postgres version, change version_suffix to ".post1", ".post2", etc.
-    #
+    # This adapter's minor version should match the required dbt-postgres version,
+    # but patch versions may differ.
     # If you bump this version, bump it in __version__.py too.
     version="1.0.4",
     description="The Materialize adapter plugin for dbt (data build tool).",
