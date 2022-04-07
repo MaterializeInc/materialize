@@ -182,13 +182,13 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 #
 > CREATE MATERIALIZED SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata)
+  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED SOURCE data2_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata)
+  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
@@ -254,7 +254,7 @@ $ file-append path=data-schema.json
 
 > CREATE MATERIALIZED SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata)
+  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
   ENVELOPE DEBEZIUM
 
@@ -352,14 +352,14 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
 
 ! CREATE MATERIALIZED SOURCE data_schema_inline_with_bad_schema_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-bad-schema-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata_bad_schema)
+  WITH(tx_metadata = data_txdata_bad_schema, tx_metadata_collection_name = 'testdrive-data-bad-schema-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:'id' column must be of type non-nullable string
 
 ! CREATE MATERIALIZED SOURCE data_schema_inline_with_sink
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_sink)
+  WITH(tx_metadata = data_sink, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:tx_metadata catalog item doesn't have a desc

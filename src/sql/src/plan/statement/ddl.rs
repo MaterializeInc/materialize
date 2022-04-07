@@ -642,6 +642,15 @@ pub fn plan_create_source(
                             // key from `with_options` so pass our validation below that all keys
                             // are used.
                             with_options.remove("tx_metadata").unwrap();
+                            // This syntax needs to be changed before allowing without experimental flag!
+                            let data_collection_name =
+                                match with_options.remove("tx_metadata_collection_name") {
+                                    Some(Value::String(d)) => d,
+                                    Some(_) => bail!("tx_metadata_collection_name must be String"),
+                                    None => bail!(
+                                        "Require tx_metadata_collection_name with tx_metadata"
+                                    ),
+                                };
 
                             let item = scx
                                 .catalog
@@ -653,11 +662,6 @@ pub fn plan_create_source(
 
                             depends_on.push(item.id());
                             depends_on.extend(item.uses());
-
-                            let data_collection_name = match external_connector {
-                                ExternalSourceConnector::Kafka(KafkaSourceConnector{ref topic, .. }) => topic.clone(),
-                                _ => bail!("Only kafka connector currently supported for debezium tx_metadata sources"),
-                            };
 
                             Some(typecheck_debezium_transaction_metadata(
                                 tx_value_desc,
