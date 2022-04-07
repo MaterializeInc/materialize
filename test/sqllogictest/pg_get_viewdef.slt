@@ -1,0 +1,111 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+statement ok
+CREATE TABLE t (a int, b int, c int)
+
+statement ok
+CREATE VIEW t_view AS SELECT t.a, b FROM t
+
+# Test pg_get_viewdef(view_name)
+
+query T
+SELECT pg_get_viewdef('doesnotexist')
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('t_view')
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Test pg_get_viewdef(view_oid)
+
+query T
+SELECT pg_get_viewdef(0)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('t_view'::regclass::oid)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Test pg_get_viewdef(view_name, pretty)
+
+query T
+SELECT pg_get_viewdef('doesnotexist', true)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('doesnotexist', false)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('t_view', true)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+query T
+SELECT pg_get_viewdef('t_view', false)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Test pg_get_viewdef(view_oid, pretty)
+
+query T
+SELECT pg_get_viewdef(0, true)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef(0, false)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('t_view'::regclass::oid, true)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+query T
+SELECT pg_get_viewdef('t_view'::regclass::oid, false)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Test pg_get_viewdef(view_oid, wrap_column)
+
+query T
+SELECT pg_get_viewdef(0, 80)
+----
+NULL
+
+query T
+SELECT pg_get_viewdef('t_view'::regclass::oid, 80)
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Test retrieving view definition after table rename
+
+statement ok
+ALTER TABLE t RENAME TO t2
+
+query T
+SELECT pg_get_viewdef('t_view'::regclass::oid)
+----
+SELECT "t2"."a", "b" FROM [u1 AS "materialize"."public"."t2"];
