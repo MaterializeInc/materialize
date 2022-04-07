@@ -10,24 +10,14 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "global_id.proto";
 
-package id;
+package global_id;
 
-message ProtoId {
+message ProtoGlobalId {
     oneof kind {
-        .global_id.ProtoGlobalId global = 1;
-        ProtoLocalId local = 2;
-    }
-}
-
-message ProtoLocalId {
-    uint64 value = 1;
-}
-
-message ProtoPartitionId {
-    oneof kind {
-        int32 kafka = 1;
-        google.protobuf.Empty none = 2;
+        uint64 system = 1;
+        uint64 user = 2;
+        uint64 transient = 3;
+        google.protobuf.Empty explain = 4;
     }
 }

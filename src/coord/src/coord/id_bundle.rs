@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_expr::GlobalId;
+use mz_repr::GlobalId;
 
 /// A bundle of storage and compute collection identifiers.
 #[derive(Debug, Default, Clone)]

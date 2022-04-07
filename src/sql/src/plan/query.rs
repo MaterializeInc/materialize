@@ -42,7 +42,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, GlobalId, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -50,7 +50,8 @@ use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
+    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
+    ScalarType,
 };
 
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};

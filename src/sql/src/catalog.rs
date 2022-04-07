@@ -22,9 +22,9 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 

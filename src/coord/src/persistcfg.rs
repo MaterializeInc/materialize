@@ -32,10 +32,10 @@ use serde::Serialize;
 use tokio::runtime::Runtime as TokioRuntime;
 use url::Url;
 
-use mz_expr::GlobalId;
 use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 use mz_persist::file::FileBlob;
 use mz_persist::runtime::{self, RuntimeConfig};
+use mz_repr::GlobalId;
 use uuid::Uuid;
 
 use crate::catalog::{self, SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};

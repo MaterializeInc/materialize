@@ -11,6 +11,7 @@
 
 pub mod adt;
 pub mod chrono;
+pub mod global_id;
 pub mod relation;
 pub mod row;
 pub mod scalar;

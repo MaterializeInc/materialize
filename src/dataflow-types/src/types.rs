@@ -19,8 +19,8 @@ use std::num::NonZeroUsize;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use mz_expr::{CollectionPlan, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::{Diff, RelationType, Row};
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sinks::SinkDesc;
@@ -120,13 +120,13 @@ pub struct SourceInstanceArguments<T = mz_repr::Timestamp> {
 }
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
-pub type SourceInstanceId = (uuid::Uuid, mz_expr::GlobalId);
+pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 
 /// A formed request for source instantiation.
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
     /// The source's own identifier.
-    pub source_id: mz_expr::GlobalId,
+    pub source_id: mz_repr::GlobalId,
     /// A dataflow identifier that should be unique across dataflows.
     pub dataflow_id: uuid::Uuid,
     /// Arguments to the source instantiation.
@@ -426,9 +426,8 @@ pub mod sources {
     use uuid::Uuid;
 
     use crate::gen::postgres_source::PostgresSourceDetails;
-    use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+    use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
@@ -1735,9 +1734,8 @@ pub mod sinks {
     use timely::progress::frontier::Antichain;
     use url::Url;
 
-    use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::RelationDesc;
+    use mz_repr::{GlobalId, RelationDesc};
 
     /// A sink for updates to a relational collection.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

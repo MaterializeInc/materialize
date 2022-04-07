@@ -110,8 +110,8 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
-use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt as IteratorExt;
+use mz_repr::GlobalId;
 
 use crate::boundary::StorageCapture;
 use crate::storage_state::StorageState;

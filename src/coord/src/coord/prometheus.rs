@@ -16,14 +16,13 @@ use std::pin::Pin;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::stream::{self, Stream, StreamExt};
-use mz_expr::GlobalId;
 use prometheus::proto::MetricType;
 use tokio::time::{self, Duration};
 use tokio_stream::wrappers::IntervalStream;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{self, SYSTEM_TIME};
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{LoggingConfig, Message, TimestampedUpdate};

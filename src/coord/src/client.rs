@@ -15,11 +15,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use mz_dataflow_types::PeekResponseUnary;
-use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{Datum, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{

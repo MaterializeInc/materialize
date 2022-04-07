@@ -22,9 +22,8 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::GlobalId;
 use mz_pgrepr::Format;
-use mz_repr::{Datum, Diff, Row, ScalarType};
+use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 

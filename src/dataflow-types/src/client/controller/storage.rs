@@ -32,7 +32,8 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use mz_expr::{GlobalId, PartitionId};
+use mz_expr::PartitionId;
+use mz_repr::GlobalId;
 use mz_stash::{self, Stash, StashError};
 
 use crate::client::controller::ReadPolicy;

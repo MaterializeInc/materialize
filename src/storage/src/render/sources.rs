@@ -27,13 +27,13 @@ use tracing::debug;
 
 use mz_dataflow_types::sources::{encoding::*, persistence::*, *};
 use mz_dataflow_types::*;
-use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
+use mz_expr::{PartitionId, SourceInstanceId};
 use mz_persist::client::{MultiWriteHandle, StreamWriteHandle};
 use mz_persist::operators::source::PersistedSource;
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_persist_types::Codec;
-use mz_repr::{Diff, Row, RowPacker, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;

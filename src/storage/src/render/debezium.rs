@@ -25,8 +25,8 @@ use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
-use mz_expr::{EvalError, GlobalId};
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_expr::EvalError;
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 
 use crate::source::DecodeResult;
 

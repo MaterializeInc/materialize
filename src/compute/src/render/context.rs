@@ -30,8 +30,8 @@ use timely::progress::{Antichain, Timestamp};
 
 use mz_dataflow_types::{DataflowDescription, DataflowError};
 use mz_dataflow_types::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
-use mz_expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
-use mz_repr::{DatumVec, Diff, Row, RowArena};
+use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_timely_util::operator::CollectionExt;
 
 // Local type definition to avoid the horror in signatures.

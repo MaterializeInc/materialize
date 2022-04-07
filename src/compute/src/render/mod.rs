@@ -112,9 +112,9 @@ use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
-use mz_expr::{GlobalId, Id};
+use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;

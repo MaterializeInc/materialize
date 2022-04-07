@@ -46,12 +46,12 @@ use mz_dataflow_types::sources::{
     KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
-use mz_expr::{CollectionPlan, GlobalId};
+use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;

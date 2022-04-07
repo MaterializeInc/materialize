@@ -17,8 +17,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{GlobalId, LocalId};
+use mz_expr::LocalId;
 use mz_ore::str::StrExt;
+use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;

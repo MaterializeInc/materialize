@@ -12,6 +12,7 @@ fn main() {
         .compile_protos(
             &[
                 "chrono.proto",
+                "global_id.proto",
                 "row.proto",
                 "strconv.proto",
                 "relation_and_scalar.proto",

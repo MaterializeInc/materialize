@@ -36,9 +36,9 @@ use serde::{Deserialize, Serialize};
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
-use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,

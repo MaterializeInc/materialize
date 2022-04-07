@@ -16,10 +16,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use mz_expr::{GlobalId, MirRelationExpr};
+use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::AstInfo;
 
 use crate::ast::{

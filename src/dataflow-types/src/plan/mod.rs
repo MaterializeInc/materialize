@@ -19,10 +19,10 @@ use mz_ore::soft_panic_or_log;
 use serde::{Deserialize, Serialize, Serializer};
 
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, EvalError, GlobalId, Id, JoinInputMapper, LocalId,
+    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use self::reduce::{KeyValPlan, ReducePlan};

@@ -13,43 +13,17 @@ use bytes::BufMut;
 use prost::Message;
 
 use crate::id::PartitionId;
-use crate::{GlobalId, Id, LocalId};
+use crate::{Id, LocalId};
+use mz_repr::proto::global_id::ProtoGlobalId;
 use mz_repr::proto::TryFromProtoError;
 
 include!(concat!(env!("OUT_DIR"), "/id.rs"));
-
-impl From<&GlobalId> for ProtoGlobalId {
-    fn from(x: &GlobalId) -> Self {
-        ProtoGlobalId {
-            kind: Some(match x {
-                GlobalId::System(x) => proto_global_id::Kind::System(*x),
-                GlobalId::User(x) => proto_global_id::Kind::User(*x),
-                GlobalId::Transient(x) => proto_global_id::Kind::Transient(*x),
-                GlobalId::Explain => proto_global_id::Kind::Explain(()),
-            }),
-        }
-    }
-}
-
-impl TryFrom<ProtoGlobalId> for GlobalId {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoGlobalId) -> Result<Self, Self::Error> {
-        match x.kind {
-            Some(proto_global_id::Kind::System(x)) => Ok(GlobalId::System(x)),
-            Some(proto_global_id::Kind::User(x)) => Ok(GlobalId::User(x)),
-            Some(proto_global_id::Kind::Transient(x)) => Ok(GlobalId::Transient(x)),
-            Some(proto_global_id::Kind::Explain(_)) => Ok(GlobalId::Explain),
-            None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
-        }
-    }
-}
 
 impl From<&Id> for ProtoId {
     fn from(x: &Id) -> Self {
         ProtoId {
             kind: Some(match x {
-                Id::Global(g) => proto_id::Kind::Global(g.into()),
+                Id::Global(g) => proto_id::Kind::Global(ProtoGlobalId::from(g)),
                 Id::Local(l) => proto_id::Kind::Local(l.into()),
             }),
         }

@@ -19,13 +19,13 @@ use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::{
-    CollectionPlan, GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, UnmaterializableFunc,
+    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};

@@ -19,9 +19,9 @@ use mz_dataflow_types::sinks::{
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
     PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
-use mz_expr::GlobalId;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
+use mz_repr::GlobalId;
 
 use crate::error::CoordError;
 
