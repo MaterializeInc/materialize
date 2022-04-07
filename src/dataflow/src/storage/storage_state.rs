@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::ActivateCapability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -28,8 +30,7 @@ use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::server::boundary::StorageCapture;
-use crate::server::LocalInput;
+use crate::boundary::StorageCapture;
 use crate::storage::decode::metrics::DecodeMetrics;
 use crate::storage::render::sources::PersistedSourceManager;
 use crate::storage::source::metrics::SourceBaseMetrics;
@@ -473,4 +474,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
     }
+}
+
+pub struct LocalInput {
+    pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
+    /// A weak reference to the capability, in case all uses are dropped.
+    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }

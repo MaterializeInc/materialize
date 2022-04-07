@@ -23,15 +23,15 @@ use timely::logging::WorkerIdentifier;
 use tracing::error;
 use uuid::Uuid;
 
-use super::{LogVariant, MaterializedLog};
-use crate::activator::RcActivator;
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
-
-use crate::replay::MzReplay;
 use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
+
+use super::{LogVariant, MaterializedLog};
+use crate::common::activator::RcActivator;
+use crate::common::replay::MzReplay;
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;

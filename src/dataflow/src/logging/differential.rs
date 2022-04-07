@@ -23,9 +23,9 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
-use crate::activator::RcActivator;
+use crate::common::activator::RcActivator;
+use crate::common::replay::MzReplay;
 use crate::logging::ConsolidateBuffer;
-use crate::replay::MzReplay;
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};

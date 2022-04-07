@@ -12,8 +12,8 @@
 //! This is roughly based on [timely::dataflow::operators::capture::Replay], which
 //! provides the protocol and semantics of the [MzReplay] operator.
 
-use crate::activator::ActivatorTrait;
 use std::time::{Duration, Instant};
+
 use timely::dataflow::channels::pushers::buffer::Buffer as PushBuffer;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::event::EventIterator;
@@ -22,6 +22,8 @@ use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::Data;
+
+use super::activator::ActivatorTrait;
 
 /// Replay a capture stream into a scope with the same timestamp.
 pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {

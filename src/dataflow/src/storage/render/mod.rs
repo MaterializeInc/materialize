@@ -113,8 +113,8 @@ use mz_dataflow_types::*;
 use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt as IteratorExt;
 
-use crate::server::boundary::StorageCapture;
-use crate::server::StorageState;
+use crate::boundary::StorageCapture;
+use crate::storage::storage_state::StorageState;
 
 mod debezium;
 mod envelope_none;

@@ -6,6 +6,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -25,15 +26,14 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_expr::GlobalId;
-use mz_repr::{Diff, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 
-use crate::activator::RcActivator;
+use crate::boundary::ComputeReplay;
+use crate::common::activator::RcActivator;
 use crate::compute::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
-use crate::server::boundary::ComputeReplay;
-use crate::server::PendingPeek;
 use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
@@ -584,5 +584,191 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
+    }
+}
+
+/// An in-progress peek, and data to eventually fulfill it.
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
+/// as each `PendingPeek` is meant to be dropped after it's responded to.
+pub(crate) struct PendingPeek {
+    peek: mz_dataflow_types::client::Peek,
+    /// The data from which the trace derives.
+    trace_bundle: TraceBundle,
+}
+
+impl PendingPeek {
+    /// Produces a corresponding log event.
+    pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
+        crate::logging::materialized::Peek::new(self.peek.id, self.peek.timestamp, self.peek.uuid)
+    }
+
+    /// Attempts to fulfill the peek and reports success.
+    ///
+    /// To produce output at `peek.timestamp`, we must be certain that
+    /// it is no longer changing. A trace guarantees that all future
+    /// changes will be greater than or equal to an element of `upper`.
+    ///
+    /// If an element of `upper` is less or equal to `peek.timestamp`,
+    /// then there can be further updates that would change the output.
+    /// If no element of `upper` is less or equal to `peek.timestamp`,
+    /// then for any time `t` less or equal to `peek.timestamp` it is
+    /// not the case that `upper` is less or equal to that timestamp,
+    /// and so the result cannot further evolve.
+    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
+        self.trace_bundle.oks_mut().read_upper(upper);
+        if upper.less_equal(&self.peek.timestamp) {
+            return None;
+        }
+        self.trace_bundle.errs_mut().read_upper(upper);
+        if upper.less_equal(&self.peek.timestamp) {
+            return None;
+        }
+        let response = match self.collect_finished_data() {
+            Ok(rows) => PeekResponse::Rows(rows),
+            Err(text) => PeekResponse::Error(text),
+        };
+        Some(response)
+    }
+
+    /// Collects data for a known-complete peek.
+    fn collect_finished_data(&mut self) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        // Check if there exist any errors and, if so, return whatever one we
+        // find first.
+        let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
+        while cursor.key_valid(&storage) {
+            let mut copies = 0;
+            cursor.map_times(&storage, |time, diff| {
+                if time.less_equal(&self.peek.timestamp) {
+                    copies += diff;
+                }
+            });
+            if copies < 0 {
+                return Err(format!(
+                    "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
+                    copies * -1,
+                    cursor.key(&storage),
+                ));
+            }
+            if copies > 0 {
+                return Err(cursor.key(&storage).to_string());
+            }
+            cursor.step_key(&storage);
+        }
+
+        // Cursor and bound lifetime for `Row` data in the backing trace.
+        let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
+        // Accumulated `Vec<(row, count)>` results that we are likely to return.
+        let mut results = Vec::new();
+
+        // When set, a bound on the number of records we need to return.
+        // The requirements on the records are driven by the finishing's
+        // `order_by` field. Further limiting will happen when the results
+        // are collected, so we don't need to have exactly this many results,
+        // just at least those results that would have been returned.
+        let max_results = self
+            .peek
+            .finishing
+            .limit
+            .map(|l| l + self.peek.finishing.offset);
+
+        if let Some(literal) = &self.peek.key {
+            cursor.seek_key(&storage, literal);
+        }
+
+        use differential_dataflow::trace::Cursor;
+        use mz_ore::result::ResultExt;
+        use mz_repr::{DatumVec, RowArena};
+
+        let mut row_builder = Row::default();
+        let mut datum_vec = DatumVec::new();
+        let mut l_datum_vec = DatumVec::new();
+        let mut r_datum_vec = DatumVec::new();
+
+        while cursor.key_valid(&storage) {
+            while cursor.val_valid(&storage) {
+                // TODO: This arena could be maintained and reuse for longer
+                // but it wasn't clear at what granularity we should flush
+                // it to ensure we don't accidentally spike our memory use.
+                // This choice is conservative, and not the end of the world
+                // from a performance perspective.
+                let arena = RowArena::new();
+                let key = cursor.key(&storage);
+                let row = cursor.val(&storage);
+                // TODO: We could unpack into a re-used allocation, except
+                // for the arena above (the allocation would not be allowed
+                // to outlive the arena above, from which it might borrow).
+                let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+                if let Some(result) = self
+                    .peek
+                    .map_filter_project
+                    .evaluate_into(&mut borrow, &arena, &mut row_builder)
+                    .map_err_to_string()?
+                {
+                    let mut copies = 0;
+                    cursor.map_times(&storage, |time, diff| {
+                        if time.less_equal(&self.peek.timestamp) {
+                            copies += diff;
+                        }
+                    });
+                    let copies: usize = if copies < 0 {
+                        return Err(format!(
+                            "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
+                            copies * -1,
+                            &*borrow,
+                        ));
+                    } else {
+                        copies.try_into().unwrap()
+                    };
+                    // if copies > 0 ... otherwise skip
+                    if let Some(copies) = NonZeroUsize::new(copies) {
+                        results.push((result, copies));
+                    }
+
+                    // If we hold many more than `max_results` records, we can thin down
+                    // `results` using `self.finishing.ordering`.
+                    if let Some(max_results) = max_results {
+                        // We use a threshold twice what we intend, to amortize the work
+                        // across all of the insertions. We could tighten this, but it
+                        // works for the moment.
+                        if results.len() >= 2 * max_results {
+                            if self.peek.finishing.order_by.is_empty() {
+                                results.truncate(max_results);
+                                return Ok(results);
+                            } else {
+                                // We can sort `results` and then truncate to `max_results`.
+                                // This has an effect similar to a priority queue, without
+                                // its interactive dequeueing properties.
+                                // TODO: Had we left these as `Vec<Datum>` we would avoid
+                                // the unpacking; we should consider doing that, although
+                                // it will require a re-pivot of the code to branch on this
+                                // inner test (as we prefer not to maintain `Vec<Datum>`
+                                // in the other case).
+                                results.sort_by(|left, right| {
+                                    let left_datums = l_datum_vec.borrow_with(&left.0);
+                                    let right_datums = r_datum_vec.borrow_with(&right.0);
+                                    mz_expr::compare_columns(
+                                        &self.peek.finishing.order_by,
+                                        &left_datums,
+                                        &right_datums,
+                                        || left.0.cmp(&right.0),
+                                    )
+                                });
+                                results.truncate(max_results);
+                            }
+                        }
+                    }
+                }
+                cursor.step_val(&storage);
+            }
+            // If we had a key, we are now done and can return.
+            if self.peek.key.is_some() {
+                return Ok(results);
+            } else {
+                cursor.step_key(&storage);
+            }
+        }
+
+        Ok(results)
     }
 }
