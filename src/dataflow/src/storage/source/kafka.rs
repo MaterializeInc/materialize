@@ -32,8 +32,8 @@ use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
 
-use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::storage::source::{NextMessage, SourceMessage, SourceReader};
+use crate::storage::{Logger, StorageEvent};
 
 use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -403,7 +403,7 @@ impl KafkaSourceReader {
     fn update_stats(&mut self) {
         while let Ok(stats) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
-                logger.log(MaterializedEvent::KafkaSourceStatistics {
+                logger.log(StorageEvent::KafkaSourceStatistics {
                     source_id: self.id,
                     old: self.last_stats.take(),
                     new: Some(stats.clone()),
@@ -525,7 +525,7 @@ impl Drop for KafkaSourceReader {
     fn drop(&mut self) {
         // Retract any metrics logged for this source.
         if let Some(logger) = self.logger.as_mut() {
-            logger.log(MaterializedEvent::KafkaSourceStatistics {
+            logger.log(StorageEvent::KafkaSourceStatistics {
                 source_id: self.id,
                 old: self.last_stats.take(),
                 new: None,

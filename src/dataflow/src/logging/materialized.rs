@@ -25,20 +25,20 @@ use uuid::Uuid;
 
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
-use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr, SourceInstanceId};
-use mz_repr::adt::jsonb::Jsonb;
+use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 
 use super::{LogVariant, MaterializedLog};
 use crate::common::activator::RcActivator;
 use crate::common::replay::MzReplay;
+use crate::storage::StorageEvent;
 
 /// Type alias for logging of materialized events.
-pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
+pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
 
 /// A logged materialized event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
-pub enum MaterializedEvent {
+pub enum ComputeEvent {
     /// Dataflow command, true for create and false for drop.
     Dataflow(GlobalId, bool),
     /// Dataflow depends on a named source of data.
@@ -48,30 +48,8 @@ pub enum MaterializedEvent {
         /// Globally unique identifier for the source on which the dataflow depends.
         source: GlobalId,
     },
-    /// Underling librdkafka statistics for a Kafka source.
-    KafkaSourceStatistics {
-        /// Materialize source identifier.
-        source_id: SourceInstanceId,
-        /// The old JSONB statistics blob to retract, if any.
-        old: Option<Jsonb>,
-        /// The new JSONB statistics blob to produce, if any.
-        new: Option<Jsonb>,
-    },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
-    /// Tracks the source name, id, partition id, and received/ingested offsets
-    SourceInfo {
-        /// Name of the source
-        source_name: String,
-        /// Source identifier
-        source_id: SourceInstanceId,
-        /// Partition identifier
-        partition_id: Option<String>,
-        /// Difference between the previous offset and current highest offset we've seen
-        offset: i64,
-        /// Difference between the previous timestamp and current highest timestamp we've seen
-        timestamp: i64,
-    },
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -101,7 +79,8 @@ impl Peek {
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `linked`: The source to read log events from.
+/// * `compute`: The source to read compute log events from.
+/// * `storage`: The source to read storage log events from.
 /// * `activator`: A handle to acknowledge activations.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
@@ -109,30 +88,37 @@ impl Peek {
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_dataflow_types::logging::LoggingConfig,
-    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
+    compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
+    storage: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, StorageEvent)>>,
     activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, KeysValsHandle> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: mz logging", move |scope| {
-        let logs = Some(linked).mz_replay(
+        let compute_logs = Some(compute).mz_replay(
+            scope,
+            "materialized logs",
+            Duration::from_nanos(config.granularity_ns as u64),
+            activator.clone(),
+        );
+        let storage_logs = Some(storage).mz_replay(
             scope,
             "materialized logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator,
         );
 
-        let mut demux =
-            OperatorBuilder::new("Materialize Logging Demux".to_string(), scope.clone());
+        let mut demux = OperatorBuilder::new(
+            "Materialize Compute Logging Demux".to_string(),
+            scope.clone(),
+        );
         use timely::dataflow::channels::pact::Pipeline;
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(&compute_logs, Pipeline);
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
-        let (mut kafka_source_statistics_out, kafka_source_statistics) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
-        let (mut source_info_out, source_info) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -142,10 +128,8 @@ pub fn construct<A: Allocate>(
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
-                let mut kafka_source_statistics = kafka_source_statistics_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
-                let mut source_info = source_info_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -153,18 +137,15 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
-                    let mut kafka_source_statistics_session =
-                        kafka_source_statistics.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut peek_duration_session = peek_duration.session(&time);
-                    let mut source_info_session = source_info.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
                             * granularity_ms) as Timestamp;
 
                         match datum {
-                            MaterializedEvent::Dataflow(id, is_create) => {
+                            ComputeEvent::Dataflow(id, is_create) => {
                                 let diff = if is_create { 1 } else { -1 };
                                 dataflow_session.give(((id, worker), time_ms, diff));
 
@@ -196,7 +177,7 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             }
-                            MaterializedEvent::DataflowDependency { dataflow, source } => {
+                            ComputeEvent::DataflowDependency { dataflow, source } => {
                                 dependency_session.give(((dataflow, source, worker), time_ms, 1));
                                 let key = (dataflow, worker);
                                 match active_dataflows.get_mut(&key) {
@@ -210,7 +191,7 @@ pub fn construct<A: Allocate>(
                                     ),
                                 }
                             }
-                            MaterializedEvent::Frontier(name, logical, delta) => {
+                            ComputeEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
                                     Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
@@ -221,27 +202,7 @@ pub fn construct<A: Allocate>(
                                     delta,
                                 ));
                             }
-                            MaterializedEvent::KafkaSourceStatistics {
-                                source_id,
-                                old,
-                                new,
-                            } => {
-                                if let Some(old) = old {
-                                    kafka_source_statistics_session.give((
-                                        (source_id, worker, old),
-                                        time_ms,
-                                        -1,
-                                    ));
-                                }
-                                if let Some(new) = new {
-                                    kafka_source_statistics_session.give((
-                                        (source_id, worker, new),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
-                            }
-                            MaterializedEvent::Peek(peek, is_install) => {
+                            ComputeEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.uuid);
                                 if is_install {
                                     peek_session.give(((peek, worker), time_ms, 1));
@@ -271,7 +232,59 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             }
-                            MaterializedEvent::SourceInfo {
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut demux = OperatorBuilder::new(
+            "Materialize Storage Logging Demux".to_string(),
+            scope.clone(),
+        );
+        let mut input = demux.new_input(&storage_logs, Pipeline);
+        let (mut kafka_source_statistics_out, kafka_source_statistics) = demux.new_output();
+        let (mut source_info_out, source_info) = demux.new_output();
+
+        let mut demux_buffer = Vec::new();
+        demux.build(move |_capability| {
+            move |_frontiers| {
+                let mut kafka_source_statistics = kafka_source_statistics_out.activate();
+                let mut source_info = source_info_out.activate();
+
+                input.for_each(|time, data| {
+                    data.swap(&mut demux_buffer);
+
+                    let mut kafka_source_statistics_session =
+                        kafka_source_statistics.session(&time);
+                    let mut source_info_session = source_info.session(&time);
+
+                    for (time, worker, datum) in demux_buffer.drain(..) {
+                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
+                            * granularity_ms) as Timestamp;
+
+                        match datum {
+                            StorageEvent::KafkaSourceStatistics {
+                                source_id,
+                                old,
+                                new,
+                            } => {
+                                if let Some(old) = old {
+                                    kafka_source_statistics_session.give((
+                                        (source_id, worker, old),
+                                        time_ms,
+                                        -1,
+                                    ));
+                                }
+                                if let Some(new) = new {
+                                    kafka_source_statistics_session.give((
+                                        (source_id, worker, new),
+                                        time_ms,
+                                        1,
+                                    ));
+                                }
+                            }
+                            StorageEvent::SourceInfo {
                                 source_name,
                                 source_id,
                                 partition_id,

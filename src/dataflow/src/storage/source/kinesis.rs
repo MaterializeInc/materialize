@@ -29,9 +29,9 @@ use mz_dataflow_types::sources::{
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 
-use crate::logging::materialized::Logger;
 use crate::storage::source::metrics::{KinesisMetrics, SourceBaseMetrics};
 use crate::storage::source::{NextMessage, SourceMessage, SourceReader};
+use crate::storage::Logger;
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.

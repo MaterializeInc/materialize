@@ -56,8 +56,8 @@ use mz_ore::task;
 use mz_repr::MessagePayload;
 use tracing::{debug, error, trace, warn};
 
-use crate::logging::materialized::Logger;
 use crate::storage::source::{NextMessage, SourceMessage, SourceReader};
+use crate::storage::Logger;
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};

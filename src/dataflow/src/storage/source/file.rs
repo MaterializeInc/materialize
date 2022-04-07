@@ -31,8 +31,8 @@ use mz_dataflow_types::sources::{
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 
-use crate::logging::materialized::Logger;
 use crate::storage::source::{NextMessage, SourceMessage, SourceReader};
+use crate::storage::Logger;
 
 use super::metrics::SourceBaseMetrics;
 
