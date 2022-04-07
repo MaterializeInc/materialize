@@ -16,6 +16,18 @@ import "adt/char.proto";
 import "adt/numeric.proto";
 import "adt/varchar.proto";
 
+
+// protobuf does not support cycling imports. ProtoColumnName and ProtoScalarType
+// belong would belong to proto/relation.proto
+message ProtoColumnName {
+    optional string value = 1;
+}
+
+message ProtoColumnType {
+    ProtoScalarType scalar_type = 1;
+    bool nullable = 2;
+}
+
 message ProtoScalarType {
     // ScalarType::Numeric contains an Option<NumericMaxScale>
     // None is encoded as this field not present.
@@ -36,8 +48,8 @@ message ProtoScalarType {
     }
 
     message ProtoRecordField {
-        string ColumnName = 1; // TODO: Create and use ProtoColumnName
-        string ColumnType = 2; // TODO: Create and use ProtoColumnType
+        ProtoColumnName ColumnName = 1; // TODO: Create and use ProtoColumnName
+        ProtoColumnType ColumnType = 2; // TODO: Create and use ProtoColumnType
     }
 
     message ProtoRecord {

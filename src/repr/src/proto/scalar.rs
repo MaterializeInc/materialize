@@ -10,8 +10,75 @@
 //! Protobuf structs mirroring [`crate::scalar`].
 
 include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
+use crate::proto::scalar::proto_scalar_type::ProtoRecordField;
 use crate::proto::TryFromProtoError;
 use crate::scalar::ScalarType;
+use crate::{ColumnName, ColumnType};
+
+impl From<&ColumnName> for ProtoColumnName {
+    fn from(x: &ColumnName) -> Self {
+        ProtoColumnName {
+            value: Some(x.0.clone()),
+        }
+    }
+}
+
+macro_rules! frm {
+    ($left: expr, $right: expr) => {
+        (match $left {
+            Some(x) => Ok(x),
+            None => Err(TryFromProtoError::MissingField($right.into())),
+        })?
+    };
+}
+
+impl TryFrom<ProtoColumnName> for ColumnName {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
+        Ok(ColumnName(frm!(x.value, "ProtoColumnName::value")))
+    }
+}
+
+impl From<&ColumnType> for ProtoColumnType {
+    fn from(x: &ColumnType) -> Self {
+        ProtoColumnType {
+            nullable: x.nullable,
+            scalar_type: Some((&x.scalar_type).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoColumnType> for ColumnType {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoColumnType) -> Result<Self, Self::Error> {
+        Ok(ColumnType {
+            nullable: x.nullable,
+            scalar_type: frm!(x.scalar_type, "ProtoColumnType::scalar_type").try_into()?,
+        })
+    }
+}
+
+impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
+    fn from(x: &(ColumnName, ColumnType)) -> Self {
+        ProtoRecordField {
+            column_name: Some((&x.0).into()),
+            column_type: Some((&x.1).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
+        Ok((
+            frm!(x.column_name, "").try_into()?,
+            frm!(x.column_type, "").try_into()?,
+        ))
+    }
+}
 
 impl From<&ScalarType> for Box<ProtoScalarType> {
     fn from(value: &ScalarType) -> Self {
@@ -67,11 +134,11 @@ impl From<&ScalarType> for ProtoScalarType {
                 })),
                 ScalarType::Record {
                     custom_oid,
-                    fields: _,
+                    fields,
                     custom_name,
                 } => Record(ProtoRecord {
                     custom_oid: *custom_oid,
-                    fields: vec![], // TODO: Replace me with ProtoRecordField
+                    fields: fields.into_iter().map(Into::into).collect(),
                     custom_name: custom_name.clone(),
                 }),
                 ScalarType::Array(typ) => Array(typ.as_ref().into()),
@@ -134,54 +201,34 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             }),
 
             VarChar(x) => Ok(ScalarType::VarChar {
-                max_length: match x.max_length {
-                    Some(x) => Some(x.try_into()?),
-                    None => {
-                        return Err(TryFromProtoError::MissingField(
-                            "ProtoVarChar::max_length".into(),
-                        ))
-                    }
-                },
+                max_length: Some(frm!(x.max_length, "ProtoVarChar::max_length").try_into()?),
             }),
-            Array(x) => {
-                // Can't inline this without type hints
-                let st: ScalarType = (*x).try_into()?;
-                Ok(ScalarType::Array(st.into()))
-            }
+            Array(x) => Ok(ScalarType::Array(
+                TryInto::<ScalarType>::try_into(*x)?.into(),
+            )),
             List(x) => Ok(ScalarType::List {
-                element_type: match x.element_type {
-                    Some(x) => {
-                        let st: ScalarType = (*x).try_into()?;
-                        st.into()
-                    }
-                    None => {
-                        return Err(TryFromProtoError::MissingField(
-                            "ProtoList::element_type".into(),
-                        ))
-                    }
-                },
+                element_type: TryInto::<ScalarType>::try_into(*frm!(
+                    x.element_type,
+                    "ProtoMap::element_type"
+                ))?
+                .into(),
                 custom_oid: x.custom_oid,
             }),
-            Record(x) => {
-                let fields = vec![]; //TODO: Replace me with ColumnType proto
-                Ok(ScalarType::Record {
-                    custom_oid: x.custom_oid,
-                    fields,
-                    custom_name: x.custom_name,
-                })
-            }
+            Record(x) => Ok(ScalarType::Record {
+                custom_oid: x.custom_oid,
+                fields: x
+                    .fields
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                custom_name: x.custom_name,
+            }),
             Map(x) => Ok(ScalarType::Map {
-                value_type: match x.value_type {
-                    Some(x) => {
-                        let st: ScalarType = (*x).try_into()?;
-                        st.into()
-                    }
-                    None => {
-                        return Err(TryFromProtoError::MissingField(
-                            "ProtoMap::value_type".into(),
-                        ))
-                    }
-                },
+                value_type: TryInto::<ScalarType>::try_into(*frm!(
+                    x.value_type,
+                    "ProtoMap::value_type"
+                ))?
+                .into(),
                 custom_oid: x.custom_oid,
             }),
         }

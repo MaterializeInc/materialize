@@ -185,7 +185,7 @@ impl RelationType {
 
 /// The name of a column in a [`RelationDesc`].
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
-pub struct ColumnName(String);
+pub struct ColumnName(pub(crate) String);
 
 impl ColumnName {
     /// Returns this column name as a `str`.
