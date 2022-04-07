@@ -14,11 +14,11 @@ use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 
 /// Metrics specific to a single worker.
 #[derive(Clone, Debug)]
-pub struct Metrics {
+pub struct DecodeMetrics {
     events_read: IntCounterVec,
 }
 
-impl Metrics {
+impl DecodeMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             events_read: registry.register(metric!(

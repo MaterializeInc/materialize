@@ -42,8 +42,8 @@ use mz_ore::result::ResultExt;
 use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
+use crate::decode::metrics::DecodeMetrics;
 use crate::event::ActivatedEventPusher;
-use crate::metrics::Metrics;
 use crate::render::sources::PersistedSourceManager;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -142,15 +142,10 @@ pub fn serve_boundary<
     // Various metrics related things.
     let source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
-    let unspecified_metrics = Metrics::register_with(&config.metrics_registry);
+    let decode_metrics = DecodeMetrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     // Bundle metrics to conceal complexity.
-    let metrics_bundle = (
-        source_metrics,
-        sink_metrics,
-        unspecified_metrics,
-        trace_metrics,
-    );
+    let metrics_bundle = (source_metrics, sink_metrics, decode_metrics, trace_metrics);
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream and send the responses to the coordinator.
@@ -194,7 +189,7 @@ pub fn serve_boundary<
             [timely_worker_index % config.workers]
             .take()
             .unwrap();
-        let (source_metrics, _sink_metrics, unspecified_metrics, _trace_metrics) =
+        let (source_metrics, _sink_metrics, decode_metrics, _trace_metrics) =
             metrics_bundle.clone();
         Worker {
             timely_worker,
@@ -207,7 +202,7 @@ pub fn serve_boundary<
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 persisted_sources: PersistedSourceManager::new(),
-                unspecified_metrics,
+                decode_metrics,
                 persist: config.persister.clone(),
                 reported_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
@@ -291,7 +286,12 @@ where
     /// The channel over which compute responses are reported.
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
-    metrics_bundle: (SourceBaseMetrics, SinkBaseMetrics, Metrics, TraceMetrics),
+    metrics_bundle: (
+        SourceBaseMetrics,
+        SinkBaseMetrics,
+        DecodeMetrics,
+        TraceMetrics,
+    ),
 }
 
 impl<'w, A, SC, CR> Worker<'w, A, SC, CR>

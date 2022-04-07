@@ -28,7 +28,7 @@ use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::metrics::Metrics;
+use crate::decode::metrics::DecodeMetrics;
 use crate::render::sources::PersistedSourceManager;
 use crate::server::boundary::StorageCapture;
 use crate::server::LocalInput;
@@ -66,8 +66,8 @@ pub struct StorageState {
     /// ever be one running (rendered) source of a persisted source, and if there is one, this map
     /// will contain a handle to it.
     pub persisted_sources: PersistedSourceManager,
-    /// Metrics reported by all dataflows.
-    pub unspecified_metrics: Metrics,
+    /// Decoding metrics reported by all dataflows.
+    pub decode_metrics: DecodeMetrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
     /// Tracks the conditional write frontiers we have reported.
