@@ -194,6 +194,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
+                annotations: Some(BTreeMap::new()), // Do not delete, we insert into it below.
                 ..Default::default()
             }),
             spec: Some(PodSpec {
@@ -219,7 +220,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }],
                 ..Default::default()
             }),
-            ..Default::default()
         };
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
         let mut hasher = Sha256::new();
@@ -281,7 +281,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     Ok(_) => {}
                     // object already doesn't exist
                     Err(kube::Error::Api(e)) if e.code == 404 => {}
-                    Err(e) => Err(e)?,
+                    Err(e) => return Err(e.into()),
                 }
             }
         }
