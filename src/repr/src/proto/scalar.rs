@@ -18,6 +18,25 @@ impl From<&ScalarType> for ProtoScalarType {
         use proto_scalar_type::Kind::*;
         use proto_scalar_type::*;
 
+        // Apply .into to contents of &Box<..> returning a Box<..>
+        fn box_into<'a, S, T: 'a>(inp: &'a Box<T>) -> Box<S>
+        where
+            S: From<&'a T>,
+        {
+            Box::new((&**inp).into())
+        }
+
+        // Apply .into to contents of &Option<..> returning a Option<..>
+        fn option_into<'a, S, T: 'a>(inp: &'a Option<T>) -> Option<S>
+        where
+            S: From<&'a T>,
+        {
+            match inp {
+                Some(x) => Some(x.into()),
+                None => None,
+            }
+        }
+
         ProtoScalarType {
             kind: Some(match value {
                 ScalarType::Bool => Bool(()),
@@ -43,19 +62,19 @@ impl From<&ScalarType> for ProtoScalarType {
                 ScalarType::Int2Vector => Int2Vector(()),
 
                 ScalarType::Numeric { max_scale } => Numeric(ProtoNumeric {
-                    max_scale: max_scale.map(|x| (&x).into()),
+                    max_scale: option_into(max_scale),
                 }),
                 ScalarType::Char { length } => Char(ProtoChar {
-                    length: length.map(|x| (&x).into()),
+                    length: option_into(length),
                 }),
                 ScalarType::VarChar { max_length } => VarChar(ProtoVarChar {
-                    max_length: max_length.map(|x| (&x).into()),
+                    max_length: option_into(max_length),
                 }),
                 ScalarType::List {
                     element_type,
                     custom_oid,
                 } => List(Box::new(ProtoList {
-                    element_type: Some(Box::new((&(**element_type)).into())),
+                    element_type: Some(box_into(element_type)),
                     custom_oid: *custom_oid,
                 })),
                 ScalarType::Record {
@@ -67,12 +86,12 @@ impl From<&ScalarType> for ProtoScalarType {
                     fields: vec![], // TODO: Replace me with ProtoRecordField
                     custom_name: custom_name.clone(),
                 }),
-                ScalarType::Array(typ) => Array(Box::new((&**typ).into())),
+                ScalarType::Array(typ) => Array(box_into(typ)),
                 ScalarType::Map {
                     value_type,
                     custom_oid,
                 } => Map(Box::new(ProtoMap {
-                    value_type: Some(Box::new((&(**value_type)).into())),
+                    value_type: Some(box_into(value_type)),
                     custom_oid: *custom_oid,
                 })),
             }),
