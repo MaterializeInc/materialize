@@ -145,7 +145,9 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         let st: ScalarType = (*x).try_into()?;
                         st.into()
                     }
-                    None => Err(TryFromProtoError::MissingField("xx".into()))?,
+                    None => Err(TryFromProtoError::MissingField(
+                        "ProtoList::element_type".into(),
+                    ))?,
                 },
                 custom_oid: x.custom_oid,
             }),
@@ -163,7 +165,9 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         let st: ScalarType = (*x).try_into()?;
                         st.into()
                     }
-                    None => Err(TryFromProtoError::MissingField("xx".into()))?,
+                    None => Err(TryFromProtoError::MissingField(
+                        "ProtoMap::value_type".into(),
+                    ))?,
                 },
                 custom_oid: x.custom_oid,
             }),
