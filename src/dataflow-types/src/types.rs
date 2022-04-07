@@ -1146,27 +1146,11 @@ pub mod sources {
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub enum ConnectorLiteral {
-        Kafka(KafkaConnectorLiteral),
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct KafkaConnectorLiteral {
+    pub struct KafkaSourceConnector {
         pub addrs: KafkaAddrs,
         // Represents options specified by user when creating the source, e.g.
         // security settings.
         pub config_options: BTreeMap<String, String>,
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub enum KafkaConnector {
-        Literal(KafkaConnectorLiteral),
-        Reference(mz_expr::GlobalId),
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct KafkaSourceConnector {
-        pub connector: KafkaConnector,
         pub topic: String,
         // Map from partition -> starting offset
         pub start_offsets: HashMap<i32, i64>,

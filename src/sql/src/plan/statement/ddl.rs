@@ -41,9 +41,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
     DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-    KafkaConnector, KafkaConnectorLiteral, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
-    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -325,7 +325,6 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-<<<<<<< HEAD
 
     if !matches!(connector, CreateSourceConnector::Kafka { .. })
         && include_metadata
@@ -335,14 +334,16 @@ pub fn plan_create_source(
         // TODO(guswynn): should this be `bail_unsupported!`?
         bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
-=======
->>>>>>> more feedback
     if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
     let (external_connector, encoding) = match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
+        CreateSourceConnector::Kafka(kafka) => {
+            let (broker, topic) = match kafka {
+                mz_sql_parser::ast::KafkaSource::Literal { broker, topic, .. } => (broker, topic),
+                _ => unreachable!(),
+            };
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -381,10 +382,8 @@ pub fn plan_create_source(
 
             let mut connector = KafkaSourceConnector {
                 topic: topic.clone(),
-                connector: KafkaConnector::Literal(KafkaConnectorLiteral {
-                    addrs: broker.parse()?,
-                    config_options,
-                }),
+                addrs: broker.parse()?,
+                config_options,
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,

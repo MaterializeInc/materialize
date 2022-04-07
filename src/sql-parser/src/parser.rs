@@ -2076,7 +2076,11 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(CreateSourceConnector::Kafka { broker, topic, key })
+                Ok(CreateSourceConnector::Kafka(KafkaSource::Literal {
+                    broker,
+                    topic,
+                    key,
+                }))
             }
             KINESIS => {
                 self.expect_keyword(ARN)?;
