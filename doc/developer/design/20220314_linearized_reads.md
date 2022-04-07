@@ -1,15 +1,11 @@
 # Supporting linearizable reads
 
+**Note**
+In this document, the term `CONSISTENT` is used as placeholder syntax for a user asking for
+a read with "stronger consistency guarantees" than the default, which may or may not
+be true linearizability. See [Formalism](#formalism-and-constraints)x) for more details.
 
-Note on terminology: `materialized` strives to always offer _serializability_. We usually refer to this as **consistency**.
-When we use _linearizability_ or _linearizable_ in this document, we are referring to those terms in service of
-what is called _strict serializability_, which is is effectively _serializability_ + _linearizability_.
-Because we consider _serializability_ important by default, we refer to the new concept we are introducing to `materialized`:
-_linearizability_.
-
-See [this jepsen map on consistency](https://jepsen.io/consistency) for more details about how these terms are used.
-
-Also, a previous version of this document included a design that has since been [broken out](https://github.com/MaterializeInc/materialize/pull/11302).
+Additionally, a previous version of this document included a design that has since been [broken out](https://github.com/MaterializeInc/materialize/pull/11302).
 
 ## Summary
 
@@ -28,9 +24,10 @@ How we choose this timestamp influences the type of consistency guarantee we get
 
 ## Goals
 
-Offer _linearizable_ reads in as many cases as possible. `materialized` is ultimately built to support this!
+Offer _linearizable_ reads in as many cases as possible. `materialized` is ultimately built to support this! Offer a weaker
+form of consistency in other cases.
 
-Avoid performance interference of linearizable reads on other "less consistent" reads, such as sequential or eventual consistency.
+Avoid performance interference of _linearizable_ reads on other "less consistent" reads.
 
 ## Non-Goals
 
@@ -48,55 +45,18 @@ and the _timestamp bindings_.
 
 ### Linearizable reads
 
-In the case of a linearizable read, peeks will be augmented to work as follows
+In the case of a `CONSISTENT` read, peeks will be augmented to work as follows
 
 1. Before issuing the peek, we will first ask STORAGE "for all sources on which this query transitively depends, what timestamp reflects all of their current contents?"
 2. We will wait until STORAGE responds with such a timestamp, `t`.
 3. We then issue the peek at _at least_ timestamp `t`, while also taking into consideration the `since` and `uppers` of the involved indexes.
 
-The behavior of non-linearizable reads does not need to be changed.
+The behavior of non-`CONSISTENT` reads does not need to be changed.
 They still consult `since` for their inputs, and may elect to choose any timestamp that is greater than this, but perhaps one that is not as "current" as for linearizable reads, to be able to return immediately.
 
 This behavior applies equally well to matarialized and unmaterialized sources.
 
-### Contraints on sources
-
-_The following section describes the contraints on linearizable reads as we will explain them to users_
-
-_Truly_ Linearizable reads can only be offered if and only if, the view or query being read from has the following:
-
-- Involves only sources whose upstream can offer adequate apis
-  - As far as we understand it, all our current source offerings, minus `kinesis` and `pubnub` can offer such apis.
-    - why: sources need a way to get the max "offset" for the source, that is linearizable.
-    - TODO: confirm multi-partition kafka works
-  - Cannot involve multiple different sources
-    - CAVEAT: arbitrarily many tables can be used with any other sources.
-    - CAVEAT: Any number of Postgres sources for the same postgres database can be used.
-    - CAVEAT: Only one individual kafka source (that is, sources that involves a specific topic) can be used, not multiple kafka sources
-    that involve multiple topics.
-    - why: sources can have a causal relationship with each other, and in general, disparate systems (or disparate "shards" within one system) do not
-    offer apis that totally order those causal relationships, a requirement for _linearizability_.
-
-### Design question:
-If these contraints are not met, what kind of consistency guarantees do we offer? It is probably not _sequential_ or _causal_, but
-we may still want to offer this as an option. We don't get _ordering guarantees_ between source-types or topics, as they have no
-managed relationship upstream.
-
-While the constraints for **true** _linearizability_ are still desirable (and should work for tests against the entire materialize stack
-(like Jepsen tests), there are other advantages to weaker guarantees:
-
-- Queries can be guaranteed to give "current" data, where "current" is defined as:
-"as of a real time moment at least the real time moment the command was issued, and no later than the response returns"
-  - This includes unmaterialized sources, allowing us to unlock queries against those.
-  - and can improve the experience of using materialized sources, as some users may prefer
-  "current" or "eventual".
-- Queries that involve sources that have no _causal_ relationship will have a stronger guarantee (TODO: what guarantee).
-  - Its perfectly possible that this is a common case for some users.
-
-(Additionally, we could imagine a scheme where we write special markers into the sources themselves to get ordering guarantees,
-but that is out of scope for this document.)
-
-## Other open questions
+### Other open questions
 
 - How much of a latency hit will fetching the max offset incur?
 - How feasible is it for ALL sources to offer a "max offset" API?
@@ -104,4 +64,97 @@ but that is out of scope for this document.)
   - Will we require a heartbeat mechanism for those sources?
 - Will linearized reads negatively impact sequentially consistent reads (are they forced to advance similarly)?
 - What syntax is best to express linearizable (or non) reads? For example, as part of `BEGIN`?
-- Should be eventually change the default experience of using `materialized` to be `LINEARIZABLE`?
+- Should be eventually change the default experience of using `materialized` to be `CONSISTENT`?
+
+## Formalism and constraints
+
+**Note**
+Please refer to [formalism](https://github.com/MaterializeInc/materialize/blob/fe0f4bac40db1afd21606428be14197601bb5a1c/doc/developer/platform/formalism.md)
+for more background about some of the terms used here, as well as
+this [this jepsen map on consistency](https://jepsen.io/consistency) for details
+about specific consistency models.
+
+Materialized offers reads with stronger _real-time_ consistency guarantees than the default.
+
+Reads again some view `V` always happen at a singular `timestamp`, which must be bound
+by the `upper` and `since` of that view. That view `V` is composed of many such _source_
+pTVC's, which are pTVC's that correspond to the data produced some some _external system_.
+
+True _linearizability_ requires that reads and writes happen in some _total order_ that is
+consistent with the _real time ordering_ of those operations. That is, each operation *appears*
+to happen atomically at some singular point in time bounded by the beginning and end of that
+operation.
+
+A `LINEARIZABLE` read against some view `V` is possible if-and-only-if the following are true:
+
+* All _source_ pTVC's that are at the base of `V` offer a _linearizable_ API for obtaining the
+  latest offset of data for that pTVC.
+  * "offset" here refers to some monotonically increasing identifier that durably and consistently
+  labels data.
+  * A given API is _linearizable_ if-and-only-if later (as in, later in _real-time_) calls tho
+  that API can never produce lower "offets".
+* For all _source_ pTVC's involved, materialized durably associate _real-time_ timestamps
+with specific offsets (these are typically referred to as _timestamp bindings_ and are currently
+implemented for Kafka sources).
+* ...and the responses from those API's can be given some _real-time total order_.
+  * The simplest way to obtain this constraint is to involve only one source.
+
+With the above constraints, the mechanism that materialized uses to service the read
+against some view `V` is as follows:
+
+1. Fetch the latest offsets for all _source_ pTVC's involved.
+2. Wait for timestamps to be durably recorded associated with all offsets, as `source_timestamps`
+3. Choose a timestamp that is _at least_
+`max(max(source_uppers), max(source_timestamps))`. Note that this may require one of both of
+holding back the `since` of `V` or waiting for the `upper` to progress past the chosen timestamp.
+4. Service the read for the view at that timestamp. This will durably advance the `upper`s of all involved
+_source_ pTVC's to at least that timestamp.
+
+This provides _linearizability_ because:
+* materialized guarantees (possible with a timestamp oracle service) that all calls to
+`current_real_time()` monotonically increase.
+* Durably recoding offsets associated with timestamps means that reads (even non-linearizable ones)
+at later times can violate the _real-time_ ordering, as later reads will always have
+a _real-time_ timestamp that is at least the chosen timestamp, and materialized, for a read against
+a pTVC at some timestamp `t` always includes all data with offsets whose associated timestamps are <= `t`.
+
+The reason the last constraint above is important is because this process can create
+an inviolably _real-time_ ordering between writes the upstream source and reads from
+materialized views, without that constraint materialized has no information if offsets
+from disparate _sources_ have a causal relationship, and could thereforce produce
+results
+
+### Caveat: views involving tables
+All reads against views that involve tables will force the query to happen at a global
+`linearized` timestamp that is shared across tables. This may be greater than the
+timestamp chosen in step #3. This is fine, as servicing this query in step #4
+will advance the `upper`s of the involved sources such that future queries will
+still be ordered at of after this query.
+
+### Caveat: queries against multiple views
+
+The above reasons only about the ordering of writes and reads to a specific view.
+If you perform `CONSISTENT` reads against multiple views with overlapping base _source_
+pTVC's, then you will not see a _linearizable_ history between those sources. You will
+see other, weaker guarantees, described below in [In practice](#in-practice).
+
+### In practice
+
+In practice this means that the following are true:
+
+* Reads against some view that involves a single _linearizable_ external source instance, and any
+number of tables can be made _linearizable_.
+  * _linearizable_ external sources include at least kafka, and exclude at least pubnub and kinesis
+  * In fact, these reads can be considered _strict serializable_
+  * Reads against other views that involve those sources, do not participate in these ordering guarantees, but
+  may have some guarantees about the ordering of reads against themselves.
+  * Non-`LINEARIZABLE` reads do not participate in these ordering guarantees.
+* Some sources (like postgres) may extend the above to allow true _linearizability_ for view involving more than
+one external source, depending on some contraints (for postgres this may be: the sources being from the same postgres instance)
+* `LINEARIZABLE` reads 1. against a view involving many _linearizable_ external source instances and/or 2. across
+multiple such views are not _linearizable_ (or _serializabile_), but are:
+  * _at least_ **read-your-writes**: that is, any write to an upstream source will be inviolably reflected in reads against materialized
+  * **recent**: that is, will reflect the state of all those upstream sources
+  * Present writes as if they happened in some partial-order that never changes; that is, results of reads are not eventually consistent, they are
+  fixed at each timestamp along the timeline.
+* Reads against views that involve non-_linearizable_ external source instances can not be made `CONSISTENT`
