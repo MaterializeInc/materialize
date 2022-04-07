@@ -116,9 +116,9 @@ use mz_expr::{GlobalId, Id};
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::Row;
 
+use crate::boundary::ComputeReplay;
 use crate::compute::arrangement::manager::TraceBundle;
-use crate::server::boundary::ComputeReplay;
-use crate::server::ComputeState;
+use crate::compute::compute_state::ComputeState;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 

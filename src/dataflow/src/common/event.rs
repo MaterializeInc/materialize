@@ -11,7 +11,7 @@
 //!
 //! This is roughly based on [timely::dataflow::operators::capture::event].
 
-use crate::activator::RcActivator;
+use super::activator::RcActivator;
 use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
 
 /// An event pusher wrapper that activates targets on push.

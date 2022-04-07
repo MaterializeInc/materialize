@@ -10,3 +10,4 @@
 pub mod decode;
 pub mod render;
 pub mod source;
+pub mod storage_state;

@@ -19,9 +19,9 @@ pub type SubscriptionId = (SourceInstanceId, WorkerIdentifier);
 
 pub mod server {
     //! TCP boundary server
-    use crate::server::boundary::StorageCapture;
-    use crate::server::tcp_boundary::{length_delimited_codec, Command, Framed, Response};
-    use crate::tcp_boundary::SubscriptionId;
+    use super::SubscriptionId;
+    use super::{length_delimited_codec, Command, Framed, Response};
+    use crate::boundary::StorageCapture;
     use differential_dataflow::Collection;
     use futures::{SinkExt, TryStreamExt};
     use std::any::Any;
@@ -368,10 +368,10 @@ pub mod server {
 
 pub mod client {
     //! TCP boundary client
-    use crate::activator::{ActivatorTrait, ArcActivator};
-    use crate::replay::MzReplay;
-    use crate::server::boundary::ComputeReplay;
-    use crate::server::tcp_boundary::{length_delimited_codec, Command, Framed, Response};
+    use crate::boundary::tcp_boundary::{length_delimited_codec, Command, Framed, Response};
+    use crate::boundary::ComputeReplay;
+    use crate::common::activator::{ActivatorTrait, ArcActivator};
+    use crate::common::replay::MzReplay;
     use differential_dataflow::{AsCollection, Collection};
     use futures::{Sink, SinkExt, TryStreamExt};
     use std::any::Any;

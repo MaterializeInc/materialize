@@ -11,10 +11,9 @@
 
 //! Driver for timely/differential dataflow.
 
-mod activator;
-mod event;
+mod boundary;
+pub(crate) mod common;
 mod operator;
-mod replay;
 mod server;
 mod sink;
 
@@ -23,8 +22,6 @@ mod storage;
 
 pub mod logging;
 
-pub use server::{
-    boundary::ComputeReplay, boundary::DummyBoundary, boundary::EventLinkBoundary,
-    boundary::StorageCapture, serve, serve_boundary, serve_boundary_requests, tcp_boundary, Config,
-    Server,
-};
+pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
+
+pub use server::{serve, serve_boundary, serve_boundary_requests, Config, Server};

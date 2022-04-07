@@ -37,8 +37,6 @@ use mz_repr::{Diff, Row, RowPacker, Timestamp};
 
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
-use crate::server::LocalInput;
-use crate::server::StorageState;
 use crate::storage::decode::decode_cdcv2;
 use crate::storage::decode::render_decode;
 use crate::storage::decode::render_decode_delimited;
@@ -50,6 +48,8 @@ use crate::storage::source::{
     PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
     SourceConfig,
 };
+use crate::storage::storage_state::LocalInput;
+use crate::storage::storage_state::StorageState;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -80,7 +80,7 @@ where
 /// Imports a table (non-durable, local source of input).
 fn import_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    storage_state: &mut crate::server::StorageState,
+    storage_state: &mut crate::storage::storage_state::StorageState,
     scope: &mut G,
     id: SourceInstanceId,
     persisted_name: Option<String>,
@@ -157,7 +157,7 @@ pub(crate) fn import_source<G>(
                 persist,
             },
     }: SourceInstanceDesc,
-    storage_state: &mut crate::server::StorageState,
+    storage_state: &mut crate::storage::storage_state::StorageState,
     scope: &mut G,
     materialized_logging: Option<Logger>,
     src_id: GlobalId,
