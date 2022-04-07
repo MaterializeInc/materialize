@@ -167,6 +167,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         persist: PersistConfig::disabled(),
         third_party_metrics_listen_addr: None,
         now: config.now,
+        cors_allowed_origins: vec![],
     }))?;
     let server = Server {
         inner,

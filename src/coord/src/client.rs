@@ -123,7 +123,7 @@ impl Client {
 /// it is created, and frees that ID for potential reuse when it is dropped.
 ///
 /// See also [`Client`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConnClient {
     conn_id: u32,
     inner: Client,

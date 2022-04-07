@@ -15,17 +15,21 @@
 
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::time::Duration;
 
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::HeaderMapExt;
-use hyper::{service, Body, Method, Request, Response, StatusCode};
+use http::header::{HeaderValue, AUTHORIZATION};
+use hyper::{Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_ore::metrics::MetricsRegistry;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
+use tower::ServiceBuilder;
+use tower_http::cors::{self, CorsLayer, Origin};
 use tracing::error;
 
 use mz_coord::session::Session;
@@ -64,6 +68,7 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
     pub pgwire_metrics: mz_pgwire::Metrics,
+    pub allowed_origins: Vec<HeaderValue>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +91,7 @@ pub struct Server {
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
     pgwire_metrics: mz_pgwire::Metrics,
+    allowed_origin: Origin,
 }
 
 impl Server {
@@ -97,6 +103,7 @@ impl Server {
             metrics_registry: config.metrics_registry,
             global_metrics: config.global_metrics,
             pgwire_metrics: config.pgwire_metrics,
+            allowed_origin: Origin::list(config.allowed_origins),
         }
     }
 
@@ -156,7 +163,7 @@ impl Server {
                 .ok_or("invalid user name in client certificate"),
         };
 
-        let svc = service::service_fn(move |req| {
+        let router = tower::service_fn(move |req| {
             let cert_user = cert_user.clone();
             let coord_client = self.coord_client.clone();
             let metrics_registry = self.metrics_registry.clone();
@@ -268,6 +275,17 @@ impl Server {
             // being used here
             future.spawn_if_canceled(|| "hyper_server".to_string())
         });
+        let svc = ServiceBuilder::new()
+            .layer(
+                CorsLayer::new()
+                    .allow_credentials(false)
+                    .allow_headers([AUTHORIZATION])
+                    .allow_methods(cors::Any)
+                    .allow_origin(self.allowed_origin.clone())
+                    .expose_headers(cors::Any)
+                    .max_age(Duration::from_secs(60) * 60),
+            )
+            .service(router);
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
     }

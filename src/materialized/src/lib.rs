@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ::http::header::HeaderValue;
 use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
@@ -125,6 +126,9 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
+    /// is permitted.
+    pub cors_allowed_origins: Vec<HeaderValue>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
@@ -490,6 +494,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
+            allowed_origins: config.cors_allowed_origins,
         });
         let mut mux = Mux::new();
         mux.add_handler(pgwire_server);
