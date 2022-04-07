@@ -282,7 +282,11 @@ impl PostgresSourceReader {
                     Ok(())
                 }));
                 try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                try_fatal!(
+                    buffer
+                        .write_all(&try_fatal!(bincode::serialize(&mz_row)))
+                        .await
+                );
             }
 
             self.metrics.tables.inc();
