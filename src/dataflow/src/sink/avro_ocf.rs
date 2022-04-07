@@ -24,7 +24,7 @@ use mz_expr::GlobalId;
 use mz_interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
 use mz_repr::{Diff, RelationDesc, Row, Timestamp};
 
-use crate::render::sinks::SinkRender;
+use crate::compute::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for AvroOcfSinkConnector
 where

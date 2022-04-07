@@ -24,10 +24,10 @@ use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
 use crate::activator::RcActivator;
-use crate::arrangement::manager::RowSpine;
-use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
+use mz_dataflow_types::KeysValsHandle;
+use mz_dataflow_types::RowSpine;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 
 /// Constructs the logging dataflow for differential logs.

@@ -28,13 +28,13 @@ use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::decode::metrics::DecodeMetrics;
-use crate::render::sources::PersistedSourceManager;
 use crate::server::boundary::StorageCapture;
 use crate::server::LocalInput;
-use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
-use crate::source::SourceToken;
+use crate::storage::decode::metrics::DecodeMetrics;
+use crate::storage::render::sources::PersistedSourceManager;
+use crate::storage::source::metrics::SourceBaseMetrics;
+use crate::storage::source::timestamp::TimestampBindingRc;
+use crate::storage::source::SourceToken;
 
 /// How frequently each dataflow worker sends timestamp binding updates
 /// back to the coordinator.
@@ -147,7 +147,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         // Add any timestamp bindings that we were already aware of on restart.
         if let Some(ts_history) = ts_history {
             for (pid, timestamp, offset) in source.ts_bindings.iter().cloned() {
-                if crate::source::responsible_for(
+                if crate::storage::source::responsible_for(
                     &source.id,
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
@@ -354,7 +354,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         )>,
     ) {
         for (debug_name, dataflow_id, as_of, source_imports) in dataflows {
-            crate::render::build_storage_dataflow(
+            crate::storage::render::build_storage_dataflow(
                 self.timely_worker,
                 &mut self.storage_state,
                 &debug_name,

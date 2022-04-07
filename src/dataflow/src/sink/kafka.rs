@@ -62,7 +62,7 @@ use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::KafkaBaseMetrics;
-use crate::render::sinks::SinkRender;
+use crate::compute::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for KafkaSinkConnector
 where

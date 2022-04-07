@@ -20,8 +20,9 @@ use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, TimelyLog};
 use crate::activator::RcActivator;
-use crate::arrangement::manager::RowSpine;
-use crate::arrangement::KeysValsHandle;
+use mz_dataflow_types::KeysValsHandle;
+use mz_dataflow_types::RowSpine;
+
 use crate::logging::ConsolidateBuffer;
 use crate::replay::MzReplay;
 use mz_dataflow_types::logging::LoggingConfig;
