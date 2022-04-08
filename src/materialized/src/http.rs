@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
-use headers::HeaderMapExt;
+use headers::{HeaderMapExt, HeaderName};
 use http::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
@@ -279,7 +279,11 @@ impl Server {
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
-                    .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+                    .allow_headers([
+                        AUTHORIZATION,
+                        CONTENT_TYPE,
+                        HeaderName::from_static("x-materialize-version"),
+                    ])
                     .allow_methods(cors::Any)
                     .allow_origin(self.allowed_origin.clone())
                     .expose_headers(cors::Any)
