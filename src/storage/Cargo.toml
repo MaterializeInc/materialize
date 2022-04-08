@@ -1,6 +1,6 @@
 [package]
-name = "mz-dataflow"
-description = "Materialize's Timely and Differential Dataflow server."
+name = "mz-storage"
+description = "Materialize's storage layer."
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.59.0"
@@ -21,7 +21,6 @@ crossbeam-channel = "0.5.4"
 csv-core = "0.1.10"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
 flate2 = "1.0.22"
 futures = "0.3.21"
@@ -32,7 +31,6 @@ lazy_static = "1.4.0"
 log = "0.4.16"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs"] }
-mz-compute = { path = "../compute" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
@@ -44,7 +42,6 @@ mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
-mz-storage = { path = "../storage" }
 mz-timely-util = { path = "../timely-util" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { version = "0.13.0", default-features = false }

@@ -30,18 +30,19 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
-use crate::boundary::BoundaryHook;
-use crate::boundary::EventLinkBoundary;
-use crate::boundary::{ComputeReplay, StorageCapture};
-use crate::compute::arrangement::manager::{TraceManager, TraceMetrics};
-use crate::compute::compute_state::ActiveComputeState;
-use crate::compute::compute_state::ComputeState;
-use crate::sink::SinkBaseMetrics;
-use crate::storage::decode::metrics::DecodeMetrics;
-use crate::storage::render::sources::PersistedSourceManager;
-use crate::storage::source::metrics::SourceBaseMetrics;
-use crate::storage::storage_state::ActiveStorageState;
-use crate::storage::storage_state::StorageState;
+use mz_storage::DecodeMetrics;
+use mz_storage::PersistedSourceManager;
+
+use mz_compute::compute_state::ActiveComputeState;
+use mz_compute::compute_state::ComputeState;
+use mz_compute::SinkBaseMetrics;
+use mz_compute::{TraceManager, TraceMetrics};
+use mz_storage::boundary::BoundaryHook;
+use mz_storage::boundary::EventLinkBoundary;
+use mz_storage::boundary::{ComputeReplay, StorageCapture};
+use mz_storage::source::metrics::SourceBaseMetrics;
+use mz_storage::storage_state::ActiveStorageState;
+use mz_storage::storage_state::StorageState;
 
 /// Configures a dataflow server.
 pub struct Config {

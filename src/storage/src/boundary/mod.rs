@@ -7,14 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! Types and traits for communicating definite data from storage to compute.
 
-//! Driver for timely/differential dataflow.
+mod boundary;
+pub mod tcp_boundary;
 
-mod server;
-
-use mz_storage::boundary;
-
-pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
-
-pub use server::{serve, serve_boundary, serve_boundary_requests, Config, Server};
+pub use boundary::*;

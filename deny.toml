@@ -74,7 +74,9 @@ wrappers = [
     "mio",
     # TODO(guswynn): switch to `tracing:enabled!` when its released
     "mz-coord",
+    "mz-compute",
     "mz-dataflow",
+    "mz-storage",
     "native-tls",
     "opentls",
     "os_info",
