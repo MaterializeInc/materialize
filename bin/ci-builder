@@ -165,15 +165,15 @@ case "$cmd" in
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
                 --network host
-                --env DOCKER_TLS_VERIFY="${DOCKER_TLS_VERIFY-}"
-                --env DOCKER_HOST="${DOCKER_HOST-}"
+                --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
+                --env "DOCKER_HOST=${DOCKER_HOST-}"
             )
 
             # Forward Docker daemon certificates, if requested.
             if [[ "${DOCKER_CERT_PATH:-}" ]]; then
                 args+=(
                     --volume "$DOCKER_CERT_PATH:/docker-certs"
-                    --env DOCKER_CERT_PATH=/docker-certs
+                    --env "DOCKER_CERT_PATH=/docker-certs"
                 )
             fi
 
