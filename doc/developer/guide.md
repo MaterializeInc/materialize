@@ -333,9 +333,7 @@ acceptable for:
 
 ## Code organization
 
-We break our code into crates for several reasons, but primarily to promote organization of code by team, thereby introducing ownership and autonomy.
-
-As such, ideally each crate will be owned by exactly one team; as of this writing, this is not yet the case, but we intend for it to be going forward
+We break our code into crates for several reasons, but primarily to promote organization of code by team, thereby introducing ownership and autonomy. As such, many crates are owned by a specific team (which does not preclude the existence of shared, cross-team crates).
 
 Although the primary unit of code organization at the inter-team level is the crate, modules within a crate are also useful for code organization, especially because they are the level at which `pub` visibility operates.
 
