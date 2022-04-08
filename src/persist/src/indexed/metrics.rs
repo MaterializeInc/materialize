@@ -24,7 +24,8 @@ pub struct BlobMetricsByType {
 }
 
 impl BlobMetricsByType {
-    pub(crate) fn register_with(blob_type: &str, registry: &MetricsRegistry) -> Self {
+    /// TODO(undocumented)
+    pub fn register_with(blob_type: &str, registry: &MetricsRegistry) -> Self {
         BlobMetricsByType {
             blob_write_count: registry.register_third_party_visible(metric!(
                 name: format!("mz_persist_blob_{}_write_count", blob_type),

@@ -1,6 +1,6 @@
 [package]
-name = "mz-dataflow"
-description = "Materialize's Timely and Differential Dataflow server."
+name = "mz-compute"
+description = "Materialize's compute layer."
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.59.0"
@@ -32,7 +32,6 @@ lazy_static = "1.4.0"
 log = "0.4.16"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs"] }
-mz-compute = { path = "../compute" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }

@@ -11,10 +11,11 @@
 
 //! Driver for timely/differential dataflow.
 
-mod server;
+pub(crate) mod arrangement;
+pub mod compute_state;
+pub(crate) mod logging;
+pub(crate) mod render;
+pub(crate) mod sink;
 
-use mz_storage::boundary;
-
-pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
-
-pub use server::{serve, serve_boundary, serve_boundary_requests, Config, Server};
+pub use arrangement::manager::{TraceManager, TraceMetrics};
+pub use sink::SinkBaseMetrics;
