@@ -39,18 +39,3 @@
     </ul>
   </nav>
 </div>
-
-<script>
-// Add click handlers for all top-level items with children.
-const menus = $("nav[role=navigation] li.has-children");
-menus.find("svg").click(e => {
-    $(e.target).parents('li').toggleClass("open");
-    e.preventDefault();
-});
-
-// Open the submenu containing the current page by default.
-menus.has(".active").addClass("open");
-
-//Scroll the sidebar to the active element
-$('.sidebar').scrollTop($(".sidebar .active").offset().top - ($(window).height()/2));
-</script>

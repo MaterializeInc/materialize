@@ -109,6 +109,11 @@ parent = "reference"
 url = "/sql/create-index"
 weight= 50
 
+[[menu.main]]
+identifier = "commands"
+parent = "reference"
+weight = 100
+name = "**SQL Commands**"
 
 [[menu.main]]
 identifier = "integration-guides"
