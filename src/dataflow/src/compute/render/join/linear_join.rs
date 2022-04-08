@@ -27,9 +27,9 @@ use mz_dataflow_types::plan::join::JoinClosure;
 use mz_dataflow_types::DataflowError;
 use mz_repr::{Diff, Row, RowArena};
 
+use crate::common::operator::CollectionExt;
 use crate::compute::render::context::CollectionBundle;
 use crate::compute::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
-use crate::operator::CollectionExt;
 use mz_repr::DatumVec;
 
 /// Different forms the streamed data might take.

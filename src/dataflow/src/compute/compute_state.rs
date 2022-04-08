@@ -30,10 +30,10 @@ use mz_repr::{Diff, Row, Timestamp};
 
 use crate::boundary::ComputeReplay;
 use crate::common::activator::RcActivator;
+use crate::common::operator::CollectionExt;
 use crate::compute::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::ComputeEvent;
-use crate::operator::CollectionExt;
 use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
@@ -360,7 +360,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
 
         let activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
-            "materialized",
+            "materialize/compute",
             Logger::new(
                 now,
                 start_offset,
@@ -374,7 +374,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
 
         let activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
-            "materialized/storage",
+            "materialize/storage",
             Logger::new(
                 now,
                 start_offset,
@@ -397,7 +397,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         let logger = self
             .timely_worker
             .log_register()
-            .get("materialized")
+            .get("materialize/compute")
             .unwrap();
 
         if logging.log_logging {
@@ -487,10 +487,12 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         self.timely_worker
             .log_register()
             .remove("differential/arrange");
-        self.timely_worker.log_register().remove("materialized");
         self.timely_worker
             .log_register()
-            .remove("materialized/storage");
+            .remove("materialize/compute");
+        self.timely_worker
+            .log_register()
+            .remove("materialize/storage");
     }
 
     /// Send progress information to the coordinator.

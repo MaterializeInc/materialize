@@ -12,9 +12,9 @@ use timely::dataflow::Scope;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{Row, RowArena};
 
+use crate::common::operator::StreamExt;
 use crate::compute::render::context::CollectionBundle;
 use crate::compute::render::context::Context;
-use crate::operator::StreamExt;
 use mz_repr::DatumVec;
 
 impl<G> Context<G, Row>

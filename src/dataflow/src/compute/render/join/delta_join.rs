@@ -24,8 +24,8 @@ use mz_repr::{Diff, Row, RowArena};
 use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
+use crate::common::operator::CollectionExt;
 use crate::compute::render::context::CollectionBundle;
-use crate::operator::CollectionExt;
 use mz_repr::DatumVec;
 
 impl<G> Context<G, Row>
@@ -407,7 +407,7 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    use crate::operator::StreamExt;
+    use crate::common::operator::StreamExt;
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
 

@@ -58,7 +58,7 @@ use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use self::metrics::SourceBaseMetrics;
 
 use super::source::util::source;
-use crate::operator::StreamExt;
+use crate::common::operator::StreamExt;
 use crate::storage::source::timestamp::TimestampBindingRc;
 use crate::storage::source::timestamp::TimestampBindingUpdater;
 use crate::storage::source::timestamp::{AssignedTimestamp, SourceTimestamp};

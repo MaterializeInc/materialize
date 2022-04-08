@@ -255,7 +255,7 @@ where
         });
 
         // Demux out the potential errors from key and value selector evaluation.
-        use crate::operator::CollectionExt;
+        use crate::common::operator::CollectionExt;
         use differential_dataflow::operators::consolidate::ConsolidateStream;
         let (ok, mut err) = key_val_input
             .as_collection()
