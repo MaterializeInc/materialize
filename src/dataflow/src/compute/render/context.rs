@@ -28,7 +28,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::operator::CollectionExt;
+use crate::common::operator::CollectionExt;
 use mz_dataflow_types::{DataflowDescription, DataflowError};
 use mz_dataflow_types::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use mz_expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};

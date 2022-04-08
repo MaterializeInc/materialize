@@ -29,7 +29,7 @@ use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
-use crate::operator::StreamExt;
+use crate::common::operator::StreamExt;
 use crate::storage::source::DecodeResult;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]

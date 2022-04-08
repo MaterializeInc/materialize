@@ -9,4 +9,5 @@
 
 pub(crate) mod activator;
 pub(crate) mod event;
+pub(crate) mod operator;
 pub(crate) mod replay;

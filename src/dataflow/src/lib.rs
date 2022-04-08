@@ -13,7 +13,6 @@
 
 mod boundary;
 pub(crate) mod common;
-mod operator;
 mod server;
 mod sink;
 
