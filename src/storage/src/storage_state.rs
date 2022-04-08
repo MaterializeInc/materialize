@@ -261,61 +261,65 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
             }
 
-            StorageCommand::Append { id, updates, upper } => {
-                let table_state = match self.storage_state.table_state.get_mut(&id) {
-                    Some(table_state) => table_state,
-                    None => panic!(
-                        "table state {} missing for insert at worker {}",
-                        id,
-                        self.timely_worker.index()
-                    ),
-                };
+            StorageCommand::Append(appends) => {
+                for (id, updates, upper) in appends {
+                    let table_state = match self.storage_state.table_state.get_mut(&id) {
+                        Some(table_state) => table_state,
+                        None => panic!(
+                            "table state {} missing for insert at worker {}",
+                            id,
+                            self.timely_worker.index()
+                        ),
+                    };
 
-                // Add the new updates to all existing renders of the table.
-                for input in &mut table_state.inputs {
-                    if let Some(capability) = input.capability.upgrade() {
-                        let mut capability = capability.borrow_mut();
-                        let mut session = input.handle.session(capability.clone());
-                        for update in &updates {
-                            assert!(update.timestamp >= *capability.time());
-                            session.give((update.row.clone(), update.timestamp, update.diff));
+                    // Add the new updates to all existing renders of the table.
+                    for input in &mut table_state.inputs {
+                        if let Some(capability) = input.capability.upgrade() {
+                            let mut capability = capability.borrow_mut();
+                            let mut session = input.handle.session(capability.clone());
+                            for update in &updates {
+                                assert!(update.timestamp >= *capability.time());
+                                session.give((update.row.clone(), update.timestamp, update.diff));
+                            }
+                            capability.downgrade(&upper);
                         }
-                        capability.downgrade(&upper);
-                        assert!(upper >= table_state.upper);
-                        table_state.upper = upper;
-                        // Announce the table updates as durably recorded. This is not correct,
-                        // but it also hasn't been correct afaict.
-                        // TODO(petrosagg): correct this once STORAGE owns table durability.
-                        let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
-                        let mut joined_frontier = Antichain::new();
-                        for time1 in borrow.iter() {
-                            joined_frontier.insert(time1.join(&upper));
-                        }
-                        *borrow = joined_frontier;
                     }
-                }
-                // Discard entries that are no longer active.
-                table_state
-                    .inputs
-                    .retain(|input| input.capability.upgrade().is_some());
 
-                // Stash the data for use by future renders of the table.
-                for update in updates {
+                    assert!(upper >= table_state.upper);
+                    table_state.upper = upper;
+                    // Announce the table updates as durably recorded. This is not correct,
+                    // but it also hasn't been correct afaict.
+                    // TODO(petrosagg): correct this once STORAGE owns table durability.
+                    let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
+                    let mut joined_frontier = Antichain::new();
+                    for time1 in borrow.iter() {
+                        joined_frontier.insert(time1.join(&upper));
+                    }
+                    *borrow = joined_frontier;
+
+                    // Discard entries that are no longer active.
                     table_state
-                        .data
-                        .push((update.row, update.timestamp, update.diff));
-                }
+                        .inputs
+                        .retain(|input| input.capability.upgrade().is_some());
 
-                // Consolidate the data in the table if it's doubled in size
-                // since the last consolidation.
-                if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                    for (_data, time, _diff) in &mut table_state.data {
-                        time.advance_by(table_state.since.borrow());
+                    // Stash the data for use by future renders of the table.
+                    for update in updates {
+                        table_state
+                            .data
+                            .push((update.row, update.timestamp, update.diff));
                     }
-                    differential_dataflow::consolidation::consolidate_updates(
-                        &mut table_state.data,
-                    );
-                    table_state.last_consolidated_size = table_state.data.len();
+
+                    // Consolidate the data in the table if it's doubled in size
+                    // since the last consolidation.
+                    if table_state.data.len() > table_state.last_consolidated_size * 2 {
+                        for (_data, time, _diff) in &mut table_state.data {
+                            time.advance_by(table_state.since.borrow());
+                        }
+                        differential_dataflow::consolidation::consolidate_updates(
+                            &mut table_state.data,
+                        );
+                        table_state.last_consolidated_size = table_state.data.len();
+                    }
                 }
             }
 

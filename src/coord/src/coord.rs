@@ -812,24 +812,23 @@ impl Coordinator {
             );
         }
 
-        // Advance the timestmap of untouched tables by appending an empty batch
+        let mut appends = vec![];
+        // First advance the timestamp of untouched tables by appending an empty batch
         for table in self.catalog.entries().filter(|e| e.is_table()) {
             let id = table.id();
             if !self.volatile_updates.contains_key(&id) {
-                self.dataflow_client
-                    .storage_mut()
-                    .append(id, vec![], advance_to)
-                    .await
-                    .unwrap();
+                appends.push((id, vec![], advance_to));
             }
         }
+        // Then drain all pending writes and prepare append commands
         for (id, updates) in self.volatile_updates.drain() {
-            self.dataflow_client
-                .storage_mut()
-                .append(id, updates, advance_to)
-                .await
-                .unwrap();
+            appends.push((id, updates, advance_to));
         }
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
     }
 
     async fn message_worker(&mut self, message: DataflowResponse) {

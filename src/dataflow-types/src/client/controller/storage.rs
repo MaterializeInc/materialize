@@ -77,9 +77,7 @@ pub trait StorageController: Debug + Send {
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     async fn append(
         &mut self,
-        id: GlobalId,
-        updates: Vec<Update<Self::Timestamp>>,
-        upper: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError>;
 
     async fn update_durability_frontiers(
@@ -312,13 +310,11 @@ where
 
     async fn append(
         &mut self,
-        id: GlobalId,
-        updates: Vec<Update<Self::Timestamp>>,
-        upper: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
         self.state
             .client
-            .send(StorageCommand::Append { id, updates, upper })
+            .send(StorageCommand::Append(commands))
             .await
             .map_err(StorageError::from)
     }
