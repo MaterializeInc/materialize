@@ -87,7 +87,9 @@ and add the following to your `settings.json`.
 If you prefer to use another editor, such as Vim or Emacs, we recommend that
 you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
 of this document; if you have any issues, ask in one of the engineering channels
-on Slack.
+on Slack.  If you do this, you may wish to change the target directory so it
+does not conflict with other cargo commands.  You can do this by adding to the
+cargo check extra args "--target-dir" and "$NEWTARGET".
 
 Besides Rust-Analyzer, the only other known tool with good code navigation features
 is CLion along with its Rust plugin. This is a good choice for developers who prefer
