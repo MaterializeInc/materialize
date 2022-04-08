@@ -34,4 +34,3 @@ description: "  "
 ### API with Cube.JS
 
 ## Conclusion
-

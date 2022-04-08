@@ -9,5 +9,3 @@ menu:
 disable_list: true
 disable_toc: true
 ---
-
-

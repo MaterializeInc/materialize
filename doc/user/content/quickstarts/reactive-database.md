@@ -30,4 +30,3 @@ Materialize is an event-driven database, this means you can create unbroken chai
 ## Step four: Query Materialize from Application
 
 ## Step five: Subscribe to changes from Application
-
