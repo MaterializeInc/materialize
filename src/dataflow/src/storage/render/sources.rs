@@ -301,7 +301,7 @@ where
                 error_collections.push(
                     err_stream
                         .map(DataflowError::SourceError)
-                        .pass_through("source-errors")
+                        .pass_through("source-errors", 1)
                         .as_collection(),
                 );
 
@@ -316,7 +316,7 @@ where
                 error_collections.push(
                     err_stream
                         .map(DataflowError::SourceError)
-                        .pass_through("source-errors")
+                        .pass_through("source-errors", 1)
                         .as_collection(),
                 );
 
@@ -375,7 +375,7 @@ where
                 error_collections.push(
                     err_source
                         .map(DataflowError::SourceError)
-                        .pass_through("source-errors")
+                        .pass_through("source-errors", 1)
                         .as_collection(),
                 );
 
@@ -533,7 +533,7 @@ where
                                 let flattened_stream =
                                     flatten_results_prepend_keys(key_envelope, results);
 
-                                let flattened_stream = flattened_stream.pass_through("decode");
+                                let flattened_stream = flattened_stream.pass_through("decode", 1);
 
                                 // When persistence is enabled we need to persist and seal up
                                 // both the timestamp bindings and the data. Otherwise, just

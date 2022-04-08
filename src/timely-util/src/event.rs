@@ -17,7 +17,9 @@ use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
 /// An event pusher wrapper that activates targets on push.
 #[derive(Clone, Debug)]
 pub struct ActivatedEventPusher<E> {
+    /// Inner event pusher.
     pub inner: E,
+    /// Activator used to prompt receipt of event.
     pub activator: RcActivator,
 }
 

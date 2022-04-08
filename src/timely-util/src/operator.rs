@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Common operator transformationts on timely streams and differential collections.
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
@@ -20,8 +22,6 @@ use timely::dataflow::operators::generic::{
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
-
-use mz_repr::Diff;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>
@@ -86,7 +86,7 @@ where
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
-    fn pass_through(&self, name: &str) -> Stream<G, (D1, G::Timestamp, Diff)>;
+    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -215,17 +215,7 @@ where
         })
     }
 
-    fn pass_through(
-        &self,
-        name: &str,
-    ) -> Stream<
-        G,
-        (
-            D1,
-            G::Timestamp,
-            Diff, /* Can't be generic -- Semigroup has no distinguished `1` element */
-        ),
-    > {
+    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)> {
         self.unary(Pipeline, name, move |_, _| {
             move |input, output| {
                 input.for_each(|cap, data| {
@@ -234,7 +224,7 @@ where
                     let mut session = output.session(&cap);
                     session.give_iterator(
                         v.into_iter()
-                            .map(|payload| (payload, cap.time().clone(), 1)),
+                            .map(|payload| (payload, cap.time().clone(), unit.clone())),
                     );
                 });
             }
