@@ -84,8 +84,11 @@ pub(crate) mod r#impl {
 /// processes. This location can contain any number of persist shards.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Location {
-    blob_uri: String,
-    consensus_uri: String,
+    /// Uri string that identifies the blob store.
+    pub blob_uri: String,
+
+    /// Uri string that identifies the consensus system.
+    pub consensus_uri: String,
 }
 
 impl Location {
