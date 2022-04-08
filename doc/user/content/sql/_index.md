@@ -1,5 +1,5 @@
 ---
-title: "Materialize SQL Reference"
+title: "SQL Reference"
 description: "A single page with every SQL command, function, type, and keyword."
 menu:
   main:
