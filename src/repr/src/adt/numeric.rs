@@ -23,6 +23,13 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
+// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
+// for guidance on using `derive(Arbitrary)` outside of test code.
+#[cfg(test)]
+use proptest_derive::Arbitrary;
+
 /// The number of internal decimal units in a [`Numeric`] value.
 pub const NUMERIC_DATUM_WIDTH: u8 = 13;
 
@@ -80,6 +87,7 @@ lazy_static! {
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
