@@ -84,7 +84,7 @@ fish2   fishval  1000   <null>   <null>
 
 
 # Works with other includes
-$ kafka-create-topic topic=headers_also
+$ kafka-create-topic topic=headers_also partitions=1
 
 $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus":"gusfive"}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
