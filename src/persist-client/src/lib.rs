@@ -17,6 +17,7 @@
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -127,6 +128,21 @@ pub struct ShardId([u8; 16]);
 impl std::fmt::Display for ShardId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "s{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl FromStr for ShardId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.strip_prefix('s') {
+            Some(uuid_str) => {
+                let uuid = Uuid::parse_str(&uuid_str)
+                    .map_err(|e| format!("could not parse ShardId '{}': {}", s, e))?;
+                Ok(ShardId(uuid.as_bytes().to_owned()))
+            }
+            None => Err(format!("unexpected ShardId '{}'", s)),
+        }
     }
 }
 
@@ -456,5 +472,17 @@ mod tests {
             format!("{:?}", ReaderId([0u8; 16])),
             "ReaderId(00000000-0000-0000-0000-000000000000)"
         );
+    }
+
+    #[test]
+    fn shard_id_roundtrip() -> Result<(), String> {
+        let original = ShardId::new();
+
+        let id_string = format!("{}", original);
+        let parsed_id: ShardId = id_string.parse()?;
+
+        assert_eq!(parsed_id, original);
+
+        Ok(())
     }
 }
