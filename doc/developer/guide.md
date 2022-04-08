@@ -331,11 +331,13 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-sasl, so
     maintaining the two separately does not introduce much overhead.
 
-## Our Crates
+## Code organization
 
-We break up our rust code into crates mostly to improve compilation time, but
-also sometimes because our code is intended to be open sourced or to be re-used
-between different binaries.
+We break our code into crates for several reasons, but primarily to promote organization of code by team, thereby introducing ownership and autonomy.
+
+As such, ideally each crate will be owned by exactly one team; as of this writing, this is not yet the case, but we intend for it to be going forward
+
+Although the primary unit of code organization at the inter-team level is the crate, modules within a crate are also useful for code organization, especially because they are the level at which `pub` visibility operates.
 
 You can view a relationship diagram of our crates by running the following
 command:
