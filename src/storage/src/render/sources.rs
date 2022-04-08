@@ -390,7 +390,6 @@ where
                                             error_collections.push(tx_source_err);
 
                                             super::debezium::render_tx(
-                                                src_id,
                                                 dbz_envelope,
                                                 &results,
                                                 tx_source_ok,
