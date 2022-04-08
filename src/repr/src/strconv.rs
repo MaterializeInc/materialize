@@ -53,6 +53,13 @@ use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
+// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
+// for guidance on using `derive(Arbitrary)` outside of test code.
+#[cfg(test)]
+use proptest_derive::Arbitrary;
+
 macro_rules! bail {
     ($($arg:tt)*) => { return Err(format!($($arg)*)) };
 }
@@ -1407,6 +1414,7 @@ where
 
 /// An error while parsing an input as a type.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ParseError {
     pub(crate) kind: ParseErrorKind,
     pub(crate) type_name: String,
@@ -1417,6 +1425,7 @@ pub struct ParseError {
 #[derive(
     Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -1490,6 +1499,7 @@ impl fmt::Display for ParseError {
 impl Error for ParseError {}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
