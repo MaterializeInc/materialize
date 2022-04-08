@@ -112,10 +112,8 @@ body {
     display: flex;
     justify-content: flex-end;
 
-    & > ul {
-        li:last-child {
-            padding-bottom: 2rem;
-        }
+    & > ul > li:last-child {
+        padding-bottom: 2rem;
     }
 
     a {
