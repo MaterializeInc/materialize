@@ -9,10 +9,9 @@
 
 //! Protobuf structs mirroring [`crate::adt::array`].
 
-include!(concat!(env!("OUT_DIR"), "/adt.array.rs"));
-
 use super::super::{ProtoRepr, TryFromProtoError};
 use crate::adt::array::InvalidArrayError;
+use crate::proto::gen::adt::array::*;
 
 impl From<&InvalidArrayError> for ProtoInvalidArrayError {
     fn from(error: &InvalidArrayError) -> Self {

@@ -9,8 +9,10 @@
 
 //! Protobuf structs mirroring [`crate::scalar`] and [`crate::relation`]
 
-include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
-use crate::proto::scalar::proto_scalar_type::ProtoRecordField;
+//include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
+use crate::proto::gen::scalar::proto_scalar_type::ProtoRecordField;
+use crate::proto::gen::scalar::*;
+
 use crate::proto::TryFromProtoError;
 use crate::proto::TryIntoIfSome;
 use crate::scalar::ScalarType;
@@ -86,8 +88,8 @@ impl From<&ScalarType> for Box<ProtoScalarType> {
 
 impl From<&ScalarType> for ProtoScalarType {
     fn from(value: &ScalarType) -> Self {
-        use proto_scalar_type::Kind::*;
-        use proto_scalar_type::*;
+        use super::gen::scalar::proto_scalar_type::Kind::*;
+        use super::gen::scalar::proto_scalar_type::*;
 
         ProtoScalarType {
             kind: Some(match value {
@@ -156,7 +158,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
     type Error = TryFromProtoError;
 
     fn try_from(value: ProtoScalarType) -> Result<Self, TryFromProtoError> {
-        use proto_scalar_type::Kind::*;
+        use crate::proto::gen::scalar::proto_scalar_type::Kind::*;
 
         let kind = value
             .kind

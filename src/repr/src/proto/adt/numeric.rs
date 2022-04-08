@@ -9,9 +9,8 @@
 
 //! Protobuf structs mirroring [`crate::adt::numeric`].
 
-include!(concat!(env!("OUT_DIR"), "/adt.numeric.rs"));
-
 use crate::adt::numeric::NumericMaxScale;
+use crate::proto::gen::adt::numeric::*;
 use crate::proto::{ProtoRepr, TryFromProtoError};
 
 impl From<&NumericMaxScale> for ProtoNumericMaxScale {

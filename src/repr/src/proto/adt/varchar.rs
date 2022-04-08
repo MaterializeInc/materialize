@@ -9,9 +9,8 @@
 
 //! Protobuf structs mirroring [`crate::adt::varchar`].
 
-include!(concat!(env!("OUT_DIR"), "/adt.varchar.rs"));
-
 use crate::adt::varchar::VarCharMaxLength;
+use crate::proto::gen::adt::varchar::*;
 use crate::proto::TryFromProtoError;
 
 impl From<&VarCharMaxLength> for ProtoVarCharMaxLength {

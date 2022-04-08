@@ -17,6 +17,10 @@ pub mod strconv;
 use mz_ore::cast::CastFrom;
 use std::{char::CharTryFromError, num::TryFromIntError};
 
+pub(crate) mod gen {
+    include!(concat!(env!("OUT_DIR"), "/mod.rs"));
+}
+
 /// An error thrown when trying to convert from a `*.proto`-generated type
 /// `Proto$T` to `$T`.
 #[derive(Debug)]
