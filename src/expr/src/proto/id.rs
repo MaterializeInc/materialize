@@ -125,16 +125,15 @@ impl mz_persist_types::Codec for PartitionId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {
         #[test]
-        fn id_serialization_roundtrip(original in any::<Id>()) {
-            let proto = ProtoId::from(&original);
-            let serialized = proto.encode_to_vec();
-            let proto = ProtoId::decode(&*serialized).unwrap();
-            let id = Id::try_from(proto).unwrap();
-            assert_eq!(id, original);
+        fn id_protobuf_roundtrip(expect in any::<Id>()) {
+            let actual = protobuf_roundtrip::<_, ProtoId>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }
