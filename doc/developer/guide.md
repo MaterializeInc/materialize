@@ -68,7 +68,10 @@ setup for developing Materialize, and the one for which you are the most likely
 to be able to get help if something goes wrong. It's important to note that you
 **should not** install the "Rust" plugin, as it is known to
 conflict with Rust-Analyzer; the latter has far more advanced code navigation
-features and is the de-facto standard for developing Rust.
+features and is the de-facto standard for developing Rust. If you use
+Rust-Analyzer, you may wish to change the target directory so it does not
+conflict with other cargo commands.  You can do this by adding to the cargo
+check extra args "--target-dir" and "$NEWTARGET".
 
 Visual Studio Code also works well for editing Python; to work on the Python code
 in the Materialize repository, install the official Python extension from Microsoft
