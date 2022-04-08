@@ -1,6 +1,8 @@
 ---
 title: "What Is Materialize?"
 description: "Learn more about Materialize"
+aliases:
+  - /overview/what-is-materialize/
 menu:
   main:
     identifier: overview
@@ -136,6 +138,6 @@ To maintain materialized views, most RDBMSes occasionally re-run the view's unde
 
 ## Learn more
 
-- [Architecture overview](../architecture) to understand Materialize's internal architecture
-- [API overview](../api-components) to understand what Materialize's SQL API expresses
-- [Materialize CDC](../../connect/materialize-cdc) to understand the benefits of the Materialize CDC envelope format
+- [Architecture overview](/overview/architecture) to understand Materialize's internal architecture
+- [API overview](/overview/key-concepts) to understand what Materialize's SQL API expresses
+- [Materialize CDC](/overview/materialize-cdc/) to understand the benefits of the Materialize CDC envelope format

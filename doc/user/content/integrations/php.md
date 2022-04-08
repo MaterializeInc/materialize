@@ -153,9 +153,9 @@ For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdo
 
 ## Insert data into tables
 
-Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materialize](https://materialize.com/docs/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
+Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materialize](/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
 
-**Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize.
+**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
 
 ```php
 <?php

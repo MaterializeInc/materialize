@@ -67,13 +67,6 @@ versions = [
   { name = "v0.1.0", date = "13 February 2020", targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"] }
 ]
 
-
-
-[[menu.main]]
-identifier = "reference"
-name = "Reference"
-weight = 30
-
 [[menu.main]]
 name = "Tables"
 parent = "reference"
@@ -99,13 +92,13 @@ url = "/sql/create-sink/"
 weight= 60
 
 [[menu.main]]
-name = "Queries (SELECT)"
+name = "Queries (`SELECT`)"
 parent = "reference"
 url = "/sql/select/"
 weight= 70
 
 [[menu.main]]
-name = "Subscriptions (TAIL)"
+name = "Subscriptions (`TAIL`)"
 parent = "reference"
 url = "/sql/create-index/"
 weight= 80
@@ -121,11 +114,20 @@ weight= 50
 identifier = "integration-guides"
 name = "Integration Guides"
 parent = "integrations"
+url = "/integrations"
 weight = 40
+
+[[menu.main]]
+identifier = "client-libraries"
+name = "Client Libraries"
+parent = "integrations"
+url = "/integrations/#libraries-and-drivers"
+weight = 30
 
 [[menu.main]]
 identifier = "advanced"
 name = "Advanced Concepts"
+parent = "overview"
 weight = 80
 
 [[menu.main]]

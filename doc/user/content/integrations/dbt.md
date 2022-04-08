@@ -186,7 +186,7 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 
     This command generates **executable SQL code** from any model files under the specified directory and runs it in the target environment. You can find the compiled statements under `/target/run` and `target/compiled` in the dbt project folder.
 
-1. Using a new terminal window, [connect](/connect/cli/) to Materialize to double-check that all objects have been created:
+1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that all objects have been created:
 
     ```bash
     psql -U materialize -h localhost -p 6875 materialize

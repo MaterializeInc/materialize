@@ -1,7 +1,8 @@
 ---
 title: "Temporal Filters (Sliding, Hopping, Tumbling Windows)"
 description: "Perform time-windowed computation over temporal data."
-weight:
+aliases:
+  - /guides/temporal-filters/
 menu:
   main:
     parent: 'sql-spellbook'

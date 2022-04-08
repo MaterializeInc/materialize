@@ -98,7 +98,7 @@ and re-order results of materialized sources or materialized views.
 You can <code>SELECT</code> from non-materialized views only if they are
 transitively materialized. For more information, see [`CREATE VIEW`: Querying
 non-materialized
-views](https://materialize.com/docs/sql/create-view/#querying-non-materialized-views).
+views](/sql/create-view/#querying-non-materialized-views).
 {{< /warning >}}
 
 Performing a `SELECT` query that does not directly read out of a materialization

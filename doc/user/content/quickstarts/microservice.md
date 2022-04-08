@@ -1,7 +1,12 @@
 ---
-title: "Microservice Demo"
+title: "Replace a Microservice with a SQL Query"
 description: "Find out how a single Materialize instance can create an entire microservice."
-
+aliases:
+  - /demos/microservice/
+menu:
+    main:
+        parent: quickstarts
+weight: 40
 ---
 
 {{% demos-warning %}}
@@ -397,7 +402,7 @@ In a future iteration, we'll make this demo more interactive.
 
 ### Preparing the environment
 
-1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
    already.
 
 1. Clone the Materialize repository:
@@ -530,6 +535,7 @@ In this demo, we saw:
 
 ## Related pages
 
-- [Business intelligence demo](../business-intelligence)
-- [Log parsing demo](../log-parsing)
-- [`CREATE SOURCE`](/sql/create-source)
+- [Microservice demo](/quickstarts/microservice/)
+- [Build a real-time analytics dashboard](/quickstarts/live-analytics/)
+- [Log parsing demo](/quickstarts/log-parsing/)
+- [`CREATE SOURCE`](/sql/create-source/)

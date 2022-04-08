@@ -24,7 +24,7 @@ This page details how to connect Materialize to a PostgreSQL (10+) database to c
 
 Field | Use
 ------|-----
-**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [API Components &mdash; Materialized sources](/overview/api-components/#materialized-sources).
+**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Key Concepts &mdash; Materialized sources](/overview/key-concepts/#materialized-sources).
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
@@ -44,7 +44,7 @@ Field | Value type | Description
 
 This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database (also know as _change data capture_).
 
-For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [Change Data Capture (Postgres) guide](/guides/cdc-postgres/#direct-postgres-source).
+For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source).
 
 #### Creating a source
 
@@ -144,5 +144,5 @@ For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_
 
 ## Related pages
 
-- [Change Data Capture (Postgres) guide](/guides/cdc-postgres/#direct-postgres-source)
+- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
 - [`CREATE VIEWS`](../../create-views)

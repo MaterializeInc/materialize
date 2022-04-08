@@ -2,7 +2,7 @@
 title: "How to connect Metabase to Materialize"
 description: "Get details about using Materialize with Metabase"
 aliases:
-  - /third-party/metabase/
+  /third-party/metabase/
 menu:
   main:
     parent: "integration-guides"

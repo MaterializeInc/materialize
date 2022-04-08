@@ -11,41 +11,41 @@ Materialize is a streaming database for real-time applications. Materialize
 accepts input data from a variety of streaming sources (like Kafka), data stores and databases (like S3 and Postgres), and files
 (like CSV and JSON), and lets you query them using SQL.
 
-{{< callout primary_url="https://materialize.com/docs/get-started/" primary_text="Get Started">}}
-  # Quickstart
+{{< callout primary_url="/docs/speedrun/" primary_text="Get Started">}}
+  # Materialize Speedrun
 
   Follow this walkthrough to start creating live views on streaming data with Materialize.
 {{</ callout >}}
 
 {{< multilinkbox >}}
 {{< linkbox icon="bulb" title="Key Concepts" >}}
-- [Materialize overview](/overview/what-is-materialize)
-- [API components](/overview/api-components)
+- [Materialize overview](/overview/what-is-materialize/)
+- [Key Concepts](/overview/key-concepts/)
 - [Materialize Cloud overview](/cloud/)
 {{</ linkbox >}}
-{{< linkbox icon="touch" title="Demos" >}}
-- [Real-time analytics dashboard](/demos/business-intelligence)
-- [Streaming SQL on server logs](/demos/log-parsing)
-- [Microservices](/demos/microservice)
+{{< linkbox icon="touch" title="Quickstarts" >}}
+- [Real-time analytics dashboard](/quickstarts/live-analytics/)
+- [Streaming SQL on server logs](/quickstarts/log-parsing/)
+- [Microservices](/quickstarts/microservice/)
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
-- [Materialize &amp; Postgres CDC](/guides/cdc-postgres/)
-- [dbt &amp; Materialize](/guides/dbt/)
-- [Materialize &amp; Node.js](/guides/node-js/)
-- [Time-windowed computation](/guides/temporal-filters/)
+- [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
+- [dbt &amp; Materialize](/integrations/dbt/)
+- [Materialize &amp; Node.js](/integrations/node-js/)
+- [Time-windowed computation](/sql/spellbook/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
-- [`CREATE SOURCE`](/sql/create-source)
-- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
-- [`SQL Data Types`](/sql/types)
-- [`SQL Functions`](/sql/functions)
+- [`CREATE SOURCE`](/sql/create-source/)
+- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
+- [`SQL Data Types`](/sql/types/)
+- [`SQL Functions`](/sql/functions/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
 ## New &amp; updated
 
-- [Release Notes](release-notes/)
-- [CDC with MySQL](/guides/cdc-mysql/)
+- [Release Notes](/release-notes/)
+- [CDC with MySQL](/integrations/cdc-mysql/)
 - [Materialize Cloud](/cloud/) - Now in open beta!
 
 ## Learn more

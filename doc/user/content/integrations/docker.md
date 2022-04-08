@@ -1,6 +1,12 @@
 ---
 title: "Using Docker"
 description: "Get details about using Materialize with Docker"
+aliases:
+  - /third-party/docker/
+menu:
+  main:
+    parent: "integration-guides"
+    name: "Docker"
 ---
 
 Many of our demos rely on [Docker] and [Docker Compose] to make it easy to deploy

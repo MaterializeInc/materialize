@@ -3,6 +3,10 @@ title: Tools and Integrations
 description: "Get details about third-party tools and integrations support with Materialize"
 aliases:
   - /third-party/supported-tools/
+  - /third-party/
+  - /third-party/postgres-cloud/
+  - /guides/postgres-cloud/
+  - /guides/
 menu:
   main:
     identifier: integrations
@@ -32,8 +36,8 @@ Kafka is supported in Materialize as a [`SOURCE`](/sql/create-source/) of input
 | Apache Kafka | {{< supportLevel production >}} | Kafka is supported in a variety of [configuration](/sql/create-source/kafka/#with-options) and [security](/sql/create-source/kafka/#authentication) options. | [More Info](/sql/create-source/kafka/) |
 | Confluent Cloud Kafka | {{< supportLevel production >}} | Use SASL authentication, see [example here](/sql/create-source/kafka/#saslplain). The same config can be used to produce messages to Confluent Kafka via a [SINK](/sql/create-sink/). |  |
 | AWS MSK (Managed Streaming for Kafka) | {{< supportLevel production >}} | Use SASL/SCRAM Authentication to securely connect to MSK clusters. [MSK SASL Docs](https://docs.aws.amazon.com/msk/latest/developerguide/msk-password.html) *(mTLS connections coming soon.)* |  |
-| Redpanda | {{< supportLevel beta >}} | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/third-party/redpanda/) for instructions and limitations. | [More Info](/third-party/redpanda/) [](#notify) |
-| Heroku Kafka | {{< supportLevel alpha >}} | Use [SSL Authentication](https://materialize.com/docs/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, [preventing SINKs from working](https://github.com/MaterializeInc/materialize/issues/8378). | [](#notify) |
+| Redpanda | {{< supportLevel beta >}} | Repdanda works as a Kafka Source and Sink in Materialize. See [using Redpanda with Materialize](/integrations/redpanda/) for instructions and limitations. | [More Info](/integrations/redpanda/) [](#notify) |
+| Heroku Kafka | {{< supportLevel alpha >}} | Use [SSL Authentication](/sql/create-source/kafka/#ssl) and the Heroku-provided certificates and keys for security. Use Heroku-provided `KAFKA_URL` for broker addresses (replace `kafka+ssl://` with `ssl://`). Heroku disables topic creation, [preventing SINKs from working](https://github.com/MaterializeInc/materialize/issues/8378). | [](#notify) |
 
 
 ### Other Message Brokers
@@ -50,7 +54,7 @@ _Is there another message broker you'd like to use with Materialize? [Open a Gi
 
 ## Databases
 
-Materialize can use change events _(creates, updates, deletes)_ as source data. These events typically come from the replication logs of databases. This requires Materialize to either connect directly to a database via a replication slot, or to use an intermediary service like [Debezium](/third-party/debezium/) to stream the events to a [message broker](#message-brokers).
+Materialize can use change events _(creates, updates, deletes)_ as source data. These events typically come from the replication logs of databases. This requires Materialize to either connect directly to a database via a replication slot, or to use an intermediary service like [Debezium](/integrations/debezium/) to stream the events to a [message broker](#message-brokers).
 
 ### PostgreSQL
 
@@ -59,13 +63,13 @@ Materialize has a [direct PostgreSQL source](/sql/create-source/postgres/) tha
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
 | Self-managed PostgreSQL (10+) | {{< supportLevel beta >}} | Users with full control over their PostgreSQL database can [connect directly to a PostgreSQL](/sql/create-source/postgres/) _version 10+_ database via a replication slot, or indirectly via Debezium. | [More Info](/sql/create-source/postgres/) [](#notify) |
-| Amazon RDS for PostgreSQL | {{< supportLevel beta >}} | The AWS user account requires the `rds_superuser` role to perform logical replication for the PostgreSQL database on Amazon RDS. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#amazon-rds) [](#notify) |
-| GCP Cloud SQL for PostgreSQL | {{< supportLevel beta >}} | Users must [enable `cloudsql.logical_decoding`](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication). | [More Info](https://materialize.com/docs/guides/postgres-cloud/#cloud-sql) [](#notify) |
-| Amazon Aurora | {{< supportLevel beta >}} | AWS Aurora can be configured to work with Materialize by enabling logical replication via `rds.logical_replication`. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#aws-aurora) [](#notify) |
+| Amazon RDS for PostgreSQL | {{< supportLevel beta >}} | The AWS user account requires the `rds_superuser` role to perform logical replication for the PostgreSQL database on Amazon RDS. | [More Info](/integrations/aws-rds/) [](#notify) |
+| GCP Cloud SQL for PostgreSQL | {{< supportLevel beta >}} | Users must [enable `cloudsql.logical_decoding`](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication). | [More Info](/integrations/gcp-cloud-sql/) [](#notify) |
+| Amazon Aurora | {{< supportLevel beta >}} | AWS Aurora can be configured to work with Materialize by enabling logical replication via `rds.logical_replication`. | [More Info](/integrations/aws-aurora/) [](#notify) |
 | Amazon Aurora Serverless | {{< supportLevel researching >}} | Aurora serverless V1 does [not currently support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) the logical replication required to integrate. | [](#notify) |
 | Heroku Postgres | {{< supportLevel researching >}} | Heroku Postgres does not open up access to logical replication. But an indirect connection may be possible via Kafka and [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors). | [](#notify) |
-| Azure Database for PostgreSQL | {{< supportLevel beta >}} | Users must [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#azure-database-for-postgresql) [](#notify) |
-| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}} | Logical replication is enabled by default. The `doadmin` user is not a superuser, you will not be able to create a publication for _all_ tables. | [More Info](https://materialize.com/docs/guides/postgres-cloud/#digitalocean-managed-postgresql) [](#notify) |
+| Azure Database for PostgreSQL | {{< supportLevel beta >}} | Users must [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance. | [More Info](/integrations/azure-postgres/) [](#notify) |
+| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}} | Logical replication is enabled by default. The `doadmin` user is not a superuser, you will not be able to create a publication for _all_ tables. | [More Info](/integrations/digitalocean-postgres/) [](#notify) |
 | CrunchyBridge Postgres| {{< supportLevel beta >}} | Logical replication is enabled by default. Users can [connect directly via a replication slot](/sql/create-source/postgres/). | [More Info](/sql/create-source/postgres/) [](#notify) |
 
 ### Other Databases
@@ -74,7 +78,7 @@ Currently, it is only possible to use Materialize with other databases via an in
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| MySQL _(via Debezium)_ | {{< supportLevel production >}} | See the [guide to setting up CDC from MySQL with Debezium](/guides/cdc-mysql/) for more information. | [More Info](/guides/cdc-mysql/) |
+| MySQL _(via Debezium)_ | {{< supportLevel production >}} | See the [guide to setting up CDC from MySQL with Debezium](/integrations/cdc-mysql/) for more information. | [More Info](/integrations/cdc-mysql/) |
 | MySQL Direct | {{< supportLevel researching >}} | A direct MySQL Source does not exist yet, but we are exploring creating one. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | MongoDB _(via Debezium)_ | {{< supportLevel researching >}} | Debezium has a MongoDB connector, but it [lacks the metadata](https://github.com/MaterializeInc/materialize/issues/7289) required to work in Materialize. | [](#notify) |
 | Snowflake, BigQuery, Redshift | {{< supportLevel not-supported >}} | OLAP DB's batch operational model are not a great fit for Materialize' event-driven model. Instead of reading from OLAP DB's, Materialize is better placed closer to where the data originates. |
@@ -100,7 +104,7 @@ Materialize is PostgreSQL compatible: Communication happens over the Postgres wi
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| dbt Core | {{< supportLevel beta >}} | The `dbt-materialize` adaptor enables users of dbt Core to manage Materialize Sources, Views, Indexes, and Sinks. [Full guide to dbt and Materialize here](https://materialize.com/docs/guides/dbt/). | [More Info](https://materialize.com/docs/guides/dbt/) [](#notify) |
+| dbt Core | {{< supportLevel beta >}} | The `dbt-materialize` adaptor enables users of dbt Core to manage Materialize Sources, Views, Indexes, and Sinks. [Full guide to dbt and Materialize here](/guides/dbt/). | [More Info](/guides/dbt/) [](#notify) |
 | dbt Cloud | {{< supportLevel in-development >}} | The `dbt-materialize` adaptor is not currently available in dbt Cloud. | [](#notify) |
 | DBeaver | {{< supportLevel production >}} | Use the PostgreSQL settings in DBeaver to connect to Materialize Core or Materialize Cloud *(using the provided certs.)* |  |
 | DataGrip IDE | {{< supportLevel in-development >}} | DataGrip uses a number of `pg_catalog` endpoints that are not yet implemented by Materialize. For details, see the [DataGrip tracking issue](https://github.com/MaterializeInc/materialize/issues/9720) in GitHub. | [](#notify) |
@@ -115,7 +119,7 @@ The following popular PostgreSQL libraries and drivers have been tested and conf
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| Node.js | {{< supportLevel production >}} | The [`node-postgres` library](https://node-postgres.com/) can be used to [manage](/guides/node-js/#manage-sources-views-and-indexes), [query](/guides/node-js/#query) and even [stream](/guides/node-js/#stream) data from Materialize. | [More Info](/guides/node-js/) |
+| Node.js | {{< supportLevel production >}} | The [`node-postgres` library](https://node-postgres.com/) can be used to [manage](/integrations/node-js/#manage-sources-views-and-indexes), [query](/integrations/node-js/#query) and even [stream](/integrations/node-js/#stream) data from Materialize. | [More Info](/integrations/node-js/) |
 | Python | {{< supportLevel production >}} | The [`psycopg2` python package](https://pypi.org/project/psycopg2/) can be used to interact with Materialize as if it were a PostgreSQL DB. | |
 | Java | {{< supportLevel production >}} | The popular [PostgreSQL JDBC driver](https://jdbc.postgresql.org/) can be used to interact with Materialize as if it were a PostgreSQL DB. |  |
 | Golang | {{< supportLevel production >}} | The [`pgx` - PostgreSQL Driver and Toolkit]https://github.com/jackc/pgx) for Golang has been confirmed to work with Materialize. | [More Info](/guides/golang/) |
@@ -140,7 +144,7 @@ Many tools in the modern data stack can connect to Materialize via PostgreSQL, b
 
 | Service | Materialize Support | Notes |  |
 | --- | --- | --- | --- |
-| Metabase | {{< supportLevel beta >}} | The Metabase PostgreSQL connector can be used to [connect Metabase to Materialize Core](/third-party/metabase/). | [More Info](/third-party/metabase/) [](#notify) |
+| Metabase | {{< supportLevel beta >}} | The Metabase PostgreSQL connector can be used to [connect Metabase to Materialize Core](/integrations/metabase/). | [More Info](/integrations/metabase/) [](#notify) |
 | Superset | {{< supportLevel alpha >}} | Connect Superset to Materialize Core or Cloud using the Postgres connector.  | [](#notify) |
 | Looker | {{< supportLevel alpha >}} | Connect Looker to Materialize Core by adding a PostgreSQL 9.5+ database connection and specifying your Materialize credentials. Connections to Materialize Cloud are currently blocked by user/password auth. | [](#notify) |
 | Google Data Studio | {{< supportLevel alpha >}} | Google Data Studio can connect to Materialize Core and Cloud using the PostgreSQL connector. Data is cached hourly but can be manually refreshed. | [](#notify) |

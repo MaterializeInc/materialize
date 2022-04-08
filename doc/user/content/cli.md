@@ -1,13 +1,12 @@
 ---
-title: "materialized binary"
+title: "materialized service configuration reference"
 weight: 20
 description: "Find out how to start the materialized binary with different configurations"
 menu:
   main:
     parent: reference
     weight: 200
-aliases:
-  - /cli/
+    name: "`materialized` Binary"
 ---
 
 ## Command line flags
@@ -133,7 +132,7 @@ corresponds to an unboundedly large duration.
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
 
-See the [Deployment section](/ops/memory#compaction) for guidance on tuning
+See the [Deployment section](/ops/optimization/#compaction) for guidance on tuning
 the compaction window.
 
 ### Logging
@@ -410,7 +409,7 @@ behavior generally matches the behavior of other HTTP clients.
 For precise details of Materialize's behavior, consult the documentation of
 the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
 
-[api-indexes]: /overview/api-components#indexes
+[api-indexes]: /overview/key-concepts/#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source

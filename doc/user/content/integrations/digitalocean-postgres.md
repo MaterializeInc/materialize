@@ -27,5 +27,5 @@ For more information, see the [Managed PostgreSQL](https://docs.digitalocean.com
 
 ## Related pages
 
-- [Change Data Capture (Postgres)](/integrations/postgres/)
+- [Connect Materialize to PostgreSQL](/integrations/cdc-postgres/)
 - [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)

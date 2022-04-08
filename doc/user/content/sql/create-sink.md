@@ -174,7 +174,7 @@ By default, Materialize creates new, distinct topics for sinks on restart. To en
 
 * **Reconstruct the history of the sink and all the objects it depends on**
 
-   For each source, timestamp/offset bindings (i.e. which timestamps were assigned to which offsets) are persisted to the on-disk [system catalog](../system-catalog). This ensures that Materialize can preserve correctness on restart and avoid publishing duplicate data to the sink.
+   For each source, timestamp/offset bindings (i.e. which timestamps were assigned to which offsets) are persisted to the on-disk [system catalog](/sql/system-catalog/). This ensures that Materialize can preserve correctness on restart and avoid publishing duplicate data to the sink.
 
     {{< note >}}
 For some deployment setups, you may need to persist the system catalog to stable storage across restarts. Without that metadata, new timestamps will be reassigned to existing offsets and data **will be republished** to the sink.
@@ -198,7 +198,7 @@ To create a sink with exactly-once processing guarantees, you need to:
 
 * Set the `reuse_topic` option to `true`;
 * Optionally name the consistency topic. This name must be unique across all sinks in the Materialize instance. If not specified, a default name will be created by appending `-consistency` to the sink topic name.
-* Specify the [format](https://materialize.com/docs/sql/create-sink/#consistency_format_spec) of the consistency topic. Only Avro is supported. If you are using a JSON-formatted sink, you must use Avro as well (at least for now!).
+* Specify the [format](/sql/create-sink/#consistency_format_spec) of the consistency topic. Only Avro is supported. If you are using a JSON-formatted sink, you must use Avro as well (at least for now!).
 
 Note that:
 

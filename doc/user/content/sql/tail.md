@@ -166,7 +166,7 @@ See [`SNAPSHOT`](#snapshot) below for details on what this means.
 If you don't specify `AS OF` explicitly, Materialize will pick a timestamp
 automatically:
 
-  - If the tailed relation is [materialized](/overview/api-components/#indexes),
+  - If the tailed relation is [materialized](/overview/key-concepts/#indexes),
     Materialize picks the latest time for which results are computed.
   - If the tailed relation is not materialized, Materialize picks time `0`.
 

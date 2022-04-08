@@ -4,6 +4,7 @@ description: "Find the top- or bottom-K elements in a group."
 weight:
 aliases:
   - /sql/idioms
+  - /guides/top-k
 menu:
   main:
     parent: 'sql-spellbook'

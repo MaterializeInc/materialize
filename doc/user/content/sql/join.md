@@ -103,7 +103,7 @@ SELECT * FROM
 ```
 
 For a real-world example of a `LATERAL` subquery, see the [Top-K by group
-idiom](/guides/top-k/).
+idiom](/sql/spellbook/top-k/).
 
 
 ## Examples

@@ -5,18 +5,18 @@
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1">
         <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
-          {{.Name}}
+          {{.Name | markdownify}}
         </a>
 
         {{- if .HasChildren }}
         <ul>
           {{- range .Children }}
           <li class="level-2 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
-            <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+            <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
               {{- if .HasChildren }}
                 {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
               {{ end }}
-              {{.Name}}
+              {{.Name | markdownify}}
             </a>
 
             {{- if .HasChildren }}
@@ -24,7 +24,7 @@
               {{- range .Children }}
               <li class="level-3">
                 <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
-                  {{.Name}}
+                  {{.Name | markdownify}}
                 </a>
               </li>
               {{- end}}

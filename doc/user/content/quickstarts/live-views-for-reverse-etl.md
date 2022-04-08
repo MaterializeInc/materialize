@@ -1,10 +1,6 @@
 ---
 title: "Build Live Views for Reverse ETL"
 description: "  "
-menu:
-    main:
-        parent: quickstarts
-weight: 10
 ---
 
 ## What are we building

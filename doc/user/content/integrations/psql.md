@@ -1,12 +1,14 @@
 ---
-title: "CLI Connections"
+title: "Connect to Materialize via psql CLI"
 description: "You can connect to Materialize from your favorite shell using compatible tools, like mzcli or psql."
 aliases:
+  - /connect/
   - /connect/cli/
 menu:
   main:
     parent: "integrations"
-    weight: 50
+    weight: 5
+    name: "`psql` CLI"
 ---
 
 You can connect to a running `materialized` process from your favorite shell

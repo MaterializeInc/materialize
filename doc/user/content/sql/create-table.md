@@ -98,7 +98,7 @@ views derived from this source, which can aggregate or filter the data down to a
 manageable size.
 
 {{< version-changed v0.23.0 >}}
-Tables no longer have a mandatory default [index](/overview/api-components/#indexes).
+Tables no longer have a mandatory default [index](/overview/key-concepts/#indexes).
 {{< /version-changed >}}
 
 ## Examples

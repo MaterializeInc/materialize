@@ -100,13 +100,15 @@ body {
 .sidebar {
   font-size: 0.8125rem;
   margin-left: auto;
-  max-width: 344px;
+  width: 100%;
   min-width: 200px;
   position: sticky;
   top: 0;
   padding: 1.5rem 2rem 1.5rem 1rem;
   overflow-y:scroll;
   height: 100vh;
+  display: flex;
+  justify-content: flex-end;
 
   a {
     display: block;

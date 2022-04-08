@@ -17,8 +17,8 @@ with its data as if it were in a SQL table.
 ## Conceptual framework
 
 Sources represent connections to resources outside Materialize that it can read
-data from. For more information, see [API Components:
-Sources](../../overview/api-components#sources).
+data from. For more information, see [Key Concepts:
+Sources](../../overview/key-concepts/#sources).
 
 ## Types of sources
 
@@ -40,6 +40,6 @@ Don't see what you're looking for? [Let us know on GitHub](https://github.com/Ma
 
 ## Related pages
 
-- [API Components](../../overview/api-components)
+- [Key Concepts](../../overview/key-concepts/)
 - [`CREATE VIEW`](../create-view)
 - [`SELECT`](../select)

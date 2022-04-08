@@ -5,8 +5,6 @@ menu:
   main:
     parent: advanced
     weight: 4
-aliases:
-  - /overview/arrangements/
 ---
 
 The mechanisms that maintain materialized views for Materialize dataflows are called **arrangements**. Understanding arrangements better can help you make decisions that will reduce memory usage while maintaining performance.
@@ -49,7 +47,7 @@ You can find a more detailed analysis of the arrangements built for different ty
 
 The size of an arrangement, or amount of memory it requires, is roughly proportional to its number of distinct `(data, time)` pairs, which can be small even if the number of records is large. As an illustration, consider a histogram of taxi rides grouped by the number of riders and the fare amount. The number of distinct `(rider, fare)` pairs will be much smaller than the number of total rides that take place.
 
-The amount of memory that the arrangement requires is then further reduced by background [compaction](/ops/memory/#compaction) of historical data.
+The amount of memory that the arrangement requires is then further reduced by background [compaction](/ops/optimization/#compaction) of historical data.
 
 ## Analyzing arrangements
 
@@ -73,5 +71,5 @@ Currently, Materialize handles implicit casts in a very [memory-intensive way](h
 
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/troubleshooting/)
-* [Deployment](/ops/memory/)
+* [Deployment](/ops/optimization/)
 * [Differential Dataflow](https://timelydataflow.github.io/differential-dataflow/)

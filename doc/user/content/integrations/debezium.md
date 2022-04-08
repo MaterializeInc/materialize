@@ -2,7 +2,7 @@
 title: "Working with Debezium CDC Records in Materialize"
 description: "Get details about using Materialize with Debezium"
 aliases:
-  - /third-party/debezium/
+  /third-party/debezium/
 menu:
   main:
     parent: "integration-guides"
@@ -23,10 +23,10 @@ Currently, Materialize only supports Avro-encoded Debezium records. If you're in
 
 For the best CDC experience, we recommend following the step-by-step guides for each upstream database:
 
-* [PostgreSQL](/guides/cdc-postgres/)
+* [PostgreSQL](/integrations/cdc-postgres/)
 
-* [MySQL](/guides/cdc-mysql/)
+* [MySQL](/integrations/cdc-mysql/)
 
 ### Kafka-less setup
 
-If you need to connect Materialize to a PostgreSQL database but Kafka is not part of your stack, you can use the [PostgreSQL direct source](/sql/create-source/postgres). This source uses PostgreSQL’s native replication protocol to continuously propagate upstream changes into Materialize, bypassing the need to deploy and maintain a Kafka instance. For more details and step-by-step instructions, check the [Change Data Capture (Postgres) guide](/guides/cdc-postgres/#direct-postgres-source).
+If you need to connect Materialize to a PostgreSQL database but Kafka is not part of your stack, you can use the [PostgreSQL direct source](/sql/create-source/postgres). This source uses PostgreSQL’s native replication protocol to continuously propagate upstream changes into Materialize, bypassing the need to deploy and maintain a Kafka instance. For more details and step-by-step instructions, check the [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source).

@@ -6,7 +6,7 @@ menu:
     parent: 'overview'
     weight: 20
 aliases:
-  - /overview/api-components
+  - /overview/api-components/
 ---
 
 Materialize is a streaming database with a SQL API. However, despite the fact
@@ -14,7 +14,7 @@ that Materialize uses SQL idioms and can process data from databases, it
 actually has very little in common with "databases" as most people think of them.
 
 In this document, we'll sketch the conceptual framework expressed by Materialize's
-API components, which might help you develop a mental model of how to work with
+Key Concepts, which might help you develop a mental model of how to work with
 Materialize and how its components differ from traditional databases.
 
 Materialize offers the following components through its SQL API:

@@ -5,8 +5,6 @@ menu:
   main:
     parent: advanced
     weight: 2
-aliases:
-  - /overview/architecture/
 ---
 
 Everything in Materialize is currently handled by the `materialized` process
@@ -150,8 +148,8 @@ Implicit in this design are a few key points:
 
 Check out:
 
-- [API components](../api-components) to better understand Materialize's API
-- [Get started](/get-started) to try out Materialize
+- [Key Concepts](/overview/key-concepts/) to better understand Materialize's API
+- [Get started](/speedrun) to try out Materialize
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

@@ -6,8 +6,8 @@ menu:
     parent: ops
     weight: 70
 aliases:
-  - /ops/deployment
-  - /ops/memory
+  - /ops/deployment/
+  - /ops/memory/
 ---
 
 Materialize stores the majority of its state in memory, and works best when the
