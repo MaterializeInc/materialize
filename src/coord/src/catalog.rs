@@ -58,8 +58,8 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinType, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA,
-    MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
@@ -1068,6 +1068,7 @@ impl CatalogEntry {
 struct AllocatedBuiltinSystemIds<T> {
     all_builtins: Vec<(T, GlobalId)>,
     new_builtins: Vec<(T, GlobalId)>,
+    migrated_builtins: Vec<(T, GlobalId)>,
 }
 
 impl Catalog {
@@ -1188,6 +1189,7 @@ impl Catalog {
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
+            migrated_builtins,
         } = catalog.allocate_system_ids(
             BUILTINS
                 .iter()
@@ -1297,9 +1299,18 @@ impl Catalog {
         }
         let new_system_id_mappings = new_builtins
             .iter()
-            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id))
+            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id, builtin.fingerprint()))
             .collect();
         catalog.storage().set_system_gids(new_system_id_mappings)?;
+
+        // TODO(jkosh44) actually migrate builtins
+        let migrated_system_id_mappings = migrated_builtins
+            .iter()
+            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id, builtin.fingerprint()))
+            .collect();
+        catalog
+            .storage()
+            .set_system_gids(migrated_system_id_mappings)?;
 
         let compute_instances = catalog.storage().load_compute_instances()?;
         for (id, name, conf) in compute_instances {
@@ -1321,8 +1332,13 @@ impl Catalog {
                 let AllocatedBuiltinSystemIds {
                     all_builtins: all_indexes,
                     new_builtins: new_indexes,
+                    ..
                 } = catalog.allocate_system_ids(BUILTINS.logs().collect(), |log| {
-                    introspection_source_index_gids.get(log.name).cloned()
+                    introspection_source_index_gids
+                        .get(log.name)
+                        .cloned()
+                        // We don't migrate indexes so we can hardcode the fingerprint as 0
+                        .map(|id| (id, 0))
                 })?;
 
                 catalog.storage().set_introspection_source_index_gids(
@@ -1411,6 +1427,7 @@ impl Catalog {
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
+            ..
         } = self.allocate_system_ids(BUILTINS.types().collect(), |typ| {
             persisted_builtin_ids
                 .get(&(typ.schema.to_string(), typ.name.to_string()))
@@ -1467,7 +1484,7 @@ impl Catalog {
 
         let new_system_id_mappings = new_builtins
             .iter()
-            .map(|(typ, id)| (typ.schema, typ.name, *id))
+            .map(|(typ, id)| (typ.schema, typ.name, *id, typ.fingerprint()))
             .collect();
         self.storage().set_system_gids(new_system_id_mappings)?;
 
@@ -1681,15 +1698,15 @@ impl Catalog {
     fn allocate_system_ids<T, F>(
         &mut self,
         builtins: Vec<T>,
-        builtin_id_lookup: F,
+        builtin_lookup: F,
     ) -> Result<AllocatedBuiltinSystemIds<T>, Error>
     where
-        T: Copy,
-        F: Fn(&T) -> Option<GlobalId>,
+        T: Copy + Fingerprint,
+        F: Fn(&T) -> Option<(GlobalId, u64)>,
     {
         let new_builtin_amount = builtins
             .iter()
-            .filter(|builtin| builtin_id_lookup(builtin).is_none())
+            .filter(|builtin| builtin_lookup(builtin).is_none())
             .count();
 
         let mut global_ids = self
@@ -1703,10 +1720,15 @@ impl Catalog {
 
         let mut all_builtins = Vec::new();
         let mut new_builtins = Vec::new();
+        let mut migrated_builtins = Vec::new();
         for builtin in &builtins {
-            match builtin_id_lookup(builtin) {
-                // TODO(jkosh44) These items may need to undergo schema migrations
-                Some(id) => all_builtins.push((*builtin, id)),
+            match builtin_lookup(builtin) {
+                Some((id, fingerprint)) => {
+                    all_builtins.push((*builtin, id));
+                    if fingerprint != builtin.fingerprint() {
+                        migrated_builtins.push((*builtin, id));
+                    }
+                }
                 None => {
                     let id = global_ids.next().expect("not enough global IDs");
                     all_builtins.push((*builtin, id));
@@ -1718,6 +1740,7 @@ impl Catalog {
         Ok(AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
+            migrated_builtins,
         })
     }
 
