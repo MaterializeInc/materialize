@@ -11,6 +11,7 @@
 
 pub mod adt;
 pub mod row;
+mod scalar;
 pub mod strconv;
 
 use mz_ore::cast::CastFrom;
