@@ -1229,6 +1229,7 @@ pub enum DomainLimit {
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
     CharacterTooLargeForEncoding(i32),
