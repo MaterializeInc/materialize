@@ -17,13 +17,13 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
-use tracing::{debug, trace};
+use tracing::trace;
 
 use mz_dataflow_types::client::{
     CreateSourceCommand, StorageCommand, StorageResponse, TimestampBindingFeedback,
 };
 use mz_dataflow_types::sources::AwsExternalId;
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
 use mz_dataflow_types::SourceInstanceDesc;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
@@ -116,33 +116,36 @@ pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
 impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Sets up the timestamp binding machinery if needed for this source
     fn setup_timestamp_binding_state(&mut self, source: &CreateSourceCommand<u64>) {
-        let ts_history = if let SourceConnector::External {
-            connector,
-            ts_frequency,
-            ..
-        } = &source.desc.connector
-        {
-            let rt_default = TimestampBindingRc::new(
-                ts_frequency.as_millis().try_into().unwrap(),
-                self.storage_state.now.clone(),
-            );
-            match connector {
-                ExternalSourceConnector::AvroOcf(_)
-                | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::S3(_) => {
-                    rt_default.add_partition(PartitionId::None, None);
-                    Some(rt_default)
+        let ts_history = match source.desc.connector {
+            SourceConnector::Local { .. }
+            | SourceConnector::External {
+                envelope: SourceEnvelope::CdcV2,
+                ..
+            } => None,
+            SourceConnector::External {
+                ref connector,
+                ts_frequency,
+                ..
+            } => {
+                let rt_default = TimestampBindingRc::new(
+                    ts_frequency.as_millis().try_into().unwrap(),
+                    self.storage_state.now.clone(),
+                );
+
+                match connector {
+                    ExternalSourceConnector::AvroOcf(_)
+                    | ExternalSourceConnector::File(_)
+                    | ExternalSourceConnector::Kinesis(_)
+                    | ExternalSourceConnector::S3(_) => {
+                        rt_default.add_partition(PartitionId::None, None);
+                        Some(rt_default)
+                    }
+                    ExternalSourceConnector::Kafka(_) => Some(rt_default),
+                    ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
+                        None
+                    }
                 }
-                ExternalSourceConnector::Kafka(_) => Some(rt_default),
-                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => None,
             }
-        } else {
-            debug!(
-                "Timestamping not supported for local sources {}. Ignoring",
-                source.id
-            );
-            None
         };
 
         // Add any timestamp bindings that we were already aware of on restart.
