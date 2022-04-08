@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Protobuf structs mirroring [`crate::scalar`].
+//! Protobuf structs mirroring [`crate::scalar`] and [`crate::relation`]
 
 include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
 use crate::proto::scalar::proto_scalar_type::ProtoRecordField;
 use crate::proto::TryFromProtoError;
+use crate::proto::TryIntoIfSome;
 use crate::scalar::ScalarType;
 use crate::{ColumnName, ColumnType};
 
@@ -23,20 +24,13 @@ impl From<&ColumnName> for ProtoColumnName {
     }
 }
 
-macro_rules! frm {
-    ($left: expr, $right: expr) => {
-        (match $left {
-            Some(x) => Ok(x),
-            None => Err(TryFromProtoError::MissingField($right.into())),
-        })?
-    };
-}
-
 impl TryFrom<ProtoColumnName> for ColumnName {
     type Error = TryFromProtoError;
 
     fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
-        Ok(ColumnName(frm!(x.value, "ProtoColumnName::value")))
+        Ok(ColumnName(x.value.ok_or_else(|| {
+            TryFromProtoError::MissingField("ProtoColumnName::value".into())
+        })?))
     }
 }
 
@@ -55,7 +49,9 @@ impl TryFrom<ProtoColumnType> for ColumnType {
     fn try_from(x: ProtoColumnType) -> Result<Self, Self::Error> {
         Ok(ColumnType {
             nullable: x.nullable,
-            scalar_type: frm!(x.scalar_type, "ProtoColumnType::scalar_type").try_into()?,
+            scalar_type: x
+                .scalar_type
+                .try_into_if_some("ProtoColumnType::scalar_type")?,
         })
     }
 }
@@ -74,8 +70,10 @@ impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
 
     fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
         Ok((
-            frm!(x.column_name, "").try_into()?,
-            frm!(x.column_type, "").try_into()?,
+            x.column_name
+                .try_into_if_some("ProtoRecordField::column_name")?,
+            x.column_type
+                .try_into_if_some("ProtoRecordField::column_type")?,
         ))
     }
 }
@@ -157,7 +155,7 @@ impl From<&ScalarType> for ProtoScalarType {
 impl TryFrom<ProtoScalarType> for ScalarType {
     type Error = TryFromProtoError;
 
-    fn try_from(value: ProtoScalarType) -> Result<Self, Self::Error> {
+    fn try_from(value: ProtoScalarType) -> Result<Self, TryFromProtoError> {
         use proto_scalar_type::Kind::*;
 
         let kind = value
@@ -188,30 +186,25 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             Int2Vector(()) => Ok(ScalarType::Int2Vector),
 
             Numeric(pn) => Ok(ScalarType::Numeric {
-                max_scale: match pn.max_scale {
-                    Some(x) => Some(x.try_into()?),
-                    None => None,
-                },
+                max_scale: pn.max_scale.map(TryInto::try_into).transpose()?,
             }),
             Char(x) => Ok(ScalarType::Char {
-                length: match x.length {
-                    Some(x) => Some(x.try_into()?),
-                    None => None,
-                },
+                length: x.length.map(TryInto::try_into).transpose()?,
             }),
 
             VarChar(x) => Ok(ScalarType::VarChar {
-                max_length: Some(frm!(x.max_length, "ProtoVarChar::max_length").try_into()?),
+                max_length: x.max_length.map(TryInto::try_into).transpose()?,
             }),
-            Array(x) => Ok(ScalarType::Array(
-                TryInto::<ScalarType>::try_into(*x)?.into(),
-            )),
+            Array(x) => Ok(ScalarType::Array({
+                let st: ScalarType = (*x).try_into()?;
+                st.into()
+            })),
             List(x) => Ok(ScalarType::List {
-                element_type: TryInto::<ScalarType>::try_into(*frm!(
-                    x.element_type,
-                    "ProtoMap::element_type"
-                ))?
-                .into(),
+                element_type: Box::new(
+                    x.element_type
+                        .map(|x| *x)
+                        .try_into_if_some("ProtoList::element_type")?,
+                ),
                 custom_oid: x.custom_oid,
             }),
             Record(x) => Ok(ScalarType::Record {
@@ -224,11 +217,11 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                 custom_name: x.custom_name,
             }),
             Map(x) => Ok(ScalarType::Map {
-                value_type: TryInto::<ScalarType>::try_into(*frm!(
-                    x.value_type,
-                    "ProtoMap::value_type"
-                ))?
-                .into(),
+                value_type: Box::new(
+                    x.value_type
+                        .map(|x| *x)
+                        .try_into_if_some("ProtoMap::value_type")?,
+                ),
                 custom_oid: x.custom_oid,
             }),
         }
