@@ -21,7 +21,7 @@ use crate::persistcfg::PersisterWithConfig;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the SQLite database.
-    pub storage: storage::Connection,
+    pub storage: Option<storage::Connection>,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.

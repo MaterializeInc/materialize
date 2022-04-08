@@ -10,9 +10,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
+use rusqlite::{params, OpenFlags};
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -381,8 +381,27 @@ impl Connection {
         data_dir_path: &Path,
         experimental_mode: Option<bool>,
     ) -> Result<Connection, Error> {
-        let mut sqlite = rusqlite::Connection::open(&data_dir_path.join("catalog"))?;
+        let sqlite = rusqlite::Connection::open(&data_dir_path.join("catalog"))?;
+        Self::with_connection(sqlite, data_dir_path, experimental_mode)
+    }
 
+    /// Opens the catalog for read-only inspection without applying migrations
+    pub fn open_debug(
+        data_dir_path: &Path,
+        experimental_mode: Option<bool>,
+    ) -> Result<Connection, Error> {
+        let sqlite = rusqlite::Connection::open_with_flags(
+            &data_dir_path.join("catalog"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        Self::with_connection(sqlite, data_dir_path, experimental_mode)
+    }
+
+    fn with_connection(
+        mut sqlite: rusqlite::Connection,
+        data_dir_path: &Path,
+        experimental_mode: Option<bool>,
+    ) -> Result<Connection, Error> {
         // Validate application ID.
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
