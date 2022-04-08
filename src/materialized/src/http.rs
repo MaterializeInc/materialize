@@ -20,7 +20,7 @@ use std::time::Duration;
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::HeaderMapExt;
-use http::header::{HeaderValue, AUTHORIZATION};
+use http::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_ore::metrics::MetricsRegistry;
@@ -279,7 +279,7 @@ impl Server {
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
-                    .allow_headers([AUTHORIZATION])
+                    .allow_headers([AUTHORIZATION, CONTENT_TYPE])
                     .allow_methods(cors::Any)
                     .allow_origin(self.allowed_origin.clone())
                     .expose_headers(cors::Any)
