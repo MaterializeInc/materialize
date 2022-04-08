@@ -13,6 +13,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
@@ -327,7 +328,7 @@ pub trait CatalogItem {
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
-    fn type_details(&self) -> Option<&CatalogTypeDetails>;
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;
 }
 
 /// The type of a [`CatalogItem`].
@@ -368,13 +369,33 @@ impl fmt::Display for CatalogItemType {
 
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CatalogTypeDetails {
-    //TODO(jkosh44) removing this would remove cyclic dependencies between types and make it
-    // easier to dynamically assign builtin type ids.
+pub struct CatalogTypeDetails<T: TypeReference> {
     /// The ID of the type with this type as the array element, if available.
     pub array_id: Option<GlobalId>,
     /// The description of this type.
-    pub typ: CatalogType,
+    pub typ: CatalogType<T>,
+}
+
+/// Represents a reference to type in the catalog
+pub trait TypeReference {
+    /// The actual type used to reference a `CatalogType`
+    type Reference: Clone + Debug + Eq + PartialEq;
+}
+
+/// Reference to a type by it's name
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NameReference;
+
+impl TypeReference for NameReference {
+    type Reference = &'static str;
+}
+
+/// Reference to a type by it's global ID
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdReference;
+
+impl TypeReference for IdReference {
+    type Reference = GlobalId;
 }
 
 /// A type stored in the catalog.
@@ -384,9 +405,9 @@ pub struct CatalogTypeDetails {
 /// types in the catalog.
 #[allow(missing_docs)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CatalogType {
+pub enum CatalogType<T: TypeReference> {
     Array {
-        element_id: GlobalId,
+        element_reference: T::Reference,
     },
     Bool,
     Bytes,
@@ -400,18 +421,18 @@ pub enum CatalogType {
     Interval,
     Jsonb,
     List {
-        element_id: GlobalId,
+        element_reference: T::Reference,
     },
     Map {
-        key_id: GlobalId,
-        value_id: GlobalId,
+        key_reference: T::Reference,
+        value_reference: T::Reference,
     },
     Numeric,
     Oid,
     PgLegacyChar,
     Pseudo,
     Record {
-        fields: Vec<(ColumnName, GlobalId)>,
+        fields: Vec<(ColumnName, T::Reference)>,
     },
     RegClass,
     RegProc,

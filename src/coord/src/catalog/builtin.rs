@@ -25,9 +25,8 @@
 use lazy_static::lazy_static;
 
 use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use mz_expr::GlobalId;
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql::catalog::{CatalogType, CatalogTypeDetails};
+use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -35,52 +34,33 @@ pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
 
-pub enum BuiltinInner {
+pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
-    Type(&'static BuiltinType),
+    Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
 }
 
-impl BuiltinInner {
+impl<T: TypeReference> Builtin<T> {
     pub fn name(&self) -> &'static str {
         match self {
-            BuiltinInner::Log(log) => log.name,
-            BuiltinInner::Table(table) => table.name,
-            BuiltinInner::View(view) => view.name,
-            BuiltinInner::Type(typ) => typ.name,
-            BuiltinInner::Func(func) => func.name,
+            Builtin::Log(log) => log.name,
+            Builtin::Table(table) => table.name,
+            Builtin::View(view) => view.name,
+            Builtin::Type(typ) => typ.name,
+            Builtin::Func(func) => func.name,
         }
     }
 
     pub fn schema(&self) -> &'static str {
         match self {
-            BuiltinInner::Log(log) => log.schema,
-            BuiltinInner::Table(table) => table.schema,
-            BuiltinInner::View(view) => view.schema,
-            BuiltinInner::Type(typ) => typ.schema,
-            BuiltinInner::Func(func) => func.schema,
+            Builtin::Log(log) => log.schema,
+            Builtin::Table(table) => table.schema,
+            Builtin::View(view) => view.schema,
+            Builtin::Type(typ) => typ.schema,
+            Builtin::Func(func) => func.schema,
         }
-    }
-}
-
-pub struct Builtin {
-    pub(crate) inner: &'static BuiltinInner,
-    pub(crate) id: GlobalId,
-}
-
-impl Builtin {
-    pub fn name(&self) -> &'static str {
-        self.inner.name()
-    }
-
-    pub fn schema(&self) -> &'static str {
-        self.inner.schema()
-    }
-
-    pub fn id(&self) -> GlobalId {
-        self.id
     }
 }
 
@@ -104,13 +84,11 @@ pub struct BuiltinView {
     pub sql: &'static str,
 }
 
-pub struct BuiltinType {
+pub struct BuiltinType<T: TypeReference> {
     pub name: &'static str,
     pub schema: &'static str,
-    // TODO(jkosh44) Would be nice to remove this and dynamically assign type ids.
-    pub id: GlobalId,
     pub oid: u32,
-    pub details: CatalogTypeDetails,
+    pub details: CatalogTypeDetails<T>,
 }
 
 pub struct BuiltinFunc {
@@ -132,12 +110,6 @@ pub struct BuiltinRole {
 // Builtins are loaded in dependency order, so a builtin must appear in `BUILTINS`
 // before any items it depends upon.
 //
-// Allocate IDs from the following ranges based on the item's type:
-// | Item type                             | ID range  | Notes
-// | --------------------------------------|-----------|-------------------------
-// | Types                                 | 1000-1999 |                        |
-// | Funcs, Logs, Tables, Views, Indexes   | 2000+     | Dynamically allocated  |
-//
 // WARNING: if you change the definition of an existing builtin item, you must
 // be careful to maintain backwards compatibility! Adding new columns is safe.
 // Removing a column, changing the name of a column, or changing the type of a
@@ -149,418 +121,383 @@ pub struct BuiltinRole {
 // Builtin types cannot be created, updated, or deleted. Their OIDs
 // are static, unlike other objects, to match the type OIDs defined by Postgres.
 
-pub const TYPE_BOOL: BuiltinType = BuiltinType {
+pub const TYPE_BOOL: BuiltinType<NameReference> = BuiltinType {
     name: "bool",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1000),
     oid: 16,
     details: CatalogTypeDetails {
         typ: CatalogType::Bool,
-        array_id: Some(GlobalId::System(1008)),
+        array_id: None,
     },
 };
 
-pub const TYPE_BYTEA: BuiltinType = BuiltinType {
+pub const TYPE_BYTEA: BuiltinType<NameReference> = BuiltinType {
     name: "bytea",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1001),
     oid: 17,
     details: CatalogTypeDetails {
         typ: CatalogType::Bytes,
-        array_id: Some(GlobalId::System(1009)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INT8: BuiltinType = BuiltinType {
+pub const TYPE_INT8: BuiltinType<NameReference> = BuiltinType {
     name: "int8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1002),
     oid: 20,
     details: CatalogTypeDetails {
         typ: CatalogType::Int64,
-        array_id: Some(GlobalId::System(1012)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INT4: BuiltinType = BuiltinType {
+pub const TYPE_INT4: BuiltinType<NameReference> = BuiltinType {
     name: "int4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1003),
     oid: 23,
     details: CatalogTypeDetails {
         typ: CatalogType::Int32,
-        array_id: Some(GlobalId::System(1010)),
+        array_id: None,
     },
 };
 
-pub const TYPE_TEXT: BuiltinType = BuiltinType {
+pub const TYPE_TEXT: BuiltinType<NameReference> = BuiltinType {
     name: "text",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1004),
     oid: 25,
     details: CatalogTypeDetails {
         typ: CatalogType::String,
-        array_id: Some(GlobalId::System(1011)),
+        array_id: None,
     },
 };
 
-pub const TYPE_OID: BuiltinType = BuiltinType {
+pub const TYPE_OID: BuiltinType<NameReference> = BuiltinType {
     name: "oid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1005),
     oid: 26,
     details: CatalogTypeDetails {
         typ: CatalogType::Oid,
-        array_id: Some(GlobalId::System(1015)),
+        array_id: None,
     },
 };
 
-pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
+pub const TYPE_FLOAT4: BuiltinType<NameReference> = BuiltinType {
     name: "float4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1006),
     oid: 700,
     details: CatalogTypeDetails {
         typ: CatalogType::Float32,
-        array_id: Some(GlobalId::System(1013)),
+        array_id: None,
     },
 };
 
-pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
+pub const TYPE_FLOAT8: BuiltinType<NameReference> = BuiltinType {
     name: "float8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1007),
     oid: 701,
     details: CatalogTypeDetails {
         typ: CatalogType::Float64,
-        array_id: Some(GlobalId::System(1014)),
+        array_id: None,
     },
 };
 
-pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_BOOL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bool",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1008),
     oid: 1000,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1000),
+            element_reference: TYPE_BOOL.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_BYTEA_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bytea",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1009),
     oid: 1001,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1001),
+            element_reference: TYPE_BYTEA.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_INT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1010),
     oid: 1007,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1003),
+            element_reference: TYPE_INT4.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_TEXT_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_text",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1011),
     oid: 1009,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1004),
+            element_reference: TYPE_TEXT.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_INT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1012),
     oid: 1016,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1002),
+            element_reference: TYPE_INT8.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_FLOAT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_float4",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1013),
     oid: 1021,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1006),
+            element_reference: TYPE_FLOAT4.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_FLOAT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_float8",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1014),
     oid: 1022,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1007),
+            element_reference: TYPE_FLOAT8.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_OID_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_oid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1015),
     oid: 1028,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1005),
+            element_reference: TYPE_OID.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_DATE: BuiltinType = BuiltinType {
+pub const TYPE_DATE: BuiltinType<NameReference> = BuiltinType {
     name: "date",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1016),
     oid: 1082,
     details: CatalogTypeDetails {
         typ: CatalogType::Date,
-        array_id: Some(GlobalId::System(1020)),
+        array_id: None,
     },
 };
 
-pub const TYPE_TIME: BuiltinType = BuiltinType {
+pub const TYPE_TIME: BuiltinType<NameReference> = BuiltinType {
     name: "time",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1017),
     oid: 1083,
     details: CatalogTypeDetails {
         typ: CatalogType::Time,
-        array_id: Some(GlobalId::System(1021)),
+        array_id: None,
     },
 };
 
-pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
+pub const TYPE_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
     name: "timestamp",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1018),
     oid: 1114,
     details: CatalogTypeDetails {
         typ: CatalogType::Timestamp,
-        array_id: Some(GlobalId::System(1019)),
+        array_id: None,
     },
 };
 
-pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_timestamp",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1019),
     oid: 1115,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1018),
+            element_reference: TYPE_TIMESTAMP.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_DATE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_date",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1020),
     oid: 1182,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1016),
+            element_reference: TYPE_DATE.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_TIME_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_time",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1021),
     oid: 1183,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1017),
+            element_reference: TYPE_TIME.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
+pub const TYPE_TIMESTAMPTZ: BuiltinType<NameReference> = BuiltinType {
     name: "timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1022),
     oid: 1184,
     details: CatalogTypeDetails {
         typ: CatalogType::TimestampTz,
-        array_id: Some(GlobalId::System(1023)),
+        array_id: None,
     },
 };
 
-pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1023),
     oid: 1185,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1022),
+            element_reference: TYPE_TIMESTAMPTZ.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
+pub const TYPE_INTERVAL: BuiltinType<NameReference> = BuiltinType {
     name: "interval",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1024),
     oid: 1186,
     details: CatalogTypeDetails {
         typ: CatalogType::Interval,
-        array_id: Some(GlobalId::System(1025)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_interval",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1025),
     oid: 1187,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1024),
+            element_reference: TYPE_INTERVAL.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
+pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1026),
     oid: 1700,
     details: CatalogTypeDetails {
         typ: CatalogType::Numeric,
-        array_id: Some(GlobalId::System(1027)),
+        array_id: None,
     },
 };
 
-pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_NUMERIC_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_numeric",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1027),
     oid: 1231,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1026),
+            element_reference: TYPE_NUMERIC.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_RECORD: BuiltinType = BuiltinType {
+pub const TYPE_RECORD: BuiltinType<NameReference> = BuiltinType {
     name: "record",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1028),
     oid: 2249,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
-        array_id: Some(GlobalId::System(1029)),
+        array_id: None,
     },
 };
 
-pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_RECORD_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_record",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1029),
     oid: 2287,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1028),
+            element_reference: TYPE_RECORD.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_UUID: BuiltinType = BuiltinType {
+pub const TYPE_UUID: BuiltinType<NameReference> = BuiltinType {
     name: "uuid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1030),
     oid: 2950,
     details: CatalogTypeDetails {
         typ: CatalogType::Uuid,
-        array_id: Some(GlobalId::System(1031)),
+        array_id: None,
     },
 };
 
-pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_uuid",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1031),
     oid: 2951,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1030),
+            element_reference: TYPE_UUID.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_JSONB: BuiltinType = BuiltinType {
+pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
     name: "jsonb",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1032),
     oid: 3802,
     details: CatalogTypeDetails {
         typ: CatalogType::Jsonb,
-        array_id: Some(GlobalId::System(1033)),
+        array_id: None,
     },
 };
 
-pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_JSONB_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_jsonb",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1033),
     oid: 3807,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1032),
+            element_reference: TYPE_JSONB.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_ANY: BuiltinType = BuiltinType {
+pub const TYPE_ANY: BuiltinType<NameReference> = BuiltinType {
     name: "any",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1034),
     oid: 2276,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -568,10 +505,9 @@ pub const TYPE_ANY: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
+pub const TYPE_ANYARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anyarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1035),
     oid: 2277,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -579,10 +515,9 @@ pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
+pub const TYPE_ANYELEMENT: BuiltinType<NameReference> = BuiltinType {
     name: "anyelement",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1036),
     oid: 2283,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -590,10 +525,9 @@ pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
+pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anynonarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1037),
     oid: 2776,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -601,202 +535,185 @@ pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_CHAR: BuiltinType = BuiltinType {
+pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
     name: "char",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1038),
     oid: 18,
     details: CatalogTypeDetails {
         typ: CatalogType::PgLegacyChar,
-        array_id: Some(GlobalId::System(1043)),
+        array_id: None,
     },
 };
 
-pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
+pub const TYPE_VARCHAR: BuiltinType<NameReference> = BuiltinType {
     name: "varchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1039),
     oid: 1043,
     details: CatalogTypeDetails {
         typ: CatalogType::VarChar,
-        array_id: Some(GlobalId::System(1044)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INT2: BuiltinType = BuiltinType {
+pub const TYPE_INT2: BuiltinType<NameReference> = BuiltinType {
     name: "int2",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1040),
     oid: 21,
     details: CatalogTypeDetails {
         typ: CatalogType::Int16,
-        array_id: Some(GlobalId::System(1041)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_INT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int2",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1041),
     oid: 1005,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1040),
+            element_reference: TYPE_INT2.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
+pub const TYPE_BPCHAR: BuiltinType<NameReference> = BuiltinType {
     name: "bpchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1042),
     oid: 1042,
     details: CatalogTypeDetails {
         typ: CatalogType::Char,
-        array_id: Some(GlobalId::System(1045)),
+        array_id: None,
     },
 };
 
-pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_CHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_char",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1043),
     oid: 1002,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1038),
+            element_reference: TYPE_CHAR.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_VARCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_varchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1044),
     oid: 1015,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1039),
+            element_reference: TYPE_VARCHAR.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_BPCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bpchar",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1045),
     oid: 1014,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1042),
+            element_reference: TYPE_BPCHAR.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_REGPROC: BuiltinType = BuiltinType {
+pub const TYPE_REGPROC: BuiltinType<NameReference> = BuiltinType {
     name: "regproc",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1046),
     oid: 24,
     details: CatalogTypeDetails {
         typ: CatalogType::RegProc,
-        array_id: Some(GlobalId::System(1047)),
+        array_id: None,
     },
 };
 
-pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_REGPROC_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regproc",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1047),
     oid: 1008,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1046),
+            element_reference: TYPE_REGPROC.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_REGTYPE: BuiltinType = BuiltinType {
+pub const TYPE_REGTYPE: BuiltinType<NameReference> = BuiltinType {
     name: "regtype",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1048),
     oid: 2206,
     details: CatalogTypeDetails {
         typ: CatalogType::RegType,
-        array_id: Some(GlobalId::System(1049)),
+        array_id: None,
     },
 };
 
-pub const TYPE_REGTYPE_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_REGTYPE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regtype",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1049),
     oid: 2211,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1048),
+            element_reference: TYPE_REGTYPE.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_REGCLASS: BuiltinType = BuiltinType {
+pub const TYPE_REGCLASS: BuiltinType<NameReference> = BuiltinType {
     name: "regclass",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1050),
     oid: 2205,
     details: CatalogTypeDetails {
         typ: CatalogType::RegClass,
-        array_id: Some(GlobalId::System(1051)),
+        array_id: None,
     },
 };
 
-pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_REGCLASS_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regclass",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1051),
     oid: 2210,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1050),
+            element_reference: TYPE_REGCLASS.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_INT2_VECTOR: BuiltinType = BuiltinType {
+pub const TYPE_INT2_VECTOR: BuiltinType<NameReference> = BuiltinType {
     name: "int2vector",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1052),
     oid: 22,
     details: CatalogTypeDetails {
         typ: CatalogType::Int2Vector,
-        array_id: Some(GlobalId::System(1053)),
+        array_id: None,
     },
 };
 
-pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
+pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int2vector",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1053),
     oid: 1006,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_id: GlobalId::System(1052),
+            element_reference: TYPE_INT2_VECTOR.name,
         },
         array_id: None,
     },
 };
 
-pub const TYPE_ANYCOMPATIBLE: BuiltinType = BuiltinType {
+pub const TYPE_ANYCOMPATIBLE: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatible",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1054),
     oid: 5077,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -804,10 +721,9 @@ pub const TYPE_ANYCOMPATIBLE: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType = BuiltinType {
+pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblearray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1055),
     oid: 5078,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -815,10 +731,9 @@ pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType = BuiltinType {
+pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblenonarray",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1056),
     oid: 5079,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -826,10 +741,9 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_LIST: BuiltinType = BuiltinType {
+pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
     name: "list",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1998),
     oid: mz_pgrepr::oid::TYPE_LIST_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -837,10 +751,9 @@ pub const TYPE_LIST: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_MAP: BuiltinType = BuiltinType {
+pub const TYPE_MAP: BuiltinType<NameReference> = BuiltinType {
     name: "map",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1999),
     oid: mz_pgrepr::oid::TYPE_MAP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -848,10 +761,9 @@ pub const TYPE_MAP: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYCOMPATIBLELIST: BuiltinType = BuiltinType {
+pub const TYPE_ANYCOMPATIBLELIST: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblelist",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1997),
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLELIST_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -859,18 +771,15 @@ pub const TYPE_ANYCOMPATIBLELIST: BuiltinType = BuiltinType {
     },
 };
 
-pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType = BuiltinType {
+pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblemap",
     schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(1996),
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLEMAP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
     },
 };
-
-// Type IDs decrement
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
@@ -985,8 +894,6 @@ pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
 };
-
-// Next id BuiltinLog: 3042
 
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
@@ -2050,77 +1957,75 @@ AS SELECT
 WHERE false",
 };
 
-// Next id BuiltinView: 5044
-
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
     id: -1,
 };
 
 lazy_static! {
-    pub static ref BUILTINS: Vec<BuiltinInner> = {
+    pub static ref BUILTINS: Vec<Builtin<NameReference>> = {
         let mut builtins = vec![
-            BuiltinInner::Type(&TYPE_ANY),
-            BuiltinInner::Type(&TYPE_ANYARRAY),
-            BuiltinInner::Type(&TYPE_ANYELEMENT),
-            BuiltinInner::Type(&TYPE_ANYNONARRAY),
-            BuiltinInner::Type(&TYPE_BOOL),
-            BuiltinInner::Type(&TYPE_BOOL_ARRAY),
-            BuiltinInner::Type(&TYPE_BYTEA),
-            BuiltinInner::Type(&TYPE_BYTEA_ARRAY),
-            BuiltinInner::Type(&TYPE_BPCHAR),
-            BuiltinInner::Type(&TYPE_BPCHAR_ARRAY),
-            BuiltinInner::Type(&TYPE_CHAR),
-            BuiltinInner::Type(&TYPE_CHAR_ARRAY),
-            BuiltinInner::Type(&TYPE_DATE),
-            BuiltinInner::Type(&TYPE_DATE_ARRAY),
-            BuiltinInner::Type(&TYPE_FLOAT4),
-            BuiltinInner::Type(&TYPE_FLOAT4_ARRAY),
-            BuiltinInner::Type(&TYPE_FLOAT8),
-            BuiltinInner::Type(&TYPE_FLOAT8_ARRAY),
-            BuiltinInner::Type(&TYPE_INT4),
-            BuiltinInner::Type(&TYPE_INT4_ARRAY),
-            BuiltinInner::Type(&TYPE_INT8),
-            BuiltinInner::Type(&TYPE_INT8_ARRAY),
-            BuiltinInner::Type(&TYPE_INTERVAL),
-            BuiltinInner::Type(&TYPE_INTERVAL_ARRAY),
-            BuiltinInner::Type(&TYPE_JSONB),
-            BuiltinInner::Type(&TYPE_JSONB_ARRAY),
-            BuiltinInner::Type(&TYPE_LIST),
-            BuiltinInner::Type(&TYPE_MAP),
-            BuiltinInner::Type(&TYPE_NUMERIC),
-            BuiltinInner::Type(&TYPE_NUMERIC_ARRAY),
-            BuiltinInner::Type(&TYPE_OID),
-            BuiltinInner::Type(&TYPE_OID_ARRAY),
-            BuiltinInner::Type(&TYPE_RECORD),
-            BuiltinInner::Type(&TYPE_RECORD_ARRAY),
-            BuiltinInner::Type(&TYPE_REGCLASS),
-            BuiltinInner::Type(&TYPE_REGCLASS_ARRAY),
-            BuiltinInner::Type(&TYPE_REGPROC),
-            BuiltinInner::Type(&TYPE_REGPROC_ARRAY),
-            BuiltinInner::Type(&TYPE_REGTYPE),
-            BuiltinInner::Type(&TYPE_REGTYPE_ARRAY),
-            BuiltinInner::Type(&TYPE_INT2),
-            BuiltinInner::Type(&TYPE_INT2_ARRAY),
-            BuiltinInner::Type(&TYPE_TEXT),
-            BuiltinInner::Type(&TYPE_TEXT_ARRAY),
-            BuiltinInner::Type(&TYPE_TIME),
-            BuiltinInner::Type(&TYPE_TIME_ARRAY),
-            BuiltinInner::Type(&TYPE_TIMESTAMP),
-            BuiltinInner::Type(&TYPE_TIMESTAMP_ARRAY),
-            BuiltinInner::Type(&TYPE_TIMESTAMPTZ),
-            BuiltinInner::Type(&TYPE_TIMESTAMPTZ_ARRAY),
-            BuiltinInner::Type(&TYPE_UUID),
-            BuiltinInner::Type(&TYPE_UUID_ARRAY),
-            BuiltinInner::Type(&TYPE_VARCHAR),
-            BuiltinInner::Type(&TYPE_VARCHAR_ARRAY),
-            BuiltinInner::Type(&TYPE_INT2_VECTOR),
-            BuiltinInner::Type(&TYPE_INT2_VECTOR_ARRAY),
-            BuiltinInner::Type(&TYPE_ANYCOMPATIBLE),
-            BuiltinInner::Type(&TYPE_ANYCOMPATIBLEARRAY),
-            BuiltinInner::Type(&TYPE_ANYCOMPATIBLENONARRAY),
-            BuiltinInner::Type(&TYPE_ANYCOMPATIBLELIST),
-            BuiltinInner::Type(&TYPE_ANYCOMPATIBLEMAP),
+            Builtin::Type(&TYPE_ANY),
+            Builtin::Type(&TYPE_ANYARRAY),
+            Builtin::Type(&TYPE_ANYELEMENT),
+            Builtin::Type(&TYPE_ANYNONARRAY),
+            Builtin::Type(&TYPE_BOOL),
+            Builtin::Type(&TYPE_BOOL_ARRAY),
+            Builtin::Type(&TYPE_BYTEA),
+            Builtin::Type(&TYPE_BYTEA_ARRAY),
+            Builtin::Type(&TYPE_BPCHAR),
+            Builtin::Type(&TYPE_BPCHAR_ARRAY),
+            Builtin::Type(&TYPE_CHAR),
+            Builtin::Type(&TYPE_CHAR_ARRAY),
+            Builtin::Type(&TYPE_DATE),
+            Builtin::Type(&TYPE_DATE_ARRAY),
+            Builtin::Type(&TYPE_FLOAT4),
+            Builtin::Type(&TYPE_FLOAT4_ARRAY),
+            Builtin::Type(&TYPE_FLOAT8),
+            Builtin::Type(&TYPE_FLOAT8_ARRAY),
+            Builtin::Type(&TYPE_INT4),
+            Builtin::Type(&TYPE_INT4_ARRAY),
+            Builtin::Type(&TYPE_INT8),
+            Builtin::Type(&TYPE_INT8_ARRAY),
+            Builtin::Type(&TYPE_INTERVAL),
+            Builtin::Type(&TYPE_INTERVAL_ARRAY),
+            Builtin::Type(&TYPE_JSONB),
+            Builtin::Type(&TYPE_JSONB_ARRAY),
+            Builtin::Type(&TYPE_LIST),
+            Builtin::Type(&TYPE_MAP),
+            Builtin::Type(&TYPE_NUMERIC),
+            Builtin::Type(&TYPE_NUMERIC_ARRAY),
+            Builtin::Type(&TYPE_OID),
+            Builtin::Type(&TYPE_OID_ARRAY),
+            Builtin::Type(&TYPE_RECORD),
+            Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_REGCLASS),
+            Builtin::Type(&TYPE_REGCLASS_ARRAY),
+            Builtin::Type(&TYPE_REGPROC),
+            Builtin::Type(&TYPE_REGPROC_ARRAY),
+            Builtin::Type(&TYPE_REGTYPE),
+            Builtin::Type(&TYPE_REGTYPE_ARRAY),
+            Builtin::Type(&TYPE_INT2),
+            Builtin::Type(&TYPE_INT2_ARRAY),
+            Builtin::Type(&TYPE_TEXT),
+            Builtin::Type(&TYPE_TEXT_ARRAY),
+            Builtin::Type(&TYPE_TIME),
+            Builtin::Type(&TYPE_TIME_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMP),
+            Builtin::Type(&TYPE_TIMESTAMP_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMPTZ),
+            Builtin::Type(&TYPE_TIMESTAMPTZ_ARRAY),
+            Builtin::Type(&TYPE_UUID),
+            Builtin::Type(&TYPE_UUID_ARRAY),
+            Builtin::Type(&TYPE_VARCHAR),
+            Builtin::Type(&TYPE_VARCHAR_ARRAY),
+            Builtin::Type(&TYPE_INT2_VECTOR),
+            Builtin::Type(&TYPE_INT2_VECTOR_ARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLE),
+            Builtin::Type(&TYPE_ANYCOMPATIBLEARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
+            Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
+            Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
         ];
         for (schema, funcs) in &[
             (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2132,7 +2037,7 @@ lazy_static! {
             (MZ_INTERNAL_SCHEMA, &*mz_sql::func::MZ_INTERNAL_BUILTINS),
         ] {
             for (name, func) in funcs.iter() {
-                builtins.push(BuiltinInner::Func(BuiltinFunc {
+                builtins.push(Builtin::Func(BuiltinFunc {
                     name,
                     schema,
                     inner: func,
@@ -2140,94 +2045,94 @@ lazy_static! {
             }
         }
         builtins.append(&mut vec![
-            BuiltinInner::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
-            BuiltinInner::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
-            BuiltinInner::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
-            BuiltinInner::Log(&MZ_DATAFLOW_CHANNELS),
-            BuiltinInner::Log(&MZ_DATAFLOW_OPERATORS),
-            BuiltinInner::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
-            BuiltinInner::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-            BuiltinInner::Log(&MZ_KAFKA_SOURCE_STATISTICS),
-            BuiltinInner::Log(&MZ_MATERIALIZATIONS),
-            BuiltinInner::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
-            BuiltinInner::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
-            BuiltinInner::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
-            BuiltinInner::Log(&MZ_PEEK_ACTIVE),
-            BuiltinInner::Log(&MZ_PEEK_DURATIONS),
-            BuiltinInner::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
-            BuiltinInner::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
-            BuiltinInner::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-            BuiltinInner::Log(&MZ_SOURCE_INFO),
-            BuiltinInner::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
-            BuiltinInner::Table(&MZ_VIEW_KEYS),
-            BuiltinInner::Table(&MZ_VIEW_FOREIGN_KEYS),
-            BuiltinInner::Table(&MZ_KAFKA_SINKS),
-            BuiltinInner::Table(&MZ_AVRO_OCF_SINKS),
-            BuiltinInner::Table(&MZ_DATABASES),
-            BuiltinInner::Table(&MZ_SCHEMAS),
-            BuiltinInner::Table(&MZ_COLUMNS),
-            BuiltinInner::Table(&MZ_INDEXES),
-            BuiltinInner::Table(&MZ_INDEX_COLUMNS),
-            BuiltinInner::Table(&MZ_TABLES),
-            BuiltinInner::Table(&MZ_SOURCES),
-            BuiltinInner::Table(&MZ_SINKS),
-            BuiltinInner::Table(&MZ_VIEWS),
-            BuiltinInner::Table(&MZ_TYPES),
-            BuiltinInner::Table(&MZ_ARRAY_TYPES),
-            BuiltinInner::Table(&MZ_BASE_TYPES),
-            BuiltinInner::Table(&MZ_LIST_TYPES),
-            BuiltinInner::Table(&MZ_MAP_TYPES),
-            BuiltinInner::Table(&MZ_ROLES),
-            BuiltinInner::Table(&MZ_PSEUDO_TYPES),
-            BuiltinInner::Table(&MZ_FUNCTIONS),
-            BuiltinInner::Table(&MZ_PROMETHEUS_READINGS),
-            BuiltinInner::Table(&MZ_PROMETHEUS_HISTOGRAMS),
-            BuiltinInner::Table(&MZ_PROMETHEUS_METRICS),
-            BuiltinInner::Table(&MZ_CLUSTERS),
-            BuiltinInner::Table(&MZ_SECRETS),
-            BuiltinInner::View(&MZ_RELATIONS),
-            BuiltinInner::View(&MZ_OBJECTS),
-            BuiltinInner::View(&MZ_CATALOG_NAMES),
-            BuiltinInner::View(&MZ_ARRANGEMENT_SHARING),
-            BuiltinInner::View(&MZ_ARRANGEMENT_SIZES),
-            BuiltinInner::View(&MZ_DATAFLOW_NAMES),
-            BuiltinInner::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
-            BuiltinInner::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
-            BuiltinInner::View(&MZ_MATERIALIZATION_FRONTIERS),
-            BuiltinInner::View(&MZ_MESSAGE_COUNTS),
-            BuiltinInner::View(&MZ_PERF_ARRANGEMENT_RECORDS),
-            BuiltinInner::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
-            BuiltinInner::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
-            BuiltinInner::View(&MZ_PERF_PEEK_DURATIONS_CORE),
-            BuiltinInner::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),
-            BuiltinInner::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
-            BuiltinInner::View(&MZ_RECORDS_PER_DATAFLOW),
-            BuiltinInner::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
-            BuiltinInner::View(&MZ_SCHEDULING_ELAPSED),
-            BuiltinInner::View(&MZ_SCHEDULING_HISTOGRAM),
-            BuiltinInner::View(&MZ_SCHEDULING_PARKS),
-            BuiltinInner::View(&PG_NAMESPACE),
-            BuiltinInner::View(&PG_CLASS),
-            BuiltinInner::View(&PG_DATABASE),
-            BuiltinInner::View(&PG_INDEX),
-            BuiltinInner::View(&PG_DESCRIPTION),
-            BuiltinInner::View(&PG_TYPE),
-            BuiltinInner::View(&PG_ATTRIBUTE),
-            BuiltinInner::View(&PG_PROC),
-            BuiltinInner::View(&PG_RANGE),
-            BuiltinInner::View(&PG_ENUM),
-            BuiltinInner::View(&PG_ATTRDEF),
-            BuiltinInner::View(&PG_SETTINGS),
-            BuiltinInner::View(&PG_CONSTRAINT),
-            BuiltinInner::View(&PG_TABLES),
-            BuiltinInner::View(&PG_ACCESS_METHODS),
-            BuiltinInner::View(&PG_ROLES),
-            BuiltinInner::View(&PG_VIEWS),
-            BuiltinInner::View(&PG_COLLATION),
-            BuiltinInner::View(&PG_POLICY),
-            BuiltinInner::View(&PG_INHERITS),
-            BuiltinInner::View(&INFORMATION_SCHEMA_COLUMNS),
-            BuiltinInner::View(&INFORMATION_SCHEMA_TABLES),
+            Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
+            Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
+            Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
+            Builtin::Log(&MZ_DATAFLOW_CHANNELS),
+            Builtin::Log(&MZ_DATAFLOW_OPERATORS),
+            Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
+            Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
+            Builtin::Log(&MZ_KAFKA_SOURCE_STATISTICS),
+            Builtin::Log(&MZ_MATERIALIZATIONS),
+            Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
+            Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
+            Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
+            Builtin::Log(&MZ_PEEK_ACTIVE),
+            Builtin::Log(&MZ_PEEK_DURATIONS),
+            Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
+            Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
+            Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
+            Builtin::Log(&MZ_SOURCE_INFO),
+            Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+            Builtin::Table(&MZ_VIEW_KEYS),
+            Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
+            Builtin::Table(&MZ_KAFKA_SINKS),
+            Builtin::Table(&MZ_AVRO_OCF_SINKS),
+            Builtin::Table(&MZ_DATABASES),
+            Builtin::Table(&MZ_SCHEMAS),
+            Builtin::Table(&MZ_COLUMNS),
+            Builtin::Table(&MZ_INDEXES),
+            Builtin::Table(&MZ_INDEX_COLUMNS),
+            Builtin::Table(&MZ_TABLES),
+            Builtin::Table(&MZ_SOURCES),
+            Builtin::Table(&MZ_SINKS),
+            Builtin::Table(&MZ_VIEWS),
+            Builtin::Table(&MZ_TYPES),
+            Builtin::Table(&MZ_ARRAY_TYPES),
+            Builtin::Table(&MZ_BASE_TYPES),
+            Builtin::Table(&MZ_LIST_TYPES),
+            Builtin::Table(&MZ_MAP_TYPES),
+            Builtin::Table(&MZ_ROLES),
+            Builtin::Table(&MZ_PSEUDO_TYPES),
+            Builtin::Table(&MZ_FUNCTIONS),
+            Builtin::Table(&MZ_PROMETHEUS_READINGS),
+            Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
+            Builtin::Table(&MZ_PROMETHEUS_METRICS),
+            Builtin::Table(&MZ_CLUSTERS),
+            Builtin::Table(&MZ_SECRETS),
+            Builtin::View(&MZ_RELATIONS),
+            Builtin::View(&MZ_OBJECTS),
+            Builtin::View(&MZ_CATALOG_NAMES),
+            Builtin::View(&MZ_ARRANGEMENT_SHARING),
+            Builtin::View(&MZ_ARRANGEMENT_SIZES),
+            Builtin::View(&MZ_DATAFLOW_NAMES),
+            Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
+            Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
+            Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
+            Builtin::View(&MZ_MESSAGE_COUNTS),
+            Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
+            Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),
+            Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
+            Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
+            Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
+            Builtin::View(&MZ_SCHEDULING_ELAPSED),
+            Builtin::View(&MZ_SCHEDULING_HISTOGRAM),
+            Builtin::View(&MZ_SCHEDULING_PARKS),
+            Builtin::View(&PG_NAMESPACE),
+            Builtin::View(&PG_CLASS),
+            Builtin::View(&PG_DATABASE),
+            Builtin::View(&PG_INDEX),
+            Builtin::View(&PG_DESCRIPTION),
+            Builtin::View(&PG_TYPE),
+            Builtin::View(&PG_ATTRIBUTE),
+            Builtin::View(&PG_PROC),
+            Builtin::View(&PG_RANGE),
+            Builtin::View(&PG_ENUM),
+            Builtin::View(&PG_ATTRDEF),
+            Builtin::View(&PG_SETTINGS),
+            Builtin::View(&PG_CONSTRAINT),
+            Builtin::View(&PG_TABLES),
+            Builtin::View(&PG_ACCESS_METHODS),
+            Builtin::View(&PG_ROLES),
+            Builtin::View(&PG_VIEWS),
+            Builtin::View(&PG_COLLATION),
+            Builtin::View(&PG_POLICY),
+            Builtin::View(&PG_INHERITS),
+            Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+            Builtin::View(&INFORMATION_SCHEMA_TABLES),
         ]);
 
         builtins
@@ -2238,7 +2143,14 @@ lazy_static! {
 impl BUILTINS {
     pub fn logs(&self) -> impl Iterator<Item = &'static BuiltinLog> + '_ {
         self.iter().filter_map(|b| match b {
-            BuiltinInner::Log(log) => Some(*log),
+            Builtin::Log(log) => Some(*log),
+            _ => None,
+        })
+    }
+
+    pub fn types(&self) -> impl Iterator<Item = &'static BuiltinType<NameReference>> + '_ {
+        self.iter().filter_map(|b| match b {
+            Builtin::Type(typ) => Some(*typ),
             _ => None,
         })
     }
@@ -2248,11 +2160,16 @@ impl BUILTINS {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
+    use tempfile::TempDir;
 
+    use mz_ore::now::NOW_ZERO;
     use tokio_postgres::NoTls;
 
+    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_sql::catalog::CatalogSchema;
+    use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
 
     use super::*;
 
@@ -2344,12 +2261,15 @@ mod tests {
             })
             .collect();
 
+        let data_dir = TempDir::new()?;
+        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+
         let mut proc_oids = HashSet::new();
         let mut type_oids = HashSet::new();
 
         for builtin in BUILTINS.iter() {
             match builtin {
-                BuiltinInner::Type(ty) => {
+                Builtin::Type(ty) => {
                     // Verify that all type OIDs are unique.
                     assert!(
                         type_oids.insert(ty.oid),
@@ -2376,13 +2296,13 @@ mod tests {
                     );
 
                     // Ensure the type matches.
-                    match ty.details.typ {
-                        CatalogType::Array { element_id } => {
+                    match &ty.details.typ {
+                        CatalogType::Array { element_reference } => {
                             let elem_ty = BUILTINS
                                 .iter()
                                 .filter_map(|builtin| match builtin {
-                                    BuiltinInner::Type(ty @ BuiltinType { id, .. })
-                                        if *id == element_id =>
+                                    Builtin::Type(ty @ BuiltinType { name, .. })
+                                        if element_reference == name =>
                                     {
                                         Some(ty)
                                     }
@@ -2391,7 +2311,7 @@ mod tests {
                                 .next();
                             let elem_ty = match elem_ty {
                                 Some(ty) => ty,
-                                None => panic!("{} is unexpectedly not a type", element_id),
+                                None => panic!("{} is unexpectedly not a type", element_reference),
                             };
                             assert_eq!(
                                 pg_ty.elem, elem_ty.oid,
@@ -2416,37 +2336,43 @@ mod tests {
                     }
 
                     // Ensure the array type reference is correct.
+                    let schema = catalog.resolve_schema_in_database(
+                        &ResolvedDatabaseSpecifier::Ambient,
+                        ty.schema,
+                        SYSTEM_CONN_ID,
+                    )?;
+                    let allocated_type = catalog.resolve_entry(
+                        None,
+                        &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
+                        &PartialObjectName {
+                            database: None,
+                            schema: Some(schema.name().schema.clone()),
+                            item: ty.name.to_string(),
+                        },
+                        SYSTEM_CONN_ID,
+                    )?;
+                    let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
+                        ty
+                    } else {
+                        panic!("unexpectedly not a type")
+                    };
                     match ty.details.array_id {
                         Some(array_id) => {
-                            let array_ty = BUILTINS
-                                .iter()
-                                .filter_map(|builtin| match builtin {
-                                    BuiltinInner::Type(ty @ BuiltinType { id, .. })
-                                        if *id == array_id =>
-                                    {
-                                        Some(ty)
-                                    }
-                                    _ => None,
-                                })
-                                .next();
-                            let array_ty = match array_ty {
-                                Some(ty) => ty,
-                                _ => panic!("{} is unexpectedly not a type", array_id),
-                            };
+                            let array_ty = catalog.get_entry(&array_id);
                             assert_eq!(
                                 pg_ty.array, array_ty.oid,
                                 "type {} has mismatched array OIDs",
-                                ty.name,
+                                allocated_type.name.item,
                             );
                         }
                         None => assert_eq!(
                             pg_ty.array, 0,
                             "type {} does not have an array type in mz but does in pg",
-                            ty.name,
+                            allocated_type.name.item,
                         ),
                     }
                 }
-                BuiltinInner::Func(func) => {
+                Builtin::Func(func) => {
                     for imp in func.inner.func_impls() {
                         // Verify that all function OIDs are unique.
                         assert!(

@@ -40,7 +40,8 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogTypeDetails, SessionCatalog,
+    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
+    IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -57,8 +58,8 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinInner, BuiltinLog, BuiltinTable, BuiltinType, BUILTINS, BUILTIN_ROLES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinTable, BuiltinType, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA,
+    MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
@@ -548,20 +549,20 @@ impl CatalogState {
     ///
     /// Panics if the builtin table doesn't exist in the catalog
     pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
-        self.resolve_builtin_object(&BuiltinInner::Table(builtin))
+        self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
     /// Optimized lookup for a builtin log
     ///
     /// Panics if the builtin log doesn't exist in the catalog
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.resolve_builtin_object(&BuiltinInner::Log(builtin))
+        self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
     /// Optimized lookup for a builtin object
     ///
     /// Panics if the builtin object doesn't exist in the catalog
-    pub fn resolve_builtin_object(&self, builtin: &BuiltinInner) -> GlobalId {
+    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
         schema.items[builtin.name()].clone()
@@ -767,7 +768,7 @@ pub struct Index {
 pub struct Type {
     pub create_sql: String,
     #[serde(skip)]
-    pub details: CatalogTypeDetails,
+    pub details: CatalogTypeDetails<IdReference>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1064,6 +1065,11 @@ impl CatalogEntry {
     }
 }
 
+struct AllocatedBuiltinSystemIds<T> {
+    all_builtins: Vec<(T, GlobalId)>,
+    new_builtins: Vec<(T, GlobalId)>,
+}
+
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
@@ -1176,53 +1182,25 @@ impl Catalog {
             );
         }
 
-        let pg_catalog_schema_id = catalog.state.get_pg_catalog_schema_id().clone();
+        catalog.load_builtin_types()?;
 
-        let builtin_ids = catalog.storage().load_system_gids()?;
-        let new_system_id_amount = BUILTINS
-            .iter()
-            .filter(|builtin| {
-                !matches!(builtin, BuiltinInner::Type(_))
-                    && !builtin_ids
-                        .contains_key(&(builtin.schema().to_string(), builtin.name().to_string()))
-            })
-            .count();
-        let mut new_system_ids = catalog
-            .allocate_system_ids(
-                new_system_id_amount
-                    .try_into()
-                    .expect("builtins should fit into u64"),
-            )?
-            .into_iter();
-        let mut new_system_id_mappings = Vec::new();
+        let persisted_builtin_ids = catalog.storage().load_system_gids()?;
+        let AllocatedBuiltinSystemIds {
+            all_builtins,
+            new_builtins,
+        } = catalog.allocate_system_ids(
+            BUILTINS
+                .iter()
+                .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
+                .collect(),
+            |builtin| {
+                persisted_builtin_ids
+                    .get(&(builtin.schema().to_string(), builtin.name().to_string()))
+                    .cloned()
+            },
+        )?;
 
-        for builtin_inner in BUILTINS.iter() {
-            let id = match builtin_inner {
-                // Builtin Types are currently statically assigned Ids
-                BuiltinInner::Type(BuiltinType { id, .. }) => *id,
-                _ => match builtin_ids.get(&(
-                    builtin_inner.schema().to_string(),
-                    builtin_inner.name().to_string(),
-                )) {
-                    // TODO(jkosh44) These items may need to undergo schema migrations
-                    // Builtin has already been assigned a global Id
-                    Some(id) => *id,
-                    // New Builtin which needs a global Id
-                    None => {
-                        let id = new_system_ids.next().expect("should be enough system ids");
-                        new_system_id_mappings.push((
-                            builtin_inner.schema(),
-                            builtin_inner.name(),
-                            id,
-                        ));
-                        id
-                    }
-                },
-            };
-            let builtin = Builtin {
-                inner: builtin_inner,
-                id,
-            };
+        for (builtin, id) in all_builtins {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
@@ -1236,11 +1214,11 @@ impl Catalog {
                 schema: builtin.schema().into(),
                 item: builtin.name().into(),
             };
-            match builtin.inner {
-                BuiltinInner::Log(log) => {
+            match builtin {
+                Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        builtin.id(),
+                        id,
                         oid,
                         name.clone(),
                         CatalogItem::Source(Source {
@@ -1255,17 +1233,17 @@ impl Catalog {
                     );
                 }
 
-                BuiltinInner::Table(table) => {
+                Builtin::Table(table) => {
                     let oid = catalog.allocate_oid()?;
                     let persist_name = if table.persistent {
                         config
                             .persister
-                            .new_table_persist_name(builtin.id(), &full_name.to_string())
+                            .new_table_persist_name(id, &full_name.to_string())
                     } else {
                         None
                     };
                     catalog.state.insert_item(
-                        builtin.id(),
+                        id,
                         oid,
                         name.clone(),
                         CatalogItem::Table(Table {
@@ -1279,12 +1257,12 @@ impl Catalog {
                     );
                 }
 
-                BuiltinInner::View(view) => {
+                Builtin::View(view) => {
                     let table_persist_name = None;
                     let source_persist_details = None;
                     let item = catalog
                         .parse_item(
-                            builtin.id(),
+                            id,
                             view.sql.into(),
                             None,
                             table_persist_name,
@@ -1301,32 +1279,15 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(builtin.id(), oid, name, item);
+                    catalog.state.insert_item(id, oid, name, item);
                 }
 
-                BuiltinInner::Type(typ) => {
-                    catalog.state.insert_item(
-                        builtin.id(),
-                        typ.oid,
-                        QualifiedObjectName {
-                            qualifiers: ObjectQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Ambient,
-                                schema_spec: SchemaSpecifier::Id(pg_catalog_schema_id),
-                            },
-                            item: typ.name.to_owned(),
-                        },
-                        CatalogItem::Type(Type {
-                            create_sql: format!("CREATE TYPE {}", typ.name),
-                            details: typ.details.clone(),
-                            depends_on: vec![],
-                        }),
-                    );
-                }
+                Builtin::Type(_) => unreachable!("loaded separately"),
 
-                BuiltinInner::Func(func) => {
+                Builtin::Func(func) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
-                        builtin.id(),
+                        id,
                         oid,
                         name.clone(),
                         CatalogItem::Func(Func { inner: func.inner }),
@@ -1334,6 +1295,10 @@ impl Catalog {
                 }
             }
         }
+        let new_system_id_mappings = new_builtins
+            .iter()
+            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id))
+            .collect();
         catalog.storage().set_system_gids(new_system_id_mappings)?;
 
         let compute_instances = catalog.storage().load_compute_instances()?;
@@ -1352,33 +1317,22 @@ impl Catalog {
             {
                 let introspection_source_index_gids =
                     catalog.storage().load_introspection_source_index_gids(id)?;
-                // Previously allocated introspection source indexes
-                let existing_indexes = BUILTINS
-                    .logs()
-                    .filter(|log| introspection_source_index_gids.contains_key(log.name))
-                    .map(|log| (log, introspection_source_index_gids[log.name]));
 
-                // New introspection source indexes that need GlobalIds
-                let new_indexes: Vec<_> = BUILTINS
-                    .logs()
-                    .filter(|log| !introspection_source_index_gids.contains_key(log.name))
-                    .collect();
-                let global_ids = catalog.allocate_system_ids(
-                    new_indexes
-                        .len()
-                        .try_into()
-                        .expect("builtin logs should fit into u64"),
-                )?;
-                let new_indexes = new_indexes.into_iter().zip(global_ids.into_iter());
+                let AllocatedBuiltinSystemIds {
+                    all_builtins: all_indexes,
+                    new_builtins: new_indexes,
+                } = catalog.allocate_system_ids(BUILTINS.logs().collect(), |log| {
+                    introspection_source_index_gids.get(log.name).cloned()
+                })?;
 
                 catalog.storage().set_introspection_source_index_gids(
                     new_indexes
-                        .clone()
-                        .map(|(log, index_id)| (id, log.name, index_id))
+                        .iter()
+                        .map(|(log, index_id)| (id, log.name, *index_id))
                         .collect(),
                 )?;
 
-                existing_indexes.chain(new_indexes).collect()
+                all_indexes
             } else {
                 Vec::new()
             };
@@ -1443,6 +1397,145 @@ impl Catalog {
         }
 
         Ok((catalog, builtin_table_updates))
+    }
+
+    /// Loads built-in system types into the catalog.
+    ///
+    /// Built-in types sometimes have references to other built-in types, and sometimes these
+    /// references are circular. This makes loading built-in types more complicated than other
+    /// built-in objects, and requires us to make multiple passes over the types to correctly
+    /// resolve all references.
+    fn load_builtin_types(&mut self) -> Result<(), Error> {
+        let persisted_builtin_ids = self.storage().load_system_gids()?;
+
+        let AllocatedBuiltinSystemIds {
+            all_builtins,
+            new_builtins,
+        } = self.allocate_system_ids(BUILTINS.types().collect(), |typ| {
+            persisted_builtin_ids
+                .get(&(typ.schema.to_string(), typ.name.to_string()))
+                .cloned()
+        })?;
+        let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
+            .into_iter()
+            .map(|(typ, id)| (typ.name, id))
+            .collect();
+
+        // Replace named references with id references
+        let mut builtin_types: Vec<_> = BUILTINS
+            .types()
+            .map(|typ| Self::resolve_builtin_type(typ, &name_to_id_map))
+            .collect();
+
+        // Resolve array_id for types
+        let mut element_id_to_array_id = HashMap::new();
+        for typ in &builtin_types {
+            match &typ.details.typ {
+                CatalogType::Array { element_reference } => {
+                    let array_id = name_to_id_map[typ.name];
+                    element_id_to_array_id.insert(*element_reference, array_id);
+                }
+                _ => {}
+            }
+        }
+        let pg_catalog_schema_id = self.state.get_pg_catalog_schema_id().clone();
+        for typ in &mut builtin_types {
+            let element_id = name_to_id_map[typ.name];
+            typ.details.array_id = element_id_to_array_id.get(&element_id).map(|id| id.clone());
+        }
+
+        // Insert into catalog
+        for typ in builtin_types {
+            let element_id = name_to_id_map[typ.name];
+            self.state.insert_item(
+                element_id,
+                typ.oid,
+                QualifiedObjectName {
+                    qualifiers: ObjectQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Ambient,
+                        schema_spec: SchemaSpecifier::Id(pg_catalog_schema_id),
+                    },
+                    item: typ.name.to_owned(),
+                },
+                CatalogItem::Type(Type {
+                    create_sql: format!("CREATE TYPE {}", typ.name),
+                    details: typ.details.clone(),
+                    depends_on: vec![],
+                }),
+            );
+        }
+
+        let new_system_id_mappings = new_builtins
+            .iter()
+            .map(|(typ, id)| (typ.schema, typ.name, *id))
+            .collect();
+        self.storage().set_system_gids(new_system_id_mappings)?;
+
+        Ok(())
+    }
+
+    fn resolve_builtin_type(
+        builtin: &BuiltinType<NameReference>,
+        name_to_id_map: &HashMap<&str, GlobalId>,
+    ) -> BuiltinType<IdReference> {
+        let typ: CatalogType<IdReference> = match &builtin.details.typ {
+            CatalogType::Array { element_reference } => CatalogType::Array {
+                element_reference: name_to_id_map[element_reference],
+            },
+            CatalogType::List { element_reference } => CatalogType::List {
+                element_reference: name_to_id_map[element_reference],
+            },
+            CatalogType::Map {
+                key_reference,
+                value_reference,
+            } => CatalogType::Map {
+                key_reference: name_to_id_map[key_reference],
+                value_reference: name_to_id_map[value_reference],
+            },
+            CatalogType::Record { fields } => CatalogType::Record {
+                fields: fields
+                    .into_iter()
+                    .map(|(column_name, reference)| {
+                        (column_name.clone(), name_to_id_map[reference])
+                    })
+                    .collect(),
+            },
+            CatalogType::Bool => CatalogType::Bool,
+            CatalogType::Bytes => CatalogType::Bytes,
+            CatalogType::Char => CatalogType::Char,
+            CatalogType::Date => CatalogType::Date,
+            CatalogType::Float32 => CatalogType::Float32,
+            CatalogType::Float64 => CatalogType::Float64,
+            CatalogType::Int16 => CatalogType::Int16,
+            CatalogType::Int32 => CatalogType::Int32,
+            CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::Interval => CatalogType::Interval,
+            CatalogType::Jsonb => CatalogType::Jsonb,
+            CatalogType::Numeric => CatalogType::Numeric,
+            CatalogType::Oid => CatalogType::Oid,
+            CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
+            CatalogType::Pseudo => CatalogType::Pseudo,
+            CatalogType::RegClass => CatalogType::RegClass,
+            CatalogType::RegProc => CatalogType::RegProc,
+            CatalogType::RegType => CatalogType::RegType,
+            CatalogType::String => CatalogType::String,
+            CatalogType::Time => CatalogType::Time,
+            CatalogType::Timestamp => CatalogType::Timestamp,
+            CatalogType::TimestampTz => CatalogType::TimestampTz,
+            CatalogType::Uuid => CatalogType::Uuid,
+            CatalogType::VarChar => CatalogType::VarChar,
+            CatalogType::Int2Vector => CatalogType::Int2Vector,
+        };
+
+        BuiltinType {
+            name: builtin.name,
+            schema: builtin.schema,
+            oid: builtin.oid,
+            details: CatalogTypeDetails {
+                array_id: builtin.details.array_id,
+                typ,
+            },
+        }
     }
 
     /// Retuns the catalog's transient revision, which starts at 1 and is
@@ -1583,8 +1676,49 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
-        self.storage().allocate_system_ids(amount)
+    /// Allocate new system ids for any new builtin objects and looks up existing system ids for
+    /// existing builtin objects
+    fn allocate_system_ids<T, F>(
+        &mut self,
+        builtins: Vec<T>,
+        builtin_id_lookup: F,
+    ) -> Result<AllocatedBuiltinSystemIds<T>, Error>
+    where
+        T: Copy,
+        F: Fn(&T) -> Option<GlobalId>,
+    {
+        let new_builtin_amount = builtins
+            .iter()
+            .filter(|builtin| builtin_id_lookup(builtin).is_none())
+            .count();
+
+        let mut global_ids = self
+            .storage()
+            .allocate_system_ids(
+                new_builtin_amount
+                    .try_into()
+                    .expect("builtins should fit into u64"),
+            )?
+            .into_iter();
+
+        let mut all_builtins = Vec::new();
+        let mut new_builtins = Vec::new();
+        for builtin in &builtins {
+            match builtin_id_lookup(builtin) {
+                // TODO(jkosh44) These items may need to undergo schema migrations
+                Some(id) => all_builtins.push((*builtin, id)),
+                None => {
+                    let id = global_ids.next().expect("not enough global IDs");
+                    all_builtins.push((*builtin, id));
+                    new_builtins.push((*builtin, id));
+                }
+            }
+        }
+
+        Ok(AllocatedBuiltinSystemIds {
+            all_builtins,
+            new_builtins,
+        })
     }
 
     pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
@@ -2783,6 +2917,7 @@ impl Catalog {
     ) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS.logs().count();
         let system_ids = self
+            .storage()
             .allocate_system_ids(
                 log_amount
                     .try_into()
@@ -3320,7 +3455,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn type_details(&self) -> Option<&CatalogTypeDetails> {
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
         if let CatalogItem::Type(Type { details, .. }) = self.item() {
             Some(details)
         } else {
