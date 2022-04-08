@@ -1074,9 +1074,8 @@ struct AllocatedBuiltinSystemIds<T> {
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog, a list of updates to builtin tables that
-    /// describe the initial state of the catalog, and a map of all
-    /// introspections sources with allocated global IDs for their indexes.
+    /// Returns the catalog and a list of updates to builtin tables that
+    /// describe the initial state of the catalog.
     pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
