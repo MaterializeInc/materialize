@@ -93,7 +93,13 @@ impl Location {
     pub async fn open(
         &self,
         timeout: Duration,
-    ) -> Result<(Arc<dyn BlobMulti>, Arc<dyn Consensus>), ExternalError> {
+    ) -> Result<
+        (
+            Arc<dyn BlobMulti + Send + Sync>,
+            Arc<dyn Consensus + Send + Sync>,
+        ),
+        ExternalError,
+    > {
         let deadline = Instant::now() + timeout;
         debug!(
             "Location::open timeout={:?} blob={} consensus={}",

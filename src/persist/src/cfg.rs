@@ -32,14 +32,17 @@ pub enum BlobMultiConfig {
 
 impl BlobMultiConfig {
     /// Opens the associated implementation of [BlobMulti].
-    pub async fn open(self, deadline: Instant) -> Result<Arc<dyn BlobMulti>, ExternalError> {
+    pub async fn open(
+        self,
+        deadline: Instant,
+    ) -> Result<Arc<dyn BlobMulti + Send + Sync>, ExternalError> {
         match self {
             BlobMultiConfig::File(config) => FileBlobMulti::open(deadline, config)
                 .await
-                .map(|x| Arc::new(x) as Arc<dyn BlobMulti>),
+                .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
             BlobMultiConfig::S3(config) => S3BlobMulti::open(deadline, config)
                 .await
-                .map(|x| Arc::new(x) as Arc<dyn BlobMulti>),
+                .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
         }
     }
 
@@ -100,11 +103,13 @@ pub enum ConsensusConfig {
 
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
-    pub async fn open(self, _deadline: Instant) -> Result<Arc<dyn Consensus>, ExternalError> {
+    pub async fn open(
+        self,
+        _deadline: Instant,
+    ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         match self {
-            ConsensusConfig::Sqlite(config) => {
-                SqliteConsensus::open(config).map(|x| Arc::new(x) as Arc<dyn Consensus>)
-            }
+            ConsensusConfig::Sqlite(config) => SqliteConsensus::open(config)
+                .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
         }
     }
 
