@@ -982,7 +982,6 @@ pub mod sources {
         pub transaction_idx: usize,
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
-        /// The record index of the `transaction.id` field
         pub tx_metadata: Option<DebeziumTransactionMetadata>,
     }
 

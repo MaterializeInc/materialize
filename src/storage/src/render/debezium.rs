@@ -15,8 +15,9 @@ use std::str::FromStr;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::{Collection, Hashable};
+use mz_dataflow_types::sources::DebeziumTransactionMetadata;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{OkErr, Operator};
+use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use tracing::{debug, error, info, warn};
 
@@ -69,6 +70,7 @@ where
                                 None => continue,
                             };
 
+                            // TODO: Dedup and process the data before combining / merging data with tx metadata
                             let partition_dedup = dedup_state
                                 .entry(result.partition.clone())
                                 .or_insert_with(|| {
@@ -140,37 +142,14 @@ where
     let (transaction_idx, tx_metadata_description) = match envelope {
         DebeziumEnvelope {
             mode:
-                DebeziumMode::Full(DebeziumDedupProjection {
-                    transaction_idx,
-                    tx_metadata,
-                    ..
-                }),
-            ..
-        }
-        | DebeziumEnvelope {
-            mode:
-                DebeziumMode::Ordered(DebeziumDedupProjection {
-                    transaction_idx,
-                    tx_metadata,
-                    ..
-                }),
-            ..
-        }
-        | DebeziumEnvelope {
-            mode:
-                DebeziumMode::FullInRange {
-                    projection:
-                        DebeziumDedupProjection {
-                            transaction_idx,
-                            tx_metadata,
-                            ..
-                        },
-                    ..
-                },
+                DebeziumMode::Full(projection)
+                | DebeziumMode::Ordered(projection)
+                | DebeziumMode::FullInRange { projection, .. },
             ..
         } => (
-            *transaction_idx,
-            tx_metadata
+            projection.transaction_idx,
+            projection
+                .tx_metadata
                 .clone()
                 .expect("render_tx should only be called when there's a transaction"),
         ),
@@ -197,12 +176,25 @@ where
 
                 // Keep mapping of `transaction_id`s to the timestamp at which that transaction END record was read from
                 // the transaction metadata stream.  That stored timestamp will be the timestamp for all data records
-                // with the corresponding `transaction_id`.
-                let mut tx_mapping = HashMap::new();
+                // with the corresponding `transaction_id`.  We keep this mapping around after we've matched `event_count`
+                // number of data rows so that we're able to process duplicates.  Otherwise, we're not able to tell the
+                // difference between "we've recieved the tx metadata and processed everything" and "we're still waiting
+                // on the tx metadata".
+                let mut tx_mapping: HashMap<String, Timestamp> = HashMap::new();
                 // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
                 // matched data rows.  This will be dropped when we've matched the indicated number of events.
-                let mut tx_cap_map = HashMap::new();
-                let mut tx_event_count = HashMap::new();
+                let mut tx_cap_event_count: HashMap<String, (Capability<_>, i64)> = HashMap::new();
+
+                let DebeziumTransactionMetadata {
+                    tx_data_collections_idx,
+                    tx_data_collections_data_collection_idx,
+                    tx_data_collection_name,
+                    tx_data_collections_event_count_idx,
+                    tx_status_idx,
+                    tx_transaction_id_idx,
+                    data_transaction_id_idx,
+                    tx_metadata_global_id: _,
+                } = tx_metadata_description;
                 move |_, _| {
                     move |tx_metadata_input, data_input, output| {
                         while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
@@ -219,20 +211,20 @@ where
                                     ));
                                 }
 
-                                let status = row.iter().nth(tx_metadata_description.tx_status_idx).unwrap().unwrap_str();
+                                let status = row.iter().nth(tx_status_idx).unwrap().unwrap_str();
                                 if status != "END" {
                                     continue;
                                 }
 
-                                let tx_id = row.iter().nth(tx_metadata_description.tx_transaction_id_idx).unwrap().unwrap_str().to_owned();
+                                let tx_id = row.iter().nth(tx_transaction_id_idx).unwrap().unwrap_str().to_owned();
 
-                                let event_count = match row.iter().nth(tx_metadata_description.tx_data_collections_idx).unwrap() {
+                                let event_count = match row.iter().nth(tx_data_collections_idx).unwrap() {
                                     Datum::List(dl) => dl,
                                     Datum::Array(dl) => dl.elements(),
                                     _ => panic!("data_collections previously validated to be array or list"),
                                 }.iter()
-                                .find(|datum| datum.unwrap_list().iter().nth(tx_metadata_description.tx_data_collections_data_collection_idx).unwrap().unwrap_str() == &tx_metadata_description.tx_data_collection_name)
-                                .map(|datum| match datum.unwrap_list().iter().nth(tx_metadata_description.tx_data_collections_event_count_idx).unwrap() {
+                                .find(|datum| datum.unwrap_list().iter().nth(tx_data_collections_data_collection_idx).unwrap().unwrap_str() == &tx_data_collection_name)
+                                .map(|datum| match datum.unwrap_list().iter().nth(tx_data_collections_event_count_idx).unwrap() {
                                     Datum::Int16(i) => i.into(),
                                     Datum::Int32(i) => i.into(),
                                     Datum::Int64(i) => i,
@@ -252,9 +244,8 @@ where
 
                                 match tx_mapping.insert(tx_id.clone(), time) {
                                     None => {
-                                        tx_event_count.insert(tx_id.clone(), event_count);
-                                        tx_cap_map
-                                            .insert(tx_id.clone(), tx_metadata_cap.clone());
+                                        tx_cap_event_count
+                                            .insert(tx_id.clone(), (tx_metadata_cap.clone(), event_count));
                                     }
                                     Some(val) if val == time => {},
                                     Some(val) => panic!("unexpected mismatch in duplicate END record for {:?}: {:?} vs {:?}", tx_id, time, val),
@@ -268,8 +259,8 @@ where
                             let data_cap = data_cap.retain();
                             data_buffer.extend(data.drain(..).map(|r| (r, data_cap.clone())));
                         }
-                        while let Some((result, data_cap)) = data_buffer.get(0).cloned() {
-                            let key = match result.key.transpose() {
+                        while let Some((result, data_cap)) = data_buffer.pop_front() {
+                            let key = match result.key.clone().transpose() {
                                 Ok(key) => key,
                                 Err(err) => {
                                     output.session(&data_cap).give((
@@ -277,11 +268,10 @@ where
                                         *data_cap.time(),
                                         1,
                                     ));
-                                    let _ = data_buffer.pop_front();
                                     continue;
                                 }
                             };
-                            let value = match result.value {
+                            let value = match result.value.clone() {
                                 Some(Ok(value)) => value,
                                 Some(Err(err)) => {
                                     output.session(&data_cap).give((
@@ -289,30 +279,26 @@ where
                                         *data_cap.time(),
                                         1,
                                     ));
-                                    let _ = data_buffer.pop_front();
                                     continue;
                                 }
-                                None => {
-                                    let _ = data_buffer.pop_front();
-                                    continue;
-                                }
+                                None => continue,
                             };
 
-                            let tx_id = match value.iter().nth(transaction_idx).unwrap() {
+                            let tx_id_and_time = match value.iter().nth(transaction_idx).unwrap() {
                                 Datum::List(l) => {
-                                    let tx_id = l.iter().nth(tx_metadata_description.data_transaction_id_idx).unwrap().unwrap_str().to_owned();
+                                    let tx_id = l.iter().nth(data_transaction_id_idx).unwrap().unwrap_str().to_owned();
                                     let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
                                         Some(time) => *time,
-                                        None => break,
+                                        None => {
+                                            data_buffer.push_front((result, data_cap));
+                                            break;
+                                        },
                                     };
                                     Some((tx_id, tx_time))
                                 },
                                 Datum::Null => None,
                                 _ => panic!("Previously validated to be nullable list"),
                             };
-
-                            // We're committed to processing it if we have a tx_time
-                            let _ = data_buffer.pop_front();
 
                             let partition_dedup = dedup_state
                                 .entry(result.partition.clone())
@@ -345,14 +331,14 @@ where
                                 None => true,
                             };
 
-                            match (should_use, tx_id) {
+                            match (should_use, tx_id_and_time) {
                                 (true, Some((tx_id, tx_time))) => {
-                                    let tx_cap_entry = match tx_cap_map.entry(tx_id.clone()) {
+                                    let mut tx_cap_event_count_entry = match tx_cap_event_count.entry(tx_id.clone()) {
                                         Entry::Occupied(e) => e,
                                         Entry::Vacant(_) => panic!("Must have cap if using record"),
                                     };
 
-                                    let mut session = output.session(tx_cap_entry.get());
+                                    let mut session = output.session(&tx_cap_event_count_entry.get().0);
                                     match value.iter().nth(before_idx).unwrap() {
                                         Datum::List(l) => {
                                             session.give((Ok(Row::pack(&l)), tx_time, -1));
@@ -371,19 +357,17 @@ where
                                             panic!("type error: expected record, found {:?}", d)
                                         }
                                     }
-                                    match tx_event_count.entry(tx_id.clone()) {
-                                        Entry::Occupied(mut e) => {
-                                            let count = e.get_mut();
-                                            *count -= 1;
-                                            if *count == 0 {
-                                                // Must drop the capability to allow the output frontier to progress
-                                                let _ = tx_cap_entry.remove_entry();
-                                                let _ = e.remove_entry();
-                                            }
-                                        }
-                                        Entry::Vacant(_) => panic!("need event count for tx_id {:?}", tx_id),
+
+                                    let (_, ref mut count) = tx_cap_event_count_entry.get_mut();
+                                    *count -= 1;
+                                    if *count == 0 {
+                                        // Must drop the capability to allow the output frontier to progress
+                                        let _ = tx_cap_event_count_entry.remove_entry();
                                     }
                                 },
+                                // The data row has no "transaction" field so it was created before transaction metadata
+                                // production was turned on.  Importantly, it is _not_ that the tx_id on the data could
+                                // not be matched to a tx metadata row.
                                 (true, None) => {
                                     let data_time = *data_cap.time();
                                     let mut session = output.session(&data_cap);

@@ -50,7 +50,7 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
@@ -1093,18 +1093,10 @@ fn typecheck_debezium_transaction_metadata(
         .ok_or_else(|| {
             anyhow!("'data_collections' column missing from debezium transaction metadata")
         })?;
-    if &(ColumnType {
-        scalar_type: ScalarType::String,
-        nullable: false,
-    }) != tx_status_ty
-    {
+    if tx_status_ty != &ScalarType::String.nullable(false) {
         bail!("'status' column must be of type non-nullable string");
     }
-    if &(ColumnType {
-        scalar_type: ScalarType::String,
-        nullable: false,
-    }) != tx_transaction_id_ty
-    {
+    if tx_transaction_id_ty != &ScalarType::String.nullable(false) {
         bail!("'id' column must be of type non-nullable string");
     }
 
