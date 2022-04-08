@@ -70,7 +70,7 @@ where
                                 None => continue,
                             };
 
-                            // TODO: Dedup and process the data before combining / merging data with tx metadata
+                            // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
                             let partition_dedup = dedup_state
                                 .entry(result.partition.clone())
                                 .or_insert_with(|| {
@@ -159,7 +159,7 @@ where
         } => panic!("render_tx should be called with a dedup mode"),
     };
 
-    // XXX(chae): Should we try to avoid moving everything to one worker?
+    // TODO(#11666): Should we try to avoid moving everything to one worker?
     tx_ok
         .inner
         .binary_frontier(
@@ -196,6 +196,8 @@ where
                     tx_metadata_global_id: _,
                 } = tx_metadata_description;
                 move |_, _| {
+                    // TODO(#11669) Revisit error handling strategy to do something optimized than just emitting
+                    // everything we can and holding back the frontier to the first data error.
                     move |tx_metadata_input, data_input, output| {
                         while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
                             refmut_data.swap(&mut tx_data);

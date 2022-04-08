@@ -631,6 +631,7 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain => {
+                    // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let tx_metadata = match with_option_objects.remove("tx_metadata") {
                         Some(SqlOption::ObjectName {
                             name: _,
