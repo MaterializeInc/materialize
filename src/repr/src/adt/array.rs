@@ -24,7 +24,7 @@ use mz_lowertest::MzReflect;
 // behind `cfg(test)`, so `proptest` can remain a dev-dependency.
 // See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
 // for guidance on using `derive(Arbitrary)` outside of test code.
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
 
 /// The maximum number of dimensions permitted in an array.
@@ -141,7 +141,7 @@ pub struct ArrayDimension {
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, MzReflect,
 )]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum InvalidArrayError {
     /// The number of dimensions in the array exceedes [`MAX_ARRAY_DIMENSIONS]`.
     TooManyDimensions(usize),

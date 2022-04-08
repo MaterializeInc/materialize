@@ -18,10 +18,9 @@ use mz_ore::cast::CastFrom;
 use std::fmt;
 
 // The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
-// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
-// for guidance on using `derive(Arbitrary)` outside of test code.
-#[cfg(test)]
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
 
 // https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
@@ -42,7 +41,7 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub struct VarCharMaxLength(pub(crate) u32);
 
 impl VarCharMaxLength {
