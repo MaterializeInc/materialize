@@ -58,11 +58,11 @@ use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use self::metrics::SourceBaseMetrics;
 
 use super::source::util::source;
-use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::storage::source::timestamp::TimestampBindingRc;
 use crate::storage::source::timestamp::TimestampBindingUpdater;
 use crate::storage::source::timestamp::{AssignedTimestamp, SourceTimestamp};
+use crate::storage::{Logger, StorageEvent};
 
 mod file;
 mod gen;
@@ -520,7 +520,7 @@ impl Drop for SourceMetrics {
         // retract our partition from logging
         if let Some(logger) = self.logger.as_mut() {
             for (partition, metric) in self.partition_metrics.iter() {
-                logger.log(MaterializedEvent::SourceInfo {
+                logger.log(StorageEvent::SourceInfo {
                     source_name: self.source_name.clone(),
                     source_id: self.source_id,
                     partition_id: partition.into(),
@@ -557,7 +557,7 @@ impl PartitionMetrics {
         offset: i64,
         timestamp: i64,
     ) {
-        logger.log(MaterializedEvent::SourceInfo {
+        logger.log(StorageEvent::SourceInfo {
             source_name: source_name.to_string(),
             source_id,
             partition_id: partition_id.into(),

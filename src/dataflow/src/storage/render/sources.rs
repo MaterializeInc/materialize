@@ -35,7 +35,6 @@ use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_persist_types::Codec;
 use mz_repr::{Diff, Row, RowPacker, Timestamp};
 
-use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::storage::decode::decode_cdcv2;
 use crate::storage::decode::render_decode;
@@ -50,6 +49,7 @@ use crate::storage::source::{
 };
 use crate::storage::storage_state::LocalInput;
 use crate::storage::storage_state::StorageState;
+use crate::storage::Logger;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///

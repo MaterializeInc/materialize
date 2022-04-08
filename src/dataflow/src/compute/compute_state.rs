@@ -32,7 +32,7 @@ use crate::boundary::ComputeReplay;
 use crate::common::activator::RcActivator;
 use crate::compute::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::materialized::MaterializedEvent;
+use crate::logging::materialized::ComputeEvent;
 use crate::operator::CollectionExt;
 use crate::sink::SinkBaseMetrics;
 
@@ -109,10 +109,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
 
                         // Log dataflow construction, frontier construction, and any dependencies.
                         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(object_id, true));
-                            logger.log(MaterializedEvent::Frontier(object_id, 0, 1));
+                            logger.log(ComputeEvent::Dataflow(object_id, true));
+                            logger.log(ComputeEvent::Frontier(object_id, 0, 1));
                             for import_id in dataflow.depends_on(collection_id) {
-                                logger.log(MaterializedEvent::DataflowDependency {
+                                logger.log(ComputeEvent::DataflowDependency {
                                     dataflow: object_id,
                                     source: import_id,
                                 })
@@ -146,9 +146,9 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                             .remove(&id)
                             .expect("Dropped compute collection with no frontier");
                         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            logger.log(ComputeEvent::Dataflow(id, false));
                             for time in frontier.elements().iter() {
-                                logger.log(MaterializedEvent::Frontier(id, *time, -1));
+                                logger.log(ComputeEvent::Frontier(id, *time, -1));
                             }
                         }
                     } else {
@@ -180,7 +180,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 let mut peek = PendingPeek { peek, trace_bundle };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                    logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
+                    logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
                 }
                 // Attempt to fulfill the peek.
                 if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
@@ -232,8 +232,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), granularity_ms);
         let d_linked = std::rc::Rc::new(EventLink::new());
         let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), granularity_ms);
-        let m_linked = std::rc::Rc::new(EventLink::new());
-        let mut m_logger = BatchLogger::new(Rc::clone(&m_linked), granularity_ms);
+        let c_linked = std::rc::Rc::new(EventLink::new());
+        let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), granularity_ms);
+        let s_linked = std::rc::Rc::new(EventLink::new());
+        let mut s_logger = BatchLogger::new(Rc::clone(&s_linked), granularity_ms);
 
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
@@ -270,7 +272,8 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
-                Rc::clone(&m_linked),
+                Rc::clone(&c_linked),
+                Rc::clone(&s_linked),
                 m_activator.clone(),
             ));
         }
@@ -363,7 +366,21 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 start_offset,
                 self.timely_worker.index(),
                 move |time, data| {
-                    m_logger.publish_batch(time, data);
+                    c_logger.publish_batch(time, data);
+                    activator.activate();
+                },
+            ),
+        );
+
+        let activator = m_activator.clone();
+        self.timely_worker.log_register().insert_logger(
+            "materialized/storage",
+            Logger::new(
+                now,
+                start_offset,
+                self.timely_worker.index(),
+                move |time, data| {
+                    s_logger.publish_batch(time, data);
                     activator.activate();
                 },
             ),
@@ -407,7 +424,8 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
-                m_linked,
+                c_linked,
+                s_linked,
                 m_activator,
             ));
         }
@@ -421,7 +439,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
-            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in r_traces {
             let id = logging.active_logs[&log];
@@ -431,7 +449,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
-            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in d_traces {
             let id = logging.active_logs[&log];
@@ -441,7 +459,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
-            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, trace) in m_traces {
             let id = logging.active_logs[&log];
@@ -451,7 +469,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
-            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
 
         self.compute_state.materialized_logger = Some(logger);
@@ -470,6 +488,9 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             .log_register()
             .remove("differential/arrange");
         self.timely_worker.log_register().remove("materialized");
+        self.timely_worker
+            .log_register()
+            .remove("materialized/storage");
     }
 
     /// Send progress information to the coordinator.
@@ -513,7 +534,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
             for (id, changes) in &mut progress {
                 for (time, diff) in changes.iter() {
-                    logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+                    logger.log(ComputeEvent::Frontier(*id, *time, *diff));
                 }
             }
         }
@@ -567,7 +588,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-            logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
+            logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
         }
     }
 
