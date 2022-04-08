@@ -52,3 +52,19 @@ impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn invalid_array_error_protobuf_roundtrip(expect in any::<InvalidArrayError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoInvalidArrayError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}

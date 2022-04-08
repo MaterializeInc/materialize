@@ -44,6 +44,7 @@ uuid = "0.8.2"
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 rand = "0.8.5"
+proptest-derive = { git = "https://github.com/materializeInc/proptest.git" }
 
 [dev-dependencies.proptest]
 git = "https://github.com/materializeInc/proptest.git"
