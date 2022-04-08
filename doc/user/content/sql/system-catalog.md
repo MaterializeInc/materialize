@@ -604,6 +604,7 @@ Field          | Type        | Meaning
 `schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
 `name`         | [`text`]    | The name of the view.
 `volatility`   | [`text`]    | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`definition`   | [`text`]    | The view definition (a `SELECT` query).
 
 ### `mz_worker_materialization_frontiers`
 

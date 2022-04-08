@@ -2069,6 +2069,25 @@ lazy_static! {
                     END)"
                 ) => String, 2507;
             },
+            // pg_get_viewdef returns the (query part of) the given view's definition.
+            // We currently don't support pretty-printing (the `Bool`/`Int32` parameters).
+            "pg_get_viewdef" => Scalar {
+                params!(String) => sql_impl_func(
+                    "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                ) => String, 1640;
+                params!(Oid) => sql_impl_func(
+                    "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
+                ) => String, 1641;
+                params!(String, Bool) => sql_impl_func(
+                    "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                ) => String, 2505;
+                params!(Oid, Bool) => sql_impl_func(
+                    "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
+                ) => String, 2506;
+                params!(Oid, Int32) => sql_impl_func(
+                    "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
+                ) => String, 3159;
+            },
             // pg_get_expr is meant to convert the textual version of
             // pg_node_tree data into parseable expressions. However, we don't
             // use the pg_get_expr structure anywhere and the equivalent columns
