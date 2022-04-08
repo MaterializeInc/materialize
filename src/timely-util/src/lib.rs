@@ -17,4 +17,8 @@
 
 #![warn(missing_docs)]
 
+pub mod activator;
+pub mod event;
+pub mod operator;
 pub mod operators_async_ext;
+pub mod replay;
