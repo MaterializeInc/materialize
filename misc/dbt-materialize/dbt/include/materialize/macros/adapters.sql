@@ -68,7 +68,7 @@
 
 {% macro materialize__drop_index(index_name) -%}
   {% call statement('drop_index') -%}
-    drop index if exists {{ index_name }} cascade
+    drop index if exists {{ index_name }}
   {%- endcall %}
 {% endmacro %}
 
@@ -104,6 +104,18 @@
   {% set table = load_result('get_columns_in_relation').table %}
   {{ return(sql_convert_columns_in_relation(table)) }}
 {% endmacro %}
+
+{% macro materialize__get_create_index_sql(relation, index_dict) -%}
+  {%- set index_config = adapter.parse_index(index_dict) -%}
+  {%- set comma_separated_columns = ", ".join(index_config.columns) -%}
+  {%- set index_name = index_config.render(relation) -%}
+    create index if not exists
+      "{{ index_name }}"
+      on {{ relation }} {% if index_config.type -%}
+        using {{ index_config.type }}
+  {%- endif %}
+  ({{ comma_separated_columns }});
+{%- endmacro %}
 
 {% macro materialize__list_relations_without_caching(schema_relation) %}
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
