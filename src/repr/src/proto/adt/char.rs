@@ -27,3 +27,19 @@ impl TryFrom<ProtoCharLength> for CharLength {
         Ok(CharLength(repr.value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn char_length_protobuf_roundtrip(expect in any::<CharLength>()) {
+            let actual = protobuf_roundtrip::<_, ProtoCharLength>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}
