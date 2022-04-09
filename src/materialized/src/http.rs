@@ -34,7 +34,6 @@ use tracing::error;
 
 use mz_coord::session::Session;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::future::OreFutureExt;
 use mz_ore::netio::SniffedStream;
 
 use crate::http::metrics::MetricsVariant;
@@ -170,7 +169,7 @@ impl Server {
             let global_metrics = self.global_metrics.clone();
             let pgwire_metrics = self.pgwire_metrics.clone();
             let frontegg = self.frontegg.clone();
-            let future = async move {
+            async move {
                 // There are three places a username may be specified:
                 // - certificate common name
                 // - HTTP Basic authentication
@@ -223,7 +222,7 @@ impl Server {
                         }
                     };
 
-                let res = match (req.method(), req.uri().path()) {
+                match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
                     (&Method::GET, "/metrics") => {
                         metrics::handle_prometheus(req, &metrics_registry, MetricsVariant::Regular)
@@ -245,35 +244,8 @@ impl Server {
                         catalog::handle_internal_catalog(req, &mut coord_client).await
                     }
                     _ => root::handle_static(req, &mut coord_client),
-                };
-                coord_client.terminate().await;
-                res
-            };
-            // Hyper will drop the future if the client goes away, in an effort
-            // to eagerly cancel work. But the design of the coordinator
-            // requires that the future be polled to completion in order for
-            // cleanup to occur. Specifically:
-            //
-            //   * The `SessionClient` *must* call `terminate` before it is
-            //     dropped.
-            //   * A peek receiver must not be dropped before it receives a
-            //     message.
-            //
-            // Not observing this rule leads to invariant violations that panic;
-            // see #6278 for an example.
-            //
-            // The fix here is to wrap the future in a combinator that will call
-            // `tokio::spawn` to poll it to completion if Hyper gives up on it.
-            // A bit weird, but it works, and hides this messiness from the code
-            // in the future itself. If Rust ever supports asynchronous
-            // destructors ("AsyncDrop"), those will admit a more natural
-            // solution to the problem.
-            //
-            // TODO(guswynn): remove this `.to_string`
-            // It appears there is a bug in the rust compiler related to async and/or closures
-            // that prevents even an explicitly-annotated `&'static str` from
-            // being used here
-            future.spawn_if_canceled(|| "hyper_server".to_string())
+                }
+            }
         });
         let svc = ServiceBuilder::new()
             .layer(
