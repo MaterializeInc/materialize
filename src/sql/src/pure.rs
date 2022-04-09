@@ -72,60 +72,53 @@ pub async fn purify_create_source(
     let mut file = None;
     match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            match kafka {
-                KafkaSource { broker, topic, .. } => {
-                    match broker {
-                        mz_sql_parser::ast::KafkaConnector::Literal { broker } => {
-                            if !broker.contains(':') {
-                                *broker += ":9092";
-                            }
+            let KafkaSource { broker, topic, .. } = kafka;
+            match broker {
+                // Temporary until the rest of the connector plumbing is finished
+                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+                mz_sql_parser::ast::KafkaConnector::Literal { broker } => {
+                    if !broker.contains(':') {
+                        *broker += ":9092";
+                    }
 
-                            // Verify that the provided security options are valid and then test them.
-                            config_options = kafka_util::extract_config(&mut with_options_map)?;
-                            let consumer =
-                                kafka_util::create_consumer(&broker, &topic, &config_options)
-                                    .await
-                                    .map_err(|e| {
-                                        anyhow!(
-                                            "Failed to create and connect Kafka consumer: {}",
-                                            e
-                                        )
-                                    })?;
+                    // Verify that the provided security options are valid and then test them.
+                    config_options = kafka_util::extract_config(&mut with_options_map)?;
+                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                        .await
+                        .map_err(|e| {
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
+                        })?;
 
-                            // Translate `kafka_time_offset` to `start_offset`.
-                            match kafka_util::lookup_start_offsets(
-                                Arc::clone(&consumer),
-                                &topic,
-                                &with_options_map,
-                                now,
-                            )
-                            .await?
-                            {
-                                Some(start_offsets) => {
-                                    // Drop `kafka_time_offset`
-                                    with_options.retain(|val| match val {
-                                        mz_sql_parser::ast::SqlOption::Value { name, .. } => {
-                                            name.as_str() != "kafka_time_offset"
-                                        }
-                                        _ => true,
-                                    });
-
-                                    // Add `start_offset`
-                                    with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                                        name: mz_sql_parser::ast::Ident::new("start_offset"),
-                                        value: mz_sql_parser::ast::Value::Array(
-                                            start_offsets
-                                                .iter()
-                                                .map(|offset| Value::Number(offset.to_string()))
-                                                .collect(),
-                                        ),
-                                    });
+                    // Translate `kafka_time_offset` to `start_offset`.
+                    match kafka_util::lookup_start_offsets(
+                        Arc::clone(&consumer),
+                        &topic,
+                        &with_options_map,
+                        now,
+                    )
+                    .await?
+                    {
+                        Some(start_offsets) => {
+                            // Drop `kafka_time_offset`
+                            with_options.retain(|val| match val {
+                                mz_sql_parser::ast::SqlOption::Value { name, .. } => {
+                                    name.as_str() != "kafka_time_offset"
                                 }
-                                _ => {}
-                            }
+                                _ => true,
+                            });
+
+                            // Add `start_offset`
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("start_offset"),
+                                value: mz_sql_parser::ast::Value::Array(
+                                    start_offsets
+                                        .iter()
+                                        .map(|offset| Value::Number(offset.to_string()))
+                                        .collect(),
+                                ),
+                            });
                         }
-                        // Temporary until the rest of the connector plumbing is finished
-                        mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+                        _ => {}
                     }
                 }
             }
