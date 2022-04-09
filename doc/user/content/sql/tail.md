@@ -113,9 +113,9 @@ the nature of the update:
 
 ### Duration
 
-`TAIL` will continue to run until canceled, session ends, or until all updates the tail could undergo have been presented. The latter case typically occurs when
+`TAIL` will continue to run until canceled, session ends, or until all updates have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
-[file sources](/sql/create-source/text-file) that were created in non-tailing
+[file sources](/sql/create-source/file) that were created in non-tailing
 mode (`tail = false`).
 
 {{< warning >}}
@@ -202,9 +202,11 @@ Below are the recommended ways to work around this.
 ### Tailing with `FETCH`
 
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
-These must be used within a transaction, with [only one `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
+These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-Let's see it in action tailing [Materialize's workers time use internally](/sql/system-catalog/#mz_scheduling_elapsed). <br/><br/>
+As an example, let's tail the [`mz_scheduling_elapsed`](/sql/system-catalog/#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow. 
+
+<br/><br/>
 First, declare a `TAIL` cursor:
 
 ```sql
@@ -212,7 +214,7 @@ BEGIN;
 DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed);
 ```
 
-Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
+Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
 
 ```sql
 FETCH ALL c;
@@ -240,7 +242,7 @@ FETCH ALL c WITH (timeout='0s');
 
 ### Using clients
 
-If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
+If you want to use `TAIL` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
 ```sql
 COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
@@ -361,7 +363,7 @@ CREATE INDEX most_scheduled_worker_idx
   WITH (logical_compaction_window = '10 seconds');
 ```
 
-Stream out changes from ten seconds before the statement is executed:
+Stream out all changes starting 10 seconds before the statement's execution time:
 
 ```sql
 COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
@@ -369,10 +371,9 @@ COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 
 Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
 
-### Relating rows with their updates
+### Mapping rows to their updates
 
-After all the rows from the `SNAPSHOT` have been transmitted, the updates will come as they occur,
-but how is it possible to know which row has been updated? <br/>
+After all the rows from the `SNAPSHOT` have been transmitted, the updates will be emitted as they occur. How can you map each row to its corresponding update? <br/>
 
 | mz_timestamp | mz_progressed | mz_diff | Column 1 | .... | Column N |
 | ------------ | ------------- | ------- | -------- | ---- | -------- | --------------------------- |

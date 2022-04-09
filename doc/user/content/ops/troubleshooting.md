@@ -194,7 +194,7 @@ operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 
 ```sql
-select * from mz_dataflow_operator_addresses where id=515 and worker=0;
+SELECT * FROM mz_dataflow_operator_addresses WHERE id=515 AND worker=0;
 ```
 
 ```
@@ -258,10 +258,10 @@ The response lists the disk space for the data directory and any subdirectories:
 
 The `mzdata` directory is typically less than 10MB in size.
 
-### How many tails are running?
+### How many `TAIL` processes are running?
 
-You can count the number of tails running in Materialize with a query or another tail.
-Every time a tail is invoked, a dataflow is created, and each uses the same name prefix.
+You can get the number of active `TAIL` processes in Materialize using the statement below, or another `TAIL` statement.
+Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is created.
 
 ```sql
 -- Report the number of tails running
