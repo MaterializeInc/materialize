@@ -340,9 +340,10 @@ pub fn plan_create_source(
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            let (broker, topic) = match kafka {
-                mz_sql_parser::ast::KafkaSource::Literal { broker, topic, .. } => (broker, topic),
-                _ => unreachable!(),
+            let (broker, topic) = match &kafka.broker {
+                mz_sql_parser::ast::KafkaConnector::Literal { broker } => (broker, &kafka.topic),
+                // Temporary until the rest of the connector plumbing is finished
+                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
             };
             let config_options = kafka_util::extract_config(&mut with_options)?;
 

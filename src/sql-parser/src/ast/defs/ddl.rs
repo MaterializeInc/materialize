@@ -466,19 +466,17 @@ pub enum CreateConnector<T: AstInfo> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaSource {
-    Literal {
-        broker: String,
-        topic: String,
-        key: Option<Vec<Ident>>,
-    },
-    Reference {
-        connector: String,
-        topic: String,
-        key: Option<Vec<Ident>>,
-    },
+pub enum KafkaConnector {
+    Literal { broker: String },
+    Reference { connector: UnresolvedObjectName },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaSource {
+    pub broker: KafkaConnector,
+    pub topic: String,
+    pub key: Option<Vec<Ident>>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector {
@@ -529,38 +527,29 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka(kafka) => match kafka {
-                KafkaSource::Literal { broker, topic, key } => {
-                    f.write_str("KAFKA BROKER '");
-                    f.write_node(&display::escape_single_quote_string(broker));
-                    f.write_str("'");
-                    f.write_str(" TOPIC '");
-                    f.write_node(&display::escape_single_quote_string(topic));
-                    f.write_str("'");
-                    if let Some(key) = key.as_ref() {
-                        f.write_str(" KEY (");
-                        f.write_node(&display::comma_separated(&key));
-                        f.write_str(")");
+            CreateSourceConnector::Kafka(kafka) => {
+                let KafkaSource { broker, topic, key } = kafka;
+                match broker {
+                    KafkaConnector::Literal { broker } => {
+                        f.write_str("KAFKA BROKER '");
+                        f.write_node(&display::escape_single_quote_string(broker));
+                        f.write_str("'");
+                    }
+                    KafkaConnector::Reference { connector } => {
+                        f.write_str("KAFKA CONNECTOR '");
+                        f.write_node(connector);
+                        f.write_str("'");
                     }
                 }
-                KafkaSource::Reference {
-                    connector,
-                    topic,
-                    key,
-                } => {
-                    f.write_str("KAFKA CONNECTOR '");
-                    f.write_node(&display::escape_single_quote_string(connector));
-                    f.write_str("'");
-                    f.write_str(" TOPIC '");
-                    f.write_node(&display::escape_single_quote_string(topic));
-                    f.write_str("'");
-                    if let Some(key) = key.as_ref() {
-                        f.write_str(" KEY (");
-                        f.write_node(&display::comma_separated(&key));
-                        f.write_str(")");
-                    }
+                f.write_str(" TOPIC '");
+                f.write_node(&display::escape_single_quote_string(topic));
+                f.write_str("'");
+                if let Some(key) = key.as_ref() {
+                    f.write_str(" KEY (");
+                    f.write_node(&display::comma_separated(&key));
+                    f.write_str(")");
                 }
-            },
+            }
             CreateSourceConnector::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
