@@ -269,18 +269,27 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 &Patch::Apply(stateful_set),
             )
             .await?;
+        // Explicitly delete any pods in the stateful set that don't match the
+        // template. In theory, Kubernetes would do this automatically, but
+        // in practice we have observed that it does not.
+        // See: https://github.com/kubernetes/kubernetes/issues/67250
         for pod_id in 0..processes {
             let pod_name = format!("{}-{}", &name, pod_id);
-            let pod = self.pod_api.get(&pod_name).await?;
+            let pod = match self.pod_api.get(&pod_name).await {
+                Ok(pod) => pod,
+                // Pod already doesn't exist.
+                Err(kube::Error::Api(e)) if e.code == 404 => continue,
+                Err(e) => return Err(e.into()),
+            };
             if pod.annotations().get(pod_template_hash_annotation) != Some(&pod_template_hash) {
                 match self
                     .pod_api
                     .delete(&pod_name, &DeleteParams::default())
                     .await
                 {
-                    Ok(_) => {}
-                    // object already doesn't exist
-                    Err(kube::Error::Api(e)) if e.code == 404 => {}
+                    Ok(_) => (),
+                    // Pod got deleted while we were looking at it.
+                    Err(kube::Error::Api(e)) if e.code == 404 => (),
                     Err(e) => return Err(e.into()),
                 }
             }
