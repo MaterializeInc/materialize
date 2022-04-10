@@ -129,7 +129,7 @@ const MIGRATIONS: &[&dyn Migration] = &[
          (4, NULL, 'mz_internal'),
          (5, NULL, 'information_schema');
      INSERT INTO roles VALUES (1, 'materialize');
-     INSERT INTO compute_instances (id, name) VALUES (1, 'default');",
+     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size\":\"1\",\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -370,7 +370,12 @@ impl Connection {
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
                 let config: ComputeInstanceConfig = match config {
-                    None => ComputeInstanceConfig::Local,
+                    None => {
+                        return Err(Error::new(ErrorKind::Unstructured(
+                            "migrating catalog from materialized to platform is not supported"
+                                .into(),
+                        )))
+                    }
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
                 };

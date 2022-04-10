@@ -131,14 +131,14 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
-    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
+    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
+    TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -238,8 +238,6 @@ pub struct TimestampedUpdate {
 /// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
-    pub granularity: Duration,
-    pub log_logging: bool,
     pub retain_readings_for: Duration,
     pub metrics_scraping_interval: Option<Duration>,
 }
@@ -2066,7 +2064,6 @@ impl Coordinator {
         self.catalog_transact(ops, |tx| {
             let new_config = &tx.catalog.get_compute_instance(plan.id).config;
             match (old_config, new_config) {
-                (InstanceConfig::Local, InstanceConfig::Local) => Ok(()),
                 (
                     InstanceConfig::Remote {
                         replicas: old_replicas,
@@ -4936,12 +4933,6 @@ pub async fn serve(
         storage,
         experimental_mode: Some(experimental_mode),
         safe_mode,
-        local_compute_introspection: logging.as_ref().map(|logging| {
-            ComputeInstanceIntrospectionConfig {
-                granularity: logging.granularity,
-                debugging: logging.log_logging,
-            }
-        }),
         build_info,
         aws_external_id,
         timestamp_frequency,

@@ -26,32 +26,25 @@ SERVICES = [
     SchemaRegistry(),
     Dataflowd(
         name="dataflowd_compute_1",
-        options="--workers 2 --processes 2 --process 0 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr dataflowd_storage:2101 --runtime compute",
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr materialized:2101 --runtime compute",
         ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_2",
-        options="--workers 2 --processes 2 --process 1 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr dataflowd_storage:2101 --runtime compute",
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_1:2102 dataflowd_compute_2:2102 --storage-addr materialized:2101 --runtime compute",
         ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_3",
-        options="--workers 2 --processes 2 --process 0 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr dataflowd_storage:2101 --runtime compute --linger --reconcile",
+        options="--workers 2 --processes 2 --process 0 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr materialized:2101 --runtime compute --linger --reconcile",
         ports=[2100, 2102],
     ),
     Dataflowd(
         name="dataflowd_compute_4",
-        options="--workers 2 --processes 2 --process 1 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr dataflowd_storage:2101 --runtime compute --linger --reconcile",
+        options="--workers 2 --processes 2 --process 1 dataflowd_compute_3:2102 dataflowd_compute_4:2102 --storage-addr materialized:2101 --runtime compute --linger --reconcile",
         ports=[2100, 2102],
     ),
-    Dataflowd(
-        name="dataflowd_storage",
-        options="--workers 2 --storage-addr dataflowd_storage:2101 --runtime storage",
-        ports=[2100, 2101],
-    ),
-    Materialized(
-        options="--storage-compute-addr=dataflowd_storage:2101 --storage-controller-addr=dataflowd_storage:2100",
-    ),
+    Materialized(extra_ports=[2101]),
     Testdrive(
         volumes=[
             "mzdata:/share/mzdata",
@@ -84,7 +77,6 @@ def workflow_nightly(c: Composition) -> None:
 
 
 def test_cluster(c: Composition, *glob: str) -> None:
-    c.up("dataflowd_storage")
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
 

@@ -85,6 +85,8 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
     },
     #[error("failpoint {0} reached)")]
     FailpointReached(String),
+    #[error("{0}")]
+    Unstructured(String),
 }
 
 impl Error {

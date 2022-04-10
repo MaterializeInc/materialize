@@ -1,6 +1,6 @@
 ---
 title: "Install Materialize Locally"
-description: "Install the Materialize binary"
+description: "Install the Materialize development environment"
 menu:
   main:
     parent: quickstarts
@@ -13,9 +13,8 @@ aliases:
 Want to connect with Materialize? Join our growing community on Slack! →
 {{< /cta >}}
 
-You can access Materialize through the `materialized` binary, which you can
-install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
-instructions install the latest release of Materialize, **{{< version >}}**. For prior releases and unstable builds, see the [Versions page](/versions).
+You can install the Materialize devellopment environment on macOS and Linux, or
+[build](#build-from-source) on most OSes (e.g. FreeBSD).
 
 {{< warning >}}
 Support for the ARM CPU architecture is in beta. You may encounter performance
@@ -30,66 +29,10 @@ We provide the `materialize/materialized` image in Docker Hub. If you already ha
 way. For example:
 
 ```shell
-docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
+docker run -p 6875:6875 materialize/materialized:{{< version >}}
 ```
 
 [docker-start]: https://www.docker.com/get-started
-
-## macOS installation
-
-### Homebrew
-
-Assuming you've installed [Homebrew](https://brew.sh/):
-
-```shell
-brew install MaterializeInc/materialize/materialized
-```
-
-### curl
-
-```shell
-curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m)-apple-darwin.tar.gz \
-    | sudo tar -xzC /usr/local --strip-components=1
-```
-
-## Linux installation
-
-### apt (Ubuntu, Debian, or variants)
-
-{{< note >}}
-These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
-previously, you may need to do so again to continue receiving updates.
-{{</ note >}}
-
-
-```shell
-# Add the signing key for the Materialize apt repository
-sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
-# Add and update the repository
-sudo sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
-sudo apt update
-# Install materialized
-sudo apt install materialized
-```
-
-### apt DEB822 (Ubuntu jammy/22.04+, Debian bookworm/testing+)
-
-For Debian-based distributions with apt version `2.3.10` or later, we offer a DEB822-compliant sources file to install Materialize:
-
-```shell
-# Add and update the repository
-curl https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
-sudo apt update
-# Install materialized
-sudo apt install materialized
-```
-
-### curl
-
-```shell
-curl -L https://binaries.materialize.com/materialized-{{< version >}}-$(uname -m)-unknown-linux-gnu.tar.gz \
-    | sudo tar -xzC /usr/local --strip-components=1
-```
 
 ## Build from source
 
@@ -126,19 +69,16 @@ for the correct release.
 git clone https://github.com/MaterializeInc/materialize.git
 cd materialize
 git checkout {{< version >}}
-cargo build --release --bin materialized
+cargo build --release --bin materialized --bin dataflowd
 ```
 
-## Run the binary
+### Run the binary
 
 You can start the `materialized` process by simply running the binary, e.g.
 
 ```nofmt
-./materialized --workers 1
+./target/release/materialized
 ```
-
-`--workers 1` specifies that the process will use 1 worker. You can also find more detail
-about our [command line flags](/cli/#command-line-flags).
 
 By default `materialized` uses:
 
@@ -146,20 +86,6 @@ Detail | Info
 ----------|------
 **Database** | `materialize`
 **Port** | `6875`
-
-### `systemd` service
-
-If you've installed Materialize via [`apt`](#apt-ubuntu-debian-or-variants), you can start it as a service by running:
-
-```shell
-systemctl start materialized.service
-```
-
-To enable the service to start up at boot, run:
-
-```shell
-systemctl enable materialized.service
-```
 
 ## CLI Connections
 

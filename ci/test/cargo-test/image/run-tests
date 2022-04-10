@@ -18,6 +18,7 @@ total=0
 
 while read -r binary package cwd; do
     echo "--- $binary"
+    killall -9 materialized dataflowd &> /dev/null || true
     # Run tests, generating a JSON event stream. The jq in the pipeline below
     # prefixes each event's name field, if present, with the package name, so
     # that we can distinguish tests with the same names in different packages.

@@ -7,12 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
 use assert_cmd::Command;
-use predicates::prelude::*;
 
 fn cmd() -> Command {
     let mut cmd = Command::cargo_bin("materialized").unwrap();
@@ -33,36 +30,4 @@ fn test_version() {
         .assert()
         .success()
         .stdout(format!("materialized {}\n", expected_version));
-}
-
-#[test]
-fn test_threads() {
-    let assert_fail = |cmd: &mut Command| {
-        cmd.assert().failure().stderr(predicate::str::starts_with(
-            "error: Invalid value \"0\" for '--workers <N>': must be greater than zero",
-        ))
-    };
-    assert_fail(cmd().arg("-w0"));
-    assert_fail(cmd().env("MZ_WORKERS", "0"));
-
-    cmd()
-        .arg("--workers=-1")
-        .assert()
-        .failure()
-        .stderr(predicate::str::starts_with(
-            "error: Invalid value \"-1\" for '--workers <N>': invalid digit found in string",
-        ));
-
-    cmd()
-        .env("MZ_WORKERS", OsStr::from_bytes(&[0xc2, 0xc2]))
-        .assert()
-        .failure()
-        .stderr(predicate::str::starts_with(
-            "error: Invalid UTF-8 was detected in one or more arguments",
-        ));
-
-    // NOTE: we don't test the successful case, where `MZ_WORKERS` or `-w` is
-    // specified correctly, because it's presently hard to check if Materialized
-    // has started correctly, since it runs forever. The success code path is
-    // well exercised by integration tests, so it's not a big deal.
 }

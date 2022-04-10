@@ -30,7 +30,6 @@ services:
       --workers 2
       --experimental
       --timestamp-frequency 100ms
-      --disable-telemetry
       --retain-prometheus-metrics 1s
       --no-sigbus-sigsegv-backtraces
     image: antithesis-materialized:${ANT_IMAGE_TAG}

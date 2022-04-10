@@ -13,7 +13,6 @@ services:
   materialized:
     mzbuild: materialized
     ports: [6875]
-    command: -w4 --disable-telemetry
     environment:
       - MZ_DEV=1
     volumes:

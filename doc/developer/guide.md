@@ -246,7 +246,7 @@ To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
 cd src/materialized
-cargo run --features=dev-web -- --dev -w1
+cargo run --features=dev-web -- --dev
 ```
 
 In this mode, every request for a static file will reload the file from disk.

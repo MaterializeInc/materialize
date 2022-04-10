@@ -44,7 +44,6 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 ## New &amp; updated
 
-- [Release Notes](/release-notes/)
 - [CDC with MySQL](/integrations/cdc-mysql/)
 - [Materialize Cloud](/cloud/) - Now in open beta!
 

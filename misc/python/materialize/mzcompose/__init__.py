@@ -158,13 +158,6 @@ def _lint_materialized_service(
     command = service.get("command", "")
     if isinstance(command, str):
         command = command.split()  # split on whitespace to extract individual arguments
-    if "--disable-telemetry" not in command:
-        errors.append(
-            LintError(
-                path,
-                "materialized service command does not include --disable-telemetry",
-            )
-        )
     env = service.get("environment", [])
     if "MZ_DEV=1" not in env:
         errors.append(

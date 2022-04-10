@@ -47,8 +47,7 @@ use tower_http::cors::{self, Origin};
 use uuid::Uuid;
 
 use materialized::{
-    OrchestratorBackend, OrchestratorConfig, RemoteStorageConfig, SecretsControllerConfig,
-    StorageConfig, TlsConfig, TlsMode,
+    OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
@@ -56,6 +55,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -177,9 +177,9 @@ pub struct Args {
     persist_cache_size_limit: Option<usize>,
 
     // === Platform options. ===
-    /// The service orchestrator implementation to use, if any.
-    #[structopt(long, hide = true, arg_enum)]
-    orchestrator: Option<Orchestrator>,
+    /// The service orchestrator implementation to use.
+    #[structopt(long, default_value = "process", arg_enum)]
+    orchestrator: Orchestrator,
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
     ///
@@ -207,44 +207,19 @@ pub struct Args {
     secrets_controller: Option<SecretsController>,
 
     // === Timely worker configuration. ===
-    /// Number of dataflow worker threads.
-    #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
-    workers: WorkerCount,
-    /// Address of a storage process that compute instances should connect to.
-    #[clap(
-        long,
-        env = "MZ_STORAGE_COMPUTE_ADDR",
-        value_name = "N",
-        requires = "storage-controller-addr",
-        hide = true
-    )]
-    storage_compute_addr: Option<String>,
     /// Address of a storage process that the controller should connect to.
     #[clap(
         long,
         env = "MZ_STORAGE_CONTROLLER_ADDR",
-        value_name = "N",
-        requires = "storage-controller-addr",
-        hide = true
+        value_name = "HOST:ADDR",
+        conflicts_with = "orchestrator"
     )]
     storage_controller_addr: Option<String>,
-    /// Log Timely logging itself.
-    #[clap(long, hide = true)]
-    debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
     #[clap(short, long, hide = true, parse(try_from_str = mz_repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
-    /// The frequency at which to update introspection sources.
-    ///
-    /// The introspection sources are the built-in sources in the mz_catalog
-    /// schema, like mz_scheduling_elapsed, that reflect the internal state of
-    /// Materialize's dataflow engine.
-    ///
-    /// Set to "off" to disable introspection.
-    #[clap(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
-    introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
@@ -256,13 +231,6 @@ pub struct Args {
     /// Default frequency with which to scrape prometheus metrics
     #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
     metrics_scraping_interval: OptionalDuration,
-
-    /// [ADVANCED] Timely progress tracking mode.
-    #[clap(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
-    timely_progress_mode: timely::worker::ProgressMode,
-    /// [ADVANCED] Amount of compaction to perform when idle.
-    #[clap(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
-    differential_idle_merge_effort: Option<isize>,
 
     // === Logging options. ===
     /// Where to emit log messages.
@@ -427,21 +395,6 @@ pub struct Args {
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
 
-    // === Telemetry options. ===
-    /// Disable telemetry reporting.
-    #[clap(
-        long,
-        conflicts_with_all = &["telemetry-domain", "telemetry-interval"],
-        env = "MZ_DISABLE_TELEMETRY",
-    )]
-    disable_telemetry: bool,
-    /// The domain hosting the telemetry server.
-    #[clap(long, env = "MZ_TELEMETRY_DOMAIN", hide = true)]
-    telemetry_domain: Option<String>,
-    /// The interval at which to report telemetry data.
-    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
-    telemetry_interval: Option<Duration>,
-
     /// The endpoint to send opentelemetry traces to.
     /// If not provided, tracing is not sent.
     ///
@@ -602,22 +555,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure Timely and Differential workers.
-    let log_logging = args.debug_introspection;
     let retain_readings_for = args.retain_prometheus_metrics;
     let metrics_scraping_interval = args.metrics_scraping_interval;
-    let logging = args
-        .introspection_frequency
-        .map(|granularity| mz_coord::LoggingConfig {
-            granularity,
-            log_logging,
-            retain_readings_for,
-            metrics_scraping_interval,
-        });
-    if log_logging && logging.is_none() {
-        bail!(
-            "cannot specify --debug-introspection and --introspection-frequency=off simultaneously"
-        );
-    }
+    let logging = Some(mz_coord::LoggingConfig {
+        retain_readings_for,
+        metrics_scraping_interval,
+    });
 
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
@@ -692,42 +635,35 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure orchestrator.
-    let orchestrator = match args.orchestrator {
-        None => {
-            if !args.orchestrator_service_label.is_empty() {
-                bail!("--orchestrator-label is only valid with --orchestrator");
+    let orchestrator = OrchestratorConfig {
+        backend: match args.orchestrator {
+            Orchestrator::Kubernetes => {
+                OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
+                    context: args.kubernetes_context.clone(),
+                    service_labels: args
+                        .orchestrator_service_label
+                        .into_iter()
+                        .map(|l| (l.key, l.value))
+                        .collect(),
+                })
             }
-            None
-        }
-        Some(backend) => Some(OrchestratorConfig {
-            backend: match backend {
-                Orchestrator::Kubernetes => {
-                    OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
-                        context: args.kubernetes_context.clone(),
-                        service_labels: args
-                            .orchestrator_service_label
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                    })
-                }
-                Orchestrator::Process => {
-                    OrchestratorBackend::Process(ProcessOrchestratorConfig {
-                        // Look for binaries in the same directory as the
-                        // running binary. When running via `cargo run`, this
-                        // means that debug binaries look for other debug
-                        // binaries and release binaries look for other release
-                        // binaries.
-                        image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                        // Chosen arbitrarily to be a relatively unused port
-                        // range. Could be made configurable via CLI flags if
-                        // necessary.
-                        port_range: 2100..=2200,
-                    })
-                }
-            },
-            dataflowd_image: args.dataflowd_image.expect("clap enforced"),
-        }),
+            Orchestrator::Process => {
+                OrchestratorBackend::Process(ProcessOrchestratorConfig {
+                    // Look for binaries in the same directory as the
+                    // running binary. When running via `cargo run`, this
+                    // means that debug binaries look for other debug
+                    // binaries and release binaries look for other release
+                    // binaries.
+                    image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                    // Chosen arbitrarily to be a relatively unused port
+                    // range. Could be made configurable via CLI flags if
+                    // necessary.
+                    port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
+                    suppress_output: false,
+                })
+            }
+        },
+        dataflowd_image: args.dataflowd_image.expect("clap enforced"),
     };
 
     // Configure secrets controller.
@@ -743,38 +679,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
-
-    let storage = match (args.storage_compute_addr, args.storage_controller_addr) {
-        (None, None) => StorageConfig::Local,
-        (Some(compute_addr), Some(controller_addr)) => StorageConfig::Remote(RemoteStorageConfig {
-            compute_addr,
-            controller_addr,
-        }),
-        _ => unreachable!("clap enforced"),
-    };
-
-    // If --disable-telemetry is present, disable telemetry. Otherwise, if a
-    // custom telemetry domain or interval is provided, enable telemetry as
-    // specified. Otherwise (the defaults), enable the production server for
-    // release mode and disable telemetry in debug mode. This should allow for
-    // good defaults (on in release, off in debug), but also easy development
-    // during testing of this feature via the command-line flags.
-    let telemetry = if args.disable_telemetry
-        || (cfg!(debug_assertions)
-            && args.telemetry_domain.is_none()
-            && args.telemetry_interval.is_none())
-    {
-        None
-    } else {
-        Some(materialized::TelemetryConfig {
-            domain: args
-                .telemetry_domain
-                .unwrap_or_else(|| "cloud.materialize.com".into()),
-            interval: args
-                .telemetry_interval
-                .unwrap_or_else(|| Duration::from_secs(3600)),
-        })
-    };
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -808,7 +712,6 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-dataflow workers: {workers}
 max log level: {max_log_level}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
@@ -842,21 +745,10 @@ max log level: {max_log_level}",
         swap_total = system.total_swap(),
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
-        workers = args.workers.0,
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
     )?;
 
     sys::adjust_rlimits();
-
-    // Build Timely worker configuration.
-    let mut timely_worker =
-        timely::WorkerConfig::default().progress_mode(args.timely_progress_mode);
-    differential_dataflow::configure(
-        &mut timely_worker,
-        &differential_dataflow::Config {
-            idle_merge_effort: args.differential_idle_merge_effort,
-        },
-    );
 
     // Configure persistence core.
     let persist_config = {
@@ -906,11 +798,10 @@ max log level: {max_log_level}",
         };
 
         let lock_info = format!(
-            "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
+            "materialized {mz_version}\nos: {os}\nstart time: {start_time}",
             mz_version = materialized::BUILD_INFO.human_version(),
             os = os_info::get(),
             start_time = Utc::now(),
-            num_workers = args.workers.0,
         );
 
         // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
@@ -933,8 +824,6 @@ max log level: {max_log_level}",
     };
 
     let server = runtime.block_on(materialized::serve(materialized::Config {
-        workers: args.workers.0,
-        timely_worker,
         logging,
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -946,18 +835,13 @@ max log level: {max_log_level}",
         data_directory,
         orchestrator,
         secrets_controller,
-        storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
-        telemetry,
         aws_external_id: args
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
-        introspection_frequency: args
-            .introspection_frequency
-            .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
         persist: persist_config,
         now: SYSTEM_TIME.clone(),

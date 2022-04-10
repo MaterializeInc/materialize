@@ -61,8 +61,6 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 /// Instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
-    /// In-process instance.
-    Local,
     /// Out-of-process named instance
     Remote {
         /// A map from replica name to hostnames.
@@ -716,6 +714,7 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::cmp;
     use std::fmt;
     use std::future::Future;
     use std::pin::Pin;
@@ -756,6 +755,7 @@ pub mod tcp {
     #[derive(Debug)]
     pub struct TcpClient<C, R> {
         connection: TcpConn<C, R>,
+        backoff: Duration,
         addr: String,
     }
 
@@ -766,6 +766,7 @@ pub mod tcp {
         pub fn new(addr: String) -> TcpClient<C, R> {
             Self {
                 connection: TcpConn::Disconnected,
+                backoff: Duration::from_millis(10),
                 addr,
             }
         }
@@ -791,10 +792,12 @@ pub mod tcp {
                         }
                         Err(e) => {
                             tracing::warn!(
-                                "Error connecting to {}: {e}; reconnecting in 1s",
-                                self.addr
+                                "Error connecting to {}: {e}; reconnecting in {:?}",
+                                self.addr,
+                                self.backoff,
                             );
-                            let deadline = Instant::now() + Duration::from_secs(1);
+                            let deadline = Instant::now() + self.backoff;
+                            self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
                             self.connection = TcpConn::Backoff(deadline);
                         }
                     },
@@ -802,7 +805,10 @@ pub mod tcp {
                         time::sleep_until(*deadline).await;
                         self.connection = TcpConn::Disconnected;
                     }
-                    TcpConn::Connected(_) => break,
+                    TcpConn::Connected(_) => {
+                        self.backoff = Duration::from_millis(10);
+                        break;
+                    }
                 }
             }
         }

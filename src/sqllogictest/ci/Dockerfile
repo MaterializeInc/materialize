@@ -9,6 +9,6 @@
 
 MZFROM ubuntu-base
 
-COPY sqllogictest /usr/local/bin
+COPY dataflowd sqllogictest /usr/local/bin/
 
 WORKDIR /workdir

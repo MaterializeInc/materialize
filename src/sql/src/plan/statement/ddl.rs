@@ -2681,14 +2681,13 @@ pub fn describe_create_cluster(
 }
 
 pub fn plan_create_cluster(
-    scx: &StatementContext,
+    _: &StatementContext,
     CreateClusterStatement {
         name,
         if_not_exists,
         options,
     }: CreateClusterStatement,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE CLUSTER")?;
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
         if_not_exists,
@@ -3010,8 +3009,6 @@ pub fn plan_drop_cluster(
         cascade,
     }: DropClustersStatement,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("DROP CLUSTER")?;
-
     let mut out = vec![];
     for name in names {
         let name = if name.0.len() == 1 {
@@ -3303,7 +3300,6 @@ pub fn plan_alter_cluster(
         options,
     }: AlterClusterStatement,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("ALTER CLUSTER")?;
     let id = match scx.resolve_compute_instance(Some(&name)) {
         Ok(instance) => instance.id(),
         Err(_) if if_exists => {

@@ -32,7 +32,7 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 ```
 {
     "name": "chbench",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find chbench run cloud-load-test",
+    "launch_script": "bin/mzcompose --find chbench run cloud-load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 200,

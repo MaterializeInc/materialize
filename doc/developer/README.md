@@ -57,11 +57,6 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
 
-* [project-management.md](project-management.md) attempts to describe our
-  current process for managing GitHub issues and milestones. Note that while all
-  of these docs are subject to change, this one is _especially_ subject to
-  change.
-
 * [reading.md](reading.md) contains a reading list.
 
 * [setup-mysql-debezium.md](setup-mysql-debezium.md) describes how to use

@@ -315,16 +315,6 @@ class CargoTest(CargoPreImage):
 
     def run(self) -> None:
         super().run()
-        CargoBuild(
-            self.rd,
-            self.path,
-            {
-                "bin": "testdrive",
-                "strip": True,
-                "extract": {"protobuf-src": {"install": "protobuf-install"}},
-            },
-        ).build()
-        CargoBuild(self.rd, self.path, {"bin": "materialized", "strip": True}).build()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here
         # deserve some explanation. The first invocation prints error messages

@@ -12,7 +12,7 @@ operational after an upgrade.
 """
 
 import random
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from semver import Version
 
@@ -31,8 +31,7 @@ from materialize.mzcompose.services import (
 # All released Materialize versions, in order from most to least recent.
 all_versions = util.known_materialize_versions()
 
-# The `materialized` options that are valid only at or above a certain version.
-mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
+mz_options: Dict[Version, str] = {}
 
 SERVICES = [
     TestCerts(),

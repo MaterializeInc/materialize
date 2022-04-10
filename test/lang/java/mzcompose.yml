@@ -11,7 +11,6 @@ version: "3"
 services:
   materialized:
     mzbuild: materialized
-    command: -w1 --disable-telemetry
     environment:
       - MZ_DEV=1
   java-smoketest:

@@ -52,8 +52,6 @@ Select an environment and follow the instructions to get the latest stable relea
     brew install MaterializeInc/materialize/materialized
     ```
 
-    **Note:** For a `curl`-based alternative, see [Install](/install#curl).
-
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
@@ -85,8 +83,6 @@ Select an environment and follow the instructions to get the latest stable relea
     # Install materialized
     apt install materialized
     ```
-
-    **Note:** For a `curl`-based alternative, see [Install](/install#curl-1).
 
 1. Once the installation is complete, you can start the `materialized` process:
 

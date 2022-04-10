@@ -30,7 +30,7 @@
 
    ```
    brew install materialize/materialize/materialized
-   materialized -w1
+   materialized
    ```
 
 6. Run tests:

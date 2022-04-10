@@ -315,26 +315,6 @@ pie
   FORMAT TEXT
 
 
-> SELECT * FROM verify_no_fetch
-text      mz_offset
--------------------
-
-> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
-0
-
-$ kafka-ingest format=bytes topic=t4 timestamp=2
-mud
-pie
-
-> SELECT * FROM verify_no_fetch
-text      mz_offset
--------------------
-mud       3
-pie       4
-
-> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
-2
-
 #
 # UPSERT + AVRO
 #
