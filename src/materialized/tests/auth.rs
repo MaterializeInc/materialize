@@ -29,7 +29,7 @@ use hyper::http::uri::Scheme;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
-use jsonwebtoken::{self, EncodingKey, DecodingKey};
+use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_ore::now::SYSTEM_TIME;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
@@ -292,6 +292,10 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                             for (k, v) in headers.iter() {
                                 req.headers_mut().unwrap().insert(k, v.clone());
                             }
+                            req.headers_mut().unwrap().insert(
+                                "Content-Type",
+                                HeaderValue::from_static("application/x-www-form-urlencoded"),
+                            );
                             req.body(Body::from("sql=SELECT pg_catalog.current_user()"))
                                 .unwrap()
                         }),

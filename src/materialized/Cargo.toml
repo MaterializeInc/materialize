@@ -32,8 +32,10 @@ anyhow = "1.0.56"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.53"
 atty = "0.2.14"
+axum = { version = "0.5.1", features = ["headers"] }
 backtrace = "0.3.64"
 base64 = "0.13.0"
+bytes = "1.1.0"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.1.8", features = ["wrap_help", "env", "derive"] }
@@ -46,6 +48,7 @@ futures = "0.3.21"
 headers = "0.3.7"
 hex = "0.4.3"
 http = "0.2.6"
+http-body = "0.4.4"
 hyper = { version = "0.14.18", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
 include_dir = "0.7.2"
@@ -54,6 +57,7 @@ jsonwebtoken = "8.0.1"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 libc = "0.2.122"
+mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow = { path = "../dataflow" }
@@ -88,11 +92,11 @@ shell-words = "1.1.0"
 sysctl = "0.4.4"
 sysinfo = "0.23.9"
 tempfile = "3.2.0"
+thiserror = "1.0.30"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
-tower = "0.4.12"
 tower-http = { version = "0.2.5", features = ["cors"] }
 tracing = "0.1.33"
 tracing-subscriber = "0.3.11"

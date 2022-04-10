@@ -261,6 +261,6 @@ pub enum FronteggError {
     TokenExpired,
     #[error("unauthorized organization")]
     UnauthorizedTenant,
-    #[error("wrong email")]
+    #[error("email in access token did not match the expected email")]
     WrongEmail,
 }

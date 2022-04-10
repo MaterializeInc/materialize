@@ -43,6 +43,7 @@ use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use sysinfo::{ProcessorExt, SystemExt};
+use tower_http::cors::{self, Origin};
 use uuid::Uuid;
 
 use materialized::{
@@ -671,6 +672,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         _ => unreachable!("clap enforced"),
     };
 
+    // Configure CORS.
+    let cors_allowed_origin = if args
+        .cors_allowed_origin
+        .iter()
+        .any(|val| val.as_bytes() == b"*")
+    {
+        cors::Any.into()
+    } else {
+        Origin::list(args.cors_allowed_origin).into()
+    };
+
     // Configure orchestrator.
     let orchestrator = match args.orchestrator {
         None => {
@@ -922,7 +934,7 @@ max log level: {max_log_level}",
         third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
         frontegg,
-        cors_allowed_origins: args.cors_allowed_origin,
+        cors_allowed_origin,
         data_directory,
         orchestrator,
         secrets_controller,

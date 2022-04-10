@@ -642,6 +642,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47594e438a243791dba58124b6669561f5baa14cb12046641d8008bf035e5a25"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "headers",
+ "http",
+ "http-body",
+ "hyper",
+ "itoa 1.0.1",
+ "matchit",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a671c9ae99531afdd5d3ee8340b8da547779430689947144c140fc74a740244"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "mime",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2791,6 +2837,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
 
 [[package]]
+name = "matchit"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73cbba799671b762df5a175adf59ce145165747bb891505c43d09aefbbf38beb"
+
+[[package]]
 name = "materialized"
 version = "0.26.1-dev"
 dependencies = [
@@ -2800,6 +2852,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "atty",
+ "axum",
  "backtrace",
  "base64",
  "bytes",
@@ -2820,6 +2873,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "http",
+ "http-body",
  "hyper",
  "hyper-openssl",
  "hyper-proxy",
@@ -2830,6 +2884,7 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "libc",
+ "mime",
  "mz-build-info",
  "mz-coord",
  "mz-dataflow",
@@ -2879,6 +2934,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "tempfile",
+ "thiserror",
  "tikv-jemallocator",
  "timely",
  "tokio",
@@ -2887,7 +2943,6 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tonic",
- "tower",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",
@@ -4151,6 +4206,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tower-http",
  "uuid",
  "walkdir",
 ]
@@ -6067,6 +6123,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
+
+[[package]]
 name = "synstructure"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6585,6 +6647,7 @@ dependencies = [
  "http-body",
  "http-range-header",
  "pin-project-lite",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
