@@ -50,6 +50,7 @@ hyper = { version = "0.14.18", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
 include_dir = "0.7.2"
 itertools = "0.10.3"
+jsonwebtoken = "8.0.1"
 krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 libc = "0.2.122"

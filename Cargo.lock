@@ -3522,6 +3522,7 @@ dependencies = [
  "mz-ore",
  "reqwest",
  "serde",
+ "thiserror",
  "tokio",
  "uuid",
 ]

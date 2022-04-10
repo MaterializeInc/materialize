@@ -10,18 +10,18 @@
 use std::future::Future;
 use std::time::Duration;
 
-use anyhow::bail;
 use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use thiserror::Error;
 use uuid::Uuid;
 
 use mz_ore::now::NowFn;
 
-pub struct FronteggConfig<'a> {
+pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
     pub admin_api_token_url: String,
     /// JWK used to validate JWTs.
-    pub jwk_rsa_pem: &'a [u8],
+    pub decoding_key: DecodingKey,
     /// Tenant id used to validate JWTs.
     pub tenant_id: Uuid,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
@@ -47,19 +47,18 @@ pub const REFRESH_SUFFIX: &str = "/token/refresh";
 impl FronteggAuthentication {
     /// Creates a new frontegg auth. `jwk_rsa_pem` is the RSA public key to
     /// validate the JWTs. `tenant_id` must be parseable as a UUID.
-    pub fn new(config: FronteggConfig) -> Result<Self, anyhow::Error> {
-        let decoding_key = DecodingKey::from_rsa_pem(&config.jwk_rsa_pem)?;
+    pub fn new(config: FronteggConfig) -> Self {
         let mut validation = Validation::new(Algorithm::RS256);
         // We validate with our own now function.
         validation.validate_exp = false;
-        Ok(Self {
+        Self {
             admin_api_token_url: config.admin_api_token_url,
-            decoding_key,
+            decoding_key: config.decoding_key,
             tenant_id: config.tenant_id,
             now: config.now,
             validation,
             refresh_before_secs: config.refresh_before_secs,
-        })
+        }
     }
 
     /// Exchanges a password for a JWT token.
@@ -81,25 +80,30 @@ impl FronteggAuthentication {
     pub async fn exchange_password_for_token(
         &self,
         password: &str,
-    ) -> Result<ApiTokenResponse, anyhow::Error> {
+    ) -> Result<ApiTokenResponse, FronteggError> {
         let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded
             // UUID bytes without or with padding, respectively.
-            let buf = base64::decode_config(password, base64::URL_SAFE)?;
-            let client_id = Uuid::from_slice(&buf[..16])?;
-            let secret = Uuid::from_slice(&buf[16..])?;
+            let buf = base64::decode_config(password, base64::URL_SAFE)
+                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
+            let client_id =
+                Uuid::from_slice(&buf[..16]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
+            let secret =
+                Uuid::from_slice(&buf[16..]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
             (client_id, secret)
         } else if password.len() >= 64 {
             // If it's more than 64 bytes, assume we have concatenated
             // hex-encoded UUIDs, possibly with some special characters mixed
             // in.
             let mut chars = password.chars().filter(|c| c.is_alphanumeric());
-            let client_id = Uuid::parse_str(&chars.by_ref().take(32).collect::<String>())?;
-            let secret = Uuid::parse_str(&chars.take(32).collect::<String>())?;
+            let client_id = Uuid::parse_str(&chars.by_ref().take(32).collect::<String>())
+                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
+            let secret = Uuid::parse_str(&chars.take(32).collect::<String>())
+                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
             (client_id, secret)
         } else {
             // Otherwise it's definitely not a password format we understand.
-            bail!("invalid password");
+            return Err(FronteggError::InvalidPasswordFormat);
         };
         self.exchange_client_secret_for_token(client_id, secret)
             .await
@@ -110,7 +114,7 @@ impl FronteggAuthentication {
         &self,
         client_id: Uuid,
         secret: Uuid,
-    ) -> Result<ApiTokenResponse, anyhow::Error> {
+    ) -> Result<ApiTokenResponse, FronteggError> {
         let resp = reqwest::Client::new()
             .post(&self.admin_api_token_url)
             .json(&ApiTokenArgs { client_id, secret })
@@ -128,17 +132,17 @@ impl FronteggAuthentication {
         &self,
         token: &str,
         expected_email: Option<&str>,
-    ) -> Result<Claims, anyhow::Error> {
+    ) -> Result<Claims, FronteggError> {
         let msg = decode::<Claims>(&token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
-            bail!("token expired")
+            return Err(FronteggError::TokenExpired);
         }
         if msg.claims.tenant_id != self.tenant_id {
-            bail!("tenant ids don't match")
+            return Err(FronteggError::UnauthorizedTenant);
         }
         if let Some(expected_email) = expected_email {
             if msg.claims.email != expected_email {
-                bail!("unexpected email")
+                return Err(FronteggError::WrongEmail);
             }
         }
         Ok(msg.claims)
@@ -149,7 +153,7 @@ impl FronteggAuthentication {
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<impl Future<Output = ()>, anyhow::Error> {
+    ) -> Result<impl Future<Output = ()>, FronteggError> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
         let frontegg = self.clone();
@@ -243,4 +247,20 @@ pub struct Claims {
     pub tenant_id: Uuid,
     pub roles: Vec<String>,
     pub permissions: Vec<String>,
+}
+
+#[derive(Error, Debug)]
+pub enum FronteggError {
+    #[error("invalid password format")]
+    InvalidPasswordFormat,
+    #[error("invalid token format: {0}")]
+    InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
+    #[error("authentication token exchange failed: {0}")]
+    TokenExchangeError(#[from] reqwest::Error),
+    #[error("authentication token expired")]
+    TokenExpired,
+    #[error("unauthorized organization")]
+    UnauthorizedTenant,
+    #[error("wrong email")]
+    WrongEmail,
 }
