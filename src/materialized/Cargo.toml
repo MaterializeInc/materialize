@@ -62,6 +62,7 @@ mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
+mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }

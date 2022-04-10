@@ -1,0 +1,18 @@
+[package]
+name = "mz-orchestrator-process"
+description = "Service orchestration via local processes for development."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.60.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.56"
+async-trait = "0.1.53"
+itertools = "0.10.3"
+mz-orchestrator = { path = "../orchestrator" }
+mz-ore = { path = "../ore" }
+mz-stash = { path = "../stash" }
+scopeguard = "1.1.0"
+tokio = "1.17.0"
+tracing = "0.1.33"

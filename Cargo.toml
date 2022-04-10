@@ -29,6 +29,7 @@ members = [
     "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
+    "src/orchestrator-process",
     "src/persist-client",
     "src/persist-types",
     "src/persist",

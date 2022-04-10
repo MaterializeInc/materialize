@@ -45,13 +45,14 @@ use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
 use materialized::{
-    OrchestratorConfig, RemoteStorageConfig, SecretsControllerConfig, StorageConfig, TlsConfig,
-    TlsMode,
+    OrchestratorBackend, OrchestratorConfig, RemoteStorageConfig, SecretsControllerConfig,
+    StorageConfig, TlsConfig, TlsMode,
 };
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
+use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -193,7 +194,12 @@ pub struct Args {
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
     /// The dataflowd image reference to use.
-    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
+    #[structopt(
+        long,
+        hide = true,
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("dataflowd"))
+    )]
     dataflowd_image: Option<String>,
 
     // === Secrets Controller options. ===
@@ -466,6 +472,7 @@ pub struct Args {
 #[derive(ArgEnum, Debug, Clone)]
 enum Orchestrator {
     Kubernetes,
+    Process,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -666,14 +673,32 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             }
             None
         }
-        Some(Orchestrator::Kubernetes) => Some(OrchestratorConfig::Kubernetes {
-            config: KubernetesOrchestratorConfig {
-                context: args.kubernetes_context.clone(),
-                service_labels: args
-                    .orchestrator_service_label
-                    .into_iter()
-                    .map(|l| (l.key, l.value))
-                    .collect(),
+        Some(backend) => Some(OrchestratorConfig {
+            backend: match backend {
+                Orchestrator::Kubernetes => {
+                    OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
+                        context: args.kubernetes_context.clone(),
+                        service_labels: args
+                            .orchestrator_service_label
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
+                    })
+                }
+                Orchestrator::Process => {
+                    OrchestratorBackend::Process(ProcessOrchestratorConfig {
+                        // Look for binaries in the same directory as the
+                        // running binary. When running via `cargo run`, this
+                        // means that debug binaries look for other debug
+                        // binaries and release binaries look for other release
+                        // binaries.
+                        image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                        // Chosen arbitrarily to be a relatively unused port
+                        // range. Could be made configurable via CLI flags if
+                        // necessary.
+                        port_range: 2100..=2200,
+                    })
+                }
             },
             dataflowd_image: args.dataflowd_image.expect("clap enforced"),
         }),

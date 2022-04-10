@@ -126,19 +126,22 @@ where
                         &format!("cluster-{instance}"),
                         ServiceConfig {
                             image: dataflowd_image.clone(),
-                            args: vec![
-                                "--runtime=compute".into(),
-                                format!("--storage-addr={storage_addr}"),
-                                "0.0.0.0:2102".into(),
-                            ],
+                            args: &|ports| {
+                                vec![
+                                    "--runtime=compute".into(),
+                                    format!("--storage-addr={storage_addr}"),
+                                    format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
+                                    format!("0.0.0.0:{}", ports["compute"]),
+                                ]
+                            },
                             ports: vec![
                                 ServicePort {
                                     name: "controller".into(),
-                                    port: 2100,
+                                    port_hint: 2100,
                                 },
                                 ServicePort {
                                     name: "compute".into(),
-                                    port: 2102,
+                                    port_hint: 2102,
                                 },
                             ],
                             // TODO: use `size` to set these.
@@ -153,12 +156,7 @@ where
                         },
                     )
                     .await?;
-                let addrs: Vec<_> = service
-                    .hosts()
-                    .iter()
-                    .map(|h| format!("{h}:2100"))
-                    .collect();
-                let client = RemoteClient::new(&addrs);
+                let client = RemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance)
                     .unwrap()

@@ -2866,6 +2866,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
+ "mz-orchestrator-process",
  "mz-ore",
  "mz-pgrepr",
  "mz-pgtest",
@@ -3731,6 +3732,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "derivative",
  "dyn-clonable",
 ]
 
@@ -3746,6 +3748,21 @@ dependencies = [
  "mz-orchestrator",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "mz-orchestrator-process"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "itertools",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-stash",
+ "scopeguard",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

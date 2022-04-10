@@ -123,12 +123,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         ServiceConfig {
             image,
             args,
-            ports,
+            ports: ports_in,
             memory_limit,
             cpu_limit,
             processes,
             labels: labels_in,
-        }: ServiceConfig,
+        }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
         let mut labels = BTreeMap::new();
@@ -138,7 +138,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 value,
             );
         }
-        for port in &ports {
+        for port in &ports_in {
             labels.insert(
                 format!("materialized.materialize.cloud/port-{}", port.name),
                 "true".into(),
@@ -175,10 +175,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             },
             spec: Some(ServiceSpec {
                 ports: Some(
-                    ports
+                    ports_in
                         .iter()
                         .map(|port| ServicePort {
-                            port: port.port,
+                            port: port.port_hint,
                             name: Some(port.name.clone()),
                             ..Default::default()
                         })
@@ -191,6 +191,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
+        let ports = ports_in
+            .iter()
+            .map(|p| (p.name.clone(), p.port_hint))
+            .collect();
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -201,12 +205,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args),
+                    args: Some(args(&ports)),
                     ports: Some(
-                        ports
+                        ports_in
                             .iter()
                             .map(|port| ContainerPort {
-                                container_port: port.port,
+                                container_port: port.port_hint,
                                 name: Some(port.name.clone()),
                                 ..Default::default()
                             })
@@ -302,7 +306,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 )
             })
             .collect();
-        Ok(Box::new(KubernetesService { hosts }))
+        Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
     /// Drops the identified service, if it exists.
@@ -339,10 +343,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 #[derive(Debug, Clone)]
 struct KubernetesService {
     hosts: Vec<String>,
+    ports: HashMap<String, i32>,
 }
 
 impl Service for KubernetesService {
-    fn hosts(&self) -> Vec<String> {
-        self.hosts.clone()
+    fn addresses(&self, port: &str) -> Vec<String> {
+        let port = self.ports[port];
+        self.hosts
+            .iter()
+            .map(|host| format!("{host}:{port}"))
+            .collect()
     }
 }
