@@ -12,7 +12,7 @@ lazy_static = "1.4.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.36"
+proc-macro2 = "1.0.37"
 
 [dev-dependencies]
 datadriven = "0.6.0"
