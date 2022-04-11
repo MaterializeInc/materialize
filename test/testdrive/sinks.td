@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+
 $ file-append path=test.csv
 a,b
 jack,jill
@@ -100,11 +102,11 @@ snk5
 > SHOW FULL SINKS
 cluster name   type  volatility
 -----------------------
-default snk1   user  unknown
-default snk2   user  unknown
-default snk3   user  unknown
-default snk4   user  unknown
-default snk5   user  unknown
+<CLUSTER_NAME> snk1   user  unknown
+<CLUSTER_NAME> snk2   user  unknown
+<CLUSTER_NAME> snk3   user  unknown
+<CLUSTER_NAME> snk4   user  unknown
+<CLUSTER_NAME> snk5   user  unknown
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
@@ -193,16 +195,16 @@ $ kafka-verify format=avro sink=materialize.public.sink10 sort-messages=true
 > SHOW FULL SINKS
 cluster    name        type  volatility
 -----------------------------------------
-default    snk1        user  unknown
-default    snk2        user  unknown
-default    snk3        user  unknown
-default    snk4        user  unknown
-default    snk5        user  unknown
-default    snk6        user  unknown
-default    snk7        user  unknown
-default    snk8        user  unknown
-default    sink9       user  nonvolatile
-default    sink10      user  nonvolatile
+<CLUSTER_NAME>    snk1        user  unknown
+<CLUSTER_NAME>    snk2        user  unknown
+<CLUSTER_NAME>    snk3        user  unknown
+<CLUSTER_NAME>    snk4        user  unknown
+<CLUSTER_NAME>    snk5        user  unknown
+<CLUSTER_NAME>    snk6        user  unknown
+<CLUSTER_NAME>    snk7        user  unknown
+<CLUSTER_NAME>    snk8        user  unknown
+<CLUSTER_NAME>    sink9       user  nonvolatile
+<CLUSTER_NAME>    sink10      user  nonvolatile
 
 # test explicit partition count
 > CREATE SINK sink11 FROM foo

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+
 ! INSERT INTO t VALUES (1, 'a');
 contains:unknown catalog item 't'
 
@@ -59,8 +61,8 @@ name
 > SHOW INDEXES FROM t
 cluster on_name  key_name       seq_in_index  column_name  expression  nullable enabled
 ---------------------------------------------------------------------------------------
-default t        t_primary_idx  1             a            <null>      true     true
-default t        t_primary_idx  2             b            <null>      false    true
+<CLUSTER_NAME> t        t_primary_idx  1             a            <null>      true     true
+<CLUSTER_NAME> t        t_primary_idx  2             b            <null>      false    true
 
 > DROP INDEX t_primary_idx
 
