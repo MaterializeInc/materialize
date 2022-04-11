@@ -3459,6 +3459,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "serde",
+ "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-serde",

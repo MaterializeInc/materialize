@@ -29,6 +29,18 @@ use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
+// Disable jemalloc on macOS, as it is not well supported [0][1][2].
+// The issues present as runaway latency on load test workloads that are
+// comfortably handled by the macOS system allocator. Consider re-evaluating if
+// jemalloc's macOS support improves.
+//
+// [0]: https://github.com/jemalloc/jemalloc/issues/26
+// [1]: https://github.com/jemalloc/jemalloc/issues/843
+// [2]: https://github.com/jemalloc/jemalloc/issues/1467
+#[cfg(not(target_os = "macos"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum RuntimeType {
     /// Host only the compute portion of the dataflow.

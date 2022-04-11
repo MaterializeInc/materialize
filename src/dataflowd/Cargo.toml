@@ -22,3 +22,11 @@ tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = "0.1.33"
 tracing-subscriber = "0.3.11"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# According to jemalloc developers, `background_threads` should always be
+# enabled, except in "esoteric" situations that don't apply to Materialize
+# (Namely: if the application relies on new threads not being created for whatever reason)
+#
+# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
