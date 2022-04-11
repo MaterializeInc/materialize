@@ -74,9 +74,10 @@ for more background about some of the terms used here, as well as
 this [this jepsen map on consistency](https://jepsen.io/consistency) for details
 about specific consistency models.
 
-Materialized offers reads with stronger _real-time_ consistency guarantees than the default.
+Materialized offers reads with stronger _real-time_ consistency guarantees than the
+isolation level (naming of levels TBD).
 
-Reads again some view `V` always happen at a singular `timestamp`, which must be bound
+Reads against some view `V` always happen at a singular `timestamp`, which must be bound
 by the `upper` and `since` of that view. That view `V` is composed of many such _source_
 pTVC's, which are pTVC's that correspond to the data produced some some _external system_.
 
@@ -91,7 +92,7 @@ A `LINEARIZABLE` read against some view `V` is possible if-and-only-if the follo
   latest offset of data for that pTVC.
   * "offset" here refers to some monotonically increasing identifier that durably and consistently
   labels data.
-  * A given API is _linearizable_ if-and-only-if later (as in, later in _real-time_) calls tho
+  * A given API is _linearizable_ if-and-only-if later (as in, later in _real-time_) calls to
   that API can never produce lower "offets".
 * For all _source_ pTVC's involved, materialized durably associate _real-time_ timestamps
 with specific offsets (these are typically referred to as _timestamp bindings_ and are currently
@@ -105,15 +106,16 @@ against some view `V` is as follows:
 1. Fetch the latest offsets for all _source_ pTVC's involved.
 2. Wait for timestamps to be durably recorded associated with all offsets, as `source_timestamps`
 3. Choose a timestamp that is _at least_
-`max(max(source_uppers), max(source_timestamps))`. Note that this may require one of both of
-holding back the `since` of `V` or waiting for the `upper` to progress past the chosen timestamp.
-4. Service the read for the view at that timestamp. This will durably advance the `upper`s of all involved
-_source_ pTVC's to at least that timestamp.
+`max(max(source_uppers), max(source_timestamps))`.
+  - Note that this may require holding back the `since` of `V`.
+  - A time greater than this `max` expression is only chosen if tables are involved,
+  [see below.](#caveat-queries-against-multiple-views)
+4. Service the read for the view at that timestamp. This will wait until the `upper`s of all involved
+_source_ pTVC's are advanced to at least that timestamp.
 
 This provides _linearizability_ because:
-* materialized guarantees (possible with a timestamp oracle service) that all calls to
-`current_real_time()` monotonically increase.
-* Durably recoding offsets associated with timestamps means that reads (even non-linearizable ones)
+* FIX HERE
+* Durably recording offsets associated with timestamps means that reads (even non-linearizable ones)
 at later times can violate the _real-time_ ordering, as later reads will always have
 a _real-time_ timestamp that is at least the chosen timestamp, and materialized, for a read against
 a pTVC at some timestamp `t` always includes all data with offsets whose associated timestamps are <= `t`.
@@ -122,14 +124,15 @@ The reason the last constraint above is important is because this process can cr
 an inviolably _real-time_ ordering between writes the upstream source and reads from
 materialized views, without that constraint materialized has no information if offsets
 from disparate _sources_ have a causal relationship, and could thereforce produce
-results
+results FIX ME
 
 ### Caveat: views involving tables
 All reads against views that involve tables will force the query to happen at a global
 `linearized` timestamp that is shared across tables. This may be greater than the
 timestamp chosen in step #3. This is fine, as servicing this query in step #4
 will advance the `upper`s of the involved sources such that future queries will
-still be ordered at of after this query.
+still be ordered at of after this query. If it is less than the timestamp in #3,
+it is not used.
 
 ### Caveat: queries against multiple views
 
