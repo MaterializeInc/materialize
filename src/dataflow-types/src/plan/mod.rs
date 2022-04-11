@@ -17,7 +17,6 @@ use std::collections::HashMap;
 
 use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize, Serializer};
-use tracing::error;
 
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, GlobalId, Id, JoinInputMapper, LocalId,
