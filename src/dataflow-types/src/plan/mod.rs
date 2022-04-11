@@ -379,6 +379,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     pub fn from_mir(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
+        debug_name: &str,
     ) -> Result<(Self, AvailableCollections), ()> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
@@ -389,12 +390,13 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // to allow the unbounded growth here. We are though somewhat protected by
         // higher levels enforcing their own limits on stack depth (in the parser,
         // transformer/desugarer, and planner).
-        mz_ore::stack::maybe_grow(|| Plan::from_mir_inner(expr, arrangements))
+        mz_ore::stack::maybe_grow(|| Plan::from_mir_inner(expr, arrangements, debug_name))
     }
 
     fn from_mir_inner(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
+        debug_name: &str,
     ) -> Result<(Self, AvailableCollections), ()> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
@@ -486,12 +488,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys) = Plan::from_mir(value, arrangements)?;
+                let (value, v_keys) = Plan::from_mir(value, arrangements, debug_name)?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir(body, arrangements)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_name)?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 (
@@ -504,7 +506,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 )
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = Plan::from_mir(input, arrangements)?;
+                let (input, keys) = Plan::from_mir(input, arrangements, debug_name)?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
                 let mut exprs = exprs.clone();
@@ -549,7 +551,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys) = Plan::from_mir(input, arrangements)?;
+                    let (plan, keys) = Plan::from_mir(input, arrangements, debug_name)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -598,8 +600,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             // we shouldn't plan delta joins at all if not all of the required arrangements
                             // are available. Print an error message, to increase the chances that
                             // the user will tell us about this.
-                            soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
-This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
+                            soft_panic_or_log!("Arrangements depended on by delta join in {} alarmingly absent: {:?}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", debug_name, missing);
                         } else {
                             // It's fine and expected that linear joins don't have all their arrangements available up front,
                             // so no need to print an error here.
@@ -631,7 +633,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();
-                let (input, keys) = Self::from_mir(input, arrangements)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_name)?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
                     permutation,
@@ -674,7 +676,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 monotonic,
             } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_name)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -703,7 +705,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_name)?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -722,7 +724,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_name)?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
@@ -759,10 +761,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys) = Self::from_mir(base, arrangements)?;
+                let (plan, keys) = Self::from_mir(base, arrangements, debug_name)?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
-                    let (plan, keys) = Self::from_mir(input, arrangements)?;
+                    let (plan, keys) = Self::from_mir(input, arrangements, debug_name)?;
                     plans_keys.push((plan, keys));
                 }
                 let plans = plans_keys
@@ -783,7 +785,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
+                let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_name)?;
                 let keys = keys.iter().cloned().map(|k| {
                     let (permutation, thinning) = permutation_for_arrangement(&k, arity);
                     (k, permutation, thinning)
@@ -932,7 +934,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build.into_iter() {
-            let (plan, keys) = Self::from_mir(&build.plan, &mut arrangements)?;
+            let (plan, keys) = Self::from_mir(&build.plan, &mut arrangements, &desc.debug_name)?;
             arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(crate::BuildDesc { id: build.id, plan });
         }
