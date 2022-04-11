@@ -62,7 +62,7 @@ tokio-byteorder = "0.3.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.7.1", features = ["codec", "io"] }
-tracing = "0.1.32"
+tracing = "0.1.33"
 thiserror = "1.0.30"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
