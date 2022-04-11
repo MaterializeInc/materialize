@@ -212,7 +212,7 @@ impl PostgresSourceReader {
         // Validate publication tables against the state snapshot
         try_fatal!(self.validate_tables(publication_tables));
 
-        // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
+        // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
         // identical.
         client
@@ -551,14 +551,14 @@ impl PostgresSourceReader {
                                 tables.join(", ")
                             )));
                         }
-                        // The enum is marked as non_exaustive. Better to be conservative here in
+                        // The enum is marked as non_exhaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
                         _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
                     }
                 }
                 // Handled above
                 PrimaryKeepAlive(_) => {}
-                // The enum is marked non_exaustive, better be conservative
+                // The enum is marked non_exhaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
         }

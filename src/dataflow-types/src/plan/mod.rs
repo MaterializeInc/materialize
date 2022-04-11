@@ -225,7 +225,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
     /// This stage performs a multiway join among `inputs`, using the equality
-    /// constraints expressed in `plan`. The plan also describes the implementataion
+    /// constraints expressed in `plan`. The plan also describes the implementation
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.

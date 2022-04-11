@@ -31,7 +31,7 @@ use crate::error::{DecodeError, Error as AvroError};
 
 /// Maximum number of bytes that can be allocated when decoding
 /// Avro-encoded values. This is a protection against ill-formed
-/// data, whose length field might be interpreted as enourmous.
+/// data, whose length field might be interpreted as enormous.
 /// See max_allocation_bytes to change this limit.
 pub static mut MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
 static MAX_ALLOCATION_BYTES_ONCE: Once = Once::new();

@@ -20,7 +20,7 @@ pub trait ActivatorTrait {
     /// Trigger an activation of operators behind this activator.
     fn activate(&self);
 
-    /// Acknowledge the receipt of activations from whithin an operator.
+    /// Acknowledge the receipt of activations from within an operator.
     fn ack(&self);
 
     /// Register a new operator with its path with this activator.

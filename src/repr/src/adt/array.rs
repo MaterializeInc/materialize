@@ -143,7 +143,7 @@ pub struct ArrayDimension {
 )]
 #[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum InvalidArrayError {
-    /// The number of dimensions in the array exceedes [`MAX_ARRAY_DIMENSIONS]`.
+    /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.
     TooManyDimensions(usize),
     /// The number of array elements does not match the cardinality derived from
     /// its dimensions.

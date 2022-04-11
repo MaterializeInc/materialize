@@ -238,7 +238,7 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
         // haystack sizes of 1KB or greater. See benchmarking results from:
         // https://github.com/killerswan/boyer-moore-search/blob/master/README.md
         //
-        // Another approach that may be interesteing to look at is a
+        // Another approach that may be interesting to look at is a
         // hardware-optimized search:
         // http://0x80.pl/articles/simd-strfind.html
         if subpattern.suffix.len() == 0 {

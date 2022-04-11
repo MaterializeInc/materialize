@@ -1745,7 +1745,7 @@ mod tests {
     }
 
     /// This test checks that Indexed correctly handles receiving an unexpected
-    /// MainenanceRes (one whose request does not match the currently in-flight
+    /// MaintenanceRes (one whose request does not match the currently in-flight
     /// request). This test is expected to panic when run with
     /// cfg!(debug_assertions).
     fn trace_compaction_unexpected_nonmatching_response() -> Result<(), Error> {
@@ -1756,7 +1756,7 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         let request = reqs[0].clone();
 
-        // Handle receiving an unexpected MaintenanceRes (one whoese request does
+        // Handle receiving an unexpected MaintenanceRes (one whose request does
         // not match the one currently in flight)
         let mut response = futures_executor::block_on(request.run_async(&maintainer).recv());
         if let MaintenanceRes::CompactTrace((_, Ok(response))) = &mut response {

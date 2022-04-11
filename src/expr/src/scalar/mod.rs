@@ -127,7 +127,7 @@ impl MirScalarExpr {
 
     /// Applies an infallible immutable `f` to each child of type `MirScalarExpr`.
     ///
-    /// Deletages to `MirScalarExprVisitor::visit_children`.
+    /// Delegates to `MirScalarExprVisitor::visit_children`.
     pub fn visit_children<'a, F>(&'a self, f: F)
     where
         F: FnMut(&'a Self),
@@ -137,7 +137,7 @@ impl MirScalarExpr {
 
     /// Applies an infallible mutable `f` to each child of type `MirScalarExpr`.
     ///
-    /// Deletages to `MirScalarExprVisitor::visit_mut_children`.
+    /// Delegates to `MirScalarExprVisitor::visit_mut_children`.
     pub fn visit_mut_children<'a, F>(&'a mut self, f: F)
     where
         F: FnMut(&'a mut Self),
@@ -147,7 +147,7 @@ impl MirScalarExpr {
 
     /// Post-order immutable infallible `MirScalarExpr` visitor.
     ///
-    /// Deletages to `MirScalarExprVisitor::visit_post`.
+    /// Delegates to `MirScalarExprVisitor::visit_post`.
     pub fn visit_post<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
@@ -157,7 +157,7 @@ impl MirScalarExpr {
 
     /// Post-order mutable infallible `MirScalarExpr` visitor.
     ///
-    /// Deletages to `MirScalarExprVisitor::visit_mut_post`.
+    /// Delegates to `MirScalarExprVisitor::visit_mut_post`.
     pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
@@ -167,7 +167,7 @@ impl MirScalarExpr {
 
     /// A generalization of `visit_mut`.
     ///
-    /// Deletages to `MirScalarExprVisitor::visit_mut_pre_post`.
+    /// Delegates to `MirScalarExprVisitor::visit_mut_pre_post`.
     pub fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,

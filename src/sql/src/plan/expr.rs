@@ -211,7 +211,7 @@ impl WindowExpr {
 /// return a different scalar value for each row within a partition, and
 /// aggregate window functions, that return the same value for all the tuples
 /// within the same partition. Aggregate window functions can be computed
-/// by joinining the input relation with a reduction over the same relation
+/// by joining the input relation with a reduction over the same relation
 /// that computes the aggregation using the partition key as its grouping
 /// key.
 pub enum WindowExprType {

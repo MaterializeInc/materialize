@@ -509,7 +509,7 @@ impl<'a> Parser<'a> {
                 // parenthesis with what we've parsed so far.
                 match (either, parser.peek_token()) {
                     // The next token is another closing parenthesis. Can't
-                    // resolve the amibiguity yet. Return to let our caller
+                    // resolve the ambiguity yet. Return to let our caller
                     // handle it.
                     (either, Some(Token::RParen)) => Ok(either.nest()),
 
@@ -1712,7 +1712,7 @@ impl<'a> Parser<'a> {
         } else {
             return self.expected(
                 self.peek_pos(),
-                "CONFLUENT SCHEMA REGISTRY or MESSSAGE",
+                "CONFLUENT SCHEMA REGISTRY or MESSAGE",
                 self.peek_token(),
             );
         }

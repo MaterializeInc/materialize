@@ -13,7 +13,7 @@
 //! Names are resolved against the innermost scope first.
 //! * If a match is found, it is returned.
 //! * If no matches are found, the name is resolved against the parent scope.
-//! * If multiple matches are found, the name is ambigious and we return an
+//! * If multiple matches are found, the name is ambiguous and we return an
 //!   error to the user.
 //!
 //! Matching rules:
@@ -72,7 +72,7 @@ pub struct ScopeItem {
     /// reference. When false, the scope item is also excluded from `SELECT *`.
     ///
     /// This should be true for almost all scope items. It is set to false for
-    /// join columns in USING constraints. For exmaple, in `t1 FULL JOIN t2
+    /// join columns in USING constraints. For example, in `t1 FULL JOIN t2
     /// USING a`, `t1.a` and `t2.a` are still available by fully-qualified
     /// reference, but a bare `a` refers to a new column whose value is
     /// `coalesce(t1.a, t2.a)`. This is a big special case because normally

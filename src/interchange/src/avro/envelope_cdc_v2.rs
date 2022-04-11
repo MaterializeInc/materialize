@@ -185,7 +185,7 @@ pub fn build_schema(row_schema: serde_json::Value) -> Schema {
     });
     let message_schema = json!([updates_schema, progress_schema,]);
 
-    Schema::parse(&message_schema).expect("schema constrution failed")
+    Schema::parse(&message_schema).expect("schema construction failed")
 }
 
 #[cfg(test)]

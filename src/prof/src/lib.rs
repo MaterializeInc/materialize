@@ -146,7 +146,7 @@ impl WeightedSymbolTrie {
 /// Given some stack traces, generate a map of addresses to their
 /// corresponding symbols.
 ///
-/// Each address could correspond to more than one symbol, becuase
+/// Each address could correspond to more than one symbol, because
 /// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
 pub fn symbolicate(profile: &StackProfile) -> HashMap<usize, Vec<String>> {
     let mut all_addrs = vec![];

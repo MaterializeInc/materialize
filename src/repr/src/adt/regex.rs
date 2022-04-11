@@ -23,7 +23,7 @@ use mz_lowertest::MzReflect;
 /// not implement [`PartialOrd`], [`Ord`] [`PartialEq`], [`Eq`], or [`Hash`].
 /// The omissions are reasonable. There is no natural definition of ordering for
 /// regexes. There *is* a natural definition of equality—whether two regexes
-/// describe the same regular language—but that is an expensive propery to
+/// describe the same regular language—but that is an expensive property to
 /// compute, and [`PartialEq`] is generally expected to be fast to compute.
 ///
 /// This type wraps [`regex::Regex`] and imbues it with implementations of the

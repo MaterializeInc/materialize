@@ -58,7 +58,7 @@ struct Args {
     /// to clean up AWS state after each script.
     #[clap(long)]
     no_reset: bool,
-    /// Force the use of the specfied temporary directory.
+    /// Force the use of the specified temporary directory.
     ///
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.

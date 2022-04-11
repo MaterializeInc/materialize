@@ -1206,7 +1206,7 @@ impl_display!(DropClustersStatement);
 /// `SET <variable>`
 ///
 /// Note: this is not a standard SQL statement, but it is supported by at
-/// least MySQL and PostgreSQL. Not all MySQL-specific syntatic forms are
+/// least MySQL and PostgreSQL. Not all MySQL-specific syntactic forms are
 /// supported yet.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SetVariableStatement {

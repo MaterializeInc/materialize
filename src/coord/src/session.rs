@@ -226,7 +226,7 @@ impl<T: CoordTimestamp> Session<T> {
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
-    /// verifying that no transaction anomolies will occur if cleared.
+    /// verifying that no transaction anomalies will occur if cleared.
     pub fn clear_transaction_ops(&mut self) {
         if let Some(txn) = self.transaction.inner_mut() {
             txn.ops = TransactionOps::None;

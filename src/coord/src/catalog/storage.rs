@@ -37,7 +37,7 @@ const APPLICATION_ID: i32 = 0x1854_47dc;
 
 /// A catalog migration
 trait Migration {
-    /// Appies a catalog migration given the top level data directory and an active transaction to
+    /// Applies a catalog migration given the top level data directory and an active transaction to
     /// the catalog's SQLite database.
     fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error>;
 }

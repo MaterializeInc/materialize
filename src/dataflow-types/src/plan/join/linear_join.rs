@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// A plan for the execution of a linear join.
 ///
 /// A linear join is a sequence of stages, each of which introduces
-/// a new collecion. Each stage is represented by a [LinearStagePlan].
+/// a new collection. Each stage is represented by a [LinearStagePlan].
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.

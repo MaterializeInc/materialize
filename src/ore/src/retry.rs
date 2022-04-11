@@ -229,7 +229,7 @@ impl Retry {
     /// fails three times in a row with a useful error message, and then the
     /// fourth attempt is canceled because the timeout is reached, the caller
     /// would rather see the useful error message from the third attempt, rather
-    /// than the "deadline exceeded" message from the fourth attemt.
+    /// than the "deadline exceeded" message from the fourth attempt.
     pub async fn retry_async_canceling<F, U, T, E>(self, mut f: F) -> Result<T, E>
     where
         F: FnMut(RetryState) -> U,
@@ -375,7 +375,7 @@ where
     }
 
     /// Uses the provided `Reader` factory to construct a `RetryReader` with the passed `Retry`
-    /// settings. See the documentation of [RetryReader::new] for more detais.
+    /// settings. See the documentation of [RetryReader::new] for more details.
     pub fn with_retry(factory: F, retry: Retry) -> Self {
         Self {
             factory,
@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(res.unwrap_err().to_string(), "injected");
     }
 
-    /// Test that the "deadline has elapsed" error is srufaced when there is
+    /// Test that the "deadline has elapsed" error is surfaced when there is
     /// no other error to surface.
     #[tokio::test]
     async fn test_retry_async_canceling_canceled_first_failure() {

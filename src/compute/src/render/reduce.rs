@@ -710,7 +710,7 @@ enum AccumInner {
     },
     /// Accumulates float values.
     Float {
-        /// Accumulates non-special float values, mapped to a fixed presicion i128 domain to
+        /// Accumulates non-special float values, mapped to a fixed precision i128 domain to
         /// preserve associativity and commutativity
         accum: i128,
         /// Counts +inf
@@ -1071,7 +1071,7 @@ where
                 let neg_infs = (n == f64::NEG_INFINITY) as Diff;
                 let non_nulls = (datum != Datum::Null) as Diff;
 
-                // Map the floating point value onto a fixed presicion domain
+                // Map the floating point value onto a fixed precision domain
                 // All special values should map to zero, since they are tracked separately
                 let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
                     0

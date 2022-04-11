@@ -406,7 +406,7 @@ pub fn plan_copy_from_rows(
     // Exit early with just the raw constant if we know that all columns are present
     // and in the correct order. This lets us bypass expensive downstream optimizations
     // more easily, as at every stage we know this expression is nothing more than
-    // a constant (as opposed to e.g. a constant with wiith an identity map and identity
+    // a constant (as opposed to e.g. a constant with with an identity map and identity
     // projection).
     let default: Vec<_> = (0..desc.arity()).collect();
     if columns == default {
@@ -2173,7 +2173,7 @@ fn plan_rows_from_internal<'a>(
     let mut num_cols = Vec::new();
 
     // Join together each of the table functions in turn. The last column is
-    // always the column to join against and is maintained to be the coalesence
+    // always the column to join against and is maintained to be the coalescence
     // of the row number column for all prior functions.
     let (mut left_expr, mut left_scope) =
         plan_table_function_internal(&qcx, functions.next().unwrap(), true, table_name)?;
@@ -2242,7 +2242,7 @@ fn plan_solitary_table_function(
         // whole-row references.
         item.from_single_column_function = true;
 
-        // Strange special case for solitary table functions that ouput one
+        // Strange special case for solitary table functions that output one
         // column whose name matches the name of the table function. If a table
         // alias is provided, the column name is changed to the table alias's
         // name. Concretely, the following query returns a column named `x`
@@ -3762,7 +3762,7 @@ fn plan_aggregate(
 
     // While all aggregate functions support the ORDER BY syntax, it's a no-op for
     // most, so explicitly drop it if the function doesn't care about order. This
-    // prevents the projection into Record below from triggering on unspported
+    // prevents the projection into Record below from triggering on unsupported
     // functions.
     let impls = match resolve_func(ecx, &name, &args)? {
         Func::Aggregate(impls) => impls,

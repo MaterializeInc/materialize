@@ -202,7 +202,7 @@ where
                     match message {
                         Ok(ComputeResponse::PeekResponse(uuid, response)) => {
                             // If this is the first response, forward it; otherwise do not.
-                            // TODO: we could collect the other responses to assert equivalance?
+                            // TODO: we could collect the other responses to assert equivalence?
                             // Trades resources (memory) for reassurances; idk which is best.
                             if self.peeks.remove(&uuid) {
                                 return Ok(Some(ComputeResponse::PeekResponse(uuid, response)));

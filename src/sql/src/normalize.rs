@@ -580,10 +580,10 @@ pub fn aws_config(
                     }
                 }
                 (Some(_), None, _) => {
-                    bail!("secret_acccess_key must be specified if access_key_id is specified")
+                    bail!("secret_access_key must be specified if access_key_id is specified")
                 }
                 (None, Some(_), _) => {
-                    bail!("secret_acccess_key cannot be specified without access_key_id")
+                    bail!("secret_access_key cannot be specified without access_key_id")
                 }
                 (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
             };

@@ -795,7 +795,7 @@ pub struct DateTimeFormat(Vec<DateTimeFormatNode>);
 impl DateTimeFormat {
     /// Compiles a new `DateTimeFormat` from the input string `s`.
     pub fn compile(s: &str) -> DateTimeFormat {
-        // The approach here uses the Aho-Coarsick string searching algorithm to
+        // The approach here uses the Aho-Corasick string searching algorithm to
         // repeatedly and efficiently find the next token of interest. Tokens of
         // interest are typically field specifiers, like "DDDD", or field
         // modifiers, like "FM". Characters in between tokens of interest are

@@ -11,7 +11,7 @@
 //!
 //! The various SQL commands instruct the system to take actions that are not
 //! yet explicitly timestamped. On the other hand, the underlying data continually
-//! change as time moves foward. On the third hand, we greatly benefit from the
+//! change as time moves forward. On the third hand, we greatly benefit from the
 //! information that some times are no longer of interest, so that we may
 //! compact the representation of the continually changing collections.
 //!
@@ -291,7 +291,7 @@ pub struct Coordinator {
     /// TODO(clusters): make this configurable per cluster, rather than
     /// globally.
     logging: Option<LoggingConfig>,
-    /// Channel to manange internal commands from the coordinator to itself.
+    /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
     metric_scraper: Scraper,
@@ -691,7 +691,7 @@ impl Coordinator {
             // but there are cases where timestamps are not bumped but we expect the closed
             // timestamps to advance (`AS OF now()`, TAILing views over RT sources and
             // tables). To address these, spawn a task that forces table timestamps to
-            // close on a regular interval. This roughly tracks the behaivor of realtime
+            // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "coordinator_advance_local_inputs", async move {
@@ -1374,7 +1374,7 @@ impl Coordinator {
             None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
         };
 
-        // Verify that this statetement type can be executed in the current
+        // Verify that this statement type can be executed in the current
         // transaction state.
         match session.transaction() {
             // By this point we should be in a running transaction.
@@ -1442,9 +1442,9 @@ impl Coordinator {
                         // Always safe.
                     }
 
-                    Statement::Insert(ref insert_statment)
+                    Statement::Insert(ref insert_statement)
                         if matches!(
-                            insert_statment.source,
+                            insert_statement.source,
                             InsertSource::Query(Query {
                                 body: SetExpr::Values(..),
                                 ..
@@ -5111,7 +5111,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
     };
     match typ {
         // File sources and sinks are prohibited in safe mode because they allow
-        // reading ƒrom and writing to arbitrary files on disk.
+        // reading from and writing to arbitrary files on disk.
         SourceConnectorType::File => {
             return Err(CoordError::SafeModeViolation(format!(
                 "file {}",

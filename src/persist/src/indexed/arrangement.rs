@@ -482,7 +482,7 @@ impl Arrangement {
     /// updates at or in advance of the Unsealed's time lower bound.
     ///
     /// `batch` is assumed not be eligible for eviction at the time of this function
-    /// call, and to satisy all [BlobUnsealedBatch] invariants.
+    /// call, and to satisfy all [BlobUnsealedBatch] invariants.
     fn unsealed_trim<L: Blob>(
         &mut self,
         batch: UnsealedBatchMeta,

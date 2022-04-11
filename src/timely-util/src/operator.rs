@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Common operator transformationts on timely streams and differential collections.
+//! Common operator transformations on timely streams and differential collections.
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;

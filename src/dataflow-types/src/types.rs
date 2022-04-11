@@ -97,7 +97,7 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
-/// A description of an instantation of a source.
+/// A description of an instantiation of a source.
 ///
 /// This includes a description of the source, but additionally any
 /// context-dependent options like the ability to apply filtering and
@@ -136,7 +136,7 @@ pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
 }
 
 impl<T> SourceInstanceRequest<T> {
-    /// Source identifier uniquely identifing this instantation.
+    /// Source identifier uniquely identifying this instantiation.
     pub fn unique_id(&self) -> SourceInstanceId {
         (self.dataflow_id, self.source_id)
     }
@@ -731,7 +731,7 @@ pub mod sources {
 
         /// Structure wrapping a timestamp update from a source
         /// If RT, contains a partition count
-        /// which informs workers that messages with Offset on PartititionId will be timestamped
+        /// which informs workers that messages with Offset on PartitionId will be timestamped
         /// with Timestamp.
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub enum TimestampSourceUpdate {
@@ -741,7 +741,7 @@ pub mod sources {
     }
 
     /// Universal language for describing message positions in Materialize, in a source independent
-    /// way. Invidual sources like Kafka or File sources should explicitly implement their own offset
+    /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
     /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
     #[derive(
         Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
@@ -1132,13 +1132,13 @@ pub mod sources {
                                         RelationDesc::from_names_and_types(fields.clone()),
                                     ),
                                     ty => {
-                                        bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty)
+                                        bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty)
                                     }
                                 }
                             }
-                            ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                            ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                         },
-                        ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                        ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                     }
                 }
             })

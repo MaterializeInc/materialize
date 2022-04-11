@@ -447,7 +447,7 @@ where
                             }
                             SourceEnvelope::Upsert(upsert_envelope) => {
                                 // TODO: use the key envelope to figure out when to add keys.
-                                // The opeator currently does it unconditionally
+                                // The operator currently does it unconditionally
                                 let upsert_operator_name = format!(
                                     "{}-{}upsert",
                                     source_name,
@@ -506,7 +506,7 @@ where
                                     // tells us that we both persisted and sealed it.
                                     //
                                     // This is the most pessimistic style of concurrency
-                                    // control, an alternatie would be to not hold data but
+                                    // control, an alternative would be to not hold data but
                                     // only hold the frontier (which is what the persist/seal
                                     // operators do).
                                     let sealed_upsert = seal_and_await(
@@ -554,11 +554,11 @@ where
                                                 envelope_config.clone(),
                                             );
 
-                                        // Don't send data forward to "dataflow" until the frontie
+                                        // Don't send data forward to "dataflow" until the frontier
                                         // tells us that we both persisted and sealed it.
                                         //
                                         // This is the most pessimistic style of concurrency
-                                        // control, an alternatie would be to not hold data but
+                                        // control, an alternative would be to not hold data but
                                         // only hold the frontier (which is what the persist/seal
                                         // operators do).
                                         let sealed_flattened_stream = seal_and_await(
@@ -724,7 +724,7 @@ impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, 
     }
 
     // NOTE: These two show our problematic use of two hierarchies of enums: we keep an envelope
-    // config in the `SourceDesc`, but we roughly mirror that hierachy in the `SourcePersistDesc`.
+    // config in the `SourceDesc`, but we roughly mirror that hierarchy in the `SourcePersistDesc`.
 
     pub fn upsert_config(&self) -> &PersistentUpsertConfig<K, V> {
         match self.envelope_config {
@@ -887,7 +887,7 @@ where
     // tells us that we both persisted and sealed it.
     //
     // This is the most pessimistic style of concurrency
-    // control, an alternatie would be to not hold data but
+    // control, an alternative would be to not hold data but
     // only hold the frontier (which is what the persist/seal
     // operators do).
     let sealed_stream = sealed_stream.await_frontier(&source_name);
@@ -956,7 +956,7 @@ impl PersistedSourceManager {
                     // Clean up the expired weak handle.
                     //
                     // NOTE: Right now, there is no explicit message when a rendered source
-                    // instance is dropped. Sources are droppped implicitly when all their
+                    // instance is dropped. Sources are dropped implicitly when all their
                     // consumers are dropped, and we notice that when the token that holds
                     // onto the strong Rc to the compaction handle is dropped.
                     self.compaction_handles.remove(&id);

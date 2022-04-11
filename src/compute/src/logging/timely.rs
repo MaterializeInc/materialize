@@ -99,7 +99,7 @@ pub fn construct<A: Allocate>(
                 let mut operates_session = ConsolidateBuffer::new(operates, 0);
                 let mut channels_session = ConsolidateBuffer::new(channels, 1);
                 let mut addresses_session = ConsolidateBuffer::new(addresses, 2);
-                let mut parks_sesssion = ConsolidateBuffer::new(parks, 3);
+                let mut parks_session = ConsolidateBuffer::new(parks, 3);
                 let mut messages_sent_session = ConsolidateBuffer::new(messages_sent, 4);
                 let mut messages_received_session = ConsolidateBuffer::new(messages_received, 5);
                 let mut schedules_duration_session = ConsolidateBuffer::new(schedules_duration, 6);
@@ -253,7 +253,7 @@ pub fn construct<A: Allocate>(
                                         let requested =
                                             requested.map(|r| r.as_nanos().next_power_of_two());
                                         let pow = duration_ns.next_power_of_two();
-                                        parks_sesssion.give(
+                                        parks_session.give(
                                             &cap,
                                             ((worker, pow as i64, requested), time_ms, 1),
                                         );

@@ -140,7 +140,7 @@ where
     /// (e.g., Kafka offset, file line number, monotonic increasing
     /// number, etc.)
     pub position: i64,
-    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
     pub partition: PartitionId,
@@ -158,7 +158,7 @@ pub struct DecodeResult {
     pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: i64,
-    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition this record came from
     pub partition: PartitionId,
@@ -1324,7 +1324,7 @@ impl SourceReaderPersistence {
         let snapshot = self.config.read_handle.snapshot()?;
         let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
 
-        // NOTE: We "compact" all time resolution, by ignorning the timestamp. We don't need
+        // NOTE: We "compact" all time resolution, by ignoring the timestamp. We don't need
         // historical resolution and simply want the view as of the time at which the data was
         // sealed. Thus, it represents the content of the timestamp histories at exactly that
         // point.
@@ -1461,7 +1461,7 @@ impl<K: Codec, V: Codec> PersistentTimestampBindingsConfig<K, V> {
 /// `timestamp_histories` and emits updates to `bindings_output` if there are in fact any changes.
 ///
 /// The updates emitted from this can be used to re-construct the state of a `TimestampBindingRc`
-/// at any given time by reading and applying (and consolidating, if neccessary) the stream of
+/// at any given time by reading and applying (and consolidating, if necessary) the stream of
 /// changes.
 fn maybe_emit_timestamp_bindings(
     source_name: &str,

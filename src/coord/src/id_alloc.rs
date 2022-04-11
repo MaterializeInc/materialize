@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(ida.alloc().unwrap(), 3);
         match ida.alloc() {
             Ok(id) => panic!(
-                "id allocator returned {}, not expected id exhaution error",
+                "id allocator returned {}, not expected id exhaustion error",
                 id
             ),
             Err(CoordError::IdExhaustionError) => (),

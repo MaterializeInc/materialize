@@ -15,7 +15,7 @@
 //! The compute controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
 //! use an identifier before it has been "created" with `create_dataflows()`. Once created, the controller holds
 //! a read capability for each output collection of a dataflow, which is manipulated with `allow_compaction()`.
-//! Eventually, a collecction is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+//! Eventually, a collection is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
 //!
 //! Created dataflows will prevent the compaction of their inputs, including other compute collections but also
 //! collections managed by the storage layer. Each dataflow input is prevented from compacting beyond the allowed
@@ -275,7 +275,7 @@ where
                 }
             }
 
-            // Canonicalize depedencies.
+            // Canonicalize dependencies.
             // Probably redundant based on key structure, but doing for sanity.
             storage_dependencies.sort();
             storage_dependencies.dedup();
