@@ -499,6 +499,7 @@ class Testdrive(Service):
         if environment is None:
             environment = [
                 "TMPDIR=/share/tmp",
+                "MZ_SOFT_ASSERTIONS=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
