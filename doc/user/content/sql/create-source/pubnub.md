@@ -17,7 +17,7 @@ This page details how to connect Materialize to a [PubNub](https://www.pubnub.co
 
 {{< diagram "create-source-pubnub.svg" >}}
 
-#### `with_options`
+#### `with_options` {#with-options}
 
 {{< diagram "with-options.svg" >}}
 
