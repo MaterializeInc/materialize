@@ -68,7 +68,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -118,6 +117,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp};
+use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage, FetchStatement,
@@ -159,7 +159,6 @@ use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprP
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::persistcfg::PersisterWithConfig;
-use crate::secrets::{FilesystemSecretsController, SecretOp, SecretsController};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
     TransactionStatus, WriteOp,
@@ -260,7 +259,7 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     pub persister: PersisterWithConfig,
     pub now: NowFn,
-    pub secrets_storage_path: PathBuf,
+    pub secrets_controller: Box<dyn SecretsController>,
 }
 
 struct PendingPeek {
@@ -4883,7 +4882,7 @@ pub async fn serve(
         metrics_registry,
         persister,
         now,
-        secrets_storage_path,
+        secrets_controller,
     }: Config,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4930,7 +4929,6 @@ pub async fn serve(
     // for bootstrap completion before proceeding.
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
-    let secrets_controller = Box::new(FilesystemSecretsController::new(secrets_storage_path));
 
     let thread = thread::Builder::new()
         .name("coordinator".to_string())

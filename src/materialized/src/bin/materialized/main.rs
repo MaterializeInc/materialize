@@ -44,7 +44,10 @@ use lazy_static::lazy_static;
 use sysinfo::{ProcessorExt, SystemExt};
 use uuid::Uuid;
 
-use materialized::{OrchestratorConfig, RemoteStorageConfig, StorageConfig, TlsConfig, TlsMode};
+use materialized::{
+    OrchestratorConfig, RemoteStorageConfig, SecretsControllerConfig, StorageConfig, TlsConfig,
+    TlsMode,
+};
 use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -192,6 +195,11 @@ pub struct Args {
     /// The dataflowd image reference to use.
     #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
     dataflowd_image: Option<String>,
+
+    // === Secrets Controller options. ===
+    /// The secrets controller implementation to use
+    #[structopt(long, hide = true, arg_enum)]
+    secrets_controller: Option<SecretsController>,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -460,6 +468,12 @@ enum Orchestrator {
     Kubernetes,
 }
 
+#[derive(ArgEnum, Debug, Clone)]
+enum SecretsController {
+    LocalFileSystem,
+    Kubernetes,
+}
+
 #[derive(Debug)]
 struct OrchestratorLabel {
     key: String,
@@ -654,7 +668,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         }
         Some(Orchestrator::Kubernetes) => Some(OrchestratorConfig::Kubernetes {
             config: KubernetesOrchestratorConfig {
-                context: args.kubernetes_context,
+                context: args.kubernetes_context.clone(),
                 service_labels: args
                     .orchestrator_service_label
                     .into_iter()
@@ -662,6 +676,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
             },
             dataflowd_image: args.dataflowd_image.expect("clap enforced"),
+        }),
+    };
+
+    // Configure secrets controller.
+    let secrets_controller = match args.secrets_controller {
+        None => None,
+        Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
+        Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
+            context: args.kubernetes_context,
         }),
     };
 
@@ -871,6 +894,7 @@ max log level: {max_log_level}",
         cors_allowed_origins: args.cors_allowed_origin,
         data_directory,
         orchestrator,
+        secrets_controller,
         storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,

@@ -2873,6 +2873,9 @@ dependencies = [
  "mz-pid-file",
  "mz-prof",
  "mz-repr",
+ "mz-secrets",
+ "mz-secrets-filesystem",
+ "mz-secrets-kubernetes",
  "mz-sql",
  "native-tls",
  "nix",
@@ -3291,6 +3294,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
+ "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
@@ -4032,6 +4036,37 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "mz-secrets"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-expr",
+]
+
+[[package]]
+name = "mz-secrets-filesystem"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-expr",
+ "mz-secrets",
+]
+
+[[package]]
+name = "mz-secrets-kubernetes"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dyn-clonable",
+ "k8s-openapi",
+ "kube",
+ "mz-secrets",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

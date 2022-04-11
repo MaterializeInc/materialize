@@ -43,7 +43,6 @@ mod tail;
 mod util;
 
 pub mod catalog;
-pub mod secrets;
 pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
