@@ -59,7 +59,7 @@ SERVICES = [
             ".:/workdir/smoke",
             "../testdrive:/workdir/testdrive",
         ],
-        materialized_params={"cluster": "c"},
+        materialized_params={"cluster": "cluster1"},
     ),
 ]
 
@@ -92,7 +92,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_compute_1")
     c.up("dataflowd_compute_2")
     c.sql(
-        "CREATE CLUSTER c REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100');"
+        "CREATE CLUSTER cluster1 REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100');"
     )
     c.run("testdrive", *glob)
 
@@ -101,7 +101,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("dataflowd_compute_4")
     c.sql(
         """
-        ALTER CLUSTER c
+        ALTER CLUSTER cluster1
             REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100'),
             REMOTE replica2 ('dataflowd_compute_3:2100', 'dataflowd_compute_4:2100')
         """
@@ -117,13 +117,13 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # verify that tests still pass.
     c.sql(
         """
-        ALTER CLUSTER c
+        ALTER CLUSTER cluster1
             REMOTE replica1 ('dataflowd_compute_1:2100', 'dataflowd_compute_2:2100')
         """
     )
     c.sql(
         """
-        ALTER CLUSTER c
+        ALTER CLUSTER cluster1
             REMOTE replica2 ('dataflowd_compute_3:2100', 'dataflowd_compute_4:2100')
         """
     )

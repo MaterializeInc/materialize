@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+
 > CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
 
 > SELECT * FROM v
@@ -59,8 +61,8 @@ contains:non-temporary items cannot depend on temporary item
 > SHOW INDEXES FROM foo
 cluster on_name    key_name         seq_in_index  column_name  expression  nullable  enabled
 --------------------------------------------------------------------------------------------
-default foo        foo_primary_idx  1             column1      <null>      false     true
-default foo        foo_primary_idx  2             column2      <null>      false     true
+<CLUSTER_NAME> foo        foo_primary_idx  1             column1      <null>      false     true
+<CLUSTER_NAME> foo        foo_primary_idx  2             column2      <null>      false     true
 
 ! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v
 contains:catalog item 'foo' already exists
