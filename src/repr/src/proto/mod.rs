@@ -10,12 +10,21 @@
 //! Generated protobuf code and companion impls.
 
 pub mod adt;
+pub mod relation;
 pub mod row;
-mod scalar;
+pub mod scalar;
 pub mod strconv;
 
 use mz_ore::cast::CastFrom;
 use std::{char::CharTryFromError, num::TryFromIntError};
+
+mod private {
+    // Types defined in relation and scalar are both defined in
+    // relation_and_scalar.proto. Thus we include them here, such
+    // that proto/relation.rs and proto/scalar.rs can refer to
+    // this private module.
+    include!(concat!(env!("OUT_DIR"), "/relation_and_scalar.rs"));
+}
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
 /// `Proto$T` to `$T`.
