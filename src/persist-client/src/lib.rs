@@ -112,20 +112,26 @@ impl Location {
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct Id([u8; 16]);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct ShardId([u8; 16]);
 
-impl std::fmt::Display for Id {
+impl std::fmt::Display for ShardId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&Uuid::from_bytes(self.0), f)
+        write!(f, "s{}", Uuid::from_bytes(self.0))
     }
 }
 
-impl Id {
-    /// Returns a random [Id] that is reasonably likely to have never been
+impl std::fmt::Debug for ShardId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShardId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl ShardId {
+    /// Returns a random [ShardId] that is reasonably likely to have never been
     /// generated before.
     pub fn new() -> Self {
-        Id(Uuid::new_v4().as_bytes().to_owned())
+        ShardId(Uuid::new_v4().as_bytes().to_owned())
     }
 }
 
@@ -160,8 +166,8 @@ impl Client {
         Ok(Client { blob, consensus })
     }
 
-    /// Provides capabilities for the durable TVC identified by `id` at its
-    /// current since and upper frontiers.
+    /// Provides capabilities for the durable TVC identified by `shard_id` at
+    /// its current since and upper frontiers.
     ///
     /// This method is a best-effort attempt to regain control of the frontiers
     /// of a shard. Its most common uses are to recover capabilities that have
@@ -170,13 +176,13 @@ impl Client {
     /// released by all other parties, this call may result in capabilities with
     /// empty frontiers (which are useless).
     ///
-    /// If `id` has never been used before, initializes a new shard and returns
-    /// handles with `since` and `upper` frontiers set to initial values of
-    /// `Antichain::from_elem(T::minimum())`.
+    /// If `shard_id` has never been used before, initializes a new shard and
+    /// returns handles with `since` and `upper` frontiers set to initial values
+    /// of `Antichain::from_elem(T::minimum())`.
     pub async fn open<K, V, T, D>(
         &self,
         timeout: Duration,
-        id: Id,
+        shard_id: ShardId,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), ExternalError>
     where
         K: Debug + Codec,
@@ -184,9 +190,9 @@ impl Client {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        trace!("Client::open timeout={:?} id={:?}", timeout, id);
+        trace!("Client::open timeout={:?} shard_id={:?}", timeout, shard_id);
         let deadline = Instant::now() + timeout;
-        let mut machine = Machine::new(id, Arc::clone(&self.consensus));
+        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus));
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
         let (write_cap, read_cap) = machine.register(deadline, &writer_id, &reader_id).await?;
         let writer = WriteHandle {
@@ -257,7 +263,7 @@ mod tests {
 
         let (mut write, mut read) = new_test_client()
             .await?
-            .open::<String, String, u64, i64>(NO_TIMEOUT, Id::new())
+            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
             .await?;
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
@@ -308,13 +314,13 @@ mod tests {
         let client = new_test_client().await?;
 
         let (mut write1, read1) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, Id::new())
+            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
             .await?;
 
         // Different types, so that checks would fail in case we were not separating these
         // collections internally.
         let (mut write2, read2) = client
-            .open::<String, (), u64, i64>(NO_TIMEOUT, Id::new())
+            .open::<String, (), u64, i64>(NO_TIMEOUT, ShardId::new())
             .await?;
 
         let res = write1
@@ -349,7 +355,7 @@ mod tests {
         let client = new_test_client().await?;
 
         let (write, read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, Id::new())
+            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
             .await?;
 
         assert!(is_send_sync(client));
@@ -369,7 +375,7 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let id = Id::new();
+        let id = ShardId::new();
         let client = new_test_client().await?;
         let (mut write1, read) = client
             .open::<String, String, u64, i64>(NO_TIMEOUT, id)
@@ -413,5 +419,33 @@ mod tests {
         assert_eq!(snap.read_all().await?, all_ok(&data, 1));
 
         Ok(())
+    }
+
+    #[test]
+    fn fmt_ids() {
+        assert_eq!(
+            format!("{}", ShardId([0u8; 16])),
+            "s00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", ShardId([0u8; 16])),
+            "ShardId(00000000-0000-0000-0000-000000000000)"
+        );
+        assert_eq!(
+            format!("{}", WriterId([0u8; 16])),
+            "w00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", WriterId([0u8; 16])),
+            "WriterId(00000000-0000-0000-0000-000000000000)"
+        );
+        assert_eq!(
+            format!("{}", ReaderId([0u8; 16])),
+            "r00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", ReaderId([0u8; 16])),
+            "ReaderId(00000000-0000-0000-0000-000000000000)"
+        );
     }
 }

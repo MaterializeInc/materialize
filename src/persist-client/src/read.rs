@@ -29,15 +29,21 @@ use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
-use crate::Id;
+use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&Uuid::from_bytes(self.0), f)
+        write!(f, "r{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for ReaderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReaderId({})", Uuid::from_bytes(self.0))
     }
 }
 
@@ -57,7 +63,7 @@ impl ReaderId {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotSplit {
-    id: Id,
+    shard_id: ShardId,
     as_of: Vec<[u8; 8]>,
     batches: Vec<String>,
 }
@@ -352,6 +358,9 @@ where
     /// system. A `new_since` of the empty antichain "finishes" this shard,
     /// promising that no more data will ever be read by this handle.
     ///
+    /// It is possible to heartbeat a reader lease by calling this with
+    /// `new_since` equal to `self.since()` (making the call a no-op).
+    ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
     pub async fn downgrade_since(
@@ -456,7 +465,7 @@ where
         };
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
-                id: self.machine.id(),
+                shard_id: self.machine.shard_id(),
                 as_of: as_of.iter().map(|x| T::encode(x)).collect(),
                 batches: Vec::new(),
             })
@@ -479,11 +488,11 @@ where
             timeout,
             split
         );
-        if split.id != self.machine.id() {
+        if split.shard_id != self.machine.shard_id() {
             return Ok(Err(InvalidUsage(anyhow!(
                 "snapshot shard id {} doesn't match handle id {}",
-                split.id,
-                self.machine.id()
+                split.shard_id,
+                self.machine.shard_id()
             ))));
         }
         let iter = SnapshotIter {

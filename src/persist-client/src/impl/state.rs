@@ -22,7 +22,7 @@ use timely::PartialOrder;
 use crate::error::{InvalidUsage, NoOp};
 use crate::read::ReaderId;
 use crate::write::WriterId;
-use crate::Id;
+use crate::ShardId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadCapability<T> {
@@ -38,7 +38,7 @@ pub struct WriteCapability<T> {
 // TODO: Document invariants.
 #[derive(Debug)]
 pub struct State<K, V, T, D> {
-    id: Id,
+    shard_id: ShardId,
 
     writers: HashMap<WriterId, WriteCapability<T>>,
     readers: HashMap<ReaderId, ReadCapability<T>>,
@@ -53,7 +53,7 @@ pub struct State<K, V, T, D> {
 impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            id: self.id.clone(),
+            shard_id: self.shard_id.clone(),
             writers: self.writers.clone(),
             readers: self.readers.clone(),
             since: self.since.clone(),
@@ -70,9 +70,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn new(id: Id) -> Self {
+    pub fn new(shard_id: ShardId) -> Self {
         State {
-            id,
+            shard_id,
             writers: HashMap::new(),
             readers: HashMap::new(),
             since: Antichain::from_elem(T::minimum()),
@@ -81,8 +81,8 @@ where
         }
     }
 
-    pub fn id(&self) -> Id {
-        self.id
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
     }
 
     pub fn register(
@@ -348,7 +348,7 @@ impl<T: Timestamp + Codec64> From<&DescriptionMeta> for Description<T> {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StateRollupMeta {
-    id: Id,
+    shard_id: ShardId,
     key_codec: String,
     val_codec: String,
     ts_codec: String,
@@ -369,7 +369,7 @@ where
 {
     fn from(x: &State<K, V, T, D>) -> Self {
         StateRollupMeta {
-            id: x.id,
+            shard_id: x.shard_id,
             key_codec: K::codec_name(),
             val_codec: V::codec_name(),
             ts_codec: T::codec_name(),
@@ -433,7 +433,7 @@ where
             ));
         }
         Ok(State {
-            id: x.id,
+            shard_id: x.shard_id,
             writers: x
                 .writers
                 .iter()

@@ -26,7 +26,7 @@ use crate::error::{InvalidUsage, NoOp};
 use crate::r#impl::state::{ReadCapability, State, WriteCapability};
 use crate::read::ReaderId;
 use crate::write::WriterId;
-use crate::Id;
+use crate::ShardId;
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
@@ -54,16 +54,16 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
-    pub fn new(id: Id, consensus: Arc<dyn Consensus + Send + Sync>) -> Self {
+    pub fn new(shard_id: ShardId, consensus: Arc<dyn Consensus + Send + Sync>) -> Self {
         Machine {
             consensus,
             seqno: None,
-            state: State::new(id),
+            state: State::new(shard_id),
         }
     }
 
-    pub fn id(&self) -> Id {
-        self.state.id()
+    pub fn shard_id(&self) -> ShardId {
+        self.state.shard_id()
     }
 
     pub async fn register(
@@ -240,7 +240,7 @@ where
         mut work_fn: WorkFn,
     ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
         loop {
-            let id = self.state.id();
+            let shard_id = self.state.shard_id();
 
             let new_seqno = self.seqno.unwrap_or_default().next();
             let mut new_state = self.state.clone();
@@ -254,7 +254,7 @@ where
             let cas_res = self
                 .consensus
                 .compare_and_set(
-                    &id.to_string(),
+                    &shard_id.to_string(),
                     deadline,
                     self.seqno,
                     VersionedData {
@@ -289,8 +289,8 @@ where
     }
 
     async fn fetch_and_update_state(&mut self, deadline: Instant) -> Result<(), ExternalError> {
-        let id = self.id();
-        let current = self.consensus.head(&id.to_string(), deadline).await?;
+        let shard_id = self.shard_id();
+        let current = self.consensus.head(&shard_id.to_string(), deadline).await?;
         self.update_state(current).await
     }
 
@@ -299,7 +299,7 @@ where
             Some(x) => x,
             None => {
                 self.seqno = None;
-                self.state = State::new(self.state.id());
+                self.state = State::new(self.state.shard_id());
                 return Ok(());
             }
         };
