@@ -33,16 +33,26 @@ mod tests {
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct MultiNamedArg {
-        fizz: Vec<Option<bool>>,
+        fizz: Vec<Option<MultiUnnamedArg>>,
         #[serde(default)]
         bizz: Vec<Vec<(SingleUnnamedArg, bool)>>,
     }
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct FirstArgEnum {
-        test_enum: Box<TestEnum>,
+        test_enum: Box<Box<TestEnum>>,
         #[serde(default)]
         second_arg: String,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
+    struct SingleNamedOptionArg {
+        named_field: Option<bool>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
+    struct SecondLayerOfOption {
+        named_field: Option<SingleNamedOptionArg>,
     }
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
@@ -60,11 +70,12 @@ mod tests {
         SingleUnnamedField2(Vec<i64>),
         SingleUnnamedField3(MultiNamedArg),
         SingleUnnamedZeroArgField(ZeroArg),
-        MultiUnnamedFields(MultiUnnamedArg, MultiNamedArg, Box<TestEnum>),
+        MultiUnnamedFields(MultiUnnamedArg, Option<Box<TestEnum>>, Box<TestEnum>),
         MultiUnnamedFields2(OptionalArg, FirstArgEnum, #[serde(default)] String),
         MultiUnnamedZeroArgFields(ZeroArg, ZeroArg),
-        MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg),
+        MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg, Option<SingleNamedOptionArg>),
         Unit,
+        OptionStructNesting(SecondLayerOfOption),
     }
 
     lazy_static! {
