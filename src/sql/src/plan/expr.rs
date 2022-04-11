@@ -262,6 +262,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
     }
@@ -272,6 +273,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
     }
@@ -290,6 +292,9 @@ impl ScalarWindowExpr {
             ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
                 order_by: self.order_by,
             },
+            ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
+                order_by: self.order_by,
+            },
         }
     }
 }
@@ -298,12 +303,14 @@ impl ScalarWindowExpr {
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
+    DenseRank,
 }
 
 impl ScalarWindowFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
             ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
+            ScalarWindowFunc::DenseRank => ScalarType::Int64.nullable(false),
         }
     }
 }
