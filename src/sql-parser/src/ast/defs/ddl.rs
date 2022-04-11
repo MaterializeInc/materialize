@@ -472,7 +472,7 @@ pub enum KafkaConnector {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSource {
+pub struct KafkaSourceConnector {
     pub broker: KafkaConnector,
     pub topic: String,
     pub key: Option<Vec<Ident>>,
@@ -485,7 +485,7 @@ pub enum CreateSourceConnector {
         path: String,
         compression: Compression,
     },
-    Kafka(KafkaSource),
+    Kafka(KafkaSourceConnector),
     Kinesis {
         arn: String,
     },
@@ -528,7 +528,7 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka(KafkaSource { broker, topic, key }) => {
+            CreateSourceConnector::Kafka(KafkaSourceConnector { broker, topic, key }) => {
                 f.write_str("KAFKA ");
                 match broker {
                     KafkaConnector::Inline { broker } => {

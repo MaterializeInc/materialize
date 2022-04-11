@@ -19,7 +19,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
-use mz_sql_parser::ast::KafkaSource;
+use mz_sql_parser::ast::KafkaSourceConnector;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -71,7 +71,7 @@ pub async fn purify_create_source(
 
     let mut file = None;
     match connector {
-        CreateSourceConnector::Kafka(KafkaSource { broker, topic, .. }) => {
+        CreateSourceConnector::Kafka(KafkaSourceConnector { broker, topic, .. }) => {
             match broker {
                 // Temporary until the rest of the connector plumbing is finished
                 mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
@@ -350,7 +350,8 @@ async fn purify_csr_connector_proto(
     envelope: &Envelope,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka(KafkaSource { topic, .. }) = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -401,7 +402,8 @@ async fn purify_csr_connector_avro(
     envelope: &Envelope,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka(KafkaSource { topic, .. }) = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
