@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
+use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize, Serializer};
 use tracing::error;
 
@@ -598,7 +599,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             // we shouldn't plan delta joins at all if not all of the required arrangements
                             // are available. Print an error message, to increase the chances that
                             // the user will tell us about this.
-                            error!("Arrangements depended on by delta join alarmingly absent: {:?}
+                            soft_assert_or_log!(false, "Arrangements depended on by delta join alarmingly absent: {:?}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
                         } else {
                             // It's fine and expected that linear joins don't have all their arrangements available up front,
