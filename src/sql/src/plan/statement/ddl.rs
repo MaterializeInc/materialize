@@ -341,7 +341,7 @@ pub fn plan_create_source(
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
             let (broker, topic) = match &kafka.broker {
-                mz_sql_parser::ast::KafkaConnector::Literal { broker } => (broker, &kafka.topic),
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker, &kafka.topic),
                 // Temporary until the rest of the connector plumbing is finished
                 mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
             };
@@ -382,8 +382,8 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
             let mut connector = KafkaSourceConnector {
-                topic: topic.clone(),
                 addrs: broker.parse()?,
+                topic: topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,

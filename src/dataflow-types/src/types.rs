@@ -1148,10 +1148,10 @@ pub mod sources {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KafkaSourceConnector {
         pub addrs: KafkaAddrs,
+        pub topic: String,
         // Represents options specified by user when creating the source, e.g.
         // security settings.
         pub config_options: BTreeMap<String, String>,
-        pub topic: String,
         // Map from partition -> starting offset
         pub start_offsets: HashMap<i32, i64>,
         pub group_id_prefix: Option<String>,

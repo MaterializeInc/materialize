@@ -459,7 +459,7 @@ impl_display!(DbzMode);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
 pub enum CreateConnector<T: AstInfo> {
-    KafkaBroker {
+    Kafka {
         broker: String,
         with_options: Vec<SqlOption<T>>,
     },
@@ -467,7 +467,7 @@ pub enum CreateConnector<T: AstInfo> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector {
-    Literal { broker: String },
+    Inline { broker: String },
     Reference { connector: UnresolvedObjectName },
 }
 
@@ -477,6 +477,7 @@ pub struct KafkaSource {
     pub topic: String,
     pub key: Option<Vec<Ident>>,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector {
@@ -527,16 +528,16 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka(kafka) => {
-                let KafkaSource { broker, topic, key } = kafka;
+            CreateSourceConnector::Kafka(KafkaSource { broker, topic, key }) => {
+                f.write_str("KAFKA ");
                 match broker {
-                    KafkaConnector::Literal { broker } => {
-                        f.write_str("KAFKA BROKER '");
+                    KafkaConnector::Inline { broker } => {
+                        f.write_str("BROKER '");
                         f.write_node(&display::escape_single_quote_string(broker));
                         f.write_str("'");
                     }
                     KafkaConnector::Reference { connector } => {
-                        f.write_str("KAFKA CONNECTOR '");
+                        f.write_str("CONNECTOR '");
                         f.write_node(connector);
                         f.write_str("'");
                     }
