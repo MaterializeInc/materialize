@@ -630,6 +630,8 @@
 - type: Window
   description: Window functions compute values across sets of rows related to the current query.
   functions:
+  - signature: 'dense_rank() -> int'
+    description: Returns the rank of the current row within its partition without gaps, counting from 1.
   - signature: 'row_number() -> int'
     description: Returns the number of the current row within its partition, counting from 1.
 
