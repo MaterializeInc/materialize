@@ -335,12 +335,15 @@ class Composition:
             _lint_composition(path, composition, errs)
         return errs
 
-    def invoke(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    def invoke(
+        self, *args: str, capture: bool = False, stdin: Optional[str] = None
+    ) -> subprocess.CompletedProcess:
         """Invoke `docker-compose` on the rendered composition.
 
         Args:
             args: The arguments to pass to `docker-compose`.
             capture: Whether to capture the child's stdout stream.
+            input: A string to provide as stdin for the command.
         """
 
         if not self.silent:
@@ -365,6 +368,7 @@ class Composition:
                 close_fds=False,
                 check=True,
                 stdout=stdout,
+                input=stdin,
                 text=True,
             )
         except subprocess.CalledProcessError as e:
@@ -545,6 +549,7 @@ class Composition:
         rm: bool = False,
         env_extra: Dict[str, str] = {},
         capture: bool = False,
+        stdin: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -557,6 +562,7 @@ class Composition:
             service: The name of a service in the composition.
             args: Arguments to pass to the service's entrypoint.
             detach: Run the container in the background.
+            stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker-compose` invocation.
@@ -573,27 +579,36 @@ class Composition:
             service,
             *args,
             capture=capture,
+            stdin=stdin,
         )
 
     def exec(
-        self, service: str, *args: str, detach: bool = False
+        self,
+        service: str,
+        *args: str,
+        detach: bool = False,
+        stdin: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
         Delegates to `docker-compose exec`.
 
         Args:
-            service: The service whose container will be used
-            command: The command to run
-            args: Arguments to pass to the command
+            service: The service whose container will be used.
+            command: The command to run.
+            args: Arguments to pass to the command.
+            detach: Run the container in the background.
+            stdin: read STDIN from a string.
         """
 
         return self.invoke(
             "exec",
             *(["--detach"] if detach else []),
+            "-T",
             service,
             *self.compose["services"][service]["entrypoint"],
             *args,
+            stdin=stdin,
         )
 
     def pull_if_variable(self, services: List[str]) -> None:
@@ -796,6 +811,22 @@ class Composition:
             print_result=print_result,
             service=service,
         )
+
+    def testdrive(
+        self, input: str, service: str = "testdrive", persistent: bool = True
+    ) -> None:
+        """Run a string as a testdrive script.
+
+        Args:
+            service: Optional name of the testdrive service to use.
+            input: The string to execute.
+            persistent: Whether a persistent testdrive container will be used.
+        """
+
+        if persistent:
+            self.exec(service, stdin=input)
+        else:
+            self.run(service, stdin=input)
 
 
 class ServiceConfig(TypedDict, total=False):
