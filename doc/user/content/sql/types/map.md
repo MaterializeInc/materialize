@@ -28,9 +28,15 @@ Field | Use
 _map&lowbar;string_ | A well-formed map object.
 _value&lowbar;type_ | The [type](../../types) of the map's values.
 
-## Operators
+## Map functions + operators
+
+### Operators
 
 {{% map-operators %}}
+
+### Functions
+
+{{< fnlist "Map" >}}
 
 ## Details
 

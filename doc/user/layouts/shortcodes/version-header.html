@@ -1,7 +1,7 @@
 {{$version := (.Get 0)}}
-{{$versionMeta := index (where $.Site.Params.versions "name" (.Get 0)) 0}}
+{{$versionMeta := index (where $.Site.Params.versions "name" $version) 0}}
 
-## {{$version}} {{if not $versionMeta}}(Unreleased){{end}} {id="{{$version}}"}
+## {{$version}} {{if $versionMeta.lts}}LTS{{end}} {{if not $versionMeta}}(Unreleased){{end}} {id="{{$version}}"}
 
 {{with $versionMeta}}
 <p class="release-date">Released on {{.date}}.</p>
