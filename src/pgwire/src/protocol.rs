@@ -21,6 +21,7 @@ use mz_expr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
+use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::debug;
 
@@ -211,50 +212,37 @@ where
         }
     };
 
-    // From this point forward we must not fail without calling `coord_client.terminate`!
+    let session = coord_client.session();
+    let mut buf = vec![BackendMessage::AuthenticationOk];
+    for var in session.vars().notify_set() {
+        buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
+    }
+    buf.push(BackendMessage::BackendKeyData {
+        conn_id: session.conn_id(),
+        secret_key: startup.secret_key,
+    });
+    for startup_message in startup.messages {
+        buf.push(ErrorResponse::from_startup_message(startup_message).into());
+    }
+    buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
+    conn.send_all(buf).await?;
+    conn.flush().await?;
 
-    let mut allow_no_session = false;
-    let res = async {
-        let session = coord_client.session();
-        let mut buf = vec![BackendMessage::AuthenticationOk];
-        for var in session.vars().notify_set() {
-            buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
-        }
-        buf.push(BackendMessage::BackendKeyData {
-            conn_id: session.conn_id(),
-            secret_key: startup.secret_key,
-        });
-        for startup_message in startup.messages {
-            buf.push(ErrorResponse::from_startup_message(startup_message).into());
-        }
-        buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
-        conn.send_all(buf).await?;
-        conn.flush().await?;
+    let machine = StateMachine {
+        metrics,
+        conn,
+        coord_client: &mut coord_client,
+    };
 
-        let machine = StateMachine {
-            metrics,
-            conn,
-            coord_client: &mut coord_client,
-        };
-
-        tokio::select! {
-            r = machine.run() => r,
-            _ = is_expired => {
-                // If the login has expired, we immediately stop running the state machine,
-                // meaning the session could still be owned by the coordinator, so we allow no
-                // session to be present.
-                allow_no_session = true;
-                Err(io::ErrorKind::ConnectionAborted.into())
-            }
+    select! {
+        r = machine.run() => r,
+        _ = is_expired => {
+            conn
+                .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
+                .await?;
+            conn.flush().await
         }
     }
-    .await;
-    if allow_no_session {
-        coord_client.terminate_allow_no_session().await;
-    } else {
-        coord_client.terminate().await;
-    }
-    res
 }
 
 #[derive(Debug)]
