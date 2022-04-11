@@ -19,7 +19,6 @@ hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destinat
 # and convert it to HTML. htmltest will scan the current prod paths and
 # complain if any have been broken in this build.
 curl https://materialize.com/docs/sitemap.xml -o ci/www/sitemap.xml
-sed 's/<loc>\(.*\)<\/loc>/<a href="\1"><\/a>/g' ci/www/sitemap.xml > ci/www/sitemap.html
 echo "<!doctype html>" > ci/www/public/index.html
-cat ci/www/sitemap.html >> ci/www/public/index.html
+sed 's/<loc>\(.*\)<\/loc>/<a href="\1"><\/a>/g' ci/www/sitemap.xml >> ci/www/public/index.html
 htmltest -s ci/www/public -c doc/user/.htmltest.yml
