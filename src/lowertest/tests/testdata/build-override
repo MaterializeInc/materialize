@@ -66,9 +66,9 @@ Some(SingleUnnamedField2([-1, 4, -2, 0]))
 #single field is a struct with named fields
 
 build override=true
-(single_unnamed_field3 ([true false false null] [[[-1.25 true] [1.24 false]]]))
+(single_unnamed_field3 ([([] "boop") null] [[[-1.25 true] [1.24 false]]]))
 ----
-Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(true), Some(false), Some(false), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
+Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(MultiUnnamedArg([], "boop")), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
 
 build override=true
 (multi_unnamed_fields_2 false unit)
@@ -116,14 +116,14 @@ multi_unnamed_zero_arg_fields
 Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
 
 build override=true
-(multi_unnamed_fields_first_zero_arg true)
+(multi_unnamed_fields_first_zero_arg true null)
 ----
-Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0))))
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0)), None))
 
 build override=true
-(multi_unnamed_fields_first_zero_arg (true [3.14 2]))
+(multi_unnamed_fields_first_zero_arg (true [3.14 2]) (null))
 ----
-Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2))))
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2)), Some(SingleNamedOptionArg { named_field: None })))
 
 # Override tests.
 
@@ -139,10 +139,10 @@ build override=true
         ]
         "hello"
     )
-    ([true false null] [[[100 true] [200 false]][]])
+    (multi_unnamed_zero_arg_fields)
     (single_named_field [0 10 42]))
 ----
-Some(MultiUnnamedFields(MultiUnnamedArg([(4, [("world", 6), ("this", 3)], 5), (3, [], 1)], "hello"), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, SingleNamedField { foo: [1, 11, 43] }))
+Some(MultiUnnamedFields(MultiUnnamedArg([(4, [("world", 6), ("this", 3)], 5), (3, [], 1)], "hello"), Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg)), SingleNamedField { foo: [1, 11, 43] }))
 
 build override=true
 (single_unnamed_field +1.1)
@@ -154,9 +154,9 @@ Some(SingleUnnamedField(SingleUnnamedArg(1.1)))
 build override=true
 (multi_unnamed_fields
     (2 "goodbye")
-    ([true false null] [[[100 true] [200 false]][]])
-    (multi_unnamed_fields 3 ([] [[[-1 true]]])
-         (multi_unnamed_fields "again" ([false false false] []) unit)
+    null
+    (multi_unnamed_fields 3 null
+         (multi_unnamed_fields "again" (multi_unnamed_fields_first_zero_arg false false) unit)
         ))
 ----
-Some(MultiUnnamedFields(MultiUnnamedArg([(2, [("\"goodbye\"", 2)], 2)], "\"goodbye\""), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, MultiUnnamedFields(MultiUnnamedArg([(3, [("", 3)], 3)], ""), MultiNamedArg { fizz: [], bizz: [[(SingleUnnamedArg(-1.0), true)]] }, MultiUnnamedFields(MultiUnnamedArg([], "again"), MultiNamedArg { fizz: [Some(false), Some(false), Some(false)], bizz: [] }, Unit))))
+Some(MultiUnnamedFields(MultiUnnamedArg([(2, [("\"goodbye\"", 2)], 2)], "\"goodbye\""), None, MultiUnnamedFields(MultiUnnamedArg([(3, [("", 3)], 3)], ""), None, MultiUnnamedFields(MultiUnnamedArg([], "again"), Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(false, (0.0, 0)), Some(SingleNamedOptionArg { named_field: Some(false) }))), Unit))))

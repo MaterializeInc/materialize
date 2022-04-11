@@ -151,13 +151,26 @@ where
     C: TestDeserializeContext,
     I: Iterator<Item = TokenTree>,
 {
-    let type_name = &normalize_type_name(type_name);
+    let (type_name, option_found) = normalize_type_name(type_name);
+
+    // If the type is an zero-argument struct, resolve without reading from the stream.
     if let Some((_, f_types)) = rti.struct_dict.get(&type_name[..]) {
         if f_types.is_empty() {
             return Ok(Some("null".to_string()));
         }
     }
+
     if let Some(first_arg) = stream_iter.next() {
+        // If type is `Option<T>`, convert the token to None if it is null,
+        // otherwise, try to convert it to an instance of `T`.
+        if option_found {
+            if let TokenTree::Ident(ident) = &first_arg {
+                if *ident == "null" {
+                    return Ok(Some("null".to_string()));
+                }
+            }
+        }
+
         // If the type refers to an enum or struct defined by us, go to a
         // special branch that allows reuse of code paths for the
         // `(<arg1>..<argn>)` syntax as well as the `<only_arg>` syntax.
@@ -228,11 +241,11 @@ where
                 match punct.as_char() {
                     // Pretend the comma does not exist and process the
                     // next `TokenTree`
-                    ',' => to_json(stream_iter, type_name, rti, ctx),
+                    ',' => to_json(stream_iter, &type_name, rti, ctx),
                     // Process the next `TokenTree` and prepend the
                     // punctuation. This enables support for negative
                     // numbers.
-                    other => match to_json(stream_iter, type_name, rti, ctx)? {
+                    other => match to_json(stream_iter, &type_name, rti, ctx)? {
                         Some(result) => Ok(Some(format!("{}{}", other, result))),
                         None => Ok(Some(other.to_string())),
                     },
@@ -608,9 +621,17 @@ pub fn from_json<C>(json: &Value, type_name: &str, rti: &ReflectedTypeInfo, ctx:
 where
     C: TestDeserializeContext,
 {
-    let type_name = normalize_type_name(type_name);
+    let (type_name, option_found) = normalize_type_name(type_name);
     if let Some(result) = ctx.reverse_syntax_override(json, &type_name, rti) {
         return result;
+    }
+    // If type is `Option<T>`, convert the value to "null" if it is null,
+    // otherwise, try to convert it to a spec corresponding to an object of
+    // type `T`.
+    if option_found {
+        if let Value::Null = json {
+            return "null".to_string();
+        }
     }
     if let Some((names, types)) = rti.struct_dict.get(&type_name[..]) {
         if types.is_empty() {
@@ -729,20 +750,28 @@ where
 /* #region Helper functions common to both spec-to-JSON and the JSON-to-spec
 transformations. */
 
-fn normalize_type_name(type_name: &str) -> String {
+fn normalize_type_name(type_name: &str) -> (String, bool) {
     // Normalize the type name by stripping whitespace.
-    let type_name = type_name.replace(' ', "");
-    // Eliminate outer `Option<>` and `Box<>` from type names because they are
-    // inconsequential when it comes to creating a correctly deserializable JSON
-    // string.
-    let type_name = if type_name.starts_with("Option<") && type_name.ends_with('>') {
-        &type_name[7..(type_name.len() - 1)]
-    } else if type_name.starts_with("Box<") && type_name.ends_with('>') {
-        &type_name[4..(type_name.len() - 1)]
-    } else {
-        &type_name
-    };
-    type_name.to_string()
+    let mut type_name = &type_name.replace(' ', "")[..];
+    let mut option_found = false;
+    // Eliminate outer `Box<>` from type names because they are inconsequential
+    // when it comes to creating a correctly deserializable JSON string.
+    // The presence of an `Option<>` is consequential, but `serde_json` cannot
+    // distinguish between `None`, `Some(None)`, `Some(Some(None))`, etc., so
+    // we strip out all `Option<>`s and return whether we have seen at least one
+    // option.
+    loop {
+        if type_name.starts_with("Option<") && type_name.ends_with('>') {
+            option_found = true;
+            type_name = &type_name[7..(type_name.len() - 1)]
+        } else if type_name.starts_with("Box<") && type_name.ends_with('>') {
+            type_name = &type_name[4..(type_name.len() - 1)]
+        } else {
+            break;
+        }
+    }
+
+    (type_name.to_string(), option_found)
 }
 
 fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usize, usize)> {
