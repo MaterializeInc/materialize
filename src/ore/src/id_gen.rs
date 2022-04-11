@@ -17,6 +17,7 @@
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::ops::AddAssign;
 use std::sync::Mutex;
 
 /// Manages the allocation of unique IDs.
@@ -38,26 +39,29 @@ impl<Id: From<u64> + Default> Gen<Id> {
 /// A generator of u64-bit IDs.
 pub type IdGen = Gen<u64>;
 
-/// Manages allocation of u32 IDs.
+/// Manages allocation of numeric IDs.
 ///
 /// Note that the current implementation wastes memory. It would be far more
 /// efficient to use a compressed bitmap, like <https://roaringbitmap.org> or
 /// the hibitset crate, but neither presently supports a fast "find first zero"
 /// operation.
 #[derive(Debug)]
-pub struct IdAllocator(Mutex<IdAllocatorInner>);
+pub struct IdAllocator<T>(Mutex<IdAllocatorInner<T>>);
 
 #[derive(Debug)]
-struct IdAllocatorInner {
-    next: u32,
-    max: u32,
-    free: VecDeque<u32>,
+struct IdAllocatorInner<T> {
+    next: T,
+    max: T,
+    free: VecDeque<T>,
 }
 
-impl IdAllocator {
+impl<T> IdAllocator<T>
+where
+    T: From<u8> + AddAssign + PartialOrd + Copy,
+{
     /// Creates a new `IdAllocator` that will assign IDs between `min` and
     /// `max`, both inclusive.
-    pub fn new(min: u32, max: u32) -> IdAllocator {
+    pub fn new(min: T, max: T) -> IdAllocator<T> {
         IdAllocator(Mutex::new(IdAllocatorInner {
             next: min,
             max,
@@ -68,7 +72,7 @@ impl IdAllocator {
     /// Allocates a new ID.
     ///
     /// Returns `None` if the allocator is exhausted.
-    pub fn alloc(&self) -> Option<u32> {
+    pub fn alloc(&self) -> Option<T> {
         let mut inner = self.0.lock().expect("lock poisoned");
         if let Some(id) = inner.free.pop_front() {
             Some(id)
@@ -77,7 +81,7 @@ impl IdAllocator {
             if id > inner.max {
                 None
             } else {
-                inner.next += 1;
+                inner.next += 1.into();
                 Some(id)
             }
         }
@@ -87,7 +91,7 @@ impl IdAllocator {
     ///
     /// It is undefined behavior to free an ID twice, or to free an ID that was
     /// not allocated by this allocator.
-    pub fn free(&self, id: u32) {
+    pub fn free(&self, id: T) {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.free.push_back(id);
     }

@@ -75,7 +75,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator>,
+    id_alloc: Arc<IdAllocator<u32>>,
 }
 
 impl Client {
