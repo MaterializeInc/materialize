@@ -40,6 +40,7 @@ mod tests {
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct FirstArgEnum {
+        #[allow(clippy::redundant_allocation)]
         test_enum: Box<Box<TestEnum>>,
         #[serde(default)]
         second_arg: String,

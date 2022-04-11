@@ -259,13 +259,13 @@ construct the enum variant or the struct using the default syntax.
 
 Generally, combinations of the above are supported. The exception are
 types with values that `serde_json` cannot distinguish from `None` because
-`serde_json` serializes them all to the same string "null". 
+`serde_json` serializes them all to the same string "null".
 * Multiple `Option<>`s nested within each other, e.g. `Option<Option<u32>>`, or
   `Option<SingleUnnamedOptionStruct>`, where the struct is defined as
   `SingleUnnamedOptionStruct(Option<u32>)`. `serde_json` cannot distinguish
   `Some(None)` from `None`.
 * `Option<NoArgumentStruct>`. `serde_json` cannot distinguish
-  `Some(NoArgumentStruct)` from `None`. 
+  `Some(NoArgumentStruct)` from `None`.
 
 ## Roundtrip
 

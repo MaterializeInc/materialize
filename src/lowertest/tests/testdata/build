@@ -96,9 +96,9 @@ Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum:
 #single field is a Vec
 
 build
-(multi_unnamed_fields 
-    ([], "bar") 
-    (single_unnamed_field_3 [([[10 [["bc" 7] ["34" 34]] 20]] "aaa") null ([] "baz")]) 
+(multi_unnamed_fields
+    ([], "bar")
+    (single_unnamed_field_3 [([[10 [["bc" 7] ["34" 34]] 20]] "aaa") null ([] "baz")])
     (single_named_field [0 10 11]))
 ----
 Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(MultiUnnamedArg([(10, [("bc", 7), ("34", 34)], 20)], "aaa")), None, Some(MultiUnnamedArg([], "baz"))], bizz: [] })), SingleNamedField { foo: [0, 10, 11] }))

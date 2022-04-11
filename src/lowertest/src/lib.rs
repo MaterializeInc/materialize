@@ -161,9 +161,11 @@ where
     }
 
     if let Some(first_arg) = stream_iter.next() {
+        // If type is `Option<T>`, convert the token to None if it is null,
+        // otherwise, try to convert it to an instance of `T`.
         if option_found {
             if let TokenTree::Ident(ident) = &first_arg {
-                if ident.to_string() == "null" {
+                if *ident == "null" {
                     return Ok(Some("null".to_string()));
                 }
             }
@@ -623,8 +625,11 @@ where
     if let Some(result) = ctx.reverse_syntax_override(json, &type_name, rti) {
         return result;
     }
-    if let Value::Null = json {
-        if option_found {
+    // If type is `Option<T>`, convert the value to "null" if it is null,
+    // otherwise, try to convert it to a spec corresponding to an object of
+    // type `T`.
+    if option_found {
+        if let Value::Null = json {
             return "null".to_string();
         }
     }
