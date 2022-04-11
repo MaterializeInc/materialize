@@ -36,12 +36,18 @@ use crate::r#impl::machine::Machine;
 /// Deserialize. It's difficult to reason about the behavior if multiple writers
 /// accidentally end up concurrently using the same [WriterId] and we haven't
 /// (yet) found a need for it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WriterId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for WriterId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&Uuid::from_bytes(self.0), f)
+        write!(f, "w{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for WriterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WriterId({})", Uuid::from_bytes(self.0))
     }
 }
 

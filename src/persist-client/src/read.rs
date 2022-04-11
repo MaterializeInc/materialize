@@ -32,12 +32,18 @@ use crate::r#impl::machine::Machine;
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&Uuid::from_bytes(self.0), f)
+        write!(f, "r{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for ReaderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReaderId({})", Uuid::from_bytes(self.0))
     }
 }
 

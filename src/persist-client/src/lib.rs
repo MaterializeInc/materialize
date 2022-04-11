@@ -112,12 +112,18 @@ impl Location {
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&Uuid::from_bytes(self.0), f)
+        write!(f, "s{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for ShardId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShardId({})", Uuid::from_bytes(self.0))
     }
 }
 
@@ -413,5 +419,33 @@ mod tests {
         assert_eq!(snap.read_all().await?, all_ok(&data, 1));
 
         Ok(())
+    }
+
+    #[test]
+    fn fmt_ids() {
+        assert_eq!(
+            format!("{}", ShardId([0u8; 16])),
+            "s00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", ShardId([0u8; 16])),
+            "ShardId(00000000-0000-0000-0000-000000000000)"
+        );
+        assert_eq!(
+            format!("{}", WriterId([0u8; 16])),
+            "w00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", WriterId([0u8; 16])),
+            "WriterId(00000000-0000-0000-0000-000000000000)"
+        );
+        assert_eq!(
+            format!("{}", ReaderId([0u8; 16])),
+            "r00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", ReaderId([0u8; 16])),
+            "ReaderId(00000000-0000-0000-0000-000000000000)"
+        );
     }
 }
