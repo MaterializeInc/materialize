@@ -9,6 +9,7 @@
 
 //! Provides a publicly available interface to transform our SQL ASTs.
 
+use mz_repr::GlobalId;
 use std::collections::{HashMap, HashSet};
 
 use mz_ore::str::StrExt;
@@ -337,6 +338,39 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     ) {
         match object_name {
             RawObjectName::Name(n) | RawObjectName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+        }
+    }
+}
+
+/// Updates all `GlobalId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
+pub fn create_stmt_replace_ids(
+    create_stmt: &mut Statement<Raw>,
+    ids: &HashMap<GlobalId, GlobalId>,
+) {
+    let mut id_replacer = CreateSqlIdReplacer { ids };
+    id_replacer.visit_statement_mut(create_stmt);
+}
+
+struct CreateSqlIdReplacer<'a> {
+    ids: &'a HashMap<GlobalId, GlobalId>,
+}
+
+impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
+    fn visit_object_name_mut(
+        &mut self,
+        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
+    ) {
+        match object_name {
+            RawObjectName::Id(id, _) => {
+                let old_id = match id.parse() {
+                    Ok(old_id) => old_id,
+                    Err(_) => panic!("invalid persisted global id {id}"),
+                };
+                if let Some(new_id) = self.ids.get(&old_id) {
+                    *id = new_id.to_string();
+                }
+            }
+            RawObjectName::Name(_) => {}
         }
     }
 }
