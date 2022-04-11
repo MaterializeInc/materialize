@@ -352,6 +352,9 @@ where
     /// system. A `new_since` of the empty antichain "finishes" this shard,
     /// promising that no more data will ever be read by this handle.
     ///
+    /// It is possible to heartbeat a reader lease by calling this with
+    /// `new_since` equal to `self.since()` (making the call a no-op).
+    ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
     pub async fn downgrade_since(

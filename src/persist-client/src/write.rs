@@ -99,9 +99,9 @@ where
     /// incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is unexpected to call this with `new_upper`
-    /// equal to `self.upper()`, as it would mean `updates` must be empty
-    /// (making the entire call a no-op).
+    /// communicate progress. It is possible to heartbeat a writer lease by
+    /// calling this with `new_upper` equal to `self.upper()` and an empty
+    /// `updates` (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
@@ -157,7 +157,8 @@ where
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
-    /// `new_upper` iff the current global upper of this shard is `expected_upper`.
+    /// `new_upper` iff the current global upper of this shard is
+    /// `expected_upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
     /// If not, an `Err` containing the current global upper is returned.
@@ -172,9 +173,9 @@ where
     /// incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is unexpected to call this with `new_upper`
-    /// equal to `self.upper()`, as it would mean `updates` must be empty
-    /// (making the entire call a no-op).
+    /// communicate progress. It is possible to heartbeat a writer lease by
+    /// calling this with `new_upper` equal to `self.upper()` and an empty
+    /// `updates` (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
