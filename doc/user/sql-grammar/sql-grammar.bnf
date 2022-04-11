@@ -85,7 +85,7 @@ create_source_postgres ::=
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
-create_source_pubnub_text ::=
+create_source_pubnub ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
