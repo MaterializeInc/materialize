@@ -36,7 +36,6 @@ mod client;
 mod command;
 mod coord;
 mod error;
-mod id_alloc;
 mod persistcfg;
 mod sink_connector;
 mod tail;
