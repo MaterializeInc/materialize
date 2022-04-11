@@ -2077,7 +2077,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 Ok(CreateSourceConnector::Kafka(KafkaSourceConnector {
-                    broker: KafkaConnector::Inline { broker },
+                    connector: KafkaConnector::Inline { broker },
                     topic,
                     key,
                 }))

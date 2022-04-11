@@ -71,7 +71,11 @@ pub async fn purify_create_source(
 
     let mut file = None;
     match connector {
-        CreateSourceConnector::Kafka(KafkaSourceConnector { broker, topic, .. }) => {
+        CreateSourceConnector::Kafka(KafkaSourceConnector {
+            connector: broker,
+            topic,
+            ..
+        }) => {
             match broker {
                 // Temporary until the rest of the connector plumbing is finished
                 mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),

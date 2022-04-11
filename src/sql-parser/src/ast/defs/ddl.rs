@@ -473,7 +473,7 @@ pub enum KafkaConnector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSourceConnector {
-    pub broker: KafkaConnector,
+    pub connector: KafkaConnector,
     pub topic: String,
     pub key: Option<Vec<Ident>>,
 }
@@ -528,7 +528,11 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka(KafkaSourceConnector { broker, topic, key }) => {
+            CreateSourceConnector::Kafka(KafkaSourceConnector {
+                connector: broker,
+                topic,
+                key,
+            }) => {
                 f.write_str("KAFKA ");
                 match broker {
                     KafkaConnector::Inline { broker } => {

@@ -340,7 +340,7 @@ pub fn plan_create_source(
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            let (broker, topic) = match &kafka.broker {
+            let (broker, topic) = match &kafka.connector {
                 mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker, &kafka.topic),
                 // Temporary until the rest of the connector plumbing is finished
                 mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
