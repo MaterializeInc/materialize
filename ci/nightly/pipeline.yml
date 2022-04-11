@@ -37,6 +37,13 @@ steps:
         required: false
     if: build.source == "ui"
 
+  - id: build-x86_64
+    label: Build x86_64
+    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder
+
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.nightly.trim_pipeline
     if: build.source == "ui"
     agents:
@@ -48,6 +55,7 @@ steps:
   - id: feature-benchmark
     label: "Feature benchmark against latest release"
     timeout_in_minutes: 180
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -58,6 +66,7 @@ steps:
   - id: feature-benchmark-persistence
     label: "Feature benchmark against latest release with persistence"
     timeout_in_minutes: 180
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -77,18 +86,21 @@ steps:
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-multi-broker
 
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -105,12 +117,14 @@ steps:
 
   - id: upgrade
     label: "Upgrade testing"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
 
   - id: limits
     label: "Product limits test"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
@@ -118,6 +132,7 @@ steps:
 
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -126,6 +141,7 @@ steps:
 
   - id: proxy
     label: ":squid: proxy"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -134,6 +150,7 @@ steps:
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -143,6 +160,7 @@ steps:
 
   - id: testdrive-workers-32
     label: ":racing_car: testdrive with --workers 32"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -154,6 +172,7 @@ steps:
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -163,6 +182,7 @@ steps:
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -172,6 +192,7 @@ steps:
 
   - id: aws-config
     label: "AWS credentials and role assumption"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
