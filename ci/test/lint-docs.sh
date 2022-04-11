@@ -23,7 +23,6 @@ git checkout main
 git pull
 hugo --gc --source doc/user --destination tmp
 echo "<!doctype html>" > ci/www/public/index.html
-sed ... tmp/sitemap.xml >> ci/www/public/index.html
-sed 's/<loc>\(.*\)<\/loc>/<a href="\1"><\/a>/g' ci/www/sitemap.xml >> ci/www/public/index.html
-htmltest -s ci/www/public -c doc/user/.htmltest.yml
+sed 's/<loc>\(.*\)<\/loc>/<a href="\1"><\/a>/g' tmp/sitemap.xml >> ci/www/public/index.html
 git checkout $(CURRENT_BRANCH)
+htmltest -s ci/www/public -c doc/user/.htmltest.yml
