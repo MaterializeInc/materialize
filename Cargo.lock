@@ -4051,7 +4051,6 @@ name = "mz-secrets-filesystem"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-expr",
  "mz-secrets",
 ]
 
@@ -4060,13 +4059,9 @@ name = "mz-secrets-kubernetes"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "dyn-clonable",
  "k8s-openapi",
  "kube",
  "mz-secrets",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

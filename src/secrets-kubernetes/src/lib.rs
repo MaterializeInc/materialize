@@ -13,7 +13,7 @@ use kube::{Client, Config};
 use mz_secrets::{SecretOp, SecretsController};
 
 pub struct KubernetesSecretsController {
-    kube_client: Client,
+    _kube_client: Client,
 }
 
 impl KubernetesSecretsController {
@@ -28,21 +28,20 @@ impl KubernetesSecretsController {
             Err(kubeconfig_err) => match Config::from_cluster_env() {
                 Ok(config) => config,
                 Err(in_cluster_err) => {
-                    // bail!("failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})");
-                    todo!()
+                    bail!("failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})");
                 }
             },
         };
         let client = Client::try_from(kubeconfig)?;
 
         Ok(KubernetesSecretsController {
-            kube_client: client,
+            _kube_client: client,
         })
     }
 }
 
 impl SecretsController for KubernetesSecretsController {
-    fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
+    fn apply(&mut self, _ops: Vec<SecretOp>) -> Result<(), Error> {
         return Ok(());
     }
 }
