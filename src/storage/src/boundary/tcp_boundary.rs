@@ -112,8 +112,8 @@ pub mod server {
         info!("About to bind to {addr}");
         let listener = TcpListener::bind(addr).await?;
         info!(
-            "listening for storage connection on  {:?}...",
-            listener.local_addr()
+            "listening for storage connection on {}...",
+            listener.local_addr()?
         );
 
         let thread = mz_ore::task::spawn(
