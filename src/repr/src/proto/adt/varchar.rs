@@ -27,3 +27,19 @@ impl TryFrom<ProtoVarCharMaxLength> for VarCharMaxLength {
         Ok(VarCharMaxLength(repr.value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn var_char_max_length_protobuf_roundtrip(expect in any::<VarCharMaxLength>()) {
+            let actual = protobuf_roundtrip::<_, ProtoVarCharMaxLength>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}

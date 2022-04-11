@@ -162,3 +162,13 @@ where
             .try_into()
     }
 }
+
+pub fn protobuf_roundtrip<'t, T, U>(val: &'t T) -> anyhow::Result<T>
+where
+    T: TryFrom<U, Error = TryFromProtoError>,
+    U: From<&'t T> + ::prost::Message + Default,
+{
+    let vec = U::from(&val).encode_to_vec();
+    let val = U::decode(&*vec)?.try_into()?;
+    Ok(val)
+}

@@ -3989,6 +3989,7 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "rand",

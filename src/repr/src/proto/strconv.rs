@@ -80,3 +80,28 @@ impl TryFrom<ProtoParseHexError> for ParseHexError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn parse_error_protobuf_roundtrip(expect in any::<ParseError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoParseError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn parse_hex_error_protobuf_roundtrip(expect in any::<ParseHexError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}

@@ -29,3 +29,19 @@ impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
         Ok(NumericMaxScale(u8::from_proto(repr.value)?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
+            let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}
