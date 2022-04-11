@@ -772,6 +772,15 @@ running will be hidden from users. Any log messages in `materialized` today that
 are meant for end-users will need to instead make their messages available via
 tables or sources in the system catalog.
 
+### Correctness
+
+Materialize aims to maintain three correctness guarantees.
+
+1. *Materialize is serializable (or strictly serializable) against all internal reads and writes.*
+2. *Materialize respects the explicit or implied event order of its sources.*  In practice this means we reclock sources without transactional semantics (Kafka streams) to reflect the order in which the source emits each event and for sources that do have transactional semantics (Postgres, Debezium) we reclock events to respect the transactional boundaries.
+3. *Materialize provides real time recency guarantees.*  This means if we observe and ingest a transaction finishing at time T and we ask materialize about the current state at time T, we produce the correct answer.  Here T is the correctly reclocked time associated with an event.  Guaranteeing real time recency guarantees means that Materialize may choose to block returning an answer to a question until we have complete certainty about the events at time T.  Blocking may not be desirable in practice, so Materialize makes the behavior optional with explicit syntax so that applications requiring this correctness property can have it while others can ignore it and safely assume non-blocking behavior albeit without any guarantees of correctness.
+
+
 ## Discussion
 
 What follows are my (@benesch's) thoughts on the design tradeoffs that were
