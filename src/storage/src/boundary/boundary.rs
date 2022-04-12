@@ -114,10 +114,13 @@ pub use boundary_hook::BoundaryHook;
 mod boundary_hook {
     use std::collections::BTreeMap;
     use std::fmt;
+    use std::iter::once;
 
     use async_trait::async_trait;
 
-    use mz_dataflow_types::client::{GenericClient, StorageCommand, StorageResponse};
+    use mz_dataflow_types::client::{
+        GenericClient, RenderSourcesCommand, StorageCommand, StorageResponse,
+    };
     use mz_dataflow_types::sources::SourceDesc;
     use mz_dataflow_types::{SourceInstanceDesc, SourceInstanceId, SourceInstanceRequest};
     use mz_expr::GlobalId;
@@ -169,23 +172,22 @@ mod boundary_hook {
                 for source in sources.iter() {
                     if let Some(requests) = self.pending.remove(&source.id) {
                         render_requests.extend(requests.into_iter().map(|request| {
-                            (
-                                format!(
+                            RenderSourcesCommand {
+                                debug_name: format!(
                                     "SourceDataflow({:?}, {:?})",
                                     request.dataflow_id, request.source_id
                                 ),
-                                request.dataflow_id,
-                                Some(request.as_of.clone()),
-                                Some((
+                                dataflow_id: request.dataflow_id,
+                                as_of: Some(request.as_of.clone()),
+                                source_imports: once((
                                     request.source_id,
                                     SourceInstanceDesc {
                                         description: source.desc.clone(),
                                         arguments: request.arguments,
                                     },
                                 ))
-                                .into_iter()
                                 .collect(),
-                            )
+                            }
                         }));
                     }
                     self.sources.insert(source.id, source.desc.clone());
@@ -211,15 +213,15 @@ mod boundary_hook {
                             let unique_id = request.unique_id();
                             if !self.suppress.contains_key(&unique_id) {
                                 if let Some(source) = self.sources.get(&request.source_id) {
-                                    let command = StorageCommand::RenderSources(vec![(
-                                        format!("SourceDataflow({:?}, {:?})", request.dataflow_id, request.source_id),
-                                        request.dataflow_id,
-                                        Some(request.as_of.clone()),
-                                        Some((request.source_id, SourceInstanceDesc {
+                                    let command = StorageCommand::RenderSources(vec![RenderSourcesCommand {
+                                        debug_name: format!("SourceDataflow({:?}, {:?})", request.dataflow_id, request.source_id),
+                                        dataflow_id: request.dataflow_id,
+                                        as_of: Some(request.as_of.clone()),
+                                        source_imports: once((request.source_id, SourceInstanceDesc {
                                             description: source.clone(),
                                             arguments: request.arguments,
-                                        })).into_iter().collect(),
-                                    )]);
+                                        })).collect(),
+                                    }]);
                                     self.client.send(command).await.unwrap()
                                 } else {
                                     self.pending.entry(request.source_id).or_insert(Vec::new()).push(request);
