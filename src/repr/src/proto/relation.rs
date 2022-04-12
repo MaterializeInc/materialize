@@ -9,7 +9,6 @@
 
 //! Protobuf structs mirroring `crate::relation`
 
-pub use super::private::proto_scalar_type::ProtoRecordField;
 pub use super::private::{ProtoColumnName, ProtoColumnType};
 use crate::proto::TryFromProtoError;
 use crate::proto::TryIntoIfSome;
@@ -52,27 +51,5 @@ impl TryFrom<ProtoColumnType> for ColumnType {
                 .scalar_type
                 .try_into_if_some("ProtoColumnType::scalar_type")?,
         })
-    }
-}
-
-impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
-    fn from(x: &(ColumnName, ColumnType)) -> Self {
-        ProtoRecordField {
-            column_name: Some((&x.0).into()),
-            column_type: Some((&x.1).into()),
-        }
-    }
-}
-
-impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
-        Ok((
-            x.column_name
-                .try_into_if_some("ProtoRecordField::column_name")?,
-            x.column_type
-                .try_into_if_some("ProtoRecordField::column_type")?,
-        ))
     }
 }

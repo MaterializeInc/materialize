@@ -9,10 +9,34 @@
 
 //! Protobuf structs mirroring `crate::scalar`
 
+pub use super::private::proto_scalar_type::ProtoRecordField;
 pub use super::private::ProtoScalarType;
 use crate::proto::TryFromProtoError;
 use crate::proto::TryIntoIfSome;
 use crate::scalar::ScalarType;
+use crate::{ColumnName, ColumnType};
+
+impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
+    fn from(x: &(ColumnName, ColumnType)) -> Self {
+        ProtoRecordField {
+            column_name: Some((&x.0).into()),
+            column_type: Some((&x.1).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
+        Ok((
+            x.column_name
+                .try_into_if_some("ProtoRecordField::column_name")?,
+            x.column_type
+                .try_into_if_some("ProtoRecordField::column_type")?,
+        ))
+    }
+}
 
 impl From<&ScalarType> for Box<ProtoScalarType> {
     fn from(value: &ScalarType) -> Self {
@@ -167,17 +191,15 @@ impl TryFrom<ProtoScalarType> for ScalarType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::protobuf_roundtrip;
     use proptest::prelude::*;
-    use prost::Message;
 
     proptest! {
        #[test]
-        fn scalar_type_serialization_roundtrip(original in any::<ScalarType>() ) {
-            let proto = ProtoScalarType::from(&original);
-            let serialized = proto.encode_to_vec();
-            let proto = ProtoScalarType::decode(&*serialized).unwrap();
-            let st = ScalarType::try_from(proto).unwrap();
-            assert_eq!(st, original);
+        fn scalar_type_serialization_roundtrip(expect in any::<ScalarType>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }
