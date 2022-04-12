@@ -2088,8 +2088,21 @@ impl<'a> Parser<'a> {
                 Ok(CreateSourceConnector::File { path, compression })
             }
             KAFKA => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
+                if !self.peek_keyword(BROKER) && !self.peek_keyword(CONNECTOR) {
+                    return self.expected(self.peek_pos(), "BROKER or CONNECTOR", self.peek_token())
+                }
+                let connector  = match self.next_token().expect("a token must follow KAFKA") {
+                    Token::Keyword(k) => {match k {
+                        BROKER => {
+                            KafkaConnector::Inline{ broker: self.parse_literal_string()? }
+                        },
+                        CONNECTOR => {
+                            KafkaConnector::Reference { connector: self.parse_object_name()? }
+                        },
+                        _ => return self.expected(self.peek_pos(), "BROKER OR CONNECTOR", Some(Token::Keyword(k)))
+                    }},
+                    t => return self.expected(self.peek_pos(), "BROKER OR CONNECTOR", Some(t)),
+                };
                 self.expect_keyword(TOPIC)?;
                 let topic = self.parse_literal_string()?;
                 // one token of lookahead:
@@ -2104,7 +2117,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 Ok(CreateSourceConnector::Kafka(KafkaSourceConnector {
-                    connector: KafkaConnector::Inline { broker },
+                    connector,
                     topic,
                     key,
                 }))
