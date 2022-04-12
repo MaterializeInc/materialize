@@ -19,6 +19,13 @@ use mz_ore::str::StrExt;
 
 use crate::{Datum, ScalarType};
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
+// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
+// for guidance on using `derive(Arbitrary)` outside of test code.
+#[cfg(test)]
+use proptest_derive::Arbitrary;
+
 /// The type of a [`Datum`](crate::Datum).
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
@@ -185,6 +192,7 @@ impl RelationType {
 
 /// The name of a column in a [`RelationDesc`].
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ColumnName(pub(crate) String);
 
 impl ColumnName {

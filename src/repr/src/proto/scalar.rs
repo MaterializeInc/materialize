@@ -163,3 +163,21 @@ impl TryFrom<ProtoScalarType> for ScalarType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use prost::Message;
+
+    proptest! {
+       #[test]
+        fn scalar_type_serialization_roundtrip(original in any::<ScalarType>() ) {
+            let proto = ProtoScalarType::from(&original);
+            let serialized = proto.encode_to_vec();
+            let proto = ProtoScalarType::decode(&*serialized).unwrap();
+            let st = ScalarType::try_from(proto).unwrap();
+            assert_eq!(st, original);
+        }
+    }
+}
