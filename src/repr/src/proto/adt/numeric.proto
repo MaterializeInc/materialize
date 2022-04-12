@@ -14,3 +14,8 @@ package adt.numeric;
 message ProtoNumericMaxScale {
     uint32 value = 1;
 }
+
+// Helper struct for representing `Option<NumericMaxScale>`.
+message ProtoOptionalNumericMaxScale {
+    ProtoNumericMaxScale value = 1;
+}

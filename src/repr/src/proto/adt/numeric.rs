@@ -15,9 +15,9 @@ use crate::proto::{ProtoRepr, TryFromProtoError};
 include!(concat!(env!("OUT_DIR"), "/adt.numeric.rs"));
 
 impl From<&NumericMaxScale> for ProtoNumericMaxScale {
-    fn from(value: &NumericMaxScale) -> Self {
+    fn from(max_scale: &NumericMaxScale) -> Self {
         ProtoNumericMaxScale {
-            value: value.0.into_proto(),
+            value: max_scale.0.into_proto(),
         }
     }
 }
@@ -25,8 +25,27 @@ impl From<&NumericMaxScale> for ProtoNumericMaxScale {
 impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
     type Error = TryFromProtoError;
 
-    fn try_from(repr: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
-        Ok(NumericMaxScale(u8::from_proto(repr.value)?))
+    fn try_from(max_scale: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
+        Ok(NumericMaxScale(u8::from_proto(max_scale.value)?))
+    }
+}
+
+impl From<&Option<NumericMaxScale>> for ProtoOptionalNumericMaxScale {
+    fn from(max_scale: &Option<NumericMaxScale>) -> Self {
+        ProtoOptionalNumericMaxScale {
+            value: max_scale.as_ref().map(From::from),
+        }
+    }
+}
+
+impl TryFrom<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
+    type Error = TryFromProtoError;
+
+    fn try_from(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, Self::Error> {
+        match max_scale.value {
+            Some(value) => Ok(Some(value.try_into()?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -40,6 +59,13 @@ mod tests {
         #[test]
         fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
             let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
+            let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
