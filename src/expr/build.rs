@@ -12,7 +12,7 @@ fn main() {
         .extern_path(".adt.array", "::mz_repr::proto::adt::array")
         .extern_path(".strconv", "::mz_repr::proto::strconv")
         .compile_protos(
-            &["id.proto", "scalar.proto"],
+            &["id.proto", "scalar.proto", "scalar/func.proto"],
             &["src/proto", "../repr/src/proto"],
         )
         .unwrap();

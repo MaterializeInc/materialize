@@ -1,0 +1,32 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package scalar.func;
+
+message ProtoUnmaterializableFunc {
+    oneof kind {
+        google.protobuf.Empty current_database = 1;
+        google.protobuf.Empty current_schemas_with_system = 2;
+        google.protobuf.Empty current_schemas_without_system = 3;
+        google.protobuf.Empty current_timestamp = 4;
+        google.protobuf.Empty current_user = 5;
+        google.protobuf.Empty mz_cluster_id = 6;
+        google.protobuf.Empty mz_logical_timestamp = 7;
+        google.protobuf.Empty mz_session_id = 8;
+        google.protobuf.Empty mz_uptime = 9;
+        google.protobuf.Empty mz_version = 10;
+        google.protobuf.Empty pg_backend_pid = 11;
+        google.protobuf.Empty pg_postmaster_start_time = 12;
+        google.protobuf.Empty version = 13;
+    }
+}
