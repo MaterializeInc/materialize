@@ -23,6 +23,14 @@ impl std::fmt::Display for InvalidUsage {
 
 impl std::error::Error for InvalidUsage {}
 
+/// An impl of PartialEq purely for convenience in tests and debug assertions.
+#[cfg(test)]
+impl PartialEq for InvalidUsage {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
 /// A sentinel indicating that a state transition was a no-op.
 #[derive(Debug)]
 pub struct NoOp {
