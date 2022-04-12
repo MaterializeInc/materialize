@@ -663,6 +663,7 @@ pub struct ComputeInstance {
     pub id: ComputeInstanceId,
     pub config: InstanceConfig,
     pub logging: Option<DataflowLoggingConfig>,
+    // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
 }
 
