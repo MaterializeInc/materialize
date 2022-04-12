@@ -42,6 +42,17 @@ On macOS:
 
 Note that on Linux, Docker automatically shares memory with the host machines; as long as your host machine has more than 8 GB of memory, you shouldn't run into issues.
 
+### Using Docker Volumes
+
+To persist the Materialize metadata, you can create a Docker volume and mount it to the [`/mzdata` directory](/cli/#data-directory) in the container:
+
+```shell
+# Create a volume
+docker volume create --name mzdata
+# Create a container with the volume mounted
+docker run -v mzdata:/mzdata -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
+```
+
 ### Use the `mzcompose` wrapper script
 
 Materialize's Docker Compose configurations do not work directly with the
