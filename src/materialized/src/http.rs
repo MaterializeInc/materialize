@@ -29,7 +29,7 @@ use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tower::ServiceBuilder;
-use tower_http::cors::{self, CorsLayer, Origin};
+use tower_http::cors::{self, AnyOr, CorsLayer, Origin};
 use tracing::{error, warn};
 
 use mz_coord::session::Session;
@@ -91,11 +91,20 @@ pub struct Server {
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
     pgwire_metrics: mz_pgwire::Metrics,
-    allowed_origin: Origin,
+    allowed_origin: AnyOr<Origin>,
 }
 
 impl Server {
     pub fn new(config: Config) -> Server {
+        let allowed_origin = if config
+            .allowed_origins
+            .iter()
+            .any(|val| val.as_bytes() == b"*")
+        {
+            tower_http::cors::Any.into()
+        } else {
+            Origin::list(config.allowed_origins).into()
+        };
         Server {
             tls: config.tls,
             frontegg: config.frontegg,
@@ -103,7 +112,7 @@ impl Server {
             metrics_registry: config.metrics_registry,
             global_metrics: config.global_metrics,
             pgwire_metrics: config.pgwire_metrics,
-            allowed_origin: Origin::list(config.allowed_origins),
+            allowed_origin,
         }
     }
 
