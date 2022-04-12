@@ -24,10 +24,9 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 
 // The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
-// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
-// for guidance on using `derive(Arbitrary)` outside of test code.
-#[cfg(test)]
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
 
 /// The number of internal decimal units in a [`Numeric`] value.
@@ -87,7 +86,7 @@ lazy_static! {
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {

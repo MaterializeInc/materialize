@@ -33,10 +33,9 @@ pub mod func;
 pub mod like_pattern;
 
 // The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
-// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
-// for guidance on using `derive(Arbitrary)` outside of test code.
-#[cfg(test)]
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -1222,7 +1221,7 @@ impl CheckedRecursion for MirScalarExprVisitor {
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum DomainLimit {
     None,
     Inclusive(i64),
