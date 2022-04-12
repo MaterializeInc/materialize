@@ -116,7 +116,7 @@ For more details and a step-by-step guide on using Kafka+Debezium for Change Dat
 
 ### Exposing source metadata
 
-In addition to the message value, Materialize can expose the message key and other source metadata fields to SQL.
+In addition to the message value, Materialize can expose the message key, headers and other source metadata fields to SQL.
 
 #### Key
 
@@ -135,6 +135,58 @@ Note that:
 - This option requires specifying the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
 - The `UPSERT` envelope always includes keys.
+
+- The `DEBEZIUM` envelope is incompatible with this option.
+
+#### Headers
+
+Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+
+```sql
+CREATE SOURCE kafka_metadata
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  INCLUDE HEADERS
+  ENVELOPE NONE;
+```
+
+To retrieve the headers in a message, you can unpack the value:
+
+```sql
+SELECT key,
+       field1,
+       field2,
+       headers[1].value AS kafka_header
+FROM mv_kafka_metadata;
+
+  key  |  field1  |  field2  |  kafka_header
+-------+----------+----------+----------------
+  foo  |  fooval  |   1000   |     hvalue
+  bar  |  barval  |   5000   |     <null>
+```
+
+, or lookup by key:
+
+```sql
+SELECT key,
+       field1,
+       field2,
+       thekey,
+       value
+FROM (SELECT key,
+             field1,
+             field2,
+             unnest(headers).key AS thekey,
+             unnest(headers).value AS value
+      FROM mv_kafka_metadata) AS km
+WHERE thekey = 'kvalue';
+
+  key  |  field1  |  field2  |  thekey  |  value
+-------+----------+----------+----------+--------
+  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+```
+
+Note that:
 
 - The `DEBEZIUM` envelope is incompatible with this option.
 
