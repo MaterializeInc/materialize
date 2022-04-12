@@ -1812,11 +1812,9 @@ impl Arbitrary for ScalarType {
                         // Now we have to use `inner` to create a Record type. First we
                         // create strategy that creates ColumnType.
                         let column_type_strat =
-                            (inner.clone(), any::<bool>()).prop_map(|(scalar_type, nullable)| {
-                                ColumnType {
-                                    scalar_type,
-                                    nullable,
-                                }
+                            (inner, any::<bool>()).prop_map(|(scalar_type, nullable)| ColumnType {
+                                scalar_type,
+                                nullable,
                             });
 
                         // Then we use that to create the fields of the record case.
