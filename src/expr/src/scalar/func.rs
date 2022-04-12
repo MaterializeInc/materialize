@@ -60,7 +60,7 @@ use proptest_derive::Arbitrary;
 mod macros;
 mod encoding;
 mod format;
-mod impls;
+pub(crate) mod impls;
 
 pub use impls::*;
 
