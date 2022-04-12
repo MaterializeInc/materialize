@@ -9,10 +9,10 @@
 
 //! Protobuf structs mirroring [`crate::adt::char`].
 
-include!(concat!(env!("OUT_DIR"), "/adt.char.rs"));
-
 use crate::adt::char::CharLength;
 use crate::proto::TryFromProtoError;
+
+include!(concat!(env!("OUT_DIR"), "/adt.char.rs"));
 
 impl From<&CharLength> for ProtoCharLength {
     fn from(x: &CharLength) -> Self {
