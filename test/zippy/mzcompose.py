@@ -28,7 +28,7 @@ SERVICES = [
     SchemaRegistry(),
     # --persistent-kafka-sources can not be enabled due to gh#11711 , gh#11506
     Materialized(options="--persistent-user-tables"),
-    Testdrive(validate_data_dir=False, no_reset=True, seed=1),
+    Testdrive(validate_data_dir=False, no_reset=True, seed=1, default_timeout="300s"),
 ]
 
 all_action_classes = [
