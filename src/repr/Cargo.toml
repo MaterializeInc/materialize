@@ -47,7 +47,6 @@ proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", opti
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 mz-repr = { path = ".", features = ["test-utils"] }
 rand = "0.8.5"
-proptest-derive = { git = "https://github.com/materializeInc/proptest.git" }
 
 [build-dependencies]
 prost-build = "0.9.1"

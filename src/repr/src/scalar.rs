@@ -32,11 +32,9 @@ use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
 // The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
-// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
-// for guidance on using `derive(Arbitrary)` outside of test code.
-
-#[cfg(test)]
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
 use proptest::prelude::*;
 
 /// A single value.
@@ -1753,7 +1751,7 @@ impl<'a> ScalarType {
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 impl Arbitrary for ScalarType {
     type Parameters = ();
     type Strategy = BoxedStrategy<ScalarType>;

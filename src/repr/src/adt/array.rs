@@ -21,9 +21,8 @@ use std::cmp::Ordering;
 use mz_lowertest::MzReflect;
 
 // The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(test)`, so `proptest` can remain a dev-dependency.
-// See https://altsysrq.github.io/proptest-book/proptest-derive/getting-started.html
-// for guidance on using `derive(Arbitrary)` outside of test code.
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
 #[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
 
