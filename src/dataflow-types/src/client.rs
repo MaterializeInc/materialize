@@ -153,23 +153,26 @@ pub struct CreateSourceCommand<T> {
     pub ts_bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
 }
 
+/// A command to render a single source
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderSourcesCommand<T> {
+    /// A human-readable name.
+    pub debug_name: String,
+    /// The dataflow's ID.
+    pub dataflow_id: uuid::Uuid,
+    /// An optional frontier to which the input should be advanced.
+    pub as_of: Option<Antichain<T>>,
+    /// Sources instantiations made available to the dataflow.
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
+}
+
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Render the enumerated sources.
-    ///
-    /// Each source has a name for debugging purposes, an optional "as of" frontier and collection
-    /// of sources to import.
-    RenderSources(
-        Vec<(
-            /* debug_name */ String,
-            /* dataflow_id */ uuid::Uuid,
-            /* as_of */ Option<Antichain<T>>,
-            /* source_imports*/ BTreeMap<GlobalId, SourceInstanceDesc<T>>,
-        )>,
-    ),
+    RenderSources(Vec<RenderSourcesCommand<T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which

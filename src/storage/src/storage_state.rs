@@ -6,7 +6,7 @@
 //! Worker-local state for storage timely instances.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -22,11 +22,11 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 use mz_dataflow_types::client::{
-    CreateSourceCommand, StorageCommand, StorageResponse, TimestampBindingFeedback,
+    CreateSourceCommand, RenderSourcesCommand, StorageCommand, StorageResponse,
+    TimestampBindingFeedback,
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_dataflow_types::SourceInstanceDesc;
 use mz_expr::{GlobalId, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist::client::RuntimeClient;
@@ -117,7 +117,7 @@ pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
 
 impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Sets up the timestamp binding machinery if needed for this source
-    fn setup_timestamp_binding_state(&mut self, source: &CreateSourceCommand<u64>) {
+    fn setup_timestamp_binding_state(&mut self, source: &CreateSourceCommand<Timestamp>) {
         let ts_history = if let SourceConnector::External {
             connector,
             ts_frequency,
@@ -347,16 +347,14 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         }
     }
 
-    fn build_storage_dataflow(
-        &mut self,
-        dataflows: Vec<(
-            String,
-            uuid::Uuid,
-            Option<Antichain<Timestamp>>,
-            BTreeMap<GlobalId, SourceInstanceDesc>,
-        )>,
-    ) {
-        for (debug_name, dataflow_id, as_of, source_imports) in dataflows {
+    fn build_storage_dataflow(&mut self, dataflows: Vec<RenderSourcesCommand<Timestamp>>) {
+        for RenderSourcesCommand {
+            debug_name,
+            dataflow_id,
+            as_of,
+            source_imports,
+        } in dataflows
+        {
             crate::render::build_storage_dataflow(
                 self.timely_worker,
                 &mut self.storage_state,
