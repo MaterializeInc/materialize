@@ -458,16 +458,34 @@ impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
+pub enum CreateConnector<T: AstInfo> {
+    Kafka {
+        broker: String,
+        with_options: Vec<SqlOption<T>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaConnector {
+    Inline { broker: String },
+    Reference { connector: UnresolvedObjectName },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaSourceConnector {
+    pub connector: KafkaConnector,
+    pub topic: String,
+    pub key: Option<Vec<Ident>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector {
     File {
         path: String,
         compression: Compression,
     },
-    Kafka {
-        broker: String,
-        topic: String,
-        key: Option<Vec<Ident>>,
-    },
+    Kafka(KafkaSourceConnector),
     Kinesis {
         arn: String,
     },
@@ -510,10 +528,24 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Kafka { broker, topic, key } => {
-                f.write_str("KAFKA BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
+            CreateSourceConnector::Kafka(KafkaSourceConnector {
+                connector: broker,
+                topic,
+                key,
+            }) => {
+                f.write_str("KAFKA ");
+                match broker {
+                    KafkaConnector::Inline { broker } => {
+                        f.write_str("BROKER '");
+                        f.write_node(&display::escape_single_quote_string(broker));
+                        f.write_str("'");
+                    }
+                    KafkaConnector::Reference { connector } => {
+                        f.write_str("CONNECTOR '");
+                        f.write_node(connector);
+                        f.write_str("'");
+                    }
+                }
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
@@ -584,11 +616,11 @@ impl AstDisplay for CreateSourceConnector {
 }
 impl_display!(CreateSourceConnector);
 
-impl<T: AstInfo> From<&CreateSinkConnector<T>> for ConnectorType {
-    fn from(connector: &CreateSinkConnector<T>) -> ConnectorType {
+impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceConnectorType {
+    fn from(connector: &CreateSinkConnector<T>) -> SourceConnectorType {
         match connector {
-            CreateSinkConnector::Kafka { .. } => ConnectorType::Kafka,
-            CreateSinkConnector::AvroOcf { .. } => ConnectorType::AvroOcf,
+            CreateSinkConnector::Kafka { .. } => SourceConnectorType::Kafka,
+            CreateSinkConnector::AvroOcf { .. } => SourceConnectorType::AvroOcf,
         }
     }
 }

@@ -103,8 +103,8 @@ impl SourceReader for KafkaSourceReader {
 
         let KafkaSourceConnector {
             addrs,
-            topic,
             config_options,
+            topic,
             group_id_prefix,
             cluster_id,
             ..

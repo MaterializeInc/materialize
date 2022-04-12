@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
+use mz_sql_parser::ast::KafkaSourceConnector;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -70,47 +71,59 @@ pub async fn purify_create_source(
 
     let mut file = None;
     match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
-            if !broker.contains(':') {
-                *broker += ":9092";
-            }
+        CreateSourceConnector::Kafka(KafkaSourceConnector {
+            connector: broker,
+            topic,
+            ..
+        }) => {
+            match broker {
+                // Temporary until the rest of the connector plumbing is finished
+                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => {
+                    if !broker.contains(':') {
+                        *broker += ":9092";
+                    }
 
-            // Verify that the provided security options are valid and then test them.
-            config_options = kafka_util::extract_config(&mut with_options_map)?;
-            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+                    // Verify that the provided security options are valid and then test them.
+                    config_options = kafka_util::extract_config(&mut with_options_map)?;
+                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                        .await
+                        .map_err(|e| {
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
+                        })?;
 
-            // Translate `kafka_time_offset` to `start_offset`.
-            match kafka_util::lookup_start_offsets(
-                Arc::clone(&consumer),
-                &topic,
-                &with_options_map,
-                now,
-            )
-            .await?
-            {
-                Some(start_offsets) => {
-                    // Drop `kafka_time_offset`
-                    with_options.retain(|val| match val {
-                        mz_sql_parser::ast::SqlOption::Value { name, .. } => {
-                            name.as_str() != "kafka_time_offset"
+                    // Translate `kafka_time_offset` to `start_offset`.
+                    match kafka_util::lookup_start_offsets(
+                        Arc::clone(&consumer),
+                        &topic,
+                        &with_options_map,
+                        now,
+                    )
+                    .await?
+                    {
+                        Some(start_offsets) => {
+                            // Drop `kafka_time_offset`
+                            with_options.retain(|val| match val {
+                                mz_sql_parser::ast::SqlOption::Value { name, .. } => {
+                                    name.as_str() != "kafka_time_offset"
+                                }
+                                _ => true,
+                            });
+
+                            // Add `start_offset`
+                            with_options.push(mz_sql_parser::ast::SqlOption::Value {
+                                name: mz_sql_parser::ast::Ident::new("start_offset"),
+                                value: mz_sql_parser::ast::Value::Array(
+                                    start_offsets
+                                        .iter()
+                                        .map(|offset| Value::Number(offset.to_string()))
+                                        .collect(),
+                                ),
+                            });
                         }
-                        _ => true,
-                    });
-
-                    // Add `start_offset`
-                    with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                        name: mz_sql_parser::ast::Ident::new("start_offset"),
-                        value: mz_sql_parser::ast::Value::Array(
-                            start_offsets
-                                .iter()
-                                .map(|offset| Value::Number(offset.to_string()))
-                                .collect(),
-                        ),
-                    });
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
@@ -341,7 +354,8 @@ async fn purify_csr_connector_proto(
     envelope: &Envelope,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -392,7 +406,8 @@ async fn purify_csr_connector_avro(
     envelope: &Envelope,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")

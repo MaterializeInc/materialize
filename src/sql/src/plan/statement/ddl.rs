@@ -339,7 +339,12 @@ pub fn plan_create_source(
     }
 
     let (external_connector, encoding) = match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
+        CreateSourceConnector::Kafka(kafka) => {
+            let (broker, topic) = match &kafka.connector {
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker, &kafka.topic),
+                // Temporary until the rest of the connector plumbing is finished
+                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+            };
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
