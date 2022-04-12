@@ -210,7 +210,13 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
 
-<<<<<<< HEAD
+  - id: secrets
+    label: "Secrets"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets
+
   - id: persistence-failpoints
     label: Persistence failpoints
     depends_on: build-x86_64
@@ -230,11 +236,3 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: catalog-compat
           run: catalog-compat
-=======
-  - id: secrets
-    label: "Secrets"
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: secrets
->>>>>>> 2077a9941 (test for storing and deleting secrets from disk)
