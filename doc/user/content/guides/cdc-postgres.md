@@ -199,7 +199,7 @@ If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://doc
 1. Check that the connector is running:
 
     ```bash
-    curl http://$CURRENT_HOST:8083/connectors/inventory-connector/status
+    curl http://$CURRENT_HOST:8083/connectors/your-connector/status
     ```
 
     The first time it connects to a Postgres server, Debezium takes a [consistent snapshot](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-snapshots) of the tables selected for replication, so you should see that the pre-existing records in the replicated table are initially pushed into your Kafka topic:
