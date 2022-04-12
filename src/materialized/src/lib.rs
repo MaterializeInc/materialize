@@ -16,7 +16,9 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::fs::Permissions;
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -389,6 +391,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             fs::create_dir_all(&secrets_storage).with_context(|| {
                 format!("creating secrets directory: {}", secrets_storage.display())
             })?;
+            let permissions = Permissions::from_mode(0o700);
+            fs::set_permissions(secrets_storage.clone(), permissions)?;
             Box::new(FilesystemSecretsController::new(secrets_storage))
         }
         Some(SecretsControllerConfig::Kubernetes { context }) => Box::new(

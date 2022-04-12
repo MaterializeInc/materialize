@@ -9,8 +9,9 @@
 use anyhow::Error;
 use mz_secrets::{SecretOp, SecretsController};
 use std::fs;
-use std::fs::File;
+use std::fs::{File, Permissions};
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 pub struct FilesystemSecretsController {
@@ -32,7 +33,9 @@ impl SecretsController for FilesystemSecretsController {
             match op {
                 SecretOp::Ensure { id, contents } => {
                     // create will override an existing file
-                    let mut file = File::create(self.secrets_storage_path.join(format!("{}", id)))?;
+                    let file_path = self.secrets_storage_path.join(format!("{}", id));
+                    let mut file = File::create(file_path.clone())?;
+                    file.set_permissions(Permissions::from_mode(0o600))?;
                     file.write_all(contents)?;
                     file.sync_all()?;
                 }
