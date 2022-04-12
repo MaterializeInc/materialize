@@ -42,9 +42,9 @@ use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
-    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
-    PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
-    SourceConfig,
+    self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
+    KinesisSourceReader, PersistentTimestampBindingsConfig, PostgresSourceReader,
+    PubNubSourceReader, S3SourceReader, SourceConfig,
 };
 use crate::storage_state::LocalInput;
 use crate::storage_state::StorageState;
@@ -335,14 +335,15 @@ where
                         ((SourceType::Delimited(ok), ts, err), cap)
                     }
                     ExternalSourceConnector::Kinesis(_) => {
-                        let ((ok, ts, err), cap) = source::create_source::<_, KinesisSourceReader>(
-                            source_config,
-                            &connector,
-                            source_persist_config
-                                .as_ref()
-                                .map(|config| config.bindings_config.clone()),
-                            storage_state.aws_external_id.clone(),
-                        );
+                        let ((ok, ts, err), cap) =
+                            source::create_source::<_, DelimitedValueSource<KinesisSourceReader>>(
+                                source_config,
+                                &connector,
+                                source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.bindings_config.clone()),
+                                storage_state.aws_external_id.clone(),
+                            );
                         ((SourceType::Delimited(ok), ts, err), cap)
                     }
                     ExternalSourceConnector::S3(_) => {

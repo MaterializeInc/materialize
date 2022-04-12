@@ -149,6 +149,70 @@ where
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
 }
 
+/// A wrapper that converts a delimited source reader that only provides
+/// values into a key/value reader whose key is always None
+pub struct DelimitedValueSource<S>(S);
+
+impl<S> SourceReader for DelimitedValueSource<S>
+where
+    S: SourceReader<Key = (), Value = Option<Vec<u8>>>,
+{
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+
+    fn new(
+        source_name: String,
+        source_id: SourceInstanceId,
+        worker_id: usize,
+        worker_count: usize,
+        consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        aws_external_id: AwsExternalId,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        encoding: SourceDataEncoding,
+        logger: Option<Logger>,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+    ) -> Result<Self, anyhow::Error> {
+        S::new(
+            source_name,
+            source_id,
+            worker_id,
+            worker_count,
+            consumer_activator,
+            connector,
+            aws_external_id,
+            restored_offsets,
+            encoding,
+            logger,
+            metrics,
+        )
+        .map(Self)
+    }
+
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+        match self.0.get_next_message()? {
+            NextMessage::Ready(SourceMessage {
+                key: _,
+                value,
+                partition,
+                offset,
+                upstream_time_millis,
+                headers,
+            }) => Ok(NextMessage::Ready(SourceMessage {
+                key: None,
+                value,
+                partition,
+                offset,
+                upstream_time_millis,
+                headers,
+            })),
+            NextMessage::Pending => Ok(NextMessage::Pending),
+            NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
+            NextMessage::Finished => Ok(NextMessage::Finished),
+        }
+    }
+}
+
 /// The output of the decoding operator
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct DecodeResult {
