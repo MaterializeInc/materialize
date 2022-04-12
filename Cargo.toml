@@ -82,6 +82,11 @@ rustc-demangle = { opt-level = 3 }
 # production installations, but we still want useful crash reports.
 debug = 1
 
+# Use this section only to change the source of dependencies that might
+# also appear as transitive dependencies of other external dependencies in
+# the dependency graph. For everything else (e.g. rust-postgres, rdkafka,
+# differential-dataflow, proptest, timely) set the `git` sourcce
+# direclty in each dependency entry.
 [patch.crates-io]
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
 parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }

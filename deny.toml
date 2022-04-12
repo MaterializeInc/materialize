@@ -152,7 +152,7 @@ allow-git = [
     "https://github.com/MaterializeInc/parquet-format-rs.git",
 
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
-    "https://github.com/materializeInc/proptest.git",
+    "https://github.com/MaterializeInc/proptest.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.
