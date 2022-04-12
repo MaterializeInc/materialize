@@ -46,8 +46,8 @@ sha-1 = "0.10.0"
 sha2 = "0.10.2"
 uncased = "0.9.6"
 uuid = "0.8.2"
-proptest = { git = "https://github.com/materializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
-proptest-derive = { git = "https://github.com/materializeInc/proptest.git", optional = true }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", optional = true }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }

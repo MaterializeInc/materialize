@@ -5153,7 +5153,7 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.0.0"
-source = "git+https://github.com/materializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
+source = "git+https://github.com/MaterializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -5169,7 +5169,7 @@ dependencies = [
 [[package]]
 name = "proptest-derive"
 version = "0.3.0"
-source = "git+https://github.com/materializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
+source = "git+https://github.com/MaterializeInc/proptest.git#7bb86b288150850657052a9f08ebe52e999c4369"
 dependencies = [
  "proc-macro2",
  "quote",
