@@ -11,11 +11,18 @@
 
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
+use rand::prelude::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
+use crate::location::{
+    Atomicity, Blob, BlobMulti, BlobRead, Consensus, ExternalError, LockInfo, Log, SeqNo,
+    VersionedData,
+};
 
 #[derive(Debug)]
 struct UnreliableCore {
@@ -207,6 +214,157 @@ where
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.handle.check_unavailable("blob delete")?;
         self.blob.delete(key).await
+    }
+}
+
+/// An unreliable delegate to [BlobMulti].
+#[derive(Debug)]
+pub struct UnreliableBlobMulti<B> {
+    rng: tokio::sync::Mutex<SmallRng>,
+    blob: B,
+}
+
+impl<B> UnreliableBlobMulti<B> {
+    /// Returns a new [UnreliableBlobMulti].
+    ///
+    /// TODO: Once we turn down the old persist API, return an
+    /// [UnreliableHandle] with the previous totally available or unavailable
+    /// behavior, plus the new partially available behavior
+    pub fn new_from_seed(seed: u64, blob: B) -> Self {
+        UnreliableBlobMulti {
+            rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
+            blob,
+        }
+    }
+
+    async fn should_happen(&self) -> bool {
+        // If necessary, we could make this configurable.
+        const SHOULD_HAPPEN_P: f64 = 0.5;
+        self.rng.lock().await.gen_bool(SHOULD_HAPPEN_P)
+    }
+
+    async fn should_timeout(&self) -> bool {
+        // If necessary, we could make this configurable.
+        const SHOULD_TIMEOUT_P: f64 = 0.5;
+        self.rng.lock().await.gen_bool(SHOULD_TIMEOUT_P)
+    }
+}
+
+#[async_trait]
+impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
+    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        if self.should_happen().await {
+            let res = self.blob.get(deadline, key).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+
+    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
+        if self.should_happen().await {
+            let res = self.blob.list_keys(deadline).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+
+    async fn set(
+        &self,
+        deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        if self.should_happen().await {
+            let res = self.blob.set(deadline, key, value, atomic).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+
+    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        if self.should_happen().await {
+            let res = self.blob.delete(deadline, key).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+}
+
+/// An unreliable delegate to [Consensus].
+#[derive(Debug)]
+pub struct UnreliableConsensus<C> {
+    rng: tokio::sync::Mutex<SmallRng>,
+    consensus: C,
+}
+
+impl<C> UnreliableConsensus<C> {
+    /// Returns a new [UnreliableConsensus].
+    ///
+    /// TODO: Once we turn down the old persist API, return an
+    /// [UnreliableHandle] with the previous totally available or unavailable
+    /// behavior, plus the new partially available behavior
+    pub fn new_from_seed(seed: u64, consensus: C) -> Self {
+        UnreliableConsensus {
+            rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
+            consensus,
+        }
+    }
+
+    async fn should_happen(&self) -> bool {
+        // If necessary, we could make this configurable.
+        const SHOULD_HAPPEN_P: f64 = 0.5;
+        self.rng.lock().await.gen_bool(SHOULD_HAPPEN_P)
+    }
+
+    async fn should_timeout(&self) -> bool {
+        // If necessary, we could make this configurable.
+        const SHOULD_TIMEOUT_P: f64 = 0.5;
+        self.rng.lock().await.gen_bool(SHOULD_TIMEOUT_P)
+    }
+}
+
+#[async_trait]
+impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
+    async fn head(
+        &self,
+        key: &str,
+        deadline: Instant,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        if self.should_happen().await {
+            let res = self.consensus.head(key, deadline).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        deadline: Instant,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+        if self.should_happen().await {
+            let res = self
+                .consensus
+                .compare_and_set(key, deadline, expected, new)
+                .await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
     }
 }
 
