@@ -1751,6 +1751,8 @@ impl<'a> ScalarType {
     }
 }
 
+// See the chapter "Generating Recurisve Data" from the proptest book:
+// https://altsysrq.github.io/proptest-book/proptest/tutorial/recursive.html
 #[cfg(feature = "test-utils")]
 impl Arbitrary for ScalarType {
     type Parameters = ();
