@@ -44,6 +44,9 @@ use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_pid_file::PidFile;
+use mz_secrets::SecretsController;
+use mz_secrets_filesystem::FilesystemSecretsController;
+use mz_secrets_kubernetes::KubernetesSecretsController;
 
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
@@ -128,6 +131,10 @@ pub struct Config {
     /// Optional configuration for a service orchestrator.
     pub orchestrator: Option<OrchestratorConfig>,
 
+    // === Secrets Storage options. ===
+    /// Optional configuration for a secrets controller.
+    pub secrets_controller: Option<SecretsControllerConfig>,
+
     // === AWS options. ===
     /// An [external ID] to be supplied to all AWS AssumeRole operations.
     ///
@@ -201,6 +208,18 @@ pub enum OrchestratorConfig {
         config: KubernetesOrchestratorConfig,
         /// The dataflowd image reference to use.
         dataflowd_image: String,
+    },
+}
+
+/// Configuration for the service orchestrator.
+#[derive(Debug, Clone)]
+pub enum SecretsControllerConfig {
+    LocalFileSystem,
+    // Create a Kubernetes Controller.
+    Kubernetes {
+        /// The name of a Kubernetes context to use, if the Kubernetes configuration
+        /// is loaded from the local kubeconfig.
+        context: String,
     },
 }
 
@@ -363,6 +382,22 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
+    // Initialize secrets controller.
+    let secrets_controller: Box<dyn SecretsController> = match config.secrets_controller {
+        None | Some(SecretsControllerConfig::LocalFileSystem) => {
+            let secrets_storage = config.data_directory.join("secrets");
+            fs::create_dir_all(&secrets_storage).with_context(|| {
+                format!("creating secrets directory: {}", secrets_storage.display())
+            })?;
+            Box::new(FilesystemSecretsController::new(secrets_storage))
+        }
+        Some(SecretsControllerConfig::Kubernetes { context }) => Box::new(
+            KubernetesSecretsController::new(context)
+                .await
+                .context("connecting to kubernetes")?,
+        ),
+    };
+
     // Initialize dataflow server.
     let dataflow_config = mz_dataflow::Config {
         workers,
@@ -442,6 +477,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         persister,
         now: config.now,
+        secrets_controller,
     })
     .await?;
 

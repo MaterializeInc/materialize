@@ -38,6 +38,7 @@ mz-stash = { path = "../stash" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-transform = { path = "../transform" }
+mz-secrets = { path = "../secrets"}
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { version = "0.13.0", default-features = false }
 prost = "0.9.0"

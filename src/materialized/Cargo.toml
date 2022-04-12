@@ -66,6 +66,9 @@ mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
+mz-secrets-filesystem = { path = "../secrets-filesystem" }
+mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
 mz-sql = { path = "../sql" }
 nix = "0.23.1"
 num_cpus = "1.13.1"
