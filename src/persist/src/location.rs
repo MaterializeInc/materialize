@@ -112,10 +112,10 @@ impl std::fmt::Display for ExternalError {
 
 impl std::error::Error for ExternalError {}
 
+/// An impl of PartialEq purely for convenience in tests and debug assertions.
 #[cfg(test)]
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
-        // TODO: What are the right semantics here?
         self.to_string() == other.to_string()
     }
 }

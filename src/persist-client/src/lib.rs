@@ -20,6 +20,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
@@ -30,6 +31,7 @@ use timely::progress::Timestamp;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
+use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
@@ -121,7 +123,11 @@ impl Location {
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+///
+/// The [std::string::ToString::to_string] format of this may be stored durably
+/// or otherwise used as an interchange format. It can be parsed back using
+/// [str::parse] or [std::str::FromStr::from_str].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -133,6 +139,25 @@ impl std::fmt::Display for ShardId {
 impl std::fmt::Debug for ShardId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ShardId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for ShardId {
+    type Err = InvalidUsage;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let u = match s.strip_prefix('s') {
+            Some(x) => x,
+            None => {
+                return Err(InvalidUsage(anyhow!(
+                    "invalid ShardId {}: incorrect prefix",
+                    s
+                )))
+            }
+        };
+        let uuid = Uuid::parse_str(&u)
+            .map_err(|err| InvalidUsage(anyhow!("invalid ShardId {}: {}", s, err)))?;
+        Ok(ShardId(*uuid.as_bytes()))
     }
 }
 
@@ -226,6 +251,8 @@ const NO_TIMEOUT: Duration = Duration::from_secs(1_000_000);
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use timely::progress::Antichain;
 
@@ -455,6 +482,30 @@ mod tests {
         assert_eq!(
             format!("{:?}", ReaderId([0u8; 16])),
             "ReaderId(00000000-0000-0000-0000-000000000000)"
+        );
+
+        // ShardId can be parsed back from its Display/to_string format.
+        assert_eq!(
+            ShardId::from_str("s00000000-0000-0000-0000-000000000000"),
+            Ok(ShardId([0u8; 16]))
+        );
+        assert_eq!(
+            ShardId::from_str("x00000000-0000-0000-0000-000000000000"),
+            Err(InvalidUsage(anyhow!(
+                "invalid ShardId x00000000-0000-0000-0000-000000000000: incorrect prefix"
+            )))
+        );
+        assert_eq!(
+            ShardId::from_str("s0"),
+            Err(InvalidUsage(anyhow!(
+                "invalid ShardId s0: invalid length: expected one of [36, 32], found 1"
+            )))
+        );
+        assert_eq!(
+            ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
+            Err(InvalidUsage(anyhow!(
+                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid length: expected one of [36, 32], found 39"
+            )))
         );
     }
 }
