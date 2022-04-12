@@ -136,6 +136,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn CatalogComputeInstance, CatalogError>;
 
+    // /// Resolves the named connector
+    // fn resolve_connector(
+    //     &self,
+    //     connector_name: &PartialObjectName,
+    // ) -> Result<&dyn CatalogConnector, CatalogError>;
+
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the
@@ -267,6 +273,15 @@ pub trait CatalogComputeInstance {
     fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
 }
 
+/// A connector in a [`SessionCatalog`]
+pub trait CatalogConnector {
+    /// Returns the connection URI for this connector regardless of type
+    fn uri(&self) -> String;
+
+    /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
+    fn options(&self) -> std::collections::BTreeMap<String, String>;
+}
+
 /// An item in a [`SessionCatalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
@@ -298,6 +313,12 @@ pub trait CatalogItem {
     /// If the catalog item is not of a type that contains a `SourceConnector`
     /// (i.e., anything other than sources), it returns an error.
     fn source_connector(&self) -> Result<&SourceConnector, CatalogError>;
+
+    /// Returns the resolved connector, called a catalog connector to disambiguate
+    ///
+    /// If the catalog item is not of a type that implements `CatalogConnector`
+    /// it returns an error
+    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;

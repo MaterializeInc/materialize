@@ -9,6 +9,7 @@
 #
 # Test basic connector functionality
 
+# Test core functionality by creating, introspecting and dropping a connector
 > CREATE CONNECTOR testconn
   FOR KAFKA BROKER 'kafka:1234'
   WITH (security_protocol = 'SASL_SSL', sasl_mechanisms = 'PLAIN')

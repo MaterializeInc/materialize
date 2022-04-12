@@ -9,8 +9,9 @@
 
 use crate::ast::Expr;
 use crate::catalog::{
-    CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
-    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
+    CatalogComputeInstance, CatalogConfig, CatalogConnector, CatalogDatabase, CatalogError,
+    CatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference,
+    SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
@@ -140,6 +141,10 @@ impl CatalogItem for TestCatalogItem {
     }
 
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
+        unimplemented!()
+    }
+
+    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError> {
         unimplemented!()
     }
 }

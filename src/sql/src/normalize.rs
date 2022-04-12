@@ -26,9 +26,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
-    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
+    KafkaConnector, KafkaSourceConnector, Op, Query, Statement, TableFactor, TableFunction,
+    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -322,7 +322,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector: _,
+            connector,
             with_options,
             format: _,
             include_metadata: _,
@@ -349,6 +349,19 @@ pub fn create_statement(
                     }
                 }
             }
+            if let mz_sql_parser::ast::CreateSourceConnector::Kafka(KafkaSourceConnector {
+                connector: KafkaConnector::Reference { connector },
+                ..
+            }) = connector
+            {
+                *connector = unresolve(
+                    scx.catalog.resolve_full_name(
+                        &scx.catalog
+                            .resolve_item(&unresolved_object_name(connector.clone())?)?
+                            .name(),
+                    ),
+                );
+            };
         }
 
         Statement::CreateTable(CreateTableStatement {

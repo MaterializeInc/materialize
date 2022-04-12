@@ -20,7 +20,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
@@ -38,9 +38,9 @@ use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
-    IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogConnector, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogSchema,
+    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -869,6 +869,16 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => Ok(&source.connector),
             _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
+        }
+    }
+
+    pub fn catalog_connector(
+        &self,
+        name: &QualifiedObjectName,
+    ) -> Result<&dyn CatalogConnector, SqlCatalogError> {
+        match &self {
+            CatalogItem::Connector(conn) => Ok(conn),
+            _ => Err(SqlCatalogError::UnknownConnector(name.item.clone())),
         }
     }
 
@@ -1850,6 +1860,19 @@ impl Catalog {
             .get(name)
             .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
         Ok(&self.state.compute_instances_by_id[id])
+    }
+
+    pub fn resolve_connector(
+        &self,
+        connector: &PartialObjectName,
+        conn_id: u32,
+    ) -> Result<&Connector, SqlCatalogError> {
+        debug!(%connector, "resolve connector");
+        let entry = self.resolve(|schema| &schema.items, None, &vec![], connector, conn_id)?;
+        match entry.item() {
+            CatalogItem::Connector(ctr) => Ok(ctr),
+            _ => Err(SqlCatalogError::UnknownConnector(connector.to_string())),
+        }
     }
 
     /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
@@ -3201,6 +3224,17 @@ impl SessionCatalog for ConnCatalog<'_> {
             })
     }
 
+    // fn resolve_connector(
+    //     &self,
+    //     connector: &PartialObjectName,
+    // ) -> Result<&dyn mz_sql::catalog::CatalogConnector, SqlCatalogError> {
+    //     // self.catalog.resolve_item(connector).map(|entry| {entry as &dyn mz_sql::catalog::CatalogConnector})
+    //     self.catalog
+    //         .resolve_connector(connector, self.conn_id)
+    //         .map(|entry| entry as &dyn mz_sql::catalog::CatalogConnector)
+    //     // Err(SqlCatalogError::UnknownConnector(connector.to_string())
+    // }
+
     fn resolve_item(
         &self,
         name: &PartialObjectName,
@@ -3312,6 +3346,20 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
     }
 }
 
+impl mz_sql::catalog::CatalogConnector for Connector {
+    fn uri(&self) -> String {
+        match &self.connector {
+            ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+        }
+    }
+
+    fn options(&self) -> std::collections::BTreeMap<String, String> {
+        match &self.connector {
+            ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
+        }
+    }
+}
+
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &QualifiedObjectName {
         self.name()
@@ -3335,6 +3383,15 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         Ok(self.source_connector()?)
+    }
+
+    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, SqlCatalogError> {
+        match self.item() {
+            CatalogItem::Connector(conn) => Ok(conn),
+            _ => Err(SqlCatalogError::UnknownConnector(
+                "Item is not a connector".to_string(),
+            )),
+        }
     }
 
     fn create_sql(&self) -> &str {

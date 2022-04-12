@@ -1129,6 +1129,14 @@ pub mod sources {
         },
     }
 
+    impl ConnectorInner {
+        pub fn uri(&self) -> String {
+            match self {
+                ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+            }
+        }
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum Compression {
         Gzip,

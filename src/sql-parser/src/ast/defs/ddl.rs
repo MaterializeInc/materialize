@@ -559,9 +559,8 @@ impl AstDisplay for CreateSourceConnector {
                         f.write_str("'");
                     }
                     KafkaConnector::Reference { connector } => {
-                        f.write_str("CONNECTOR '");
+                        f.write_str("CONNECTOR ");
                         f.write_node(connector);
-                        f.write_str("'");
                     }
                 }
                 f.write_str(" TOPIC '");
