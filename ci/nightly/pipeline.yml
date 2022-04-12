@@ -34,6 +34,8 @@ steps:
           - { value: feature-benchmark-persistence }
           - { value: aws-config }
           - { value: zippy }
+          - { value: persistence-failpoints }
+          - { value: catalog-compat }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -206,3 +208,23 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
+
+  - id: persistence-failpoints
+    label: Persistence failpoints
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: failpoints
+
+  - id: catalog-compat
+    label: Catalog compatibility test
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: catalog-compat
+          run: catalog-compat

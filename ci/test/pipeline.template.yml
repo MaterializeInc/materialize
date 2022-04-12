@@ -131,16 +131,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
 
-  - id: persistence-failpoints
-    label: Persistence failpoints
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-          run: failpoints
-
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
@@ -228,16 +218,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-ingest-open-loop
           run: smoke-test
-
-  - id: catalog-compat
-    label: Catalog compatibility test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: catalog-compat
-          run: catalog-compat
 
   - id: restarts
     label: Restart test
