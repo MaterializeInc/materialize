@@ -76,7 +76,7 @@ pub trait Transform: std::fmt::Debug {
     ) -> Result<(), TransformError>;
     /// A string describing the transform.
     ///
-    /// This is useful mainly when iterating through many `Box<Tranform>`
+    /// This is useful mainly when iterating through many `Box<Transform>`
     /// and one wants to judge progress before some defect occurs.
     fn debug(&self) -> String {
         format!("{:?}", self)

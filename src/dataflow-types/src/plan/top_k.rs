@@ -58,7 +58,7 @@ impl TopKPlan {
             // For monotonic inputs, we are able to retract inputs that can no longer be produced
             // as outputs. Any inputs beyond `offset + limit` will never again be produced as
             // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-            // these removeable records are those in the input not produced in the output.
+            // these removable records are those in the input not produced in the output.
             // TODO: consider broadening this optimization to `offset > 0` by first filtering
             // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
             // of `offset` and `limit`, discarding only the records not produced in the intermediate

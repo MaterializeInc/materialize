@@ -67,7 +67,7 @@ where
 
                         // Step (1) above)
 
-                        // Because `sort_by_key` is stable, it will not reorder equal elements. Therefore, elements with the smae
+                        // Because `sort_by_key` is stable, it will not reorder equal elements. Therefore, elements with the same
                         // key will stay grouped together.
                         buf.sort_by_key(|(t, _k, diff, _row)| (*t, *diff));
                         for ((t, k), group) in &buf

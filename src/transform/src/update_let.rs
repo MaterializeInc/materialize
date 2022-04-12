@@ -22,7 +22,7 @@ use mz_repr::RelationType;
 
 /// Refreshes identifiers and types for local let bindings.
 ///
-/// The analysis is caapable of handling shadowing of identifiers, which
+/// The analysis is capable of handling shadowing of identifiers, which
 /// *shouldn't* happen, but if it does and we wanted to kick and scream,
 /// this is one place we could do that. Instead, we'll just come up with
 /// guaranteed unique names for each let binding.

@@ -62,7 +62,7 @@ pub struct ExplanationNode<'a> {
     pub typ: Option<RelationType>,
     /// The ID of the linear chain to which this node belongs.
     pub chain: u64,
-    /// Nexted explanations for any subqueries in the node.
+    /// Nested explanations for any subqueries in the node.
     pub subqueries: Vec<Explanation<'a>>,
 }
 

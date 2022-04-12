@@ -37,7 +37,7 @@ pub mod join_input_mapper;
 
 /// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
 ///
-/// The recursion limit must be large enough to accomodate for the linear representation
+/// The recursion limit must be large enough to accommodate for the linear representation
 /// of some pathological but frequently occurring query fragments.
 ///
 /// For example, in MIR we could have long chains of
@@ -256,7 +256,7 @@ impl MirRelationExpr {
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 if let MirRelationExpr::Let { body, .. } = &e {
                     // Do not traverse the value sub-graph, since it's not relevant for
-                    // determing the relation type of Let operators.
+                    // determining the relation type of Let operators.
                     Some(vec![&*body])
                 } else {
                     None
@@ -661,7 +661,7 @@ impl MirRelationExpr {
                 // If there are A, B, each with a unique `key` such that
                 // we are looking at
                 //
-                //     A.proj(set_containg_key) + (B - A.proj(key)).map(stuff)
+                //     A.proj(set_containing_key) + (B - A.proj(key)).map(stuff)
                 //
                 // Then we can report `key` as a unique key.
                 //
@@ -833,7 +833,7 @@ impl MirRelationExpr {
         }
     }
 
-    /// Retain only the rows satisifying each of several predicates.
+    /// Retain only the rows satisfying each of several predicates.
     pub fn filter<I>(self, predicates: I) -> Self
     where
         I: IntoIterator<Item = MirScalarExpr>,

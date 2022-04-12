@@ -130,7 +130,7 @@ pub fn canonicalize_equivalences(
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
-    // Fuse equivalence classes containing the same exprssion.
+    // Fuse equivalence classes containing the same expression.
     for index in 1..equivalences.len() {
         for inner in 0..index {
             if equivalences[index]

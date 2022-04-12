@@ -393,7 +393,7 @@ async fn purify_csr_connector_proto(
         }
         Some(CsrSeedCompiledOrLegacy::Compiled(..)) => (),
         Some(CsrSeedCompiledOrLegacy::Legacy(..)) => {
-            unreachable!("Should not be able to purify CsrCeedCompiledOrLegacy::Legacy")
+            unreachable!("Should not be able to purify CsrSeedCompiledOrLegacy::Legacy")
         }
     }
 
@@ -547,7 +547,7 @@ pub async fn purify_csv(
                 bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
             }
             CreateSourceConnector::S3 { .. } => {
-                bail!("CSV WITH HEADER for S3 sources requiers specifying the header columns")
+                bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
             }
             _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),
         },

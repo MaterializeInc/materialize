@@ -89,7 +89,7 @@ where
     ///
     /// Blocks until the client sends a complete message. If the client
     /// terminates the stream, returns `None`. Returns an error if the client
-    /// sends a malformatted message or if the connection underlying is broken.
+    /// sends a malformed message or if the connection underlying is broken.
     pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
         let message = self.inner.try_next().await?;
         match &message {
@@ -668,7 +668,7 @@ fn decode_copy_fail(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 ///
 /// The API provided is very similar to [`bytes::Buf`], but operations return
 /// errors rather than panicking. This is important for safety, as we don't want
-/// to crash if the user sends us malformatted pgwire messages.
+/// to crash if the user sends us malformed pgwire messages.
 ///
 /// There are also some special-purpose methods, like [`Cursor::read_cstr`],
 /// that are specific to pgwire messages.

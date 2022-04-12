@@ -726,7 +726,7 @@ pub mod client {
     impl Drop for DropReplay {
         fn drop(&mut self) {
             if let Some(message) = self.message.take() {
-                // Igore errors on send as it indicates the client is no longer running
+                // Ignore errors on send as it indicates the client is no longer running
                 let _ = self.announce_tx.send(message);
             }
         }

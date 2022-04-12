@@ -13,7 +13,7 @@ use byteorder::{BigEndian, ByteOrder};
 /// Extracts the schema_id placed in front of the serialized message by the confluent stack
 /// Optionally expect an empty
 ///
-/// This function returns the schema_id and a sublice of the rest of the buffer
+/// This function returns the schema_id and a subslice of the rest of the buffer
 fn extract_schema_id<'buf>(buf: &'buf [u8], protocol: &str) -> Result<(i32, &'buf [u8])> {
     // The first byte is a magic byte (0) that indicates the Confluent
     // serialization format version, and the next four bytes are a big

@@ -173,7 +173,7 @@ where
             // DataflowError again afterwards, such that the returned Streams have the same error
             // type.
             //
-            // This also means that we cannot push MFPs into the upsert operatot, as that would
+            // This also means that we cannot push MFPs into the upsert operator, as that would
             // mean persisting EvalErrors, which, also icky.
             let mut row_buf = Row::default();
             let stream = stream.flat_map(move |decode_result| {
@@ -272,7 +272,7 @@ where
 /// This method takes decoded datums and prepares as output
 /// a row which contains only those positions of `position_or`.
 /// If any predicate is failed, no row is produced, and if an
-/// error is encounted it is returned instead.
+/// error is encountered it is returned instead.
 fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],

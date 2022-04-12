@@ -9,7 +9,7 @@
 
 //! Traits and types for controller of the dataflow subsystem.
 
-// This appears to be defective at the moment, with false positiives
+// This appears to be defective at the moment, with false positives
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
@@ -202,7 +202,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
 impl<T> ComputeCommand<T> {
     /// Indicates which global ids should start and cease frontier tracking.
     ///
-    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// Identifiers added to `start` will install frontier tracking, and identifiers
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
@@ -252,7 +252,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     /// not greater or equal to that compaction frontier.
     ///
     /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
-    /// response or cancelation.
+    /// response or cancellation.
     ///
     /// Returns the number of distinct commands that remain.
     pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {

@@ -79,7 +79,7 @@ impl CodegenBuf {
     ///
     /// Specifically, if `s` is empty, the method writes the line `{` into the
     /// buffer; otherwise writes the line `s {` into the buffer at the current
-    /// identation level. Then it increments the buffer's indentation level.
+    /// indentation level. Then it increments the buffer's indentation level.
     pub fn start_block<S>(&mut self, s: S)
     where
         S: AsRef<str>,
@@ -94,7 +94,7 @@ impl CodegenBuf {
     }
 
     /// Closes the current indented block and starts a new one at the same
-    /// identation level.
+    /// indentation level.
     ///
     /// Specifically, the method writes the line `} s {` into the buffer at one
     /// less than the buffer's indentation level.

@@ -35,7 +35,7 @@ pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
         self,
         scope: &mut S,
         name: &str,
-        perid: Duration,
+        period: Duration,
         activator: A,
     ) -> Stream<S, D>;
 }

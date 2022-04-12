@@ -719,7 +719,7 @@ impl ParamType {
             | MapAnyCompatible
             | NonVecAny
             // In PG, RecordAny isn't polymorphic even though it offers
-            // polymoprhic behavior. For more detail, see
+            // polymorphic behavior. For more detail, see
             // `PolymorphicCompatClass::StructuralEq`.
             | RecordAny => true,
             Any | Plain(_) => false,
@@ -897,7 +897,7 @@ impl GetReturnType for HirScalarExpr {
             }
             HirScalarExpr::CallVariadic { func, .. } => func.output_type(output_type_inputs),
             other => unreachable!(
-                "unexepected HirScalarExpr in Operation<HirScalarExpr>::return_type: {:?}",
+                "unexpected HirScalarExpr in Operation<HirScalarExpr>::return_type: {:?}",
                 other
             ),
         };
@@ -930,7 +930,7 @@ impl GetReturnType for TableFuncPlan {
                 .map(|col| col.scalar_type)
                 .collect(),
             other => unreachable!(
-                "unexepected HirRelationExpr in Operation<TableFuncPlan>::return_type: {:?}",
+                "unexpected HirRelationExpr in Operation<TableFuncPlan>::return_type: {:?}",
                 other
             ),
         };
@@ -1251,7 +1251,7 @@ fn find_match<'a, R: std::fmt::Debug>(
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum PolymorphicCompatClass {
-    /// Represents the older "Any"-style matching of PG polymoprhic types, which
+    /// Represents the older "Any"-style matching of PG polymorphic types, which
     /// constrains all types to be of the same type, i.e. does not attempt to
     /// promote parameters to a best common type.
     BaseEq,
@@ -1364,7 +1364,7 @@ impl PolymorphicSolution {
         }
     }
 
-    /// Determines the desired type of polymoprhic compatibility, as well as the
+    /// Determines the desired type of polymorphic compatibility, as well as the
     /// values to determine a polymorphic solution.
     fn track_seen(&mut self, param: &ParamType, seen: Option<ScalarType>) {
         use ParamType::*;
@@ -1380,7 +1380,7 @@ impl PolymorphicSolution {
             o => {
                 assert!(
                     !o.is_polymorphic(),
-                    "polymophic parameters must track types they encounter to determine polymorphic solution"
+                    "polymorphic parameters must track types they encounter to determine polymorphic solution"
                 );
                 return;
             }
@@ -1536,7 +1536,7 @@ fn coerce_args_to_types(
                 CoercibleScalarExpr::LiteralString(_) => {
                     sql_bail!("input of anonymous composite types is not implemented");
                 }
-                // By passing the creation of the polymorphic soution, we've
+                // By passing the creation of the polymorphic solution, we've
                 // already ensured that all of the record types are
                 // intrinsically well-typed enough to move onto the next step.
                 _ => cexpr.type_as_any(ecx)?,

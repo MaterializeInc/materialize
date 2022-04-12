@@ -194,7 +194,7 @@ pub struct BucketedPlan {
     pub skips: Vec<usize>,
     /// The number of buckets in each layer of the reduction tree. Should
     /// be decreasing, and ideally, a power of two so that we can easily
-    /// distribute values to buckets with `value.hashed() % bucketes[layer]`.
+    /// distribute values to buckets with `value.hashed() % buckets[layer]`.
     pub buckets: Vec<u64>,
 }
 

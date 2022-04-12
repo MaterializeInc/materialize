@@ -58,7 +58,7 @@ impl ValType {
     }
 }
 
-// Describes Kafka cluster configurations users can suppply using `CREATE
+// Describes Kafka cluster configurations users can supply using `CREATE
 // SOURCE...WITH (option_list)`.
 struct Config {
     name: &'static str,
@@ -364,7 +364,7 @@ pub async fn lookup_start_offsets(
 
     // Lookup offsets
     // TODO(guswynn): see if we can add broker to this name
-    task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
+    task::spawn_blocking(|| format!("kafka_lookup_start_offsets:{topic}"), {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
@@ -398,7 +398,7 @@ pub async fn lookup_start_offsets(
 
             if start_offsets.len() != num_partitions {
                 bail!(
-                    "Expected offsets for {} partitions, but recevied {}",
+                    "Expected offsets for {} partitions, but received {}",
                     num_partitions,
                     start_offsets.len(),
                 );
@@ -413,7 +413,7 @@ pub async fn lookup_start_offsets(
 // Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
 // If that ever changes, we will want to first collect all pids that have no
 // offset for a given timestamp and then do a single request (instead of doing
-// a request for each paritition individually).
+// a request for each partition individually).
 fn fetch_end_offset(
     consumer: &BaseConsumer<KafkaErrCheckContext>,
     topic: &str,

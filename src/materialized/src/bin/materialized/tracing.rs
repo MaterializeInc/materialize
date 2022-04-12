@@ -69,7 +69,7 @@ where
 {
     if let Some(endpoint) = opentelemetry_endpoint {
         // Manually setup an openssl-backed, h2, proxied `Channel`,
-        // and setup the timeout accoding to
+        // and setup the timeout according to
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
         let endpoint = Endpoint::from_shared(endpoint.clone())?.timeout(Duration::from_secs(
             opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,

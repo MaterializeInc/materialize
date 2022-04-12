@@ -242,7 +242,7 @@ impl SourceReader for KafkaSourceReader {
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
         while attempts < consumer_count {
-            // First, see if we have a message aleady, either from polling the consumer, above, or
+            // First, see if we have a message already, either from polling the consumer, above, or
             // from polling the partition queues below.
             if let NextMessage::Ready(_) = next_message {
                 // Found a message, exit the loop and return message
@@ -569,7 +569,7 @@ fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
-    // Consumer group ID. librdkafka requires this, and we use offset commiting
+    // Consumer group ID. librdkafka requires this, and we use offset committing
     // to provide a way for users to monitor ingest progress (though we do not
     // rely on the committed offsets for any functionality)
     //

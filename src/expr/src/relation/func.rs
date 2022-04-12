@@ -1057,7 +1057,7 @@ fn generate_series_ts(
     }
     let rev = normalized_step < 0;
 
-    let tsri = TimestampRangeStepInclusive {
+    let trsi = TimestampRangeStepInclusive {
         state: start,
         stop,
         step,
@@ -1065,7 +1065,7 @@ fn generate_series_ts(
         done: false,
     };
 
-    Ok(tsri.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
 }
 
 fn generate_subscripts_array(

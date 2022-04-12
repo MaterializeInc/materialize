@@ -210,7 +210,7 @@ impl JoinClosure {
         }
     }
 
-    /// True iff the closure neither filters nor transforms recorcds.
+    /// True iff the closure neither filters nor transforms records.
     pub fn is_identity(&self) -> bool {
         self.ready_equivalences.is_empty() && self.before.is_identity()
     }

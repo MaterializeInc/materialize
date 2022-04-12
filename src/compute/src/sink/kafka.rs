@@ -190,7 +190,7 @@ pub struct KafkaSinkSendRetryManager {
     // Because we flush this fully before moving onto the next timestamp, this queue cannot contain
     // more messages than are contained in a single timely timestamp.  It's also unlikely to get
     // beyond the size of the rdkafka internal message queue because that seems to stop accepting
-    // new messages when erorrs are being returned by the delivery callback -- though we should not
+    // new messages when errors are being returned by the delivery callback -- though we should not
     // rely on that fact if/when we eventually (tm) get around to making our queues bounded.
     //
     // If perf becomes an issue, we can do something slightly more complex with a crossbeam channel
@@ -423,7 +423,7 @@ struct KafkaSinkState {
     /// restarting the sink to gate updates with a lower timestamp. We advance
     /// the write frontier in lockstep with writing out END records. This
     /// ensures that we don't write updates more than once, ensuring
-    /// exactly-once guaruantees.
+    /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
 
@@ -797,7 +797,7 @@ impl KafkaSinkState {
                     )
                 })?;
 
-            // Empty topic.  Return early to avoid unnecesasry call to kafka below.
+            // Empty topic.  Return early to avoid unnecessary call to kafka below.
             if hi == 0 {
                 return Ok(None);
             }
@@ -1089,7 +1089,7 @@ where
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are only sent to Kafka once the input frontier has passed their `time`. Updates are
-/// sent in ascending timestamp order. The order of updates at the same timstamp will not be changed.
+/// sent in ascending timestamp order. The order of updates at the same timestamp will not be changed.
 /// However, it is important to keep in mind that this operator exchanges updates so if the input
 /// stream is sharded updates will likely arrive at this operator in some non-deterministic order.
 ///
@@ -1284,7 +1284,7 @@ where
                     bail_err!(s.send(record).await);
 
                     // advance to the next repetition of this row, or the next row if all
-                    // reptitions are exhausted
+                    // repetitions are exhausted
                     total_sent += 1;
                     repeat_counter += 1;
                     if repeat_counter == encoded_row.count {

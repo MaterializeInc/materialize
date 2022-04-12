@@ -77,7 +77,7 @@
 //!     fn visit_query(&mut self, query: &'ast Query<Raw>) {
 //!         self.count += 1;
 //!
-//!         // Delegate to the default implentation to visit any nested
+//!         // Delegate to the default implementation to visit any nested
 //!         // subqueries. Placing this call at the end of the method results
 //!         // in a pre-order traversal. Place it at the beginning for a
 //!         // post-order traversal instead.

@@ -31,7 +31,7 @@ where
 
     /// Reports whether all the elements of the iterator are the same.
     ///
-    /// This condition is trivally true for iterators with zero or one elements.
+    /// This condition is trivially true for iterators with zero or one elements.
     fn all_equal(mut self) -> bool
     where
         Self::Item: PartialEq,

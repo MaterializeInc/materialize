@@ -1566,7 +1566,7 @@ fn attempt_outer_join(
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
 ) -> Option<mz_expr::MirRelationExpr> {
-    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
+    // Both `left` and `right` are decorrelated inputs, whose first `oa` columns
     // correspond to an outer context: we should do the outer join independently
     // for each prefix. In the case that `on` is just some equality tests between
     // columns of `left` and `right`, we can employ a relatively simple plan.
@@ -1664,7 +1664,7 @@ fn attempt_outer_join(
                             .map(|typ| mz_expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
-                        // Add to `result` absent elemetns, prepended with typed nulls.
+                        // Add to `result` absent elements, prepended with typed nulls.
                         result = right_present
                             .negate()
                             .union(get_right.clone())

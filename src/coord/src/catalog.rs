@@ -1554,7 +1554,7 @@ impl Catalog {
         }
     }
 
-    /// Retuns the catalog's transient revision, which starts at 1 and is
+    /// Returns the catalog's transient revision, which starts at 1 and is
     /// incremented on every change. This is not persisted to disk, and will
     /// restart on every load.
     pub fn transient_revision(&self) -> u64 {

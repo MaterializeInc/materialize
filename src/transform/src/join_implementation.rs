@@ -152,7 +152,7 @@ impl JoinImplementation {
                     .enumerate()
                     .map(|(i, c)| (c, i))
                     .collect::<HashMap<_, _>>();
-                // Eliminate arrangements refering to columns that have been
+                // Eliminate arrangements referring to columns that have been
                 // projected away by surrounding MFPs.
                 available_arrangements[index].retain(|key| {
                     key.iter()

@@ -173,7 +173,7 @@ fn try_push_reduce_through_join(
     let old_join_mapper =
         JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
     // 1) Partition the join constraints into constraints containing a group
-    //    key and onstraints that don't.
+    //    key and constraints that don't.
     let (new_join_equivalences, component_equivalences): (Vec<_>, Vec<_>) = equivalences
         .iter()
         .cloned()
