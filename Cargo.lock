@@ -3386,6 +3386,8 @@ dependencies = [
  "mz-repr",
  "mz-stash",
  "num_enum",
+ "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "rdkafka",

@@ -9,7 +9,18 @@
 
 fn main() {
     prost_build::Config::new()
-        .type_attribute(".", "#[derive(Eq, serde::Serialize, serde::Deserialize)]")
-        .compile_protos(&["dataflow-types/src/postgres_source.proto"], &[".."])
+        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.proto", "::mz_repr::proto")
+        .type_attribute(
+            ".mz_dataflow_types.postgres_source",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
+        )
+        .compile_protos(
+            &[
+                "dataflow-types/src/logging.proto",
+                "dataflow-types/src/postgres_source.proto",
+            ],
+            &[".."],
+        )
         .unwrap();
 }

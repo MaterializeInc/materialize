@@ -12,6 +12,8 @@
 use mz_ore::cast::CastFrom;
 use std::{char::CharTryFromError, num::TryFromIntError};
 
+include!(concat!(env!("OUT_DIR"), "/mz_repr.proto.rs"));
+
 /// An error thrown when trying to convert from a `*.proto`-generated type
 /// `Proto$T` to `$T`.
 #[derive(Debug)]
@@ -131,6 +133,20 @@ impl ProtoRepr for u8 {
     }
 }
 
+impl ProtoRepr for u128 {
+    type Repr = ProtoU128;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        let lo = (self & (u64::MAX as u128)) as u64;
+        let hi = (self >> 64) as u64;
+        ProtoU128 { hi, lo }
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        Ok((repr.hi as u128) << 64 | (repr.lo as u128))
+    }
+}
+
 impl<T: ProtoRepr> ProtoRepr for Option<T> {
     type Repr = Option<T::Repr>;
 
@@ -159,6 +175,24 @@ where
     fn try_into_if_some<S: ToString>(self, field: S) -> Result<T, TryFromProtoError> {
         self.ok_or_else(|| TryFromProtoError::missing_field(field))?
             .try_into()
+    }
+}
+
+/// Convenience syntax for trying to convert a `Self` value of type
+/// `Option<U>` to `T` if the value is `Some(value)`, or returning
+/// [`TryFromProtoError::MissingField`] if the value is `None`.
+pub trait FromProtoIfSome<T> {
+    fn from_proto_if_some<S: ToString>(self, field: S) -> Result<T, TryFromProtoError>;
+}
+
+/// A blanket implementation for `Option<U>` where `U` is the
+/// `ProtoRepr::Repr` type for `T`.
+impl<T> FromProtoIfSome<T> for Option<T::Repr>
+where
+    T: ProtoRepr,
+{
+    fn from_proto_if_some<S: ToString>(self, field: S) -> Result<T, TryFromProtoError> {
+        T::from_proto(self.ok_or_else(|| TryFromProtoError::missing_field(field))?)
     }
 }
 
