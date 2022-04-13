@@ -2130,6 +2130,14 @@ impl Coordinator {
 
         let payload = evaled.unwrap_bytes();
 
+        // Limit the size of a secret to 512 KiB
+        // This is the largest size of a single secret in Consul/Kubernetes
+        // We are enforcing this limit across all types of Secrets Controllers
+        // Most secrets are expected to be roughly 75B
+        if payload.len() > 1024 * 512 {
+            coord_bail!("secrets can not be bigger than 512KiB")
+        }
+
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
