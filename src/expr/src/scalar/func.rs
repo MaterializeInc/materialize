@@ -50,6 +50,12 @@ use mz_repr::{
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
+use proptest_derive::Arbitrary;
+
 #[macro_use]
 mod macros;
 mod encoding;
@@ -59,6 +65,7 @@ mod impls;
 pub use impls::*;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchemasWithSystem,

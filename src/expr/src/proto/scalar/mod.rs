@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
+pub mod func;
 
 use crate::scalar::{DomainLimit, EvalError};
 use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+
+include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
 
 impl From<&DomainLimit> for ProtoDomainLimit {
     fn from(limit: &DomainLimit) -> Self {
