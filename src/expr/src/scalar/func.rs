@@ -3500,6 +3500,70 @@ pub enum UnaryFunc {
     MzTypeName(MzTypeName),
 }
 
+#[cfg(feature = "test-utils")]
+use proptest::{prelude::*, strategy::*};
+
+#[cfg(feature = "test-utils")]
+impl proptest::arbitrary::Arbitrary for UnaryFunc {
+    type Parameters = ();
+
+    type Strategy = Union<BoxedStrategy<UnaryFunc>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            Not::arbitrary().prop_map_into(),
+            IsNull::arbitrary().prop_map_into(),
+            IsTrue::arbitrary().prop_map_into(),
+            IsFalse::arbitrary().prop_map_into(),
+            BitNotInt16::arbitrary().prop_map_into(),
+            BitNotInt32::arbitrary().prop_map_into(),
+            BitNotInt64::arbitrary().prop_map_into(),
+            NegInt16::arbitrary().prop_map_into(),
+            NegInt32::arbitrary().prop_map_into(),
+            NegInt64::arbitrary().prop_map_into(),
+            NegFloat32::arbitrary().prop_map_into(),
+            NegFloat64::arbitrary().prop_map_into(),
+            NegNumeric::arbitrary().prop_map_into(),
+            NegInterval::arbitrary().prop_map_into(),
+            SqrtFloat64::arbitrary().prop_map_into(),
+            SqrtNumeric::arbitrary().prop_map_into(),
+            CbrtFloat64::arbitrary().prop_map_into(),
+            AbsInt16::arbitrary().prop_map_into(),
+            AbsInt32::arbitrary().prop_map_into(),
+            AbsInt64::arbitrary().prop_map_into(),
+            AbsFloat32::arbitrary().prop_map_into(),
+            AbsFloat64::arbitrary().prop_map_into(),
+            AbsNumeric::arbitrary().prop_map_into(),
+            CastBoolToString::arbitrary().prop_map_into(),
+            CastBoolToStringNonstandard::arbitrary().prop_map_into(),
+            CastBoolToInt32::arbitrary().prop_map_into(),
+            CastInt16ToFloat32::arbitrary().prop_map_into(),
+            CastInt16ToFloat64::arbitrary().prop_map_into(),
+            CastInt16ToInt32::arbitrary().prop_map_into(),
+            CastInt16ToInt64::arbitrary().prop_map_into(),
+            CastInt16ToString::arbitrary().prop_map_into(),
+            CastInt2VectorToArray::arbitrary().prop_map_into(),
+            CastInt32ToBool::arbitrary().prop_map_into(),
+            CastInt32ToFloat32::arbitrary().prop_map_into(),
+            CastInt32ToFloat64::arbitrary().prop_map_into(),
+            CastInt32ToOid::arbitrary().prop_map_into(),
+            CastInt32ToPgLegacyChar::arbitrary().prop_map_into(),
+            CastInt32ToInt16::arbitrary().prop_map_into(),
+            CastInt32ToInt64::arbitrary().prop_map_into(),
+            CastInt32ToString::arbitrary().prop_map_into(),
+            CastOidToInt32::arbitrary().prop_map_into(),
+            CastOidToInt64::arbitrary().prop_map_into(),
+            CastOidToString::arbitrary().prop_map_into(),
+            CastOidToRegClass::arbitrary().prop_map_into(),
+            CastRegClassToOid::arbitrary().prop_map_into(),
+            CastOidToRegProc::arbitrary().prop_map_into(),
+            CastRegProcToOid::arbitrary().prop_map_into(),
+            CastOidToRegType::arbitrary().prop_map_into(),
+            CastRegTypeToOid::arbitrary().prop_map_into(),
+        ]
+    }
+}
+
 derive_unary!(
     Not,
     NegFloat32,
