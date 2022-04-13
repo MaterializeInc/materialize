@@ -121,6 +121,12 @@
         any elements equal to the given value `e`. Comparisons are done using
         IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
 
+- type: Map
+  description: Map functions take [`map`](../types/map) arguments, and are [polymorphic](../types/#polymorphism).
+  functions:
+    - signature: 'map_length(m: mapany) -> int'
+      description: Return the number of elements in `m`.
+
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
     [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.

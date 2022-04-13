@@ -50,8 +50,7 @@ To get an arbitrary commit for:
 
 ## Support
 
-We offer support for the two most recent versions of Materialize. The
-currently supported versions are indicated in the table at the top of the page.
+We offer support for only the most recent version of Materialize.
 
 To engage with our community support team:
 
@@ -73,10 +72,7 @@ request. Please reach out to our sales team at <https://materialize.com/contact/
 
 ### Schedule
 
-We issue a new release of Materialize every week. Most releases are *timed
-releases*, which are cut on schedule, irrespective of what features and bug
-fixes have been merged. In rare cases, if severe regressions are discovered, we
-may skip a timed release.
+We issue new *feature releases* of Materialize as necessary.
 
 Occasionally, we may issue an *emergency release* to address a severe bug
 or security vulnerability. Emergency releases are based on the most recent
@@ -87,6 +83,10 @@ Every year or two, we expect to issue a *major release* to mark a new era in
 Materialize's development. The first major release of Materialize will be v1.0.0
 and will bring improved stability, backwards-compatibility, and support
 guarantees. We do not yet have a planned release date for v1.0.0.
+
+{{< version-changed v0.26.0 >}}
+Feature releases are no longer issued on a fixed schedule.
+{{</ version-changed >}}
 
 {{< version-changed v0.10.0 >}}
 Releases of Materialize prior to v0.10.0 followed a different schedule and
