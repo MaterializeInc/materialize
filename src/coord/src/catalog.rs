@@ -252,6 +252,32 @@ impl CatalogState {
         .and_then(|id| self.try_get_entry(id))
     }
 
+    /// Gets an entry named `item` from exactly one of system schemas.
+    ///
+    /// # Panics
+    /// - If `item` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `item`.
+    fn get_entry_in_system_schemas(&self, item: &str) -> &CatalogEntry {
+        let mut res = None;
+        for system_schema in &[
+            PG_CATALOG_SCHEMA,
+            INFORMATION_SCHEMA,
+            MZ_CATALOG_SCHEMA,
+            MZ_INTERNAL_SCHEMA,
+        ] {
+            let schema_id = &self.ambient_schemas_by_name[*system_schema];
+            let schema = &self.ambient_schemas_by_id[schema_id];
+            if let Some(global_id) = schema.items.get(item) {
+                match res {
+                    None => res = Some(self.get_entry(global_id)),
+                    Some(_) => panic!("only call get_entry_in_system_schemas on objects uniquely identifiable in one system schema"),
+                }
+            }
+        }
+
+        res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
+    }
+
     pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
         self.try_get_entry_in_schema(name, conn_id).is_some()
     }

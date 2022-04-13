@@ -568,7 +568,13 @@ impl Type {
         }
     }
 
-    /// Returns the name that PostgreSQL uses for this type.
+    /// Returns the item's name in a way that guarantees it's resolvable in the
+    /// catalog.
+    pub fn catalog_name(&self) -> &'static str {
+        self.inner().name()
+    }
+
+    /// Returns the user-friendly name that PostgreSQL uses for this type.
     pub fn name(&self) -> &'static str {
         // postgres_types' `name()` uses the pg_catalog name, and not the pretty
         // SQL standard name.

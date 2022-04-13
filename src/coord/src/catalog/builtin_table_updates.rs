@@ -454,10 +454,11 @@ impl CatalogState {
         let mut updates = vec![];
         for func_impl_details in func.inner.func_impls() {
             let arg_ids = func_impl_details
-                .arg_oids
+                .arg_typs
                 .iter()
-                .map(|oid| self.get_entry_by_oid(oid).id().to_string())
+                .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
                 .collect::<Vec<_>>();
+
             let mut row = Row::default();
             row.packer()
                 .push_array(
@@ -470,14 +471,6 @@ impl CatalogState {
                 .unwrap();
             let arg_ids = row.unpack_first();
 
-            let variadic_id = func_impl_details
-                .variadic_oid
-                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
-
-            let ret_id = func_impl_details
-                .return_oid
-                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
-
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_FUNCTIONS),
                 row: Row::pack_slice(&[
@@ -486,8 +479,18 @@ impl CatalogState {
                     Datum::Int64(schema_id.into()),
                     Datum::String(name),
                     arg_ids,
-                    Datum::from(variadic_id.as_deref()),
-                    Datum::from(ret_id.as_deref()),
+                    Datum::from(
+                        func_impl_details
+                            .variadic_typ
+                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .as_deref(),
+                    ),
+                    Datum::from(
+                        func_impl_details
+                            .return_typ
+                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .as_deref(),
+                    ),
                     func_impl_details.return_is_set.into(),
                 ]),
                 diff,
