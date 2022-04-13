@@ -19,19 +19,23 @@ use crate::parser::BuiltinCommand;
 
 pub const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
-pub struct RegexAction {
-    regex: Regex,
-    replacement: String,
+pub enum RegexAction {
+    Set { regex: Regex, replacement: String },
+    Unset,
 }
 
-pub fn build_regex(mut cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Error> {
+pub fn build_regex_set(mut cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Error> {
     let regex = cmd.args.parse("match")?;
     let replacement = cmd
         .args
         .opt_string("replacement")
         .unwrap_or_else(|| DEFAULT_REGEX_REPLACEMENT.into());
     cmd.args.done()?;
-    Ok(RegexAction { regex, replacement })
+    Ok(RegexAction::Set { regex, replacement })
+}
+
+pub fn build_regex_unset(_cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Error> {
+    Ok(RegexAction::Unset)
 }
 
 #[async_trait]
@@ -41,8 +45,15 @@ impl Action for RegexAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        state.regex = Some(self.regex.clone());
-        state.regex_replacement = self.replacement.clone();
+        match self {
+            RegexAction::Set { regex, replacement } => {
+                state.regex = Some(regex.clone());
+                state.regex_replacement = replacement.clone();
+            }
+            RegexAction::Unset => {
+                state.regex = None;
+            }
+        }
         Ok(ControlFlow::Continue)
     }
 }

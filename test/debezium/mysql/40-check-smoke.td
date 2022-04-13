@@ -16,8 +16,16 @@ USE test;
 INSERT INTO t1 VALUES (345, 345);
 COMMIT;
 
+$ schema-registry-wait-schema schema=mysql.transaction-value
+
+> CREATE MATERIALIZED SOURCE mysql_tx_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mysql.transaction'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE;
+
 > CREATE MATERIALIZED SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mysql.test.t1'
+  WITH (tx_metadata = mysql_tx_metadata, tx_metadata_collection_name='test.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 

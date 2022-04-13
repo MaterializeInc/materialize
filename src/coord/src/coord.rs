@@ -2273,6 +2273,7 @@ impl Coordinator {
             connector: plan.source.connector,
             persist_details,
             desc: plan.source.desc,
+            depends_on: plan.source.depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,

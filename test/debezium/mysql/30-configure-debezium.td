@@ -34,6 +34,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "database.include.list": "test",
         "database.history.kafka.bootstrap.servers": "kafka:9092",
         "database.history.kafka.topic": "dbhistory.mysql",
-        "include.schema.changes": "true"
+        "include.schema.changes": "true",
+        "provide.transaction.metadata": "true"
     }
 }

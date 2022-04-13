@@ -426,6 +426,7 @@ pub mod sources {
     use uuid::Uuid;
 
     use crate::gen::postgres_source::PostgresSourceDetails;
+    use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 
@@ -899,6 +900,18 @@ pub mod sources {
         pub mode: DebeziumMode,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct DebeziumTransactionMetadata {
+        pub tx_metadata_global_id: GlobalId,
+        pub tx_status_idx: usize,
+        pub tx_transaction_id_idx: usize,
+        pub tx_data_collections_idx: usize,
+        pub tx_data_collections_data_collection_idx: usize,
+        pub tx_data_collections_event_count_idx: usize,
+        pub tx_data_collection_name: String,
+        pub data_transaction_id_idx: usize,
+    }
+
     /// Ordered means we can trust Debezium high water marks
     ///
     /// In standard operation, Debezium should always emit messages in position order, but
@@ -943,6 +956,20 @@ pub mod sources {
         },
     }
 
+    impl DebeziumMode {
+        pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
+            match self {
+                DebeziumMode::Ordered(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::Full(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::FullInRange {
+                    projection: DebeziumDedupProjection { tx_metadata, .. },
+                    ..
+                } => tx_metadata.as_ref(),
+                DebeziumMode::None => None,
+            }
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumDedupProjection {
         /// The column index containing the debezium source metadata
@@ -955,6 +982,7 @@ pub mod sources {
         pub transaction_idx: usize,
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
+        pub tx_metadata: Option<DebeziumTransactionMetadata>,
     }
 
     /// Debezium generates records that contain metadata about the upstream database. The structure of

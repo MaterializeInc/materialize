@@ -243,7 +243,7 @@ where
             // whose contents will be concatenated and inserted along the collection.
             let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
-            let source_persist_config = match (persist, storage_state.persist.as_mut()) {
+            let source_persist_config = match (persist.clone(), storage_state.persist.as_mut()) {
                 (Some(persist_desc), Some(persist)) => {
                     Some(get_persist_config(&uid, persist_desc, persist))
                 }
@@ -283,7 +283,7 @@ where
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
-                logger: materialized_logging,
+                logger: materialized_logging.clone(),
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
@@ -439,11 +439,49 @@ where
                         // render envelopes
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
-                                let (stream, errors) = super::debezium::render(
-                                    dbz_envelope,
-                                    &results,
-                                    dataflow_debug_name.clone(),
-                                );
+                                let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
+                                    Some(tx_metadata) => {
+                                        let tx_src_desc = storage_state
+                                            .source_descriptions
+                                            .get(&tx_metadata.tx_metadata_global_id)
+                                            // N.B. tx_id is validated when constructing dbz_envelope
+                                            .expect("bad tx metadata spec")
+                                            .clone();
+                                        // TODO(#11667): reuse the existing arrangement if it exists
+                                        let ((tx_source_ok, tx_source_err), tx_token) =
+                                            import_source(
+                                                dataflow_debug_name,
+                                                dataflow_id,
+                                                as_of_frontier,
+                                                SourceInstanceDesc {
+                                                    description: tx_src_desc,
+                                                    arguments: SourceInstanceArguments {
+                                                        operators: None,
+                                                        persist,
+                                                    },
+                                                },
+                                                storage_state,
+                                                scope,
+                                                materialized_logging,
+                                                tx_metadata.tx_metadata_global_id,
+                                            );
+                                        needed_tokens.push(tx_token);
+                                        error_collections.push(tx_source_err);
+
+                                        super::debezium::render_tx(
+                                            src_id,
+                                            dbz_envelope,
+                                            &results,
+                                            tx_source_ok,
+                                            dataflow_debug_name.clone(),
+                                        )
+                                    }
+                                    None => super::debezium::render(
+                                        dbz_envelope,
+                                        &results,
+                                        dataflow_debug_name.clone(),
+                                    ),
+                                };
                                 (stream.as_collection(), Some(errors.as_collection()))
                             }
                             SourceEnvelope::Upsert(upsert_envelope) => {

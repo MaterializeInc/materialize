@@ -8,13 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::max;
-use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{OkErr, Operator};
+use differential_dataflow::{Collection, Hashable};
+use mz_dataflow_types::sources::DebeziumTransactionMetadata;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use tracing::{debug, error, info, warn};
 
@@ -22,6 +25,7 @@ use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
+use mz_expr::{EvalError, GlobalId};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::DecodeResult;
@@ -66,6 +70,7 @@ where
                                 None => continue,
                             };
 
+                            // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
                             let partition_dedup = dedup_state
                                 .entry(result.partition.clone())
                                 .or_insert_with(|| {
@@ -116,6 +121,288 @@ where
                 Err(e) => Err((e, time, diff)),
             }),
     }
+}
+
+pub(crate) fn render_tx<G: Scope>(
+    data_id: GlobalId,
+    envelope: &DebeziumEnvelope,
+    input: &Stream<G, DecodeResult>,
+    tx_ok: Collection<G, Row, Diff>,
+    debug_name: String,
+) -> (
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
+)
+where
+    G: ScopeParent<Timestamp = Timestamp>,
+{
+    let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
+    let hashed_id = data_id.hashed();
+
+    let (transaction_idx, tx_metadata_description) = match envelope {
+        DebeziumEnvelope {
+            mode:
+                DebeziumMode::Full(projection)
+                | DebeziumMode::Ordered(projection)
+                | DebeziumMode::FullInRange { projection, .. },
+            ..
+        } => (
+            projection.transaction_idx,
+            projection
+                .tx_metadata
+                .clone()
+                .expect("render_tx should only be called when there's a transaction"),
+        ),
+        DebeziumEnvelope {
+            mode: DebeziumMode::None,
+            ..
+        } => panic!("render_tx should be called with a dedup mode"),
+    };
+
+    // TODO(#11666): Should we try to avoid moving everything to one worker?
+    tx_ok
+        .inner
+        .binary_frontier(
+            &input,
+            Exchange::new(move |_| hashed_id),
+            Exchange::new(move |_| hashed_id),
+            "envelope-debezium-tx",
+            {
+                let envelope = envelope.clone();
+                let mut tx_data = vec![];
+                let mut data = vec![];
+                let mut data_buffer = VecDeque::new();
+                let mut dedup_state = HashMap::new();
+
+                // Keep mapping of `transaction_id`s to the timestamp at which that transaction END record was read from
+                // the transaction metadata stream.  That stored timestamp will be the timestamp for all data records
+                // with the corresponding `transaction_id`.  We keep this mapping around after we've matched `event_count`
+                // number of data rows so that we're able to process duplicates.  Otherwise, we're not able to tell the
+                // difference between "we've recieved the tx metadata and processed everything" and "we're still waiting
+                // on the tx metadata".
+                let mut tx_mapping: HashMap<String, Timestamp> = HashMap::new();
+                // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
+                // matched data rows.  This will be dropped when we've matched the indicated number of events.
+                let mut tx_cap_event_count: HashMap<String, (Capability<_>, i64)> = HashMap::new();
+
+                let DebeziumTransactionMetadata {
+                    tx_data_collections_idx,
+                    tx_data_collections_data_collection_idx,
+                    tx_data_collection_name,
+                    tx_data_collections_event_count_idx,
+                    tx_status_idx,
+                    tx_transaction_id_idx,
+                    data_transaction_id_idx,
+                    tx_metadata_global_id: _,
+                } = tx_metadata_description;
+                move |_, _| {
+                    // TODO(#11669) Revisit error handling strategy to do something optimized than just emitting
+                    // everything we can and holding back the frontier to the first data error.
+                    move |tx_metadata_input, data_input, output| {
+                        while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
+                            refmut_data.swap(&mut tx_data);
+                            let tx_metadata_cap = tx_metadata_cap.retain();
+                            for (row, time, diff) in tx_data.drain(..) {
+                                if diff != 1 {
+                                    output.session(&tx_metadata_cap).give((
+                                        Err(DataflowError::EvalError(EvalError::Internal(
+                                            format!("Transaction metadata supplied diff value {:?}", diff),
+                                        ))),
+                                        time,
+                                        1,
+                                    ));
+                                }
+
+                                let status = row.iter().nth(tx_status_idx).unwrap().unwrap_str();
+                                if status != "END" {
+                                    continue;
+                                }
+
+                                let tx_id = row.iter().nth(tx_transaction_id_idx).unwrap().unwrap_str().to_owned();
+
+                                let event_count = match row.iter().nth(tx_data_collections_idx).unwrap() {
+                                    Datum::List(dl) => dl,
+                                    Datum::Array(dl) => dl.elements(),
+                                    _ => panic!("data_collections previously validated to be array or list"),
+                                }.iter()
+                                .find(|datum| datum.unwrap_list().iter().nth(tx_data_collections_data_collection_idx).unwrap().unwrap_str() == &tx_data_collection_name)
+                                .map(|datum| match datum.unwrap_list().iter().nth(tx_data_collections_event_count_idx).unwrap() {
+                                    Datum::Int16(i) => i.into(),
+                                    Datum::Int32(i) => i.into(),
+                                    Datum::Int64(i) => i,
+                                    Datum::Null => 0,
+                                    d => panic!("event_count field previously validated to be integer type.  Found {:?}", d),
+                                }).unwrap_or(0);
+
+                                // It's okay for event_count to equal zero here!  This occurs when there is transaction
+                                // metadata for other collections but not this particular one.  If that happens, let's
+                                // just move on with our lives.
+                                //
+                                // We do have panics / unwraps above though because we still ought to validate that the
+                                // shape of the data is correct -- or else we might be unintentionally missing data!
+                                if event_count == 0 {
+                                    continue;
+                                }
+
+                                match tx_mapping.insert(tx_id.clone(), time) {
+                                    None => {
+                                        tx_cap_event_count
+                                            .insert(tx_id.clone(), (tx_metadata_cap.clone(), event_count));
+                                    }
+                                    Some(val) if val == time => {},
+                                    Some(val) => panic!("unexpected mismatch in duplicate END record for {:?}: {:?} vs {:?}", tx_id, time, val),
+                                }
+                            }
+                        }
+
+                        while let Some((data_cap, refmut_data)) = data_input.next() {
+                            // RefOrMut doesn't let us drain directly into iterator
+                            refmut_data.swap(&mut data);
+                            let data_cap = data_cap.retain();
+                            data_buffer.extend(data.drain(..).map(|r| (r, data_cap.clone())));
+                        }
+                        while let Some((result, data_cap)) = data_buffer.pop_front() {
+                            let key = match result.key.clone().transpose() {
+                                Ok(key) => key,
+                                Err(err) => {
+                                    output.session(&data_cap).give((
+                                        Err(err.into()),
+                                        *data_cap.time(),
+                                        1,
+                                    ));
+                                    continue;
+                                }
+                            };
+                            let value = match result.value.clone() {
+                                Some(Ok(value)) => value,
+                                Some(Err(err)) => {
+                                    output.session(&data_cap).give((
+                                        Err(err.into()),
+                                        *data_cap.time(),
+                                        1,
+                                    ));
+                                    continue;
+                                }
+                                None => continue,
+                            };
+
+                            let tx_id_and_time = match value.iter().nth(transaction_idx).unwrap() {
+                                Datum::List(l) => {
+                                    let tx_id = l.iter().nth(data_transaction_id_idx).unwrap().unwrap_str().to_owned();
+                                    let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
+                                        Some(time) => *time,
+                                        None => {
+                                            data_buffer.push_front((result, data_cap));
+                                            break;
+                                        },
+                                    };
+                                    Some((tx_id, tx_time))
+                                },
+                                Datum::Null => None,
+                                _ => panic!("Previously validated to be nullable list"),
+                            };
+
+                            let partition_dedup = dedup_state
+                                .entry(result.partition.clone())
+                                .or_insert_with(|| {
+                                    DebeziumDeduplicationState::new(envelope.clone())
+                                });
+                            let should_use = match partition_dedup {
+                                Some(ref mut s) => {
+                                    let res = s.should_use_record(
+                                        key,
+                                        &value,
+                                        result.position,
+                                        result.upstream_time_millis,
+                                        &debug_name,
+                                    );
+                                    match res {
+                                        Ok(b) => b,
+                                        Err(err) => {
+                                            // We could theoretically use tx_cap_map.get(tx_id) here but for sake of
+                                            // consistency, we output all errors at the data_cap time.
+                                            output.session(&data_cap).give((
+                                                Err(err),
+                                                *data_cap.time(),
+                                                1,
+                                            ));
+                                            continue;
+                                        }
+                                    }
+                                }
+                                None => true,
+                            };
+
+                            match (should_use, tx_id_and_time) {
+                                (true, Some((tx_id, tx_time))) => {
+                                    let mut tx_cap_event_count_entry = match tx_cap_event_count.entry(tx_id.clone()) {
+                                        Entry::Occupied(e) => e,
+                                        Entry::Vacant(_) => panic!("Must have cap if using record"),
+                                    };
+
+                                    let mut session = output.session(&tx_cap_event_count_entry.get().0);
+                                    match value.iter().nth(before_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), tx_time, -1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                    match value.iter().nth(after_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), tx_time, 1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+
+                                    let (_, ref mut count) = tx_cap_event_count_entry.get_mut();
+                                    *count -= 1;
+                                    if *count == 0 {
+                                        // Must drop the capability to allow the output frontier to progress
+                                        let _ = tx_cap_event_count_entry.remove_entry();
+                                    }
+                                },
+                                // The data row has no "transaction" field so it was created before transaction metadata
+                                // production was turned on.  Importantly, it is _not_ that the tx_id on the data could
+                                // not be matched to a tx metadata row.
+                                (true, None) => {
+                                    let data_time = *data_cap.time();
+                                    let mut session = output.session(&data_cap);
+                                    match value.iter().nth(before_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), data_time, -1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                    match value.iter().nth(after_idx).unwrap() {
+                                        Datum::List(l) => {
+                                            session.give((Ok(Row::pack(&l)), data_time, 1));
+                                        }
+                                        Datum::Null => {}
+                                        d => {
+                                            panic!("type error: expected record, found {:?}", d)
+                                        }
+                                    }
+                                },
+                                (false, _) => (),
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        .ok_err(|(res, time, diff)| match res {
+            Ok(v) => Ok((v, time, diff)),
+            Err(e) => Err((e, time, diff)),
+        })
 }
 
 /// Track whether or not we should skip a specific debezium message

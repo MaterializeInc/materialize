@@ -295,7 +295,7 @@ pub fn create_statement(
             name,
             col_names: _,
             connector: _,
-            with_options: _,
+            with_options,
             format: _,
             include_metadata: _,
             envelope: _,
@@ -306,6 +306,21 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
+
+            for opt in with_options.iter_mut() {
+                if let SqlOption::ObjectName { name, object_name } = opt {
+                    if ident_ref(name) == "tx_metadata" {
+                        // Use the catalog to resolve to a fully qualified name
+                        *object_name = unresolve(
+                            scx.catalog.resolve_full_name(
+                                scx.catalog
+                                    .resolve_item(&unresolved_object_name(object_name.clone())?)?
+                                    .name(),
+                            ),
+                        );
+                    }
+                }
+            }
         }
 
         Statement::CreateTable(CreateTableStatement {

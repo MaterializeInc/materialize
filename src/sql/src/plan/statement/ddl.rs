@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -40,10 +40,10 @@ use mz_dataflow_types::sources::encoding::{
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
-    UnplannedSourceEnvelope, UpsertStyle,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
+    FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
+    KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
+    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -313,7 +313,8 @@ pub fn plan_create_source(
     } = &stmt;
 
     let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options);
+    let mut with_options = normalize::options(with_options_original);
+    let mut with_option_objects = normalize::option_objects(with_options_original);
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
@@ -337,6 +338,8 @@ pub fn plan_create_source(
     if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
+
+    let mut depends_on = vec![];
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
@@ -628,7 +631,51 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain => {
-                    let dedup_projection = typecheck_debezium_dedup(&value_desc);
+                    // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
+                    let tx_metadata = match with_option_objects.remove("tx_metadata") {
+                        Some(SqlOption::ObjectName {
+                            name: _,
+                            object_name: tx_metadata,
+                        }) => {
+                            scx.require_experimental_mode("DEBEZIUM TX_METADATA")?;
+                            // `with_option_objects` and `with_options` should correspond.  We want
+                            // to keep the `ObjectName` information but we also need to remove the
+                            // key from `with_options` so pass our validation below that all keys
+                            // are used.
+                            with_options.remove("tx_metadata").unwrap();
+                            // This syntax needs to be changed before allowing without experimental flag!
+                            let data_collection_name =
+                                match with_options.remove("tx_metadata_collection_name") {
+                                    Some(Value::String(d)) => d,
+                                    Some(_) => bail!("tx_metadata_collection_name must be String"),
+                                    None => bail!(
+                                        "Require tx_metadata_collection_name with tx_metadata"
+                                    ),
+                                };
+
+                            let item = scx
+                                .catalog
+                                .resolve_item(&normalize::unresolved_object_name(tx_metadata)?)?;
+                            let full_name = scx.catalog.resolve_full_name(item.name());
+                            let tx_value_desc = item
+                                .desc(&full_name)
+                                .context("tx_metadata must refer to a source")?;
+
+                            depends_on.push(item.id());
+                            depends_on.extend(item.uses());
+
+                            Some(typecheck_debezium_transaction_metadata(
+                                tx_value_desc,
+                                &value_desc,
+                                item.id(),
+                                data_collection_name,
+                            )?)
+                        }
+                        Some(v) => bail!("tx_metadata must be an Object but found {:?}", v),
+                        None => None,
+                    };
+
+                    let dedup_projection = typecheck_debezium_dedup(&value_desc, tx_metadata);
 
                     let dedup_mode = match with_options.remove("deduplication") {
                         None => match dedup_projection {
@@ -871,6 +918,7 @@ pub fn plan_create_source(
             timeline,
         },
         desc,
+        depends_on,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
@@ -901,6 +949,7 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), anyho
 
 fn typecheck_debezium_dedup(
     value_desc: &RelationDesc,
+    tx_metadata: Option<DebeziumTransactionMetadata>,
 ) -> Result<DebeziumDedupProjection, anyhow::Error> {
     let (source_idx, source_ty) = value_desc
         .get_by_name(&"source".into())
@@ -1017,12 +1066,112 @@ fn typecheck_debezium_dedup(
         },
         None => bail!("'total_order' field missing from tx record"),
     };
+
     Ok(DebeziumDedupProjection {
         source_idx,
         snapshot_idx,
         source_projection,
         transaction_idx,
         total_order_idx,
+        tx_metadata,
+    })
+}
+
+fn typecheck_debezium_transaction_metadata(
+    tx_value_desc: &RelationDesc,
+    data_value_desc: &RelationDesc,
+    tx_metadata_global_id: GlobalId,
+    tx_data_collection_name: String,
+) -> Result<DebeziumTransactionMetadata, anyhow::Error> {
+    let (tx_status_idx, tx_status_ty) = tx_value_desc
+        .get_by_name(&"status".into())
+        .ok_or_else(|| anyhow!("'status' column missing from debezium transaction metadata"))?;
+    let (tx_transaction_id_idx, tx_transaction_id_ty) = tx_value_desc
+        .get_by_name(&"id".into())
+        .ok_or_else(|| anyhow!("'id' column missing from debezium transaction metadata"))?;
+    let (tx_data_collections_idx, tx_data_collections_ty) = tx_value_desc
+        .get_by_name(&"data_collections".into())
+        .ok_or_else(|| {
+            anyhow!("'data_collections' column missing from debezium transaction metadata")
+        })?;
+    if tx_status_ty != &ScalarType::String.nullable(false) {
+        bail!("'status' column must be of type non-nullable string");
+    }
+    if tx_transaction_id_ty != &ScalarType::String.nullable(false) {
+        bail!("'id' column must be of type non-nullable string");
+    }
+
+    // Don't care about nullability of data_collections or subtypes
+    let (tx_data_collections_data_collection, tx_data_collections_event_count) =
+        match tx_data_collections_ty.scalar_type {
+            ScalarType::Array(ref element_type)
+            | ScalarType::List {
+                ref element_type, ..
+            } => match **element_type {
+                ScalarType::Record { ref fields, .. } => {
+                    let data_collections_data_collection = fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, f)| f.0.as_str() == "data_collection");
+                    let data_collections_event_count = fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, f)| f.0.as_str() == "event_count");
+                    (
+                        data_collections_data_collection,
+                        data_collections_event_count,
+                    )
+                }
+                _ => bail!("'data_collections' array must contain records"),
+            },
+            _ => bail!("'data_collections' column must be of array or list type",),
+        };
+
+    let tx_data_collections_data_collection_idx = match tx_data_collections_data_collection {
+        Some((idx, (_, ty))) => match ty.scalar_type {
+            ScalarType::String => idx,
+            _ => bail!("'data_collections.data_collection' must be of type string"),
+        },
+        _ => bail!("'data_collections.data_collection' missing from debezium transaction metadata"),
+    };
+
+    let tx_data_collections_event_count_idx = match tx_data_collections_event_count {
+        Some((idx, (_, ty))) => match ty.scalar_type {
+            ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64 => idx,
+            _ => bail!("'data_collections.event_count' must be of type string"),
+        },
+        _ => bail!("'data_collections.event_count' missing from debezium transaction metadata"),
+    };
+
+    let (_data_transaction_idx, data_transaction_ty) = data_value_desc
+        .get_by_name(&"transaction".into())
+        .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
+
+    let data_transaction_id = match &data_transaction_ty.scalar_type {
+        ScalarType::Record { fields, .. } => fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.0.as_str() == "id"),
+        _ => bail!("'transaction' column must be of type record"),
+    };
+
+    let data_transaction_id_idx = match data_transaction_id {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::String => idx,
+            _ => bail!("'transaction.id' column must be of type string"),
+        },
+        None => bail!("'transaction.id' column missing from debezium input"),
+    };
+
+    Ok(DebeziumTransactionMetadata {
+        tx_metadata_global_id,
+        tx_status_idx,
+        tx_transaction_id_idx,
+        tx_data_collections_idx,
+        tx_data_collections_data_collection_idx,
+        tx_data_collections_event_count_idx,
+        tx_data_collection_name,
+        data_transaction_id_idx,
     })
 }
 
