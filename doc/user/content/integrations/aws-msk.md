@@ -9,8 +9,12 @@ menu:
 
 This guide goes through the required steps to connect Materialize to an AWS MSK cluster, including some of the more complicated bits around configuring security settings in MSK.
 
-The process contains the following steps:
+If you already have an MSK cluster, you can skip step 1 and directly move on to _Make the cluster public and enable SASL_. You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a materialized source for.
+
+The process to connect Materialize to Amazon MSK consists of the following steps:
 1. #### Create an Amazon MSK cluster
+    If you already have an Amazon MSk cluster set up, then you can skip this step.
+
     a. Sign in to the AWS Management console and open the [Amazon MSK console](https://us-east-1.console.aws.amazon.com/msk/)
 
     b. Choose **Create cluster**
@@ -93,103 +97,28 @@ The process contains the following steps:
     ##### Create the cluster's configuration
     a. Go to the [Amazon CloudShell console](https://us-east-1.console.aws.amazon.com/cloudshell/)
 
-    b. Create a file with the following line
+    b. Create a file (eg. _msk-config.txt_) with the following line
       ```
         allow.everyone.if.no.acl.found = false
       ```
 
     c. Run the following AWS CLI command, replacing `<config-file-path>` with the path to the file where you saved your configuration in the previous step
     ```
-      aws kafka create-configuration --name "ExampleConfigurationName" --description "Example configuration description." --kafka-versions "2.6.2" --server-properties fileb://<config-file-path>
+      aws kafka create-configuration --name "ExampleConfigurationName" --description "Example configuration description." --kafka-versions "2.6.2" --server-properties fileb://<config-file-path>/msk-config.txt
     ```
 
 
     You can find more information about making your MSK cluster public [here](https://docs.aws.amazon.com/msk/latest/developerguide/public-access.html).
 
 3. #### Create a client machine
-    a. Open the [Amazon EC2 console](https://console.aws.amazon.com/ec2/)
+    If you already have a client machine set up that can interact with your MSK cluster, then you can skip this step.
 
-    b. Choose **Launch instances**
-
-    c. Choose **Select** to create an instance of _Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type_.
-
-    d. Choose the _t2.xlarge_ instance type by selecting the check box next to it
-
-    e. Choose **Next: Configure Instance Details**
-
-    f. In the **Network** list, choose the VPC whose ID you saved while creating the Amazon MSK Cluster in the first step
-
-    g. In the **Auto-assign Public IP** list, choose _Enable_.
-
-    h. In the menu near the top, choose **Add Tags**.
-
-    i. Choose **Add Tag**.
-
-    j. Enter _Name_ for the **Key** and what you want to name the client for the **Value**.
-
-    k. Choose **Review and Launch**, and then choose **Launch**.
-
-    l. Choose **Create a new key pair**, enter a name for **Key pair name**, and then choose **Download Key Pair**. Alternatively, you can use an existing key pair if you prefer.
-
-    m. Read the acknowledgement, select the check box next to it, and choose **Launch Instances**.
-
-    n. Choose **View Instances**. Then, in the **Security Groups** column, choose the security group that is associated with your client instance.
-
-    o. Copy the name of the security group, and save it for later.
-
-    p. Open the [Amazon VPC console](https://console.aws.amazon.com/vpc/).
-
-    q. In the navigation pane, choose **Security Groups**. Find the security group whose ID you saved while creating the Amazon MSK Cluster. Choose this row by selecting the check box in the first column.
-
-    r. In the **Inbound Rules** tab, choose **Edit inbound rules**.
-
-    s. Choose **Add rule**.
-
-    t. In the new rule, choose _All traffic_ in the Type column. In the second field in the Source column, select the security group of the client machine. This is the group whose name you saved earlier in this step.
-
-    u. Choose **Save rules**. Now the cluster's security group can accept traffic that comes from the client machine's security group.
-
-    Find more details about creating an EC2 client machine for MSK [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-client-machine.html).
+    If not, you can create an EC2 client machine and then add the security group of the client to the inbound rules of the cluster's security group from the VPC console. You can find more details about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-client-machine.html).
 
 4. #### Install Kafka and create a topic
-    a. Open the [Amazon EC2 console](https://console.aws.amazon.com/ec2/)
+    To start using Materialize with Kafka, you need to create a Materialize source over a Kafka topic. If you already have Kafka installed and a topic created, you can skip this step.
 
-    b. In the navigation pane, choose **Instances**, and then choose the client instance you created earlier by selecting the check box next to it
-
-    c. Choose **Actions**, and then choose **Connect**. Follow the instructions to connect to the client machine
-
-    d. Install Java on the client machine by running the following command:
-      ```
-        sudo yum install java-1.8.0
-      ```
-
-    e. Run the following command to download Apache Kafka
-      ```
-        wget https://archive.apache.org/dist/kafka/2.6.2/kafka_2.12-2.6.2.tgz
-      ```
-
-    f. Run the following command in the directory where you downloaded the TAR file in the previous step
-      ```
-        tar -xzf kafka_2.12-2.6.2.tgz
-      ```
-
-    g. Go to the _kafka_2.12-2.6.2_ directory
-
-    h. Open the [Amazon MSK console](https://console.aws.amazon.com/msk/)
-
-    i. Wait for the status of cluster to become _Active_. This might take several minutes. After the status becomes Active, choose the cluster name. This action takes you to a page where you can see the cluster summary.
-
-    j. Choose **View client information**.
-
-    k. Copy the private endpoint for plaintext authentication and the Apache ZooKeeper connection string (also for plaintext communication)
-
-    l. Run the following command, replacing `<ZookeeperConnectString>` with the string that you obtained in the previous instruction and `<topic-name>` with the name you want to give your topic
-    ```
-      bin/kafka-topics.sh --create --zookeeper <ZookeeperConnectString> --replication-factor 3 --partitions 1 --topic <topic-name>
-    ```
-    If the command succeeds, you see the following message: _Created topic \<topic-name>_.
-
-    Find more information about creating a Topic [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
+    Otherwise, you can install Kafka on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
 
 
 5. #### Create a Materialized source
@@ -215,3 +144,5 @@ The process contains the following steps:
     ```
 
     f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your MSK cluster.
+
+    **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We used the `WITH` options to provide the username and password and connect to MSK using SASL. For the key and value formats, we used text, however, Materialize supports various other options as well. For example, you can also create a source using _AVRO_ and a Confluent schema registry. You can find more details about the various different supported formats and possible configurations [here](https://materialize.com/docs/sql/create-source/kafka/).
