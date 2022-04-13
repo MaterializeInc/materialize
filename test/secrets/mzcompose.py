@@ -28,15 +28,16 @@ def workflow_default(c: Composition) -> None:
         "[[ `stat -c \"%a\" /share/mzdata/secrets` == '700' ]] && exit 0 || exit 1",
     )
 
-    c.sql("CREATE SECRET foo AS 'bar'")
+    c.sql("CREATE SECRET secret AS 's3cret'")
     # Check that the contents of the secret have made it to the storage
     c.exec(
         "materialized",
         "bash",
         "-c",
-        "[[ `cat /share/mzdata/secrets/*` == 'bar' ]] && exit 0 || exit 1",
+        "[[ `cat /share/mzdata/secrets/*` == 's3cret' ]] && exit 0 || exit 1",
     )
 
+    # Check that the file permissions are restrictive
     c.exec(
         "materialized",
         "bash",
@@ -44,7 +45,35 @@ def workflow_default(c: Composition) -> None:
         "[[ `stat -c \"%a\" /share/mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
     )
 
-    c.sql("DROP SECRET foo")
+    # Check that alter secret gets reflected on disk
+    c.sql("ALTER SECRET secret AS 'tops3cret'")
+    c.exec(
+        "materialized",
+        "bash",
+        "-c",
+        "[[ `cat /share/mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
+    )
+
+    # check that replacing the file did not change permissions
+    c.exec(
+        "materialized",
+        "bash",
+        "-c",
+        "[[ `stat -c \"%a\" /share/mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
+    )
+
+    # Rename should not change the contents on disk
+    c.sql("ALTER SECRET secret RENAME TO renamed_secret")
+
+    # Check that the contents of the secret have made it to the storage
+    c.exec(
+        "materialized",
+        "bash",
+        "-c",
+        "[[ `cat /share/mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
+    )
+
+    c.sql("DROP SECRET renamed_secret")
     # Check that the file has been deleted from the storage
     c.exec(
         "materialized",

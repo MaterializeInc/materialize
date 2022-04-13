@@ -131,14 +131,14 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, ComputeInstanceIntrospectionConfig,
-    CreateComputeInstancePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
-    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
+    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -1819,6 +1819,9 @@ impl Coordinator {
             Plan::AlterIndexEnable(plan) => {
                 tx.send(self.sequence_alter_index_enable(plan).await, session);
             }
+            Plan::AlterSecret(plan) => {
+                tx.send(self.sequence_alter_secret(&session, plan).await, session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id()).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
@@ -2108,35 +2111,12 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateSecretPlan {
             name,
-            secret,
+            mut secret,
             full_name,
             if_not_exists,
         } = plan;
 
-        let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            self.catalog.state(),
-            &mut secret.secret_as.clone(),
-            ExprPrepStyle::OneShot {
-                logical_time: None,
-                session,
-            },
-        )?;
-        let evaled = secret.secret_as.eval(&[], &temp_storage)?;
-
-        if evaled == Datum::Null {
-            coord_bail!("secret value can not be null");
-        }
-
-        let payload = evaled.unwrap_bytes();
-
-        // Limit the size of a secret to 512 KiB
-        // This is the largest size of a single secret in Consul/Kubernetes
-        // We are enforcing this limit across all types of Secrets Controllers
-        // Most secrets are expected to be roughly 75B
-        if payload.len() > 1024 * 512 {
-            coord_bail!("secrets can not be bigger than 512KiB")
-        }
+        let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2146,7 +2126,7 @@ impl Coordinator {
 
         self.secrets_controller.apply(vec![SecretOp::Ensure {
             id,
-            contents: Vec::from(payload),
+            contents: payload,
         }])?;
 
         let ops = vec![catalog::Op::CreateItem {
@@ -4364,6 +4344,56 @@ impl Coordinator {
             self.ship_dataflow(df, compute_instance).await;
         }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    async fn sequence_alter_secret(
+        &mut self,
+        session: &Session,
+        plan: AlterSecretPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let AlterSecretPlan { id, mut secret_as } = plan;
+
+        let payload = self.extract_secret(session, &mut secret_as)?;
+
+        self.secrets_controller.apply(vec![SecretOp::Ensure {
+            id,
+            contents: payload,
+        }])?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
+    }
+
+    fn extract_secret(
+        &mut self,
+        session: &Session,
+        mut secret_as: &mut MirScalarExpr,
+    ) -> Result<Vec<u8>, CoordError> {
+        let temp_storage = RowArena::new();
+        prep_scalar_expr(
+            self.catalog.state(),
+            &mut secret_as,
+            ExprPrepStyle::OneShot {
+                logical_time: None,
+                session,
+            },
+        )?;
+        let evaled = secret_as.eval(&[], &temp_storage)?;
+
+        if evaled == Datum::Null {
+            coord_bail!("secret value can not be null");
+        }
+
+        let payload = evaled.unwrap_bytes();
+
+        // Limit the size of a secret to 512 KiB
+        // This is the largest size of a single secret in Consul/Kubernetes
+        // We are enforcing this limit across all types of Secrets Controllers
+        // Most secrets are expected to be roughly 75B
+        if payload.len() > 1024 * 512 {
+            coord_bail!("secrets can not be bigger than 512KiB")
+        }
+
+        return Ok(Vec::from(payload));
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]

@@ -1006,7 +1006,7 @@ impl_display_t!(AlterIndexStatement);
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
-    pub secret_name: T::ObjectName,
+    pub name: T::ObjectName,
     pub if_exists: bool,
     pub value: Expr<T>,
 }
@@ -1017,7 +1017,7 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
         if self.if_exists {
             f.write_str("IF EXISTS ");
         }
-        f.write_node(&self.secret_name);
+        f.write_node(&self.name);
         f.write_str(" AS ");
         f.write_node(&self.value);
     }
