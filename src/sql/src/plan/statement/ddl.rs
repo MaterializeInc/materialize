@@ -84,12 +84,13 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig,
-    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table,
+    Type, View,
 };
 use crate::pure::Schema;
 
@@ -3092,14 +3093,46 @@ pub fn describe_alter_secret_options(
 }
 
 pub fn plan_alter_secret(
-    _: &StatementContext,
-    AlterSecretStatement {
-        secret_name: _,
-        if_exists: _,
-        value: _,
-    }: AlterSecretStatement<Aug>,
+    scx: &StatementContext,
+    stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("ALTER SECRET")
+    scx.require_experimental_mode("CREATE SECRET")?;
+
+    let AlterSecretStatement {
+        name,
+        if_exists,
+        value,
+    } = &stmt;
+
+    let entry = match scx.get_item_by_resolved_name(&name) {
+        Ok(secret) => secret,
+        Err(_) if *if_exists => {
+            // TODO(benesch): generate a notice indicating this secret does not
+            // exist.
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Secret,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
+    if entry.item_type() != CatalogItemType::Secret {
+        bail!(
+            "{} is a {} not a secret",
+            name.full_name_str(),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let create_sql = normalize::create_statement(&scx, Statement::AlterSecret(stmt.clone()))?;
+    let secret_as = query::plan_secret_as(scx, value.clone())?;
+
+    let secret = Secret {
+        create_sql,
+        secret_as,
+    };
+
+    Ok(Plan::AlterSecret(AlterSecretPlan { id, secret }))
 }
 
 pub fn describe_alter_cluster(

@@ -2992,7 +2992,7 @@ impl<'a> Parser<'a> {
             AS => {
                 let value = self.parse_expr()?;
                 Statement::AlterSecret(AlterSecretStatement {
-                    secret_name: name,
+                    name: name,
                     if_exists,
                     value,
                 })

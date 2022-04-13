@@ -111,6 +111,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterSecret(AlterSecretPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -389,6 +390,12 @@ pub struct AlterItemRenamePlan {
     pub current_full_name: FullObjectName,
     pub to_name: String,
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSecretPlan {
+    pub id: GlobalId,
+    pub secret: Secret,
 }
 
 #[derive(Debug)]
