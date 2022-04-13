@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use async_trait::async_trait;
+use derivative::Derivative;
 use dyn_clonable::clonable;
 
 /// An orchestrator manages services.
@@ -44,7 +45,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Clone + Send {
     async fn ensure_service(
         &mut self,
         id: &str,
-        config: ServiceConfig,
+        config: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
@@ -56,19 +57,25 @@ pub trait NamespacedOrchestrator: fmt::Debug + Clone + Send {
 
 /// Describes a running service managed by an `Orchestrator`.
 pub trait Service: fmt::Debug {
-    /// Returns the hostnames for each of the service's processes, in order.
-    fn hosts(&self) -> Vec<String>;
+    /// Given the name of a port, returns the addresses for each of the
+    /// service's processes, in order.
+    ///
+    /// Panics if `port` does not name a valid port.
+    fn addresses(&self, port: &str) -> Vec<String>;
 }
 
 /// Describes the desired state of a service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceConfig {
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
+pub struct ServiceConfig<'a> {
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
-    /// Arguments for the process.
-    pub args: Vec<String>,
+    /// A function that generates the arguments for each process the service
+    /// given the mapping from port names to assignments.
+    #[derivative(Debug = "ignore")]
+    pub args: &'a (dyn Fn(&HashMap<String, i32>) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -91,8 +98,10 @@ pub struct ServicePort {
     ///
     /// Note that not all orchestrator backends make use of port names.
     pub name: String,
-    /// The port number.
-    pub port: i32,
+    /// The desired port number.
+    ///
+    /// Not all orchestrator backends will make use of the hint.
+    pub port_hint: i32,
 }
 
 /// Describes a limit on memory resources.

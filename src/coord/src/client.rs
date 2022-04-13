@@ -17,6 +17,7 @@ use uuid::Uuid;
 use mz_dataflow_types::PeekResponseUnary;
 use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{Datum, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
@@ -26,7 +27,6 @@ use crate::command::{
     StartupResponse,
 };
 use crate::error::CoordError;
-use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// A handle to a running coordinator.
@@ -75,7 +75,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator>,
+    id_alloc: Arc<IdAllocator<u32>>,
 }
 
 impl Client {
@@ -89,7 +89,7 @@ impl Client {
     /// Allocates a client for an incoming connection.
     pub fn new_conn(&self) -> Result<ConnClient, CoordError> {
         Ok(ConnClient {
-            conn_id: self.id_alloc.alloc()?,
+            conn_id: self.id_alloc.alloc().ok_or(CoordError::IdExhaustionError)?,
             inner: self.clone(),
         })
     }

@@ -31,6 +31,7 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
+use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -201,14 +202,20 @@ pub struct TelemetryConfig {
 
 /// Configuration for the service orchestrator.
 #[derive(Debug, Clone)]
-pub enum OrchestratorConfig {
-    /// Create a Kubernetes orchestrator.
-    Kubernetes {
-        /// The configuration for the orchestrator itself.
-        config: KubernetesOrchestratorConfig,
-        /// The dataflowd image reference to use.
-        dataflowd_image: String,
-    },
+pub struct OrchestratorConfig {
+    /// Which orchestrator backend to use.
+    pub backend: OrchestratorBackend,
+    /// The dataflowd image reference to use.
+    pub dataflowd_image: String,
+}
+
+/// The orchestrator itself.
+#[derive(Debug, Clone)]
+pub enum OrchestratorBackend {
+    /// A Kubernetes orchestrator.
+    Kubernetes(KubernetesOrchestratorConfig),
+    /// A local process orchestrator.
+    Process(ProcessOrchestratorConfig),
 }
 
 /// Configuration for the service orchestrator.
@@ -323,13 +330,20 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // Initialize orchestrator.
     let orchestrator = match config.orchestrator {
         None => None,
-        Some(OrchestratorConfig::Kubernetes {
-            config: kubernetes_config,
+        Some(OrchestratorConfig {
+            backend,
             dataflowd_image,
         }) => {
-            let orchestrator = KubernetesOrchestrator::new(kubernetes_config)
-                .await
-                .context("connecting to kubernetes")?;
+            let orchestrator: Box<dyn Orchestrator> = match backend {
+                OrchestratorBackend::Kubernetes(config) => Box::new(
+                    KubernetesOrchestrator::new(config)
+                        .await
+                        .context("connecting to kubernetes")?,
+                ),
+                OrchestratorBackend::Process(config) => {
+                    Box::new(ProcessOrchestrator::new(config).await?)
+                }
+            };
 
             if let StorageConfig::Local = &config.storage {
                 let storage_workers = 1;
@@ -339,19 +353,21 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                         "runtime",
                         ServiceConfig {
                             image: dataflowd_image.clone(),
-                            args: vec![
-                                format!("--workers={storage_workers}"),
-                                "--runtime=storage".into(),
-                                format!("--storage-addr=0.0.0.0:2101"),
-                            ],
+                            args: &|ports| {
+                                vec![
+                                    "--runtime=storage".into(),
+                                    format!("--workers={storage_workers}"),
+                                    format!("--storage-addr=0.0.0.0:{}", ports["storage"]),
+                                ]
+                            },
                             ports: vec![
                                 ServicePort {
                                     name: "controller".into(),
-                                    port: 2100,
+                                    port_hint: 2100,
                                 },
                                 ServicePort {
                                     name: "storage".into(),
-                                    port: 2101,
+                                    port_hint: 2101,
                                 },
                             ],
                             // TODO: limits?
@@ -362,10 +378,9 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                         },
                     )
                     .await?;
-                let storage_host = service.hosts().into_element();
                 config.storage = StorageConfig::Remote(RemoteStorageConfig {
-                    compute_addr: format!("{storage_host}:2101"),
-                    controller_addr: format!("{storage_host}:2100"),
+                    compute_addr: service.addresses("storage").into_element(),
+                    controller_addr: service.addresses("controller").into_element(),
                 });
             }
 
@@ -375,7 +390,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             };
 
             Some(mz_dataflow_types::client::controller::OrchestratorConfig {
-                orchestrator: Box::new(orchestrator),
+                orchestrator,
                 dataflowd_image,
                 storage_addr: remote_storage_config.compute_addr.clone(),
             })
