@@ -243,12 +243,6 @@ a    b
 #
 # Create a source using a file schema
 #
-! CREATE MATERIALIZED SOURCE data_schema_file
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
-  ENVELOPE DEBEZIUM
-contains:No such file or directory
-
 $ file-append path=data-schema.json
 \${schema}
 
@@ -279,8 +273,14 @@ $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 #
 # Test reading from the source when tx and data don't match
 #
-# Sleep to make sure we get a different RT timestamp from previous messages
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+# We want the next message to have a different timestamp
+> BEGIN
+> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (snapshot = false, progress = true)
+> FETCH 1 c
+mz_timestamp  mz_progressed  mz_diff  a       b
+-------------------------------------------------
+<TIMESTAMP>   true           <null>   <null>  <null>
+> COMMIT
 
 $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
 {"status": "BEGIN", "id": "7", "event_count": null, "data_collections": null}
@@ -307,7 +307,15 @@ a  b
 8  9
 2  7
 
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+# We want the next message to have a different timestamp
+> BEGIN
+> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (snapshot = false, progress = true)
+> FETCH 1 c
+mz_timestamp  mz_progressed  mz_diff  a       b
+-------------------------------------------------
+<TIMESTAMP>   true           <null>   <null>  <null>
+> COMMIT
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 3, "b": 9}}, "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "9"}}
 
@@ -333,6 +341,28 @@ a  b
 8  9
 2  7
 3  9
+
+$ unset-regex
+
+# Reingest to verify that we keep transactionality
+> CREATE MATERIALIZED SOURCE data_sink_reingest
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
+
+> SELECT after::text FROM data_sink_reingest ORDER BY transaction ASC
+(1,1)
+(2,3)
+(4,5)
+(8,9)
+(2,7)
+(3,9)
+
+> SELECT COUNT(*) AS event_count FROM data_sink_reingest GROUP BY transaction ORDER BY transaction ASC
+3
+1
+1
+1
 
 #
 # Testing tx_metadata specification
@@ -362,4 +392,4 @@ contains:'id' column must be of type non-nullable string
   WITH(tx_metadata = data_sink, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:tx_metadata catalog item doesn't have a desc
+contains:tx_metadata must refer to a source

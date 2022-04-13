@@ -659,7 +659,7 @@ pub fn plan_create_source(
                             let full_name = scx.catalog.resolve_full_name(item.name());
                             let tx_value_desc = item
                                 .desc(&full_name)
-                                .context("tx_metadata catalog item doesn't have a desc")?;
+                                .context("tx_metadata must refer to a source")?;
 
                             depends_on.push(item.id());
                             depends_on.extend(item.uses());
