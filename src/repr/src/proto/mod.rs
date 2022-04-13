@@ -10,6 +10,7 @@
 //! Generated protobuf code and companion impls.
 
 pub mod adt;
+pub mod chrono;
 pub mod relation;
 pub mod row;
 pub mod scalar;
@@ -33,6 +34,8 @@ pub enum TryFromProtoError {
     TryFromIntError(TryFromIntError),
     /// A wrapped [`CharTryFromError`] due to failed [`char`] conversion.
     CharTryFromError(CharTryFromError),
+    /// A date conversion failed
+    DateConversionError(String),
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
@@ -63,6 +66,7 @@ impl std::fmt::Display for TryFromProtoError {
         match self {
             TryFromIntError(error) => error.fmt(f),
             CharTryFromError(error) => error.fmt(f),
+            DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
         }
     }
@@ -74,6 +78,7 @@ impl std::error::Error for TryFromProtoError {
         match self {
             TryFromIntError(error) => Some(error),
             CharTryFromError(error) => Some(error),
+            DateConversionError(_) => None,
             MissingField(_) => None,
         }
     }
@@ -179,4 +184,14 @@ where
     let vec = U::from(&val).encode_to_vec();
     let val = U::decode(&*vec)?.try_into()?;
     Ok(val)
+}
+
+pub fn protobuf_repr_roundtrip<'t, T, U>(val: &'t T) -> anyhow::Result<T>
+where
+    T: ProtoRepr<Repr = U> + Clone,
+    U: ::prost::Message + Default,
+{
+    let t: U = val.clone().into_proto();
+    let vec = t.encode_to_vec();
+    Ok(T::from_proto(U::decode(&*vec)?)?)
 }

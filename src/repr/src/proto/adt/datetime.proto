@@ -1,0 +1,48 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package adt.datetime;
+
+import "chrono.proto";
+import "google/protobuf/empty.proto";
+
+message ProtoTimezone {
+    oneof kind {
+        chrono.ProtoFixedOffset fixed_offset = 1;
+        chrono.ProtoTz tz = 2;
+    }
+}
+
+message ProtoDateTimeUnits {
+    oneof kind {
+        google.protobuf.Empty epoch = 1;
+        google.protobuf.Empty millennium = 2;
+        google.protobuf.Empty century = 3;
+        google.protobuf.Empty decade = 4;
+        google.protobuf.Empty year = 5;
+        google.protobuf.Empty quarter = 6;
+        google.protobuf.Empty week = 7;
+        google.protobuf.Empty month = 8;
+        google.protobuf.Empty hour = 9;
+        google.protobuf.Empty day = 10;
+        google.protobuf.Empty day_of_week = 11;
+        google.protobuf.Empty day_of_year = 12;
+        google.protobuf.Empty iso_day_of_week = 13;
+        google.protobuf.Empty iso_day_of_year = 14;
+        google.protobuf.Empty minute = 15;
+        google.protobuf.Empty second = 16;
+        google.protobuf.Empty milliseconds = 17;
+        google.protobuf.Empty microseconds = 18;
+        google.protobuf.Empty timezone = 19;
+        google.protobuf.Empty timezone_hour = 20;
+        google.protobuf.Empty timezone_minute = 21;
+    }
+}
