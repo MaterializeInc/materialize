@@ -10,4 +10,3 @@ publish = false
 anyhow = "1.0.56"
 async-trait = "0.1.53"
 derivative = "2.2.0"
-dyn-clonable = "0.9.0"

@@ -11,6 +11,8 @@
 #
 # materialized — build and run materialized and its constituent services.
 
+set -euo pipefail
+
 . misc/shlib/shlib.bash
 
 release=false

@@ -9,10 +9,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use dyn_clonable::clonable;
 
 /// An orchestrator manages services.
 ///
@@ -27,29 +27,27 @@ use dyn_clonable::clonable;
 ///
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
-#[clonable]
-pub trait Orchestrator: fmt::Debug + Clone + Send {
+pub trait Orchestrator: fmt::Debug + Send + Sync {
     /// Enter a namespace in the orchestrator.
-    fn namespace(&self, namespace: &str) -> Box<dyn NamespacedOrchestrator>;
+    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }
 
 /// An orchestrator restricted to a single namespace.
-#[clonable]
 #[async_trait]
-pub trait NamespacedOrchestrator: fmt::Debug + Clone + Send {
+pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Ensures that a service with the given configuration is running.
     ///
     /// If a service with the same ID already exists, its configuration is
     /// updated to match `config`. This may or may not involve restarting the
     /// service, depending on whether the existing service matches `config`.
     async fn ensure_service(
-        &mut self,
+        &self,
         id: &str,
         config: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&mut self, id: &str) -> Result<(), anyhow::Error>;
+    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
