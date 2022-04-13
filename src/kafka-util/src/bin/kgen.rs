@@ -529,18 +529,18 @@ struct Args {
     )]
     key_format: KeyFormat,
     /// Minimum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("keys", "random"))]
+    #[clap(long, required_if_eq("key-format", "random"))]
     key_min: Option<u64>,
     /// Maximum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("keys", "random"))]
+    #[clap(long, required_if_eq("key-format", "random"))]
     key_max: Option<u64>,
     /// Schema describing Avro key data to randomly generate, if using
     /// Avro-formatted keys.
-    #[clap(long, required_if_eq("keys", "avro"))]
+    #[clap(long, required_if_eq("key-format", "avro"))]
     avro_key_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro key object, if using Avro-formatted keys.
-    #[clap(long, required_if_eq("keys", "avro"))]
+    #[clap(long, required_if_eq("key-format", "avro"))]
     avro_key_distribution: Option<serde_json::Value>,
 
     // == Value arguments. ==
