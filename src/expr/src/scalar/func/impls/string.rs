@@ -20,6 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::adt::char::{format_str_trim, Char, CharLength};
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
@@ -117,7 +118,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
 
 impl fmt::Display for CastStringToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("i64tonumeric")
+        f.write_str("strtonumeric")
     }
 }
 
@@ -500,3 +501,11 @@ impl fmt::Display for CastStringToInt2Vector {
         f.write_str("strtoint2vector")
     }
 }
+
+sqlfunc!(
+    #[sqlname = "strtojsonb"]
+    // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
+    fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+        strconv::parse_jsonb(a).map_err(|e| e.into())
+    }
+);

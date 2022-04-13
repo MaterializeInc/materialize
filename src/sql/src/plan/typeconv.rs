@@ -383,7 +383,7 @@ lazy_static! {
             (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
             (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
             (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
-            (String, Jsonb) => Explicit: CastStringToJsonb,
+            (String, Jsonb) => Explicit: CastStringToJsonb(func::CastStringToJsonb),
             (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
@@ -528,17 +528,17 @@ lazy_static! {
             }),
 
             // JSONB
-            (Jsonb, Bool) => Explicit: CastJsonbToBool,
-            (Jsonb, Int16) => Explicit: CastJsonbToInt16,
-            (Jsonb, Int32) => Explicit: CastJsonbToInt32,
-            (Jsonb, Int64) => Explicit: CastJsonbToInt64,
-            (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
-            (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
+            (Jsonb, Bool) => Explicit: CastJsonbToBool(func::CastJsonbToBool),
+            (Jsonb, Int16) => Explicit: CastJsonbToInt16(func::CastJsonbToInt16),
+            (Jsonb, Int32) => Explicit: CastJsonbToInt32(func::CastJsonbToInt32),
+            (Jsonb, Int64) => Explicit: CastJsonbToInt64(func::CastJsonbToInt64),
+            (Jsonb, Float32) => Explicit: CastJsonbToFloat32(func::CastJsonbToFloat32),
+            (Jsonb, Float64) => Explicit: CastJsonbToFloat64(func::CastJsonbToFloat64),
             (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(func::CastJsonbToNumeric(s))))
             }),
-            (Jsonb, String) => Assignment: CastJsonbToString,
+            (Jsonb, String) => Assignment: CastJsonbToString(func::CastJsonbToString),
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString(func::CastUuidToString),
@@ -607,7 +607,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
         Int16 | Int32 | Float32 | Float64 => plan_cast(
             ecx,
             CastContext::Explicit,
@@ -615,7 +617,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             &Numeric { max_scale: None },
         )
         .expect("cast known to exist")
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -633,7 +637,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 exprs,
             }
         }
-        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
     }
 }
 

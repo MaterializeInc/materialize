@@ -159,136 +159,17 @@ pub fn or<'a>(
     }
 }
 
-// TODO(jamii): it would be much more efficient to skip the intermediate
-// repr::jsonb::Jsonb.
-fn cast_string_to_jsonb<'a>(
-    a: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let jsonb = strconv::parse_jsonb(a.unwrap_str())?;
-    Ok(temp_storage.push_unary_row(jsonb.into_row()))
-}
-
-fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_jsonb(&mut buf, JsonbRef::from_datum(a));
-    Datum::String(temp_storage.push_string(buf))
-}
-
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
         Datum::JsonNull => Datum::Null,
         Datum::String(_) => a,
-        _ => cast_jsonb_to_string(a, temp_storage),
-    }
-}
-
-fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Null => Datum::JsonNull,
-        Datum::Numeric(n) => {
-            let n = n.into_inner();
-            if n.is_finite() {
-                a
-            } else if n.is_nan() {
-                Datum::String("NaN")
-            } else if n.is_negative() {
-                Datum::String("-Infinity")
-            } else {
-                Datum::String("Infinity")
-            }
+        _ => {
+            let s = cast_jsonb_to_string(JsonbRef::from_datum(a));
+            Datum::String(temp_storage.push_string(s))
         }
-        _ => a,
     }
 }
 
-fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()).map(|d| d.into()),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "smallint".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()).map(|d| d.into()),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "integer".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()).map(|d| d.into()),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "bigint".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()).map(|d| d.into()),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "real".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()).map(|d| d.into()),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "double precision".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_numeric<'a>(
-    a: Datum<'a>,
-    scale: Option<NumericMaxScale>,
-) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::Numeric(_) => match scale {
-            None => Ok(a),
-            Some(scale) => rescale_numeric(a, scale),
-        },
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "numeric".into(),
-        }),
-    }
-}
-
-fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match a {
-        Datum::True | Datum::False => Ok(a),
-        _ => Err(EvalError::InvalidJsonbCast {
-            from: jsonb_type(a).into(),
-            to: "boolean".into(),
-        }),
-    }
-}
-
-fn jsonb_type(d: Datum<'_>) -> &'static str {
-    match d {
-        Datum::JsonNull => "null",
-        Datum::False | Datum::True => "boolean",
-        Datum::String(_) => "string",
-        Datum::Numeric(_) => "numeric",
-        Datum::List(_) => "array",
-        Datum::Map(_) => "object",
-        _ => unreachable!("jsonb_type called on invalid datum {:?}", d),
-    }
-}
 /// Casts between two record types by casting each element of `a` ("record1") using
 /// `cast_expr` and collecting the results into a new record ("record2").
 fn cast_record1_to_record2<'a>(
@@ -3378,16 +3259,16 @@ pub enum UnaryFunc {
     CastPgLegacyCharToString(CastPgLegacyCharToString),
     CastPgLegacyCharToInt32(CastPgLegacyCharToInt32),
     CastBytesToString(CastBytesToString),
-    CastStringToJsonb,
-    CastJsonbToString,
-    CastJsonbOrNullToJsonb,
-    CastJsonbToInt16,
-    CastJsonbToInt32,
-    CastJsonbToInt64,
-    CastJsonbToFloat32,
-    CastJsonbToFloat64,
-    CastJsonbToNumeric(Option<NumericMaxScale>),
-    CastJsonbToBool,
+    CastStringToJsonb(CastStringToJsonb),
+    CastJsonbToString(CastJsonbToString),
+    CastJsonbOrNullToJsonb(CastJsonbOrNullToJsonb),
+    CastJsonbToInt16(CastJsonbToInt16),
+    CastJsonbToInt32(CastJsonbToInt32),
+    CastJsonbToInt64(CastJsonbToInt64),
+    CastJsonbToFloat32(CastJsonbToFloat32),
+    CastJsonbToFloat64(CastJsonbToFloat64),
+    CastJsonbToNumeric(CastJsonbToNumeric),
+    CastJsonbToBool(CastJsonbToBool),
     CastUuidToString(CastUuidToString),
     CastRecordToString {
         ty: ScalarType,
@@ -3653,6 +3534,16 @@ derive_unary!(
     CastPgLegacyCharToString,
     CastPgLegacyCharToInt32,
     CastBytesToString,
+    CastStringToJsonb,
+    CastJsonbToString,
+    CastJsonbOrNullToJsonb,
+    CastJsonbToInt16,
+    CastJsonbToInt32,
+    CastJsonbToInt64,
+    CastJsonbToFloat32,
+    CastJsonbToFloat64,
+    CastJsonbToNumeric,
+    CastJsonbToBool,
     CastVarCharToString,
     Chr
 );
@@ -3831,17 +3722,17 @@ impl UnaryFunc {
             | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
+            | CastStringToJsonb(_)
+            | CastJsonbToString(_)
+            | CastJsonbOrNullToJsonb(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_)
+            | CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
             | Chr(_) => unreachable!(),
-            CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
-            CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
-            CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
-            CastJsonbToInt16 => cast_jsonb_to_int16(a),
-            CastJsonbToInt32 => cast_jsonb_to_int32(a),
-            CastJsonbToInt64 => cast_jsonb_to_int64(a),
-            CastJsonbToFloat32 => cast_jsonb_to_float32(a),
-            CastJsonbToFloat64 => cast_jsonb_to_float64(a),
-            CastJsonbToNumeric(scale) => cast_jsonb_to_numeric(a, *scale),
-            CastJsonbToBool => cast_jsonb_to_bool(a),
             CastRecordToString { ty }
             | CastArrayToString { ty }
             | CastListToString { ty }
@@ -4070,14 +3961,22 @@ impl UnaryFunc {
             | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
+            | CastStringToJsonb(_)
+            | CastJsonbToString(_)
+            | CastJsonbOrNullToJsonb(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_)
+            | CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
             | Chr(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
             IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
-
-            CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4090,26 +3989,11 @@ impl UnaryFunc {
             | Upper
             | Lower => ScalarType::String.nullable(nullable),
 
-            CastJsonbToNumeric(scale) => {
-                ScalarType::Numeric { max_scale: *scale }.nullable(nullable)
-            }
-
             TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
 
             TimezoneTimestampTz(_) => ScalarType::Timestamp.nullable(nullable),
 
             TimezoneTimestamp(_) => ScalarType::TimestampTz.nullable(nullable),
-
-            // converts null to jsonnull
-            CastJsonbOrNullToJsonb => ScalarType::Jsonb.nullable(nullable),
-
-            CastJsonbToString => ScalarType::String.nullable(nullable),
-            CastJsonbToInt16 => ScalarType::Int16.nullable(nullable),
-            CastJsonbToInt32 => ScalarType::Int32.nullable(nullable),
-            CastJsonbToInt64 => ScalarType::Int64.nullable(nullable),
-            CastJsonbToFloat32 => ScalarType::Float32.nullable(nullable),
-            CastJsonbToFloat64 => ScalarType::Float64.nullable(nullable),
-            CastJsonbToBool => ScalarType::Bool.nullable(nullable),
 
             CastRecord1ToRecord2 { return_ty, .. } => {
                 return_ty.without_modifiers().nullable(nullable)
@@ -4160,8 +4044,6 @@ impl UnaryFunc {
     pub fn propagates_nulls_manual(&self) -> bool {
         match self {
             UnaryFunc::Not(_) => unreachable!(),
-            // converts null to jsonnull
-            UnaryFunc::CastJsonbOrNullToJsonb => false,
             _ => true,
         }
     }
@@ -4331,10 +4213,17 @@ impl UnaryFunc {
             | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
+            | CastStringToJsonb(_)
+            | CastJsonbToString(_)
+            | CastJsonbOrNullToJsonb(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_)
+            | CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
             | Chr(_) => unreachable!(),
-            // These return null when their input is SQL null.
-            CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
-            | CastJsonbToFloat32 | CastJsonbToFloat64 | CastJsonbToBool => true,
             // Return null if the inner field is null
             RecordGet(_) => true,
             // Always returns null
@@ -4345,8 +4234,7 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsLikeMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
-            CastStringToJsonb => false,
+            IsLikeMatch(_) | IsRegexpMatch(_) => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
@@ -4357,7 +4245,6 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
-            CastJsonbToNumeric(_) => false,
             TimezoneTime { .. } => false,
             TimezoneTimestampTz(_) => false,
             TimezoneTimestamp(_) => false,
@@ -4446,6 +4333,16 @@ impl UnaryFunc {
             | JustifyDays(_)
             | JustifyHours(_)
             | JustifyInterval(_)
+            | CastStringToJsonb(_)
+            | CastJsonbToString(_)
+            | CastJsonbOrNullToJsonb(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_)
+            | CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4614,17 +4511,17 @@ impl UnaryFunc {
             | CastPgLegacyCharToInt32(_)
             | CastBytesToString(_)
             | CastVarCharToString(_)
+            | CastStringToJsonb(_)
+            | CastJsonbToString(_)
+            | CastJsonbOrNullToJsonb(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_)
+            | CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
             | Chr(_) => unreachable!(),
-            CastStringToJsonb => f.write_str("strtojsonb"),
-            CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
-            CastJsonbToString => f.write_str("jsonbtostr"),
-            CastJsonbToInt16 => f.write_str("jsonbtoi16"),
-            CastJsonbToInt32 => f.write_str("jsonbtoi32"),
-            CastJsonbToInt64 => f.write_str("jsonbtoi64"),
-            CastJsonbToFloat32 => f.write_str("jsonbtof32"),
-            CastJsonbToFloat64 => f.write_str("jsonbtof64"),
-            CastJsonbToBool => f.write_str("jsonbtobool"),
-            CastJsonbToNumeric(_) => f.write_str("jsonbtonumeric"),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
             CastArrayToString { .. } => f.write_str("arraytostr"),

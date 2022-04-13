@@ -34,7 +34,7 @@ reduce
 )
 [jsonb]
 ----
-isnull(jsonbtoi32(#0))
+isnull(#0)
 
 # IsNull around a single BinaryFunc.
 

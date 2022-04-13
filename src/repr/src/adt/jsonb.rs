@@ -159,13 +159,18 @@ pub struct JsonbRef<'a> {
     datum: Datum<'a>,
 }
 
-impl JsonbRef<'_> {
+impl<'a> JsonbRef<'a> {
     /// Constructs a `JsonbRef` from a [`Datum`].
     ///
     /// Note that `datum` is not checked for validity. Not all `Datum`s are
     /// valid JSON.
     pub fn from_datum(datum: Datum) -> JsonbRef {
         JsonbRef { datum }
+    }
+
+    /// Unwrapps a `JsonbRef` and returns the inner [`Datum`].
+    pub fn into_datum(self) -> Datum<'a> {
+        self.datum
     }
 
     /// Constructs an owned [`Jsonb`] from this `JsonbRef`.
