@@ -149,7 +149,7 @@ Implicit in this design are a few key points:
 Check out:
 
 - [Key Concepts](/overview/key-concepts/) to better understand Materialize's API
-- [Get started](/speedrun) to try out Materialize
+- [Get started](/get-started) to try out Materialize
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

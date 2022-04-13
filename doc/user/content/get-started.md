@@ -1,12 +1,10 @@
 ---
-title: "Speedrun: Materialize a View"
+title: "Get Started: Materialize a View"
 description: "Get started with Materialize"
 menu:
   main:
     parent: 'overview'
     weight: 10
-aliases:
-  - /get-started
   - /katacoda/
 ---
 
