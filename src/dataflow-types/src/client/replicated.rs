@@ -22,11 +22,12 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
 
 use crate::client::Peek;
+use crate::PeekResponse;
 use mz_expr::GlobalId;
 
 use super::{ComputeClient, GenericClient};
@@ -47,6 +48,7 @@ pub struct ActiveReplication<C, T> {
     history: crate::client::ComputeCommandHistory<T>,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
     last_command_count: usize,
+    pending_responses: VecDeque<ComputeResponse<T>>,
 }
 
 impl<C, T> Default for ActiveReplication<C, T> {
@@ -58,6 +60,7 @@ impl<C, T> Default for ActiveReplication<C, T> {
             uppers: Default::default(),
             history: Default::default(),
             last_command_count: 0,
+            pending_responses: Default::default(),
         }
     }
 }
@@ -129,6 +132,13 @@ where
         // Register an interest in the peek.
         if let ComputeCommand::Peek(Peek { uuid, .. }) = &cmd {
             self.peeks.insert(*uuid);
+        } else if let ComputeCommand::CancelPeeks { uuids } = &cmd {
+            for uuid in uuids {
+                if self.peeks.remove(uuid) {
+                    let response = ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled);
+                    self.pending_responses.push_back(response);
+                }
+            }
         }
 
         // Initialize any necessary frontier tracking.
@@ -181,7 +191,9 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        if self.replicas.is_empty() {
+        if let Some(response) = self.pending_responses.pop_front() {
+            return Ok(Some(response));
+        } else if self.replicas.is_empty() {
             // We want to communicate that the result is not ready
             futures::future::pending().await
         } else {
