@@ -2116,30 +2116,7 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            self.catalog.state(),
-            &mut secret.secret_as,
-            ExprPrepStyle::OneShot {
-                logical_time: None,
-                session,
-            },
-        )?;
-        let evaled = secret.secret_as.eval(&[], &temp_storage)?;
-
-        if evaled == Datum::Null {
-            coord_bail!("secret value can not be null");
-        }
-
-        let payload = evaled.unwrap_bytes();
-
-        // Limit the size of a secret to 512 KiB
-        // This is the largest size of a single secret in Consul/Kubernetes
-        // We are enforcing this limit across all types of Secrets Controllers
-        // Most secrets are expected to be roughly 75B
-        if payload.len() > 1024 * 512 {
-            coord_bail!("secrets can not be bigger than 512KiB")
-        }
+        let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog.allocate_user_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2149,7 +2126,7 @@ impl Coordinator {
 
         self.secrets_controller.apply(vec![SecretOp::Ensure {
             id,
-            contents: Vec::from(payload),
+            contents: payload,
         }])?;
 
         let ops = vec![catalog::Op::CreateItem {
@@ -4375,6 +4352,21 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let AlterSecretPlan { id, mut secret_as } = plan;
 
+        let payload = self.extract_secret(session, &mut secret_as)?;
+
+        self.secrets_controller.apply(vec![SecretOp::Ensure {
+            id,
+            contents: payload,
+        }])?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
+    }
+
+    fn extract_secret(
+        &mut self,
+        session: &Session,
+        mut secret_as: &mut MirScalarExpr,
+    ) -> Result<Vec<u8>, CoordError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
@@ -4400,12 +4392,7 @@ impl Coordinator {
             coord_bail!("secrets can not be bigger than 512KiB")
         }
 
-        self.secrets_controller.apply(vec![SecretOp::Ensure {
-            id,
-            contents: Vec::from(payload),
-        }])?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
+        return Ok(Vec::from(payload));
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]

@@ -3096,7 +3096,7 @@ pub fn plan_alter_secret(
     scx: &StatementContext,
     stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE SECRET")?;
+    scx.require_experimental_mode("ALTER SECRET")?;
 
     let AlterSecretStatement {
         name,
@@ -3117,7 +3117,7 @@ pub fn plan_alter_secret(
     };
     if entry.item_type() != CatalogItemType::Secret {
         bail!(
-            "{} is a {} not a secret",
+            "{} is a {} not a SECRET",
             name.full_name_str(),
             entry.item_type()
         )
