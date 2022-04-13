@@ -1,6 +1,6 @@
 ---
 title: "Java and Materialize"
-description: "Use PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize."
+description: "Use the PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize."
 weight:
 menu:
   main:
