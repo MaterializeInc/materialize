@@ -31,7 +31,6 @@ steps:
           - { value: testdrive-partitions-5 }
           - { value: persistence-testdrive }
           - { value: feature-benchmark }
-          - { value: feature-benchmark-persistence }
           - { value: aws-config }
           - { value: zippy }
           - { value: secrets }
@@ -66,21 +65,6 @@ steps:
           args:
             - --other-tag
             - latest
-
-  - id: feature-benchmark-persistence
-    label: "Feature benchmark against latest release with persistence"
-    timeout_in_minutes: 180
-    depends_on: build-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --other-tag
-            - latest
-            - --this-options
-            - "--persistent-user-tables --persistent-kafka-sources"
-            - --other-options
-            - "--persistent-user-tables --persistent-kafka-sources"
 
   - id: coverage
     label: Code coverage
