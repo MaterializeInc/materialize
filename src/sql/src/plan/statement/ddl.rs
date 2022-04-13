@@ -24,6 +24,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_postgres_util::TableInfo;
+use mz_repr::adt::interval::Interval;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -2695,6 +2696,12 @@ pub fn plan_create_cluster(
     }))
 }
 
+const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
+    micros: 1_000_000,
+    months: 0,
+    days: 0,
+};
+
 fn plan_cluster_options(
     options: Vec<ClusterOption>,
 ) -> Result<ComputeInstanceConfig, anyhow::Error> {
@@ -2725,7 +2732,8 @@ fn plan_cluster_options(
                 if introspection_granularity.is_some() {
                     bail!("INTROSPECTION GRANULARITY specified more than once");
                 }
-                introspection_granularity = Some(with_option_type!(Some(interval), Interval));
+                introspection_granularity =
+                    Some(with_option_type!(Some(interval), OptionalInterval));
             }
             ClusterOption::Size(s) => {
                 if size.is_some() {
@@ -2735,6 +2743,9 @@ fn plan_cluster_options(
             }
         }
     }
+
+    let introspection_granularity =
+        introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
 
     let introspection = match (introspection_debugging, introspection_granularity) {
         (None | Some(false), None) => None,
