@@ -3191,8 +3191,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 } else {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.
-                    let name = self.get_item_by_oid(&pgrepr_type.oid()).name();
-                    self.resolve_full_name(name).to_string()
+                    let name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: pg_catalog_schema,
+                        },
+                        item: pgrepr_type.name().to_string(),
+                    };
+                    self.resolve_full_name(&name).to_string()
                 };
                 res
             }
