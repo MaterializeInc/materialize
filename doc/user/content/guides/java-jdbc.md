@@ -7,7 +7,7 @@ menu:
     parent: guides
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that Java applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use [PostgreSQL JDBC Driver](https://jdbc.postgresql.org/download.html) to connect to Materialize and issue PostgreSQL commands.
+Materialize is **PostgreSQL-compatible**, which means that Java applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the [PostgreSQL JDBC Driver](https://jdbc.postgresql.org/download.html) to connect to Materialize and issue PostgreSQL commands.
 
 ## Connect
 
