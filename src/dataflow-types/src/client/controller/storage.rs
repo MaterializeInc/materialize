@@ -455,6 +455,12 @@ where
             }
             durability_updates.push((*id, write_frontier));
         }
+
+        // Note: this seal is not performed in a transaction with the above `update_many`.
+        // This is fine/correct, but subtle. If we crash in between these 2 writes, the
+        // updates will be read in their entirety, and future updates past the old upper will
+        // still be accepted. Later seals will never erroneously seal times for ts bindings
+        // that were recorded, because we always record bindings before seal-ing here.
         self.state.stash.seal_batch(&seals)?;
 
         self.update_durability_frontiers(durability_updates).await?;
