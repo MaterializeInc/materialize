@@ -601,18 +601,16 @@ class Composition:
             stdin: read STDIN from a string.
         """
 
-        entrypoint = (
-            self.compose["services"][service]["entrypoint"]
-            if "entrypoint" in self.compose["services"][service]
-            else None
-        )
-
         return self.invoke(
             "exec",
             *(["--detach"] if detach else []),
             "-T",
             service,
-            *([entrypoint] if entrypoint else []),
+            *(
+                self.compose["services"][service]["entrypoint"]
+                if "entrypoint" in self.compose["services"][service]
+                else []
+            ),
             *args,
             stdin=stdin,
         )
