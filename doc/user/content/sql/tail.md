@@ -342,7 +342,7 @@ while (true)
 | [GO](/guides/golang/#stream) |
 ### Using `AS OF`
 
-Start Materialize with a custom compaction window [`--logical-compaction-window 10000`](/cli/#compaction-window) and create a non-materialized view:
+Start Materialize with a custom compaction window [`--logical-compaction-window 10s`](/cli/#compaction-window) and create a non-materialized view:
 
 ```sql
 CREATE VIEW most_scheduled_worker AS
@@ -355,7 +355,7 @@ CREATE VIEW most_scheduled_worker AS
   LIMIT 1;
 ```
 
-Create an index and set a the compaction:
+Create an index and set the compaction window:
 
 ```sql
 CREATE INDEX most_scheduled_worker_idx
@@ -383,8 +383,8 @@ After all the rows from the `SNAPSHOT` have been transmitted, the updates will b
 | 2            | false         | -1      | id1      |      | value1   |
 | 2            | false         | 1       | id1      |      | value4   |
 
-If you already know your data, then any _column_ acting as a key will do the work but if the key is unknown, then using a `hash(columns_values)` could serve as your key. <br/><br/>
-Back to the example, `Column 1` acts as the key to know from where the update comes from; in case this was unknown, hashing the values from `Column 1` to `Column N` should reveal the origin row.
+If your data has a unique key, this can be used to map an update to its corresponding row; if the key is unknown, you can use the output of `hash(columns_values)` instead. <br/><br/>
+In the example above, `Column 1` acts as the key that uniquely identifies the row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
 
 ---
 
