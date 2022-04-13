@@ -376,7 +376,7 @@ Stream out all changes starting 10 seconds before the statement's execution time
 COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
 ```
 
-Take into account, for this example, that ten logical seconds need to pass by inside Materialize to browse and recover changes from the last ten seconds.
+Take into account that, in this example, 10 logical seconds need to pass within Materialize to browse and recover changes from the last 10 seconds.
 
 ### Mapping rows to their updates
 
