@@ -274,12 +274,18 @@ where
                 let response = response?;
                 match &response {
                     Some(StorageResponse::TimestampBindings(feedback)) => {
-                        self.storage_controller
-                            .update_write_frontiers(&feedback.changes)
-                            .await?;
+
+                        // !!! The ordering is important here. We can never
+                        // communicate a new upper or save them in a local
+                        // datastructure before we durably record ts bindings
+                        // as otherwise a crash could cause dataloss
 
                         self.storage_controller
                             .persist_timestamp_bindings(&feedback)
+                            .await?;
+
+                        self.storage_controller
+                            .update_write_frontiers(&feedback.changes)
                             .await?;
                     }
                     Some(StorageResponse::LinearizedTimestamps(_)) => {
