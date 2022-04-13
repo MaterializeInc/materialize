@@ -4,7 +4,7 @@ description: "Understand Materialize's architecture."
 menu:
   main:
     parent: 'overview'
-    weight: 20
+    weight: 10
 aliases:
   - /overview/api-components/
 ---

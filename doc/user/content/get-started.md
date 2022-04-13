@@ -4,7 +4,9 @@ description: "Get started with Materialize"
 menu:
   main:
     parent: 'overview'
-    weight: 10
+    weight: 20
+    name: 'Get Started'
+aliases:
   - /katacoda/
 ---
 
