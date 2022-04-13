@@ -267,7 +267,7 @@ with conn.cursor() as cur:
             print(row)
 ```
 
-#### `Streaming` with Python and psycopg3
+#### `Stream` with Python and psycopg3
 
 {{< warning >}}
 psycopg3 is not yet stable.
