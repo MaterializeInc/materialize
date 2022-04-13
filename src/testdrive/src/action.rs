@@ -537,7 +537,8 @@ pub(crate) async fn build(
                     "s3-add-notifications" => {
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
-                    "set-regex" => Box::new(set::build_regex(builtin).map_err(wrap_err)?),
+                    "set-regex" => Box::new(set::build_regex_set(builtin).map_err(wrap_err)?),
+                    "unset-regex" => Box::new(set::build_regex_unset(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         Box::new(set::build_sql_timeout(builtin).map_err(wrap_err)?)
                     }
