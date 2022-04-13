@@ -2453,12 +2453,7 @@ fn invent_column_name(
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
-                _ => {
-                    let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
-                    let pgrepr_type = mz_pgrepr::Type::from(&ty);
-                    let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
-                    Some((entry.name().item.clone().into(), NameQuality::Low))
-                }
+                _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
             Expr::Case { else_result, .. } => {
                 match else_result
