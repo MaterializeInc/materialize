@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Note: protobuf does not support cyclic imports. Thus, this file contains
+// both, definitions from relation.rs and scalar.rs
+
 syntax = "proto3";
 
-package scalar;
+package relation_and_scalar;
 
 import "google/protobuf/empty.proto";
 import "adt/char.proto";
@@ -17,8 +20,6 @@ import "adt/numeric.proto";
 import "adt/varchar.proto";
 
 
-// Note: protobuf does not support cyclic imports. ProtoColumnName and ProtoScalarType
-// belong to proto/relation.proto if it was supported.
 message ProtoColumnName {
     optional string value = 1;
 }

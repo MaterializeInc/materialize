@@ -13,7 +13,7 @@ fn main() {
             &[
                 "row.proto",
                 "strconv.proto",
-                "scalar.proto",
+                "relation_and_scalar.proto",
                 "adt/array.proto",
                 "adt/char.proto",
                 "adt/numeric.proto",

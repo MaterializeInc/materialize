@@ -7,54 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Protobuf structs mirroring [`crate::scalar`] and [`crate::relation`]
+//! Protobuf structs mirroring `crate::scalar`
 
-include!(concat!(env!("OUT_DIR"), "/scalar.rs"));
-use crate::proto::scalar::proto_scalar_type::ProtoRecordField;
+pub use super::private::proto_scalar_type::ProtoRecordField;
+pub use super::private::ProtoScalarType;
 use crate::proto::TryFromProtoError;
 use crate::proto::TryIntoIfSome;
 use crate::scalar::ScalarType;
 use crate::{ColumnName, ColumnType};
-
-impl From<&ColumnName> for ProtoColumnName {
-    fn from(x: &ColumnName) -> Self {
-        ProtoColumnName {
-            value: Some(x.0.clone()),
-        }
-    }
-}
-
-impl TryFrom<ProtoColumnName> for ColumnName {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
-        Ok(ColumnName(x.value.ok_or_else(|| {
-            TryFromProtoError::MissingField("ProtoColumnName::value".into())
-        })?))
-    }
-}
-
-impl From<&ColumnType> for ProtoColumnType {
-    fn from(x: &ColumnType) -> Self {
-        ProtoColumnType {
-            nullable: x.nullable,
-            scalar_type: Some((&x.scalar_type).into()),
-        }
-    }
-}
-
-impl TryFrom<ProtoColumnType> for ColumnType {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoColumnType) -> Result<Self, Self::Error> {
-        Ok(ColumnType {
-            nullable: x.nullable,
-            scalar_type: x
-                .scalar_type
-                .try_into_if_some("ProtoColumnType::scalar_type")?,
-        })
-    }
-}
 
 impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
     fn from(x: &(ColumnName, ColumnType)) -> Self {
@@ -86,8 +46,8 @@ impl From<&ScalarType> for Box<ProtoScalarType> {
 
 impl From<&ScalarType> for ProtoScalarType {
     fn from(value: &ScalarType) -> Self {
-        use proto_scalar_type::Kind::*;
-        use proto_scalar_type::*;
+        use super::private::proto_scalar_type::Kind::*;
+        use super::private::proto_scalar_type::*;
 
         ProtoScalarType {
             kind: Some(match value {
@@ -156,7 +116,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
     type Error = TryFromProtoError;
 
     fn try_from(value: ProtoScalarType) -> Result<Self, TryFromProtoError> {
-        use proto_scalar_type::Kind::*;
+        use super::private::proto_scalar_type::Kind::*;
 
         let kind = value
             .kind
@@ -224,6 +184,22 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                 ),
                 custom_oid: x.custom_oid,
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+       #[test]
+        fn scalar_type_serialization_roundtrip(expect in any::<ScalarType>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

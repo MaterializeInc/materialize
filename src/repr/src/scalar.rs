@@ -31,6 +31,12 @@ use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
+use proptest::prelude::*;
+
 /// A single value.
 ///
 /// Note that `Datum` must always derive [`Eq`] to enforce equality with
@@ -1742,6 +1748,93 @@ impl<'a> ScalarType {
             }
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
+    }
+}
+
+// See the chapter "Generating Recurisve Data" from the proptest book:
+// https://altsysrq.github.io/proptest-book/proptest/tutorial/recursive.html
+#[cfg(feature = "test-utils")]
+impl Arbitrary for ScalarType {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<ScalarType>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // A strategy for generating the leaf cases of ScalarType
+        let leaf = prop_oneof![
+            Just(ScalarType::Bool),
+            Just(ScalarType::Int16),
+            Just(ScalarType::Int32),
+            Just(ScalarType::Int64),
+            Just(ScalarType::Float32),
+            Just(ScalarType::Float64),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|max_scale| ScalarType::Numeric { max_scale }),
+            Just(ScalarType::Date),
+            Just(ScalarType::Time),
+            Just(ScalarType::Timestamp),
+            Just(ScalarType::TimestampTz),
+            Just(ScalarType::Interval),
+            Just(ScalarType::PgLegacyChar),
+            Just(ScalarType::Bytes),
+            Just(ScalarType::String),
+            any::<Option<CharLength>>().prop_map(|length| ScalarType::Char { length }),
+            any::<Option<VarCharMaxLength>>()
+                .prop_map(|max_length| ScalarType::VarChar { max_length }),
+            Just(ScalarType::Jsonb),
+            Just(ScalarType::Uuid),
+            Just(ScalarType::Oid),
+            Just(ScalarType::RegProc),
+            Just(ScalarType::RegType),
+            Just(ScalarType::RegClass),
+            Just(ScalarType::Int2Vector),
+        ];
+
+        leaf.prop_recursive(
+            2, // For now, just go one level deep
+            4,
+            5,
+            |inner| {
+                prop_oneof![
+                    // Array
+                    inner.clone().prop_map(|x| ScalarType::Array(Box::new(x))),
+                    // List
+                    (inner.clone(), any::<Option<u32>>()).prop_map(|(x, oid)| ScalarType::List {
+                        element_type: Box::new(x),
+                        custom_oid: oid
+                    }),
+                    // Map
+                    (inner.clone(), any::<Option<u32>>()).prop_map(|(x, oid)| ScalarType::Map {
+                        value_type: Box::new(x),
+                        custom_oid: oid
+                    }),
+                    // Record
+                    {
+                        // Now we have to use `inner` to create a Record type. First we
+                        // create strategy that creates ColumnType.
+                        let column_type_strat =
+                            (inner, any::<bool>()).prop_map(|(scalar_type, nullable)| ColumnType {
+                                scalar_type,
+                                nullable,
+                            });
+
+                        // Then we use that to create the fields of the record case.
+                        // fields has type vec<(ColumnName,ColumnType)>
+                        let fields_strat =
+                            prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
+
+                        // Now we combine it with the default strategies to get Records.
+                        (fields_strat, any::<Option<u32>>(), any::<Option<String>>()).prop_map(
+                            |(fields, custom_oid, custom_name)| ScalarType::Record {
+                                fields,
+                                custom_oid,
+                                custom_name,
+                            },
+                        )
+                    }
+                ]
+            },
+        )
+        .boxed()
     }
 }
 
