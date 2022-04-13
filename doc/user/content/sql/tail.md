@@ -23,6 +23,7 @@ You can use `TAIL` to:
 
 -   Power event processors that react to every change to a relation or an arbitrary `SELECT` statement.
 -   Replicate the complete history of a relation while the `TAIL` is active.
+-   Test a SQL select statement over non-materialized views
 
 ## Syntax
 
@@ -204,7 +205,7 @@ Below are the recommended ways to work around this.
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-As an example, let's tail the [`mz_scheduling_elapsed`](/sql/system-catalog/#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow. 
+As an example, let's tail the [`mz_scheduling_elapsed`](/sql/system-catalog/#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow.
 
 <br/><br/>
 First, declare a `TAIL` cursor:
@@ -260,7 +261,7 @@ dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed")
+    cur.execute("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed)")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
@@ -288,7 +289,7 @@ conn = psycopg3.connect(dsn)
 
 conn = psycopg3.connect(dsn)
 with conn.cursor() as cur:
-    for row in cur.stream("TAIL t"):
+    for row in cur.stream("TAIL (SELECT * FROM t)"):
         print(row)
 ```
 
@@ -296,7 +297,7 @@ with conn.cursor() as cur:
 
 ```csharp
 var txn = conn.BeginTransaction();
-new NpgsqlCommand("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed", conn, txn).ExecuteNonQuery();
+new NpgsqlCommand("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed)", conn, txn).ExecuteNonQuery();
 while (true)
 {
     using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
@@ -324,7 +325,7 @@ while (true)
 
   conn.setAutoCommit(false);
 
-  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL mz_scheduling_elapsed;");
+  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed);");
 
   while (true) {
       ResultSet fetchResultSet = stmt.executeQuery("FETCH 100 c WITH (timeout='1s');");
@@ -340,9 +341,15 @@ while (true)
 | [Node.js](/guides/node-js/#stream)|
 | [PHP](/guides/php-pdo/#stream)|
 | [GO](/guides/golang/#stream) |
-### Using `AS OF`
+### Using AS OF
 
-Start Materialize with a custom compaction window [`--logical-compaction-window 10s`](/cli/#compaction-window) and create a non-materialized view:
+[`AS OF`](#as-of) requires Materialize to start with a custom [compaction window](/cli/#compaction-window) otherwise it will default to `0`.
+
+```shell
+docker run -p 6875:6875 materialize/materialized:{{< version >}} --logical-compaction-window 10s
+```
+
+Create a non-materialized view:
 
 ```sql
 CREATE VIEW most_scheduled_worker AS
@@ -385,40 +392,3 @@ After all the rows from the `SNAPSHOT` have been transmitted, the updates will b
 
 If your data has a unique key, this can be used to map an update to its corresponding row; if the key is unknown, you can use the output of `hash(columns_values)` instead. <br/><br/>
 In the example above, `Column 1` acts as the key that uniquely identifies the row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
-
----
-
-#### Changelog
-
-{{< version-changed v0.20.0 >}}
-Support arbitrary SELECT statements in `TAIL`.
-{{</ version-changed >}}
-
-{{< version-changed v0.8.1 >}}
-Columns names added by `TAIL` now prepended by `mz_`.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-`TAIL` is now guaranteed to send timestamps in non-decreasing order.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
-`WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.2 >}}
-The [`PROGRESS`](#progress) option has been added.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-The timestamp and diff information moved to leading, well-typed columns.
-Previously the timestamp and diff information was encoded in a human-readable
-string in a trailing [`text`](/sql/types/text) column.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-`TAIL` sends rows to the client normally, i.e., as if they were sent by a
-[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
-a [`COPY TO`](/sql/copy-to) statement.
-{{</ version-changed >}}
