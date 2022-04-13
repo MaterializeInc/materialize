@@ -712,6 +712,13 @@ impl Consensus for MemConsensus {
                                  new.seqno, expected)));
             }
         }
+
+        if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
+            return Err(ExternalError::from(anyhow!(
+                "sequence numbers must fit within [0, i64::MAX], received: {:?}",
+                new.seqno
+            )));
+        }
         let mut store = self.data.lock().await;
 
         let data = store.get(key);

@@ -283,7 +283,9 @@ pub struct VersionedData {
 ///
 /// Users are expected to use this API with consistently increasing sequence numbers
 /// to allow multiple processes across multiple machines to agree to a total order
-/// of the evolution of the data.
+/// of the evolution of the data. To make roundtripping through various forms of durable
+/// storage easier, sequence numbers used with [Consensus] need to be restricted to the
+/// range [0, i64::MAX].
 ///
 /// TODO: Do we need to expose the evolution of this data across a series of versions?
 #[async_trait]
@@ -304,6 +306,8 @@ pub trait Consensus: std::fmt::Debug {
     /// number does not equal `expected` or if `new`'s sequence number is less than or
     /// equal to the current sequence number. It is invalid to call this function with
     /// a `new` and `expected` such that `new`'s sequence number is <= `expected`.
+    /// It is invalid to call this function with a sequence number outside of the range
+    /// [0, i64::MAX].
     ///
     /// This data is initialized to None, and the first call to compare_and_set needs to
     /// happen with None as the expected value to set the state.
@@ -1034,6 +1038,61 @@ pub mod tests {
                 .await,
             Ok(Ok(()))
         );
+
+        // Sequence numbers used within Consensus have to be within [0, i64::MAX].
+
+        assert_eq!(
+            consensus
+                .compare_and_set(
+                    &"zero",
+                    deadline,
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(0),
+                        data: vec![],
+                    }
+                )
+                .await,
+            Ok(Ok(()))
+        );
+        assert_eq!(
+            consensus
+                .compare_and_set(
+                    &"i64_max",
+                    deadline,
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(i64::MAX.try_into().expect("i64::MAX fits in u64")),
+                        data: vec![],
+                    }
+                )
+                .await,
+            Ok(Ok(()))
+        );
+        assert!(consensus
+            .compare_and_set(
+                &"i64_max_plus_one",
+                deadline,
+                None,
+                VersionedData {
+                    seqno: SeqNo(1 << 63),
+                    data: vec![],
+                }
+            )
+            .await
+            .is_err());
+        assert!(consensus
+            .compare_and_set(
+                &"u64_max",
+                deadline,
+                None,
+                VersionedData {
+                    seqno: SeqNo(u64::MAX),
+                    data: vec![],
+                }
+            )
+            .await
+            .is_err());
 
         Ok(())
     }

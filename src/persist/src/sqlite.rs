@@ -15,7 +15,8 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use rusqlite::{named_params, params, Connection, OptionalExtension};
+use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
+use rusqlite::{named_params, params, Connection, Error as SqliteError, OptionalExtension};
 use tokio::sync::Mutex;
 
 use crate::error::Error;
@@ -26,11 +27,37 @@ const APPLICATION_ID: i32 = 0x0678_ef32; // chosen randomly
 const SCHEMA: &str = "
 CREATE TABLE consensus (
     shard text NOT NULL,
-    sequence_number integer NOT NULL,
+    sequence_number bigint NOT NULL,
     data blob NOT NULL,
     PRIMARY KEY(shard, sequence_number)
 );
 ";
+
+impl ToSql for SeqNo {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>, SqliteError> {
+        // We can only represent sequence numbers in the range [0, i64::MAX].
+        let value = match i64::try_from(self.0) {
+            Ok(value) => value,
+            Err(e) => return Err(SqliteError::ToSqlConversionFailure(Box::new(e))),
+        };
+        Ok(ToSqlOutput::Owned(Value::Integer(value)))
+    }
+}
+
+impl FromSql for SeqNo {
+    fn column_result(value: ValueRef<'_>) -> Result<Self, FromSqlError> {
+        let sequence_number = <i64 as FromSql>::column_result(value)?;
+
+        // Sanity check that the sequence number we received from sqlite falls
+        // in the [0, i64::MAX] range.
+        let sequence_number = match u64::try_from(sequence_number) {
+            Ok(seqno) => seqno,
+            Err(e) => return Err(FromSqlError::Other(Box::new(e))),
+        };
+
+        Ok(SeqNo(sequence_number))
+    }
+}
 
 /// Implementation of [Consensus] over a sqlite database.
 #[derive(Debug)]
@@ -73,7 +100,7 @@ impl SqliteConsensus {
              WHERE shard = $shard AND sequence_number < $sequence_number",
         )?;
 
-        stmt.execute(named_params! {"$shard": key, "$sequence_number": sequence_number.0})?;
+        stmt.execute(named_params! {"$shard": key, "$sequence_number": sequence_number})?;
 
         Ok(())
     }
@@ -92,12 +119,9 @@ impl Consensus for SqliteConsensus {
                  WHERE shard = $shard ORDER BY sequence_number DESC LIMIT 1",
         )?;
         stmt.query_row(named_params! {"$shard": key}, |row| {
-            let sequence_number = row.get("sequence_number")?;
+            let seqno = row.get("sequence_number")?;
             let data: Vec<_> = row.get("data")?;
-            Ok(VersionedData {
-                seqno: SeqNo(sequence_number),
-                data,
-            })
+            Ok(VersionedData { seqno, data })
         })
         .optional()
         .map_err(|e| e.into())
@@ -140,9 +164,9 @@ impl Consensus for SqliteConsensus {
 
             stmt.execute(named_params! {
                 "$shard": key,
-                "$sequence_number": new.seqno.0,
+                "$sequence_number": new.seqno,
                 "$data": new.data,
-                "$expected": expected.0,
+                "$expected": expected,
             })?
         } else {
             let conn = self.conn.lock().await;
@@ -157,7 +181,7 @@ impl Consensus for SqliteConsensus {
             )?;
             stmt.execute(named_params! {
                 "$shard": key,
-                "$sequence_number": new.seqno.0,
+                "$sequence_number": new.seqno,
                 "$data": new.data,
             })?
         };
