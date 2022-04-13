@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -41,7 +42,6 @@ pub struct KubernetesOrchestratorConfig {
 }
 
 /// An orchestrator backed by Kubernetes.
-#[derive(Clone)]
 pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
@@ -83,8 +83,8 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
-    fn namespace(&self, namespace: &str) -> Box<dyn NamespacedOrchestrator> {
-        Box::new(NamespacedKubernetesOrchestrator {
+    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+        Arc::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
             stateful_set_api: Api::default_namespaced(self.client.clone()),
             pod_api: Api::default_namespaced(self.client.clone()),
@@ -118,7 +118,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     async fn ensure_service(
-        &mut self,
+        &self,
         id: &str,
         ServiceConfig {
             image,
@@ -310,7 +310,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     }
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&mut self, id: &str) -> Result<(), anyhow::Error> {
+    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
         let res = self
             .stateful_set_api

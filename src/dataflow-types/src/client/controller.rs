@@ -175,7 +175,7 @@ where
             if let Some(OrchestratorConfig { orchestrator, .. }) = &mut self.orchestrator {
                 orchestrator
                     .namespace("compute")
-                    .drop_service(&format!("instance-{instance}"))
+                    .drop_service(&format!("cluster-{instance}"))
                     .await?;
             }
             compute.client.send(ComputeCommand::DropInstance).await?;

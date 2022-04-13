@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use itertools::Itertools;
 use scopeguard::defer;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::{error, info};
@@ -40,10 +40,11 @@ pub struct ProcessOrchestratorConfig {
 /// **This orchestrator is for development only.** Due to limitations in the
 /// Unix process API, it does not exactly conform to the documented semantics
 /// of `Orchestrator`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<IdAllocator<i32>>,
+    namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
 }
 
 impl ProcessOrchestrator {
@@ -57,33 +58,37 @@ impl ProcessOrchestrator {
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir)?,
             port_allocator: Arc::new(IdAllocator::new(*port_range.start(), *port_range.end())),
+            namespaces: Mutex::new(HashMap::new()),
         })
     }
 }
 
 impl Orchestrator for ProcessOrchestrator {
-    fn namespace(&self, namespace: &str) -> Box<dyn NamespacedOrchestrator> {
-        Box::new(NamespacedProcessOrchestrator {
-            namespace: namespace.into(),
-            image_dir: self.image_dir.clone(),
-            port_allocator: Arc::clone(&self.port_allocator),
-            supervisors: Arc::new(Mutex::new(HashMap::new())),
-        })
+    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+        let mut namespaces = self.namespaces.lock().expect("lock poisoned");
+        Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
+            Arc::new(NamespacedProcessOrchestrator {
+                namespace: namespace.into(),
+                image_dir: self.image_dir.clone(),
+                port_allocator: Arc::clone(&self.port_allocator),
+                supervisors: Mutex::new(HashMap::new()),
+            })
+        }))
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
     port_allocator: Arc<IdAllocator<i32>>,
-    supervisors: Arc<Mutex<HashMap<String, Vec<JoinHandle<()>>>>>,
+    supervisors: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
 }
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     async fn ensure_service(
-        &mut self,
+        &self,
         id: &str,
         ServiceConfig {
             image,
@@ -116,46 +121,20 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             processes.push(ports.clone());
             handles.push(mz_ore::task::spawn(
                 || format!("service-supervisor: {full_id}"),
-                {
-                    let full_id = full_id.clone();
-                    let args = args.clone();
-                    let path = path.clone();
-                    let port_allocator = Arc::clone(&self.port_allocator);
-                    async move {
-                        defer! {
-                            for port in ports.values() {
-                                port_allocator.free(*port);
-                            }
-                        }
-                        loop {
-                            info!(
-                                "Launching {}: {} {}...",
-                                full_id,
-                                path.display(),
-                                args.iter().join(" ")
-                            );
-                            match Command::new(&path).args(&args).status().await {
-                                Ok(status) => {
-                                    error!("{} exited: {}; relaunching in 5s", full_id, status);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "{} failed to launch: {}; relaunching in 5s",
-                                        full_id, e
-                                    );
-                                }
-                            }
-                            time::sleep(Duration::from_secs(5)).await;
-                        }
-                    }
-                },
+                supervise(
+                    full_id.clone(),
+                    path.clone(),
+                    args.clone(),
+                    Arc::clone(&self.port_allocator),
+                    ports.values().cloned().collect(),
+                ),
             ))
         }
         supervisors.insert(id.into(), handles);
         Ok(Box::new(ProcessService { processes }))
     }
 
-    async fn drop_service(&mut self, id: &str) -> Result<(), anyhow::Error> {
+    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         let mut supervisors = self.supervisors.lock().expect("lock poisoned");
         if let Some(handles) = supervisors.remove(id) {
             for handle in handles {
@@ -168,6 +147,46 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let supervisors = self.supervisors.lock().expect("lock poisoned");
         Ok(supervisors.keys().cloned().collect())
+    }
+}
+
+async fn supervise(
+    full_id: String,
+    path: PathBuf,
+    args: Vec<String>,
+    port_allocator: Arc<IdAllocator<i32>>,
+    ports: Vec<i32>,
+) {
+    defer! {
+        for port in ports {
+            port_allocator.free(port);
+        }
+    }
+    loop {
+        info!(
+            "Launching {}: {} {}...",
+            full_id,
+            path.display(),
+            args.iter().join(" ")
+        );
+        match Command::new(&path).args(&args).spawn() {
+            Ok(process) => {
+                let status = KillOnDropChild(process).0.wait().await;
+                error!("{} exited: {:?}; relaunching in 5s", full_id, status);
+            }
+            Err(e) => {
+                error!("{} failed to launch: {}; relaunching in 5s", full_id, e);
+            }
+        };
+        time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+struct KillOnDropChild(Child);
+
+impl Drop for KillOnDropChild {
+    fn drop(&mut self) {
+        let _ = self.0.start_kill();
     }
 }
 
