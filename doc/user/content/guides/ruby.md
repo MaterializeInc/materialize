@@ -105,7 +105,7 @@ res.each do |row|
 end
 ```
 
-For more details, see the  [`exec` instancemethod](https://rubydoc.info/gems/pg/0.10.0/PGconn#exec-instance_method) documentation.
+For more details, see the  [`exec` instance method](https://rubydoc.info/gems/pg/0.10.0/PGconn#exec-instance_method) documentation.
 
 ## Insert data into tables
 
