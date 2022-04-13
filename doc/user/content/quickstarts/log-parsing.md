@@ -1,5 +1,5 @@
 ---
-title: "SQL on Streaming Logs"
+title: "Run SQL on Streaming Logs"
 description: "Find out how Materialize can extract meaningful data from logs in real time."
 aliases:
   - /demos/log-parsing/
