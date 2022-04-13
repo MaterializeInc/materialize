@@ -3123,16 +3123,9 @@ pub fn plan_alter_secret(
         )
     }
     let id = entry.id();
-
-    let create_sql = normalize::create_statement(&scx, Statement::AlterSecret(stmt.clone()))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
-    let secret = Secret {
-        create_sql,
-        secret_as,
-    };
-
-    Ok(Plan::AlterSecret(AlterSecretPlan { id, secret }))
+    Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
 pub fn describe_alter_cluster(

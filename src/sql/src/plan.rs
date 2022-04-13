@@ -395,7 +395,7 @@ pub struct AlterItemRenamePlan {
 #[derive(Debug)]
 pub struct AlterSecretPlan {
     pub id: GlobalId,
-    pub secret: Secret,
+    pub secret_as: MirScalarExpr,
 }
 
 #[derive(Debug)]

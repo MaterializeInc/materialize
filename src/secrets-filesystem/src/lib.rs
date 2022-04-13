@@ -35,8 +35,9 @@ impl SecretsController for FilesystemSecretsController {
                     let file_path = self.secrets_storage_path.join(format!("{}", id));
                     let mut file = OpenOptions::new()
                         .mode(0o600)
-                        .create_new(true)
+                        .create(true)
                         .write(true)
+                        .truncate(true)
                         .open(file_path)?;
                     file.write_all(contents)?;
                     file.sync_all()?;

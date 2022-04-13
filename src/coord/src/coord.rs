@@ -2111,7 +2111,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateSecretPlan {
             name,
-            secret,
+            mut secret,
             full_name,
             if_not_exists,
         } = plan;
@@ -2119,7 +2119,7 @@ impl Coordinator {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
-            &mut secret.secret_as.clone(),
+            &mut secret.secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: None,
                 session,
@@ -4373,18 +4373,18 @@ impl Coordinator {
         session: &Session,
         plan: AlterSecretPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let AlterSecretPlan { id, secret } = plan;
+        let AlterSecretPlan { id, mut secret_as } = plan;
 
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
-            &mut secret.secret_as.clone(),
+            &mut secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: None,
                 session,
             },
         )?;
-        let evaled = secret.secret_as.eval(&[], &temp_storage)?;
+        let evaled = secret_as.eval(&[], &temp_storage)?;
 
         if evaled == Datum::Null {
             coord_bail!("secret value can not be null");
