@@ -1413,4 +1413,4 @@ ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { secret_name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
