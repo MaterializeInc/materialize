@@ -56,7 +56,7 @@ use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
     AlterClusterStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AstInfo, AvroSchema, ClusterOption, ColumnOption, Compression,
+    AlterSecretStatement, AvroSchema, ClusterOption, ColumnOption, Compression,
     CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
     CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
@@ -1176,10 +1176,10 @@ fn typecheck_debezium_transaction_metadata(
     })
 }
 
-fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
-    format: &CreateSourceFormat<T>,
+fn get_encoding(
+    format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
-    with_options: &Vec<SqlOption<T>>,
+    with_options: &Vec<SqlOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
@@ -1209,9 +1209,9 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
     Ok(encoding)
 }
 
-fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
-    format: &Format<T>,
-    with_options: &Vec<SqlOption<T>>,
+fn get_encoding_inner(
+    format: &Format<Aug>,
+    with_options: &Vec<SqlOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -2765,9 +2765,9 @@ fn plan_cluster_options(
     }
 }
 
-pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
+pub fn describe_create_secret(
     _: &StatementContext,
-    _: &CreateSecretStatement<T>,
+    _: &CreateSecretStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3030,7 +3030,7 @@ pub fn plan_drop_cluster(
 pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
-    names: Vec<<Aug as AstInfo>::ObjectName>,
+    names: Vec<ResolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     let items: Vec<_> = names
