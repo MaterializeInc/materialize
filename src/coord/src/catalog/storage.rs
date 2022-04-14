@@ -400,7 +400,7 @@ impl Connection {
 
     pub fn load_introspection_source_index_gids(
         &self,
-        compute_id: i64,
+        compute_id: ComputeInstanceId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
         self.inner
             .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
@@ -444,7 +444,7 @@ impl Connection {
     /// Panics if provided id is not a system id
     pub fn set_introspection_source_index_gids(
         &mut self,
-        mappings: Vec<(i64, &str, GlobalId)>,
+        mappings: Vec<(ComputeInstanceId, &str, GlobalId)>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
@@ -602,7 +602,7 @@ impl Transaction<'_> {
         cluster_name: &str,
         config: &ComputeInstanceConfig,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<i64, Error> {
+    ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         let id = match self
@@ -717,17 +717,28 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+    pub fn remove_compute_instance(
+        &self,
+        name: &str,
+        compute_id: ComputeInstanceId,
+    ) -> Result<(), Error> {
         let n = self
             .inner
             .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
             .execute(params![name])?;
         assert!(n <= 1);
-        if n == 1 {
-            Ok(())
-        } else {
-            Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
+        if n != 1 {
+            return Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into());
         }
+
+        let _ = self
+            .inner
+            .prepare_cached(
+                "DELETE FROM compute_introspection_source_indexes WHERE compute_id = ?",
+            )?
+            .execute(params![compute_id])?;
+
+        Ok(())
     }
 
     pub fn remove_item(&self, id: GlobalId) -> Result<(), Error> {

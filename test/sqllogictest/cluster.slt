@@ -188,3 +188,13 @@ DROP CLUSTER baz CASCADE
 query T
 SELECT name FROM mz_indexes;
 ----
+
+# Test that dropping a cluster and re-creating it with the same name is valid
+statement ok
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
