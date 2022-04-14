@@ -2772,11 +2772,7 @@ impl Coordinator {
             instance_ids.push(instance.id);
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            let compute_id = self.catalog.resolve_compute_instance(name.as_str())?.id;
-            ops.push(catalog::Op::DropComputeInstance {
-                name,
-                id: compute_id,
-            });
+            ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;

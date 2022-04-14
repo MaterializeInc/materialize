@@ -2364,11 +2364,11 @@ impl Catalog {
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
                 }
-                Op::DropComputeInstance { name, id } => {
+                Op::DropComputeInstance { name } => {
                     if name == "default" {
                         coord_bail!("cannot drop the default cluster");
                     }
-                    tx.remove_compute_instance(&name, id)?;
+                    tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     vec![Action::DropComputeInstance { name }]
                 }
@@ -2997,7 +2997,6 @@ pub enum Op {
     },
     DropComputeInstance {
         name: String,
-        id: ComputeInstanceId,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules

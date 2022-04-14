@@ -110,9 +110,9 @@ const MIGRATIONS: &[&dyn Migration] = &[
      );
 
      CREATE TABLE compute_introspection_source_indexes (
-        compute_id integer NOT NULL,
+        compute_id integer NOT NULL REFERENCES compute_instances,
         name text NOT NULL,
-        index_id integer NOT NULL,
+        index_id integer NOT NULL UNIQUE,
         PRIMARY KEY (compute_id, name)
      );
 
@@ -717,28 +717,25 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn remove_compute_instance(
-        &self,
-        name: &str,
-        compute_id: ComputeInstanceId,
-    ) -> Result<(), Error> {
+    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+        let _ = self
+            .inner
+            .prepare_cached(
+                "DELETE FROM compute_introspection_source_indexes WHERE compute_id =
+                    (SELECT id FROM compute_instances WHERE name = ?)",
+            )?
+            .execute(params![name])?;
+
         let n = self
             .inner
             .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
             .execute(params![name])?;
         assert!(n <= 1);
-        if n != 1 {
-            return Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into());
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         }
-
-        let _ = self
-            .inner
-            .prepare_cached(
-                "DELETE FROM compute_introspection_source_indexes WHERE compute_id = ?",
-            )?
-            .execute(params![compute_id])?;
-
-        Ok(())
     }
 
     pub fn remove_item(&self, id: GlobalId) -> Result<(), Error> {
