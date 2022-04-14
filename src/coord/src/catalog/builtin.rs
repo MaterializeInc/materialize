@@ -1086,7 +1086,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("category", ScalarType::String.nullable(false)),
         persistent: false,
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
@@ -1576,6 +1577,23 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
     (CASE mztype WHEN 'a' THEN 'b' ELSE mztype END)::pg_catalog.char AS typtype,
+    (CASE category
+        WHEN 'array' THEN 'A'
+        WHEN 'bit-string' THEN 'V'
+        WHEN 'boolean' THEN 'B'
+        WHEN 'composite' THEN 'C'
+        WHEN 'date-time' THEN 'D'
+        WHEN 'enum' THEN 'E'
+        WHEN 'geometric' THEN 'G'
+        WHEN 'list' THEN 'U' -- List types are user-defined from PostgreSQL's perspective.
+        WHEN 'network-address' THEN 'I'
+        WHEN 'numeric' THEN 'N'
+        WHEN 'pseudo' THEN 'P'
+        WHEN 'string' THEN 'S'
+        WHEN 'timespan' THEN 'T'
+        WHEN 'user-defined' THEN 'U'
+        WHEN 'unknown' THEN 'X'
+    END) AS typcategory,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
     coalesce(

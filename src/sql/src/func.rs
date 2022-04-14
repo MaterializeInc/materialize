@@ -23,6 +23,7 @@ use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::ast::{SelectStatement, Statement};
+use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{resolve_names, resolve_names_expr, PartialObjectName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -53,27 +54,6 @@ impl<'a> fmt::Display for FuncSpec<'a> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Mirrored from [PostgreSQL's `typcategory`][typcategory].
-///
-/// Note that Materialize also uses a number of pseudotypes when planning, but
-/// we have yet to need to integrate them with `TypeCategory`.
-///
-/// [typcategory]:
-/// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
-pub enum TypeCategory {
-    Array,
-    Bool,
-    Composite,
-    DateTime,
-    List,
-    Numeric,
-    Pseudo,
-    String,
-    Timespan,
-    UserDefined,
-}
-
 impl TypeCategory {
     /// Extracted from PostgreSQL 9.6.
     /// ```sql,ignore
@@ -87,9 +67,10 @@ impl TypeCategory {
     /// ORDER BY typcategory;
     /// ```
     pub fn from_type(typ: &ScalarType) -> Self {
+        // Keep this in sync with `from_catalog_type`.
         match typ {
             ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
-            ScalarType::Bool => Self::Bool,
+            ScalarType::Bool => Self::Boolean,
             ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
@@ -143,6 +124,43 @@ impl TypeCategory {
         }
     }
 
+    /// Like `from_type`, but for catalog types.
+    // TODO(benesch): would be nice to figure out how to share code with
+    // `from_type`, but the refactor to enable that would be substantial.
+    pub fn from_catalog_type<T>(catalog_type: &CatalogType<T>) -> Self
+    where
+        T: TypeReference,
+    {
+        // Keep this in sync with `from_type`.
+        match catalog_type {
+            CatalogType::Array { .. } | CatalogType::Int2Vector => Self::Array,
+            CatalogType::Bool => Self::Boolean,
+            CatalogType::Bytes | CatalogType::Jsonb | CatalogType::Uuid => Self::UserDefined,
+            CatalogType::Date
+            | CatalogType::Time
+            | CatalogType::Timestamp
+            | CatalogType::TimestampTz => Self::DateTime,
+            CatalogType::Float32
+            | CatalogType::Float64
+            | CatalogType::Int16
+            | CatalogType::Int32
+            | CatalogType::Int64
+            | CatalogType::Oid
+            | CatalogType::RegClass
+            | CatalogType::RegProc
+            | CatalogType::RegType
+            | CatalogType::Numeric { .. } => Self::Numeric,
+            CatalogType::Interval => Self::Timespan,
+            CatalogType::List { .. } => Self::List,
+            CatalogType::PgLegacyChar
+            | CatalogType::String
+            | CatalogType::Char { .. }
+            | CatalogType::VarChar { .. } => Self::String,
+            CatalogType::Record { .. } => TypeCategory::Composite,
+            CatalogType::Map { .. } | CatalogType::Pseudo => Self::Pseudo,
+        }
+    }
+
     /// Extracted from PostgreSQL 9.6.
     /// ```ignore
     /// SELECT typcategory, typname, typispreferred
@@ -152,8 +170,18 @@ impl TypeCategory {
     /// ```
     pub fn preferred_type(&self) -> Option<ScalarType> {
         match self {
-            Self::Array | Self::Composite | Self::List | Self::Pseudo | Self::UserDefined => None,
-            Self::Bool => Some(ScalarType::Bool),
+            Self::Array
+            | Self::BitString
+            | Self::Composite
+            | Self::Enum
+            | Self::Geometric
+            | Self::List
+            | Self::NetworkAddress
+            | Self::Pseudo
+            | Self::Range
+            | Self::Unknown
+            | Self::UserDefined => None,
+            Self::Boolean => Some(ScalarType::Bool),
             Self::DateTime => Some(ScalarType::TimestampTz),
             Self::Numeric => Some(ScalarType::Float64),
             Self::String => Some(ScalarType::String),

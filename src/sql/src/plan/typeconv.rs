@@ -25,7 +25,7 @@ use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
-use crate::func::TypeCategory;
+use crate::catalog::TypeCategory;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
