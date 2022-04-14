@@ -207,7 +207,6 @@ These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#r
 This allows you to limit the number of rows and the time window of your requests.
 As an example, let's tail the [`mz_scheduling_elapsed`](/sql/system-catalog/#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow.
 
-<br/><br/>
 First, declare a `TAIL` cursor:
 
 ```sql
@@ -380,7 +379,7 @@ Take into account that, in this example, 10 logical seconds need to pass within 
 
 ### Mapping rows to their updates
 
-After all the rows from the `SNAPSHOT` have been transmitted, the updates will be emitted as they occur. How can you map each row to its corresponding update? <br/>
+After all the rows from the [`SNAPSHOT`](#snapshot) have been transmitted, the updates will be emitted as they occur. How can you map each row to its corresponding update?
 
 | mz_timestamp | mz_progressed | mz_diff | Column 1 | .... | Column N |
 | ------------ | ------------- | ------- | -------- | ---- | -------- | --------------------------- |
@@ -390,5 +389,6 @@ After all the rows from the `SNAPSHOT` have been transmitted, the updates will b
 | 2            | false         | -1      | id1      |      | value1   |
 | 2            | false         | 1       | id1      |      | value4   |
 
-If your data has a unique key, this can be used to map an update to its corresponding row; if the key is unknown, you can use the output of `hash(columns_values)` instead. <br/><br/>
-In the example above, `Column 1` acts as the key that uniquely identifies the row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
+If your row has a unique column key, it is possible to map the update to its corresponding origin row; if the key is unknown, you can use the output of `hash(columns_values)` instead.
+
+In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
