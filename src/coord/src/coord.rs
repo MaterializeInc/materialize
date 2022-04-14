@@ -5155,20 +5155,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
         _ => return Ok(()),
     };
     match typ {
-        // File sources and sinks are prohibited in safe mode because they allow
-        // reading from and writing to arbitrary files on disk.
-        SourceConnectorType::File => {
-            return Err(CoordError::SafeModeViolation(format!(
-                "file {}",
-                source_or_sink
-            )));
-        }
-        SourceConnectorType::AvroOcf => {
-            return Err(CoordError::SafeModeViolation(format!(
-                "Avro OCF {}",
-                source_or_sink
-            )));
-        }
         // Kerberos-authenticated Kafka sources and sinks are prohibited in
         // safe mode because librdkafka will blindly execute the string passed
         // as `sasl_kerberos_kinit_cmd`.

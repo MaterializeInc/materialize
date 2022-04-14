@@ -231,7 +231,6 @@ where
 {
     match connector {
         SinkConnector::Kafka(connector) => Box::new(connector.clone()),
-        SinkConnector::AvroOcf(connector) => Box::new(connector.clone()),
         SinkConnector::Tail(connector) => Box::new(connector.clone()),
     }
 }

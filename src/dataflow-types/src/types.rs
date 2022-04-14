@@ -455,6 +455,8 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum DataEncoding {
             Avro(AvroEncoding),
+            // Note(guswynn): currently unused, left to support
+            // avro ocf s3 sinks someday
             AvroOcf(AvroOcfEncoding),
             Protobuf(ProtobufEncoding),
             Csv(CsvEncoding),
@@ -1694,7 +1696,6 @@ pub mod sources {
 pub mod sinks {
 
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
     use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
@@ -1731,7 +1732,6 @@ pub mod sinks {
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
-        AvroOcf(AvroOcfSinkConnector),
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1766,17 +1766,10 @@ pub mod sinks {
         pub value_schema_id: i32,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AvroOcfSinkConnector {
-        pub value_desc: RelationDesc,
-        pub path: PathBuf,
-    }
-
     impl SinkConnector {
         /// Returns the name of the sink connector.
         pub fn name(&self) -> &'static str {
             match self {
-                SinkConnector::AvroOcf(_) => "avro-ocf",
                 SinkConnector::Kafka(_) => "kafka",
                 SinkConnector::Tail(_) => "tail",
             }
@@ -1799,7 +1792,6 @@ pub mod sinks {
         pub fn requires_source_compaction_holdback(&self) -> bool {
             match self {
                 SinkConnector::Kafka(k) => k.exactly_once,
-                SinkConnector::AvroOcf(_) => false,
                 SinkConnector::Tail(_) => false,
             }
         }
@@ -1809,7 +1801,6 @@ pub mod sinks {
         pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
             match self {
                 SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
-                SinkConnector::AvroOcf(_) => &[],
                 SinkConnector::Tail(_) => &[],
             }
         }
@@ -1821,14 +1812,6 @@ pub mod sinks {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkConnectorBuilder {
         Kafka(KafkaSinkConnectorBuilder),
-        AvroOcf(AvroOcfSinkConnectorBuilder),
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AvroOcfSinkConnectorBuilder {
-        pub path: PathBuf,
-        pub file_name_suffix: String,
-        pub value_desc: RelationDesc,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

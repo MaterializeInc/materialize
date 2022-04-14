@@ -16,16 +16,13 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
-use csv::ReaderBuilder;
 use mz_sql_parser::ast::KafkaSourceConnector;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use reqwest::Url;
-use tokio::fs::File;
-use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
@@ -69,7 +66,6 @@ pub async fn purify_create_source(
     let mut with_options_map = normalize::options(with_options);
     let mut config_options = BTreeMap::new();
 
-    let mut file = None;
     match connector {
         CreateSourceConnector::Kafka(KafkaSourceConnector {
             connector: broker,
@@ -165,15 +161,7 @@ pub async fn purify_create_source(
         CreateSourceConnector::PubNub { .. } => (),
     }
 
-    purify_source_format(
-        format,
-        connector,
-        &envelope,
-        file,
-        &config_options,
-        with_options,
-    )
-    .await?;
+    purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
 
     Ok(stmt)
 }
@@ -182,7 +170,6 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
     connector: &mut CreateSourceConnector,
     envelope: &Envelope,
-    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
@@ -219,7 +206,6 @@ async fn purify_source_format(
                 format,
                 connector,
                 envelope,
-                file,
                 connector_options,
                 with_options,
             )
@@ -227,29 +213,10 @@ async fn purify_source_format(
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            ensure!(
-                file.is_none(),
-                anyhow!("[internal-error] File sources cannot be key-value sources")
-            );
-
-            purify_source_format_single(
-                key,
-                connector,
-                envelope,
-                None,
-                connector_options,
-                with_options,
-            )
-            .await?;
-            purify_source_format_single(
-                val,
-                connector,
-                envelope,
-                None,
-                connector_options,
-                with_options,
-            )
-            .await?;
+            purify_source_format_single(key, connector, envelope, connector_options, with_options)
+                .await?;
+            purify_source_format_single(val, connector, envelope, connector_options, with_options)
+                .await?;
         }
     }
     Ok(())
@@ -259,7 +226,6 @@ async fn purify_source_format_single(
     format: &mut Format<Raw>,
     connector: &mut CreateSourceConnector,
     envelope: &Envelope,
-    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
@@ -313,10 +279,10 @@ async fn purify_source_format_single(
             }
         },
         Format::Csv {
-            delimiter,
+            delimiter: _,
             ref mut columns,
         } => {
-            purify_csv(file, connector, *delimiter, columns).await?;
+            purify_csv(None, connector, columns)?;
         }
         Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
     }
@@ -422,91 +388,41 @@ async fn purify_csr_connector_avro(
     Ok(())
 }
 
-pub async fn purify_csv(
-    file: Option<File>,
+pub fn purify_csv(
+    // Note(guswynn): this is currently unused, but this left here
+    // for a possible later extension where we support reading
+    // headers from the s3 file itself.
+    //
+    // This is also why this function is left in pure.rs, as obtaining this
+    // string record may require network io, despite this function
+    // being left non-async
+    from_file_headers: Option<csv::StringRecord>,
     connector: &CreateSourceConnector,
-    delimiter: char,
     columns: &mut CsvColumns,
 ) -> anyhow::Result<()> {
     if matches!(columns, CsvColumns::Header { .. })
-        && !matches!(
-            connector,
-            | CreateSourceConnector::S3 { .. }
-        )
+        && !matches!(connector, CreateSourceConnector::S3 { .. })
     {
         bail_unsupported!("CSV WITH HEADER with non-file or S3 sources");
     }
 
-    let first_row = if let Some(file) = file {
-        let file = tokio::io::BufReader::new(file);
-        let csv_header = file.lines().next_line().await;
-        if !delimiter.is_ascii() {
-            bail!("CSV delimiter must be ascii");
-        }
-        match csv_header {
-            Ok(Some(csv_header)) => {
-                let mut reader = ReaderBuilder::new()
-                    .delimiter(delimiter as u8)
-                    .has_headers(false)
-                    .from_reader(csv_header.as_bytes());
-
-                if let Some(result) = reader.records().next() {
-                    match result {
-                        Ok(headers) => Some(headers),
-                        Err(e) => bail!("Unable to parse header row: {}", e),
-                    }
-                } else {
-                    None
-                }
-            }
-            Ok(None) => {
-                if let CsvColumns::Header { names } = columns {
-                    if names.is_empty() {
-                        bail!(
-                            "CSV file expected to have at least one line \
-                             to determine column names, but is empty"
-                        );
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            Err(e) => {
-                // TODO(#7562): support compressed files
-                if let CsvColumns::Header { names } = columns {
-                    if names.is_empty() {
-                        bail!("Cannot determine header by reading CSV file: {}", e);
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-    } else {
-        None
-    };
-
-    match (&columns, first_row) {
-        (CsvColumns::Header { names }, Some(headers)) if names.is_empty() => {
+    match (&columns, from_file_headers) {
+        (CsvColumns::Header { names }, Some(from_file_headers)) if names.is_empty() => {
             *columns = CsvColumns::Header {
-                names: headers.into_iter().map(Ident::from).collect(),
+                names: from_file_headers.into_iter().map(Ident::from).collect(),
             };
         }
-        (CsvColumns::Header { names }, Some(headers)) => {
-            if names.len() != headers.len() {
+        (CsvColumns::Header { names }, Some(from_file_headers)) => {
+            if names.len() != from_file_headers.len() {
                 bail!(
                     "Named column count ({}) does not match \
                      number of columns discovered ({})",
                     names.len(),
-                    headers.len()
+                    from_file_headers.len()
                 );
             } else if let Some((sql, csv)) = names
                 .iter()
-                .zip(headers.iter())
+                .zip(from_file_headers.iter())
                 .find(|(sql, csv)| sql.as_str() != &**csv)
             {
                 bail!(
@@ -517,22 +433,8 @@ pub async fn purify_csv(
                 );
             }
         }
-        (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
-            CreateSourceConnector::S3 { .. } => {
-                bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
-            }
-            _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),
-        },
-        (CsvColumns::Header { names }, None) => {
-            // we don't need to do any verification if we are told the names of the headers
-            assert!(
-                !names.is_empty(),
-                "empty names should be caught in a previous match arm"
-            );
-        }
-
-        (CsvColumns::Count(n), first_line) => {
-            if let Some(columns) = first_line {
+        (CsvColumns::Count(n), from_file_headers) => {
+            if let Some(columns) = from_file_headers {
                 if *n != columns.len() {
                     bail!(
                         "Specified column count (WITH {} COLUMNS) \
@@ -542,6 +444,21 @@ pub async fn purify_csv(
                     );
                 }
             }
+        }
+
+        // Actual used cases
+        (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
+            CreateSourceConnector::S3 { .. } => {
+                bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
+            }
+            _ => unreachable!(),
+        },
+        (CsvColumns::Header { names }, None) => {
+            // we don't need to do any verification if we are told the names of the headers
+            assert!(
+                !names.is_empty(),
+                "empty names should be caught in a previous match arm"
+            );
         }
     }
     Ok(())

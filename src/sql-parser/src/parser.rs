@@ -2164,11 +2164,6 @@ impl<'a> Parser<'a> {
                     consistency,
                 })
             }
-            AVRO => {
-                self.expect_keyword(OCF)?;
-                let path = self.parse_literal_string()?;
-                Ok(CreateSinkConnector::AvroOcf { path })
-            }
             _ => unreachable!(),
         }
     }

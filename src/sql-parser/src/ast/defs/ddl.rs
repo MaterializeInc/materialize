@@ -639,11 +639,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                     f.write_node(consistency);
                 }
             }
-            CreateSinkConnector::AvroOcf { path } => {
-                f.write_str("AVRO OCF '");
-                f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
-            }
         }
     }
 }

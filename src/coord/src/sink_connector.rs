@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fs::OpenOptions;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -15,9 +14,8 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use rdkafka::config::ClientConfig;
 
 use mz_dataflow_types::sinks::{
-    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
-    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
+    KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
 use mz_expr::GlobalId;
 use mz_kafka_util::client::MzClientContext;
@@ -31,7 +29,6 @@ pub async fn build(
 ) -> Result<SinkConnector, CoordError> {
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
-        SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, id),
     }
 }
 
@@ -330,45 +327,5 @@ async fn build_kafka(
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
         config_options: builder.config_options,
-    }))
-}
-
-fn build_avro_ocf(
-    builder: AvroOcfSinkConnectorBuilder,
-    id: GlobalId,
-) -> Result<SinkConnector, CoordError> {
-    let mut name = match builder.path.file_stem() {
-        None => coord_bail!(
-            "unable to read file name from path {}",
-            builder.path.display()
-        ),
-        Some(stem) => stem.to_owned(),
-    };
-    name.push("-");
-    name.push(id.to_string());
-    name.push("-");
-    name.push(builder.file_name_suffix);
-    if let Some(extension) = builder.path.extension() {
-        name.push(".");
-        name.push(extension);
-    }
-
-    let path = builder.path.with_file_name(name);
-
-    // Try to create a new sink file
-    let _ = OpenOptions::new()
-        .append(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| {
-            anyhow!(
-                "unable to create avro ocf sink file {} : {}",
-                path.display(),
-                e
-            )
-        })?;
-    Ok(SinkConnector::AvroOcf(AvroOcfSinkConnector {
-        path,
-        value_desc: builder.value_desc,
     }))
 }

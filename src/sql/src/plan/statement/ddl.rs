@@ -14,7 +14,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -31,12 +30,12 @@ use tracing::{debug, warn};
 
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
-    AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-    KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, SinkConnectorBuilder,
+    SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
-    included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding, DataEncoding,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
+    RegexEncoding, SourceDataEncoding,
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
@@ -2028,30 +2027,6 @@ fn get_kafka_sink_consistency_config(
 
     Ok(result)
 }
-
-fn avro_ocf_sink_builder(
-    format: Option<Format<Aug>>,
-    path: String,
-    file_name_suffix: String,
-    value_desc: RelationDesc,
-) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    if format.is_some() {
-        bail!("avro ocf sinks cannot specify a format");
-    }
-
-    let path = PathBuf::from(path);
-
-    if path.is_dir() {
-        bail!("avro ocf sink cannot write to a directory");
-    }
-
-    Ok(SinkConnectorBuilder::AvroOcf(AvroOcfSinkConnectorBuilder {
-        path,
-        file_name_suffix,
-        value_desc,
-    }))
-}
-
 pub fn describe_create_sink(
     _: &StatementContext,
     _: &CreateSinkStatement<Raw>,
@@ -2152,7 +2127,6 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnector::AvroOcf { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2200,9 +2174,6 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnector::AvroOcf { path } => {
-            avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
-        }
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
