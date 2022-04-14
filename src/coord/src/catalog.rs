@@ -2489,16 +2489,12 @@ impl Catalog {
                         ComputeInstanceConfig::Local => InstanceConfig::Local,
                         ComputeInstanceConfig::Remote {
                             replicas,
-                            introspection,
-                        } => {
-                            InstanceConfig::Remote { replicas }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Remote { replicas },
                         ComputeInstanceConfig::Managed {
                             size,
-                            introspection,
-                        } => {
-                            InstanceConfig::Managed { size }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Managed { size },
                     };
                     vec![Action::UpdateComputeInstanceConfig { id, config }]
                 }
