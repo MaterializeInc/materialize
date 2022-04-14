@@ -110,7 +110,7 @@ const MIGRATIONS: &[&dyn Migration] = &[
      );
 
      CREATE TABLE compute_introspection_source_indexes (
-        compute_id integer NOT NULL REFERENCES compute_instances,
+        compute_id integer NOT NULL REFERENCES compute_instances (id) ON DELETE CASCADE,
         name text NOT NULL,
         index_id integer NOT NULL UNIQUE,
         PRIMARY KEY (compute_id, name)
@@ -718,14 +718,6 @@ impl Transaction<'_> {
     }
 
     pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
-        let _ = self
-            .inner
-            .prepare_cached(
-                "DELETE FROM compute_introspection_source_indexes WHERE compute_id =
-                    (SELECT id FROM compute_instances WHERE name = ?)",
-            )?
-            .execute(params![name])?;
-
         let n = self
             .inner
             .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
