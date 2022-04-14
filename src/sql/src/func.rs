@@ -1763,7 +1763,7 @@ lazy_static! {
                 params!(ArrayAny, Int64) => BinaryFunc::ArrayUpper => Int32, 2092;
             },
             "ascii" => Scalar {
-                params!(String) => UnaryFunc::Ascii, 1620;
+                params!(String) => UnaryFunc::Ascii(func::Ascii), 1620;
             },
             "avg" => Scalar {
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2100;
@@ -1778,7 +1778,7 @@ lazy_static! {
                 params!(String) => UnaryFunc::BitLengthString, 1811;
             },
             "btrim" => Scalar {
-                params!(String) => UnaryFunc::TrimWhitespace, 885;
+                params!(String) => UnaryFunc::TrimWhitespace(func::TrimWhitespace), 885;
                 params!(String, String) => BinaryFunc::Trim, 884;
             },
             "cbrt" => Scalar {
@@ -1790,7 +1790,7 @@ lazy_static! {
                 params!(Numeric) => UnaryFunc::CeilNumeric(func::CeilNumeric), 1711;
             },
             "char_length" => Scalar {
-                params!(String) => UnaryFunc::CharLength, 1381;
+                params!(String) => UnaryFunc::CharLength(func::CharLength), 1381;
             },
             "concat" => Scalar {
                 params!(Any...) => Operation::variadic(|ecx, cexprs| {
@@ -1964,7 +1964,7 @@ lazy_static! {
             "length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
                 // bpcharlen is redundant with automatic coercion to string, 1318.
-                params!(String) => UnaryFunc::CharLength, 1317;
+                params!(String) => UnaryFunc::CharLength(func::CharLength), 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
             "like_escape" => Scalar {
@@ -1991,7 +1991,7 @@ lazy_static! {
                 params!(String, Int64, String) => VariadicFunc::PadLeading, 873;
             },
             "ltrim" => Scalar {
-                params!(String) => UnaryFunc::TrimLeadingWhitespace, 881;
+                params!(String) => UnaryFunc::TrimLeadingWhitespace(func::TrimLeadingWhitespace), 881;
                 params!(String, String) => BinaryFunc::TrimLeading, 875;
             },
             "make_timestamp" => Scalar {
@@ -2210,7 +2210,7 @@ lazy_static! {
                 params!(Numeric, Int32) => BinaryFunc::RoundNumeric, 1707;
             },
             "rtrim" => Scalar {
-                params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
+                params!(String) => UnaryFunc::TrimTrailingWhitespace(func::TrimTrailingWhitespace), 882;
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
             },
             "sha224" => Scalar {

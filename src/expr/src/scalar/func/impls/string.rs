@@ -18,7 +18,7 @@ use uuid::Uuid;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_repr::adt::char::{format_str_trim, Char, CharLength};
+use mz_repr::adt::char::{format_str_trim, Char};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -370,7 +370,7 @@ impl fmt::Display for CastStringToMap {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToChar {
-    pub length: Option<CharLength>,
+    pub length: Option<mz_repr::adt::char::CharLength>,
     pub fail_on_len: bool,
 }
 
@@ -506,6 +506,44 @@ sqlfunc!(
     #[sqlname = "strtojsonb"]
     // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
     fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
-        strconv::parse_jsonb(a).map_err(|e| e.into())
+        Ok(strconv::parse_jsonb(a)?)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "btrim"]
+    fn trim_whitespace<'a>(a: &'a str) -> &'a str {
+        a.trim_matches(' ')
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "ltrim"]
+    fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
+        a.trim_start_matches(' ')
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "rtrim"]
+    fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
+        a.trim_end_matches(' ')
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "ascii"]
+    fn ascii<'a>(a: &'a str) -> i32 {
+        match a.chars().next() {
+            None => 0,
+            Some(v) => v as i32,
+        }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "char_length"]
+    fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
+        i32::try_from(a.chars().count()).or(Err(EvalError::Int32OutOfRange))
     }
 );

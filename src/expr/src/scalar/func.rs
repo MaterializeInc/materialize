@@ -466,13 +466,6 @@ where
     }
 }
 
-fn char_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i32::try_from(a.unwrap_str().chars().count()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
-}
-
 fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
@@ -1385,13 +1378,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         _ => Datum::Null,
-    }
-}
-
-fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_str().chars().next() {
-        None => Datum::Int32(0),
-        Some(v) => Datum::Int32(v as i32),
     }
 }
 
@@ -3359,12 +3345,12 @@ pub enum UnaryFunc {
     FloorFloat32(FloorFloat32),
     FloorFloat64(FloorFloat64),
     FloorNumeric(FloorNumeric),
-    Ascii,
+    Ascii(Ascii),
     BitLengthBytes,
     BitLengthString,
     ByteLengthBytes,
     ByteLengthString,
-    CharLength,
+    CharLength(CharLength),
     Chr(Chr),
     IsLikeMatch(like_pattern::Matcher),
     IsRegexpMatch(Regex),
@@ -3397,9 +3383,9 @@ pub enum UnaryFunc {
     RoundFloat32(RoundFloat32),
     RoundFloat64(RoundFloat64),
     RoundNumeric(RoundNumeric),
-    TrimWhitespace,
-    TrimLeadingWhitespace,
-    TrimTrailingWhitespace,
+    TrimWhitespace(TrimWhitespace),
+    TrimLeadingWhitespace(TrimLeadingWhitespace),
+    TrimTrailingWhitespace(TrimTrailingWhitespace),
     RecordGet(usize),
     ListLength,
     MapLength,
@@ -3666,7 +3652,12 @@ derive_unary!(
     CastJsonbToNumeric,
     CastJsonbToBool,
     CastVarCharToString,
-    Chr
+    Chr,
+    Ascii,
+    CharLength,
+    TrimWhitespace,
+    TrimTrailingWhitespace,
+    TrimLeadingWhitespace
 );
 
 impl UnaryFunc {
@@ -3853,6 +3844,11 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -3865,12 +3861,10 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            Ascii => Ok(ascii(a)),
             BitLengthString => bit_length(a.unwrap_str()),
             BitLengthBytes => bit_length(a.unwrap_bytes()),
             ByteLengthString => byte_length(a.unwrap_str()),
             ByteLengthBytes => byte_length(a.unwrap_bytes()),
-            CharLength => char_length(a),
             IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
             RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
@@ -3900,9 +3894,6 @@ impl UnaryFunc {
             JsonbTypeof => Ok(jsonb_typeof(a)),
             JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
             JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
-            TrimWhitespace => Ok(trim_whitespace(a)),
-            TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
-            TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
@@ -4092,10 +4083,16 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
             | Chr(_) => unreachable!(),
 
-            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
-            | ByteLengthString => ScalarType::Int32.nullable(nullable),
+            BitLengthBytes | BitLengthString | ByteLengthBytes | ByteLengthString => {
+                ScalarType::Int32.nullable(nullable)
+            }
 
             IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
@@ -4104,9 +4101,6 @@ impl UnaryFunc {
             | CastListToString { .. }
             | CastMapToString { .. }
             | CastInt2VectorToString
-            | TrimWhitespace
-            | TrimLeadingWhitespace
-            | TrimTrailingWhitespace
             | Upper
             | Lower => ScalarType::String.nullable(nullable),
 
@@ -4344,6 +4338,11 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
@@ -4353,17 +4352,13 @@ impl UnaryFunc {
             // Returns null on non-array input
             JsonbArrayLength => true,
 
-            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
-            | ByteLengthString => false,
+            BitLengthBytes | BitLengthString | ByteLengthBytes | ByteLengthString => false,
             IsLikeMatch(_) | IsRegexpMatch(_) => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
             | CastInt2VectorToString
-            | TrimWhitespace
-            | TrimLeadingWhitespace
-            | TrimTrailingWhitespace
             | Upper
             | Lower => false,
             TimezoneTime { .. } => false,
@@ -4464,6 +4459,11 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4642,6 +4642,11 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4650,8 +4655,6 @@ impl UnaryFunc {
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
-            Ascii => f.write_str("ascii"),
-            CharLength => f.write_str("char_length"),
             BitLengthBytes => f.write_str("bit_length"),
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
@@ -4677,9 +4680,6 @@ impl UnaryFunc {
             JsonbTypeof => f.write_str("jsonb_typeof"),
             JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
             JsonbPretty => f.write_str("jsonb_pretty"),
-            TrimWhitespace => f.write_str("btrim"),
-            TrimLeadingWhitespace => f.write_str("ltrim"),
-            TrimTrailingWhitespace => f.write_str("rtrim"),
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
@@ -6025,10 +6025,6 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     Datum::Timestamp(timestamp)
 }
 
-fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_matches(' '))
-}
-
 fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let substring: &'a str = a.unwrap_str();
     let string = b.unwrap_str();
@@ -6108,10 +6104,6 @@ fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
 }
 
-fn trim_leading_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_start_matches(' '))
-}
-
 fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
@@ -6119,10 +6111,6 @@ fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         a.unwrap_str()
             .trim_start_matches(|c| trim_chars.contains(c)),
     )
-}
-
-fn trim_trailing_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_end_matches(' '))
 }
 
 fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
