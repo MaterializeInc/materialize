@@ -2039,6 +2039,14 @@ impl AggregateExpr {
             AggregateFunc::Lag { .. } => {
                 let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
 
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let lag_type = return_type.unwrap_record_element_type()[0].clone();
+
                 // Extract the original row
                 let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
 
@@ -2048,22 +2056,22 @@ impl AggregateExpr {
                 let offset = encoded_args.clone().call_unary(UnaryFunc::RecordGet(1));
                 let default_value = encoded_args.call_unary(UnaryFunc::RecordGet(2));
 
-                // In this case, the window always has only one element, so if the offset is not zero,
-                // the default value should be returned instead.
+                // In this case, the window always has only one element, so if the offset is not null and
+                // not zero, the default value should be returned instead.
                 let value = offset
+                    .clone()
                     .call_binary(
                         MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
                         crate::BinaryFunc::Eq,
                     )
                     .if_then_else(expr, default_value);
+                let null_offset_check = offset
+                    .call_unary(crate::UnaryFunc::IsNull(crate::func::IsNull))
+                    .if_then_else(MirScalarExpr::literal_null(lag_type), value);
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
+                        elem_type: return_type,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
@@ -2072,7 +2080,7 @@ impl AggregateExpr {
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![null_offset_check, original_row],
                     }],
                 }
             }

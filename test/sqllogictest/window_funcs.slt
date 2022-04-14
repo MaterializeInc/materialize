@@ -1335,3 +1335,18 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
 1  2
 3  12
+
+# Null value in input relation
+# This was caused by a bug in the reduce elision logic
+statement ok
+CREATE TABLE t3 (f1 INTEGER)
+----
+
+statement ok
+INSERT INTO t3 VALUES (NULL)
+----
+
+query II
+SELECT f1, lag(0, f1 , 0) OVER (PARTITION BY f1 ORDER BY f1) FROM t3 GROUP BY f1 ORDER BY 1
+----
+NULL NULL
