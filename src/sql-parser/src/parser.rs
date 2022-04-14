@@ -1866,16 +1866,17 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connector = if self.parse_keyword(KAFKA) {
-            self.expect_keyword(BROKER)?;
-            let broker = self.parse_literal_string()?;
-            let with_options = self.parse_opt_with_sql_options()?;
-            CreateConnector::KafkaBroker {
-                broker,
-                with_options,
+        let connector = match self.expect_one_of_keywords(&[KAFKA])? {
+            Keyword::Kafka => {
+                self.expect_keyword(BROKER)?;
+                let broker = self.parse_literal_string()?;
+                let with_options = self.parse_opt_with_sql_options()?;
+                CreateConnector::Kafka {
+                    broker,
+                    with_options,
+                }
             }
-        } else {
-            return self.expected(self.peek_pos(), "KAFKA", self.peek_token());
+            _ => unreachable!(),
         };
         Ok(Statement::CreateConnector(CreateConnectorStatement {
             name,
@@ -2594,7 +2595,8 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW, CONNECTOR,
+            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            CONNECTOR,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -3978,7 +3980,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                COLUMNS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
+                COLUMNS, CONNECTORS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
             ])?;
             self.prev_token();
         }
@@ -3990,6 +3992,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_one_of_keywords(&[
                     COLUMNS,
+                    CONNECTORS,
                     MATERIALIZED,
                     OBJECTS,
                     ROLES,
@@ -4026,6 +4029,7 @@ impl<'a> Parser<'a> {
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
             OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
+            CONNECTORS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
@@ -4037,6 +4041,7 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
                 SECRETS => ObjectType::Secret,
+                CONNECTORS => ObjectType::Connector,
                 _ => unreachable!(),
             };
 
@@ -4126,6 +4131,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, CONNECTOR]) {
+            Ok(Statement::ShowCreateConnector(
+                ShowCreateConnectorStatement {
+                    connector_name: self.parse_raw_name()?,
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 Ident::new("transaction_isolation")

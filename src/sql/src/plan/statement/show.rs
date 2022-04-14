@@ -18,6 +18,7 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::ShowCreateConnectorStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -195,6 +196,35 @@ pub fn plan_show_create_index(
     }
 }
 
+pub fn describe_show_create_connector(
+    _: &StatementContext,
+    _: &ShowCreateConnectorStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Connector", ScalarType::String.nullable(false))
+            .with_column("Create Connector", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_connector(
+    scx: &StatementContext,
+    ShowCreateConnectorStatement { connector_name }: ShowCreateConnectorStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    let connector = scx.get_item_by_resolved_name(&connector_name)?;
+    if let CatalogItemType::Connector = connector.item_type() {
+        let name = connector_name.full_name_str();
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&name),
+                Datum::String(connector.create_sql()),
+            ])],
+        }))
+    } else {
+        bail!("'{}' is not a connector", connector_name.full_name_str());
+    }
+}
+
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement<Aug>,
@@ -275,7 +305,7 @@ pub fn show_objects<'a>(
         ObjectType::Cluster => show_clusters(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
-        ObjectType::Connector => show_connectors(scx, extended, full, from, filter), 
+        ObjectType::Connector => show_connectors(scx, extended, full, from, filter),
     }
 }
 
@@ -285,7 +315,7 @@ fn show_connectors<'a>(
     full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-)-> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
@@ -301,7 +331,6 @@ fn show_connectors<'a>(
         query = format!("SELECT name FROM ({})", query);
     }
     ShowSelect::new(scx, query, filter, None, None)
-
 }
 
 fn show_tables<'a>(

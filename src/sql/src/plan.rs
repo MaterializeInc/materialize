@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{ConnectorLiteral, SourceConnector};
+use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
 use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -465,7 +465,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Connector {
     pub create_sql: String,
-    pub connector: ConnectorLiteral,
+    pub connector: ConnectorInner,
 }
 
 #[derive(Clone, Debug)]

@@ -136,6 +136,9 @@ pub fn describe(
         Statement::ShowCreateView(stmt) => Some(show::describe_show_create_view(&scx, stmt)?),
         Statement::ShowCreateSink(stmt) => Some(show::describe_show_create_sink(&scx, stmt)?),
         Statement::ShowCreateIndex(stmt) => Some(show::describe_show_create_index(&scx, stmt)?),
+        Statement::ShowCreateConnector(stmt) => {
+            Some(show::describe_show_create_connector(&scx, stmt)?)
+        }
         Statement::ShowColumns(_) => None,
         Statement::ShowDatabases(_) => None,
         Statement::ShowSchemas(_) => None,
@@ -398,6 +401,10 @@ pub fn plan(
             let (stmt, _) = resolve_stmt!(Statement::ShowCreateIndex, scx, stmt);
             show::plan_show_create_index(scx, stmt)
         }
+        stmt @ Statement::ShowCreateConnector(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::ShowCreateConnector, scx, stmt);
+            show::plan_show_create_connector(scx, stmt)
+        }
         stmt @ Statement::ShowColumns(_) => {
             let (stmt, _) = resolve_stmt!(Statement::ShowColumns, scx, stmt);
             show::show_columns(scx, stmt)?.plan()
@@ -502,7 +509,8 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
-            | (CatalogItemType::Secret, ObjectType::Secret) => true,
+            | (CatalogItemType::Secret, ObjectType::Secret)
+            | (CatalogItemType::Connector, ObjectType::Connector) => true,
             (_, _) => false,
         }
     }

@@ -24,11 +24,11 @@ use mz_repr::ColumnName;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
-    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
+    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -468,6 +468,14 @@ pub fn create_statement(
             name,
             if_not_exists,
             value: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+        Statement::CreateConnector(CreateConnectorStatement {
+            name,
+            connector: _,
+            if_not_exists,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

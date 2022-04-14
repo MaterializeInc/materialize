@@ -398,6 +398,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -425,6 +426,7 @@ mz_avro_ocf_sinks     system
 mz_base_types         system
 mz_clusters           system
 mz_columns            system
+mz_connectors         system
 mz_databases          system
 mz_functions          system
 mz_index_columns      system
@@ -454,6 +456,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -484,6 +487,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -506,7 +510,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-23
+27
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

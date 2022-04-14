@@ -27,7 +27,7 @@ use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ConnectorLiteral, ExternalSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -48,8 +48,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateConnectorPlan,
+    CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -798,7 +799,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connector {
     pub create_sql: String,
-    pub connector: ConnectorLiteral,
+    pub connector: ConnectorInner,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2810,6 +2811,12 @@ impl Catalog {
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
+            Plan::CreateConnector(CreateConnectorPlan { connector, .. }) => {
+                CatalogItem::Connector(Connector {
+                    create_sql: connector.create_sql,
+                    connector: connector.connector,
+                })
+            }
             _ => bail!("catalog entry generated inappropriate plan"),
         })
     }

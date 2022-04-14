@@ -66,6 +66,7 @@ Compression
 Confluent
 Connection
 Connector
+Connectors
 Consistency
 Constraint
 Copy

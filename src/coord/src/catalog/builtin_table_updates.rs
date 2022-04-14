@@ -10,7 +10,7 @@
 use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
-use mz_dataflow_types::sources::ConnectorLiteral;
+use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::{GlobalId, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -28,7 +28,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
-    Source, Table, Type, SYSTEM_CONN_ID,
+    Source, Table, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -227,7 +227,7 @@ impl CatalogState {
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(match connector.connector {
-                    ConnectorLiteral::Kafka(_) => "kafka broker",
+                    ConnectorInner::Kafka { .. } => "kafka",
                 }),
             ]),
             diff,

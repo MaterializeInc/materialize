@@ -42,8 +42,8 @@ use mz_dataflow_types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding,
 };
 use mz_dataflow_types::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
+    provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
+    DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
     KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
@@ -2812,9 +2812,9 @@ pub fn plan_create_secret(
     }))
 }
 
-pub fn describe_create_connector(
+pub fn describe_create_connector<T: mz_sql_parser::ast::AstInfo>(
     _: &StatementContext,
-    _: &CreateConnectorStatement<Raw>,
+    _: &CreateConnectorStatement<T>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2825,22 +2825,22 @@ pub fn plan_create_connector(
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CONNECTOR")?;
 
-    let create_sql = stmt.to_string();
+    let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
         name,
         connector,
         if_not_exists,
     } = stmt;
     let connector_literal = match connector {
-        CreateConnector::KafkaBroker {
+        CreateConnector::Kafka {
             broker,
             with_options,
         } => {
             let mut with_options = normalize::options(&with_options);
-            ConnectorLiteral::Kafka(KafkaSourceConnectorLiteral {
-                addrs: broker.parse()?,
+            ConnectorInner::Kafka {
+                broker: broker.parse()?,
                 config_options: kafka_util::extract_config(&mut with_options)?,
-            })
+            }
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
@@ -3117,7 +3117,7 @@ pub fn plan_drop_item(
         bail!(
             "{} is not of type {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
-            object_type
+            object_type,
         );
     }
     if !cascade {

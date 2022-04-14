@@ -22,10 +22,10 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceFormat,
-    CreateSourceConnector, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceConnector,
+    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -71,6 +71,7 @@ pub enum Statement<T: AstInfo> {
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateConnector(ShowCreateConnectorStatement<T>),
     ShowVariable(ShowVariableStatement),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
@@ -129,6 +130,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
             Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            Statement::ShowCreateConnector(stmt) => f.write_node(stmt),
             Statement::ShowVariable(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
@@ -378,6 +380,7 @@ impl AstDisplay for CreateSchemaStatement {
     }
 }
 impl_display!(CreateSchemaStatement);
+
 /// `CREATE CONNECTOR`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectorStatement<T: AstInfo> {
@@ -394,18 +397,7 @@ impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" FOR ");
-        match &self.connector {
-            CreateConnector::KafkaBroker {
-                broker,
-                with_options,
-            } => {
-                f.write_str("KAFKA BROKER ");
-                f.write_node(&display::escape_single_quote_string(&broker));
-                f.write_str(" WITH (");
-                f.write_node(&display::comma_separated(&with_options));
-                f.write_str(")");
-            }
-        }
+        self.connector.fmt(f)
     }
 }
 impl_display_t!(CreateConnectorStatement);
@@ -1512,6 +1504,18 @@ impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
     }
 }
 impl_display_t!(ShowCreateIndexStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateConnectorStatement<T: AstInfo> {
+    pub connector_name: T::ObjectName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateConnectorStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE CONNECTOR ");
+        f.write_node(&self.connector_name);
+    }
+}
 
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
