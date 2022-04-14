@@ -9,6 +9,7 @@
 
 //! Protobuf structs mirroring `crate::scalar`
 
+pub use super::adt::numeric::ProtoOptionalNumericMaxScale;
 pub use super::private::proto_scalar_type::ProtoRecordField;
 pub use super::private::ProtoScalarType;
 use crate::proto::TryFromProtoError;
@@ -73,9 +74,7 @@ impl From<&ScalarType> for ProtoScalarType {
                 ScalarType::RegClass => RegClass(()),
                 ScalarType::Int2Vector => Int2Vector(()),
 
-                ScalarType::Numeric { max_scale } => Numeric(ProtoNumeric {
-                    max_scale: max_scale.as_ref().map(Into::into),
-                }),
+                ScalarType::Numeric { max_scale } => Numeric(max_scale.into()),
                 ScalarType::Char { length } => Char(ProtoChar {
                     length: length.as_ref().map(Into::into),
                 }),
@@ -145,8 +144,8 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             RegClass(()) => Ok(ScalarType::RegClass),
             Int2Vector(()) => Ok(ScalarType::Int2Vector),
 
-            Numeric(pn) => Ok(ScalarType::Numeric {
-                max_scale: pn.max_scale.map(TryInto::try_into).transpose()?,
+            Numeric(x) => Ok(ScalarType::Numeric {
+                max_scale: x.try_into()?,
             }),
             Char(x) => Ok(ScalarType::Char {
                 length: x.length.map(TryInto::try_into).transpose()?,
@@ -196,7 +195,7 @@ mod tests {
 
     proptest! {
        #[test]
-        fn scalar_type_serialization_roundtrip(expect in any::<ScalarType>() ) {
+        fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
