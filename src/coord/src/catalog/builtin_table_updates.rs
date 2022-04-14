@@ -15,7 +15,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogDatabase, CatalogType};
+use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 
@@ -400,6 +400,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
+                Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
             ]),
             diff,
         };

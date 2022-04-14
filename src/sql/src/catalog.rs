@@ -446,6 +446,72 @@ pub enum CatalogType<T: TypeReference> {
     Int2Vector,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Mirrored from [PostgreSQL's `typcategory`][typcategory].
+///
+/// Note that Materialize also uses a number of pseudotypes when planning, but
+/// we have yet to need to integrate them with `TypeCategory`.
+///
+/// [typcategory]:
+/// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
+pub enum TypeCategory {
+    /// Array type.
+    Array,
+    /// Bit string type.
+    BitString,
+    /// Boolean type.
+    Boolean,
+    /// Composite type.
+    Composite,
+    /// Date/time type.
+    DateTime,
+    /// Enum type.
+    Enum,
+    /// Geometric type.
+    Geometric,
+    /// List type. Materialize specific.
+    List,
+    /// Network address type.
+    NetworkAddress,
+    /// Numeric type.
+    Numeric,
+    /// Pseudo type.
+    Pseudo,
+    /// Range type.
+    Range,
+    /// String type.
+    String,
+    /// Timestamp type.
+    Timespan,
+    /// User-defined type.
+    UserDefined,
+    /// Unknown type.
+    Unknown,
+}
+
+impl fmt::Display for TypeCategory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            TypeCategory::Array => "array",
+            TypeCategory::BitString => "bit-string",
+            TypeCategory::Boolean => "boolean",
+            TypeCategory::Composite => "composite",
+            TypeCategory::DateTime => "date-time",
+            TypeCategory::Enum => "enum",
+            TypeCategory::Geometric => "geometric",
+            TypeCategory::List => "list",
+            TypeCategory::NetworkAddress => "network-address",
+            TypeCategory::Numeric => "numeric",
+            TypeCategory::Pseudo => "pseudo",
+            TypeCategory::Range => "range",
+            TypeCategory::String => "string",
+            TypeCategory::Timespan => "timespan",
+            TypeCategory::UserDefined => "user-defined",
+            TypeCategory::Unknown => "unknown",
+        })
+    }
+}
+
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
