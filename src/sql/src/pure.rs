@@ -126,31 +126,6 @@ pub async fn purify_create_source(
                 }
             }
         }
-        CreateSourceConnector::AvroOcf { path, .. } => {
-            let path = path.clone();
-            task::block_in_place(|| {
-                // mz_avro::Reader has no async equivalent, so we're stuck
-                // using blocking calls here.
-                let f = std::fs::File::open(path)?;
-                let r = mz_avro::Reader::new(f)?;
-                if !with_options_map.contains_key("reader_schema") {
-                    let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                    with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                        name: mz_sql_parser::ast::Ident::new("reader_schema"),
-                        value: mz_sql_parser::ast::Value::String(schema),
-                    });
-                }
-                Ok::<_, anyhow::Error>(())
-            })?;
-        }
-        // Report an error if a file cannot be opened, or if it is a directory.
-        CreateSourceConnector::File { path, .. } => {
-            let f = File::open(&path).await?;
-            if f.metadata().await?.is_dir() {
-                bail!("Expected a regular file, but {} is a directory.", path);
-            }
-            file = Some(f);
-        }
         CreateSourceConnector::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
@@ -456,7 +431,7 @@ pub async fn purify_csv(
     if matches!(columns, CsvColumns::Header { .. })
         && !matches!(
             connector,
-            CreateSourceConnector::File { .. } | CreateSourceConnector::S3 { .. }
+            | CreateSourceConnector::S3 { .. }
         )
     {
         bail_unsupported!("CSV WITH HEADER with non-file or S3 sources");
@@ -543,9 +518,6 @@ pub async fn purify_csv(
             }
         }
         (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
-            CreateSourceConnector::File { .. } => {
-                bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
-            }
             CreateSourceConnector::S3 { .. } => {
                 bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
             }

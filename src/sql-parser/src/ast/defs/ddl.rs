@@ -481,17 +481,9 @@ pub struct KafkaSourceConnector {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector {
-    File {
-        path: String,
-        compression: Compression,
-    },
     Kafka(KafkaSourceConnector),
     Kinesis {
         arn: String,
-    },
-    /// Avro Object Container File
-    AvroOcf {
-        path: String,
     },
     S3 {
         /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
@@ -521,13 +513,6 @@ pub enum CreateSourceConnector {
 impl AstDisplay for CreateSourceConnector {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnector::File { path, compression } => {
-                f.write_str("FILE '");
-                f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
-                f.write_str(" COMPRESSION ");
-                f.write_node(compression);
-            }
             CreateSourceConnector::Kafka(KafkaSourceConnector {
                 connector: broker,
                 topic,
@@ -558,11 +543,6 @@ impl AstDisplay for CreateSourceConnector {
             CreateSourceConnector::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
-                f.write_str("'");
-            }
-            CreateSourceConnector::AvroOcf { path } => {
-                f.write_str("AVRO OCF '");
-                f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
             CreateSourceConnector::S3 {
@@ -616,11 +596,12 @@ impl AstDisplay for CreateSourceConnector {
 }
 impl_display!(CreateSourceConnector);
 
+// TODO(guswynn): this is just used to make some coord error message
+// handling easier
 impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceConnectorType {
     fn from(connector: &CreateSinkConnector<T>) -> SourceConnectorType {
         match connector {
             CreateSinkConnector::Kafka { .. } => SourceConnectorType::Kafka,
-            CreateSinkConnector::AvroOcf { .. } => SourceConnectorType::AvroOcf,
         }
     }
 }
@@ -634,8 +615,6 @@ pub enum CreateSinkConnector<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
-    /// Avro Object Container File
-    AvroOcf { path: String },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {

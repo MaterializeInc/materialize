@@ -64,7 +64,6 @@ use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::{Logger, StorageEvent};
 use mz_timely_util::operator::StreamExt;
 
-mod file;
 mod gen;
 mod kafka;
 mod kinesis;
@@ -77,9 +76,6 @@ mod util;
 pub mod timestamp;
 
 use differential_dataflow::Hashable;
-pub use file::read_file_task;
-pub use file::FileReadStyle;
-pub use file::FileSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
@@ -137,7 +133,7 @@ where
     /// The record's value
     pub value: V,
     /// The position in the partition described by the `partition` in the source
-    /// (e.g., Kafka offset, file line number, monotonic increasing
+    /// (e.g., Kafka offset, monotonic increasing
     /// number, etc.)
     pub position: i64,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
@@ -383,7 +379,7 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
 ///
 /// TODO: this trait is still a little too Kafka-centric, specifically the concept of
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
-/// we are forced to treat things like file sources as "single-partition"
+/// we are forced to some sources as "single-partition"
 pub(crate) trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;

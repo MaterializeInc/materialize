@@ -2051,15 +2051,6 @@ impl<'a> Parser<'a> {
                     details,
                 })
             }
-            FILE => {
-                let path = self.parse_literal_string()?;
-                let compression = if self.parse_keyword(COMPRESSION) {
-                    self.parse_compression()?
-                } else {
-                    Compression::None
-                };
-                Ok(CreateSourceConnector::File { path, compression })
-            }
             KAFKA => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
@@ -2086,11 +2077,6 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
                 Ok(CreateSourceConnector::Kinesis { arn })
-            }
-            AVRO => {
-                self.expect_keyword(OCF)?;
-                let path = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::AvroOcf { path })
             }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS

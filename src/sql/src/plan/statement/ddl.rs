@@ -41,9 +41,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
     DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
-    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+    PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
+    SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::{CollectionPlan, GlobalId};
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -482,27 +482,6 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding)
         }
-        CreateSourceConnector::File { path, compression } => {
-            let tail = match with_options.remove("tail") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("tail must be a boolean"),
-            };
-
-            let connector = ExternalSourceConnector::File(FileSourceConnector {
-                path: path.clone().into(),
-                compression: match compression {
-                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
-                    Compression::None => mz_dataflow_types::sources::Compression::None,
-                },
-                tail,
-            });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("File sources do not support key decoding");
-            }
-            (connector, encoding)
-        }
         CreateSourceConnector::S3 {
             key_sources,
             pattern,
@@ -584,33 +563,6 @@ pub fn plan_create_source(
                 channel: channel.clone(),
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
-        }
-        CreateSourceConnector::AvroOcf { path, .. } => {
-            let tail = match with_options.remove("tail") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("tail must be a boolean"),
-            };
-
-            let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
-                path: path.clone().into(),
-                compression: mz_dataflow_types::sources::Compression::None,
-                tail,
-            });
-            if !matches!(format, CreateSourceFormat::None) {
-                bail!("avro ocf sources cannot specify a format");
-            }
-            let reader_schema = match with_options
-                .remove("reader_schema")
-                .expect("purification guarantees presence of reader_schema")
-            {
-                Value::String(s) => s,
-                _ => bail!("reader_schema option must be a string"),
-            };
-            let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
-                reader_schema,
-            }));
-            (connector, encoding)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -792,12 +744,6 @@ pub fn plan_create_source(
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
-            //TODO check that key envelope is not set
-            if let CreateSourceConnector::AvroOcf { .. } = connector {
-                // TODO[btv] - there is no fundamental reason not to support this eventually,
-                // but OCF goes through a separate pipeline that it hasn't been implemented for.
-                bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
-            }
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),

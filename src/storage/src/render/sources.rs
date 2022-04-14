@@ -42,7 +42,7 @@ use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
+    self, DecodeResult, DelimitedValueSource,  KafkaSourceReader,
     KinesisSourceReader, PersistentTimestampBindingsConfig, PostgresSourceReader,
     PubNubSourceReader, S3SourceReader, SourceConfig,
 };
@@ -348,17 +348,6 @@ where
                     }
                     ExternalSourceConnector::S3(_) => {
                         let ((ok, ts, err), cap) = source::create_source::<_, S3SourceReader>(
-                            source_config,
-                            &connector,
-                            source_persist_config
-                                .as_ref()
-                                .map(|config| config.bindings_config.clone()),
-                            storage_state.aws_external_id.clone(),
-                        );
-                        ((SourceType::ByteStream(ok), ts, err), cap)
-                    }
-                    ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
-                        let ((ok, ts, err), cap) = source::create_source::<_, FileSourceReader>(
                             source_config,
                             &connector,
                             source_persist_config
