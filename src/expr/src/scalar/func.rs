@@ -36,7 +36,6 @@ use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
-use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
@@ -45,9 +44,7 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex;
 use mz_repr::proto::TryFromProtoError;
-use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, RowPacker, ScalarType,
-};
+use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -444,26 +441,6 @@ fn decode<'a>(
     let format = encoding::lookup_format(format.unwrap_str())?;
     let out = format.decode(string.unwrap_str())?;
     Ok(Datum::from(temp_storage.push_bytes(out)))
-}
-
-fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len() * 8) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
-}
-
-fn byte_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
 }
 
 fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2108,62 +2085,6 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
-fn jsonb_array_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    Ok(match a {
-        Datum::List(list) => Datum::Int32(
-            list.iter()
-                .count()
-                .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
-        ),
-        _ => Datum::Null,
-    })
-}
-
-fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Map(_) => Datum::String("object"),
-        Datum::List(_) => Datum::String("array"),
-        Datum::String(_) => Datum::String("string"),
-        Datum::Numeric(_) => Datum::String("number"),
-        Datum::True | Datum::False => Datum::String("boolean"),
-        Datum::JsonNull => Datum::String("null"),
-        Datum::Null => Datum::Null,
-        _ => panic!("Not jsonb: {:?}", a),
-    }
-}
-
-fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    fn strip_nulls(a: Datum, row: &mut RowPacker) {
-        match a {
-            Datum::Map(dict) => row.push_dict_with(|row| {
-                for (k, v) in dict.iter() {
-                    match v {
-                        Datum::JsonNull => (),
-                        _ => {
-                            row.push(Datum::String(k));
-                            strip_nulls(v, row);
-                        }
-                    }
-                }
-            }),
-            Datum::List(list) => row.push_list_with(|row| {
-                for elem in list.iter() {
-                    strip_nulls(elem, row);
-                }
-            }),
-            _ => row.push(a),
-        }
-    }
-    temp_storage.make_datum(|row| strip_nulls(a, row))
-}
-
-fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_jsonb_pretty(&mut buf, JsonbRef::from_datum(a));
-    Datum::String(temp_storage.push_string(buf))
-}
-
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     And,
@@ -3346,15 +3267,15 @@ pub enum UnaryFunc {
     FloorFloat64(FloorFloat64),
     FloorNumeric(FloorNumeric),
     Ascii(Ascii),
-    BitLengthBytes,
+    BitLengthBytes(BitLengthBytes),
     BitLengthString(BitLengthString),
-    ByteLengthBytes,
+    ByteLengthBytes(ByteLengthBytes),
     ByteLengthString(ByteLengthString),
     CharLength(CharLength),
     Chr(Chr),
-    IsLikeMatch(like_pattern::Matcher),
-    IsRegexpMatch(Regex),
-    RegexpMatch(Regex),
+    IsLikeMatch(IsLikeMatch),
+    IsRegexpMatch(IsRegexpMatch),
+    RegexpMatch(RegexpMatch),
     ExtractInterval(DateTimeUnits),
     ExtractTime(DateTimeUnits),
     ExtractTimestamp(DateTimeUnits),
@@ -3376,10 +3297,10 @@ pub enum UnaryFunc {
     JustifyDays(JustifyDays),
     JustifyHours(JustifyHours),
     JustifyInterval(JustifyInterval),
-    JsonbArrayLength,
-    JsonbTypeof,
-    JsonbStripNulls,
-    JsonbPretty,
+    JsonbArrayLength(JsonbArrayLength),
+    JsonbTypeof(JsonbTypeof),
+    JsonbStripNulls(JsonbStripNulls),
+    JsonbPretty(JsonbPretty),
     RoundFloat32(RoundFloat32),
     RoundFloat64(RoundFloat64),
     RoundNumeric(RoundNumeric),
@@ -3660,8 +3581,17 @@ derive_unary!(
     TrimLeadingWhitespace,
     BitLengthString,
     ByteLengthString,
+    BitLengthBytes,
+    ByteLengthBytes,
     Upper,
-    Lower
+    Lower,
+    JsonbArrayLength,
+    JsonbTypeof,
+    JsonbStripNulls,
+    JsonbPretty,
+    IsLikeMatch,
+    IsRegexpMatch,
+    RegexpMatch
 );
 
 impl UnaryFunc {
@@ -3853,10 +3783,19 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
             | BitLengthString(_)
             | ByteLengthString(_)
             | Upper(_)
             | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -3869,11 +3808,6 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            BitLengthBytes => bit_length(a.unwrap_bytes()),
-            ByteLengthBytes => byte_length(a.unwrap_bytes()),
-            IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
-            IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
-            RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             ExtractInterval(units) => date_part_interval_inner::<Numeric>(*units, a),
             ExtractTime(units) => date_part_time_inner::<Numeric>(*units, a),
             ExtractTimestamp(units) => {
@@ -3896,10 +3830,6 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
             TimezoneTimestampTz(tz) => Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz())),
             TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
-            JsonbArrayLength => jsonb_array_length(a),
-            JsonbTypeof => Ok(jsonb_typeof(a)),
-            JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
-            JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
@@ -4092,15 +4022,20 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
             | BitLengthString(_)
             | ByteLengthString(_)
             | Upper(_)
             | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
             | Chr(_) => unreachable!(),
-
-            BitLengthBytes | ByteLengthBytes => ScalarType::Int32.nullable(nullable),
-
-            IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4134,11 +4069,6 @@ impl UnaryFunc {
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
 
-            JsonbArrayLength => ScalarType::Int32.nullable(nullable),
-            JsonbTypeof => ScalarType::String.nullable(nullable),
-            JsonbStripNulls => ScalarType::Jsonb.nullable(nullable),
-            JsonbPretty => ScalarType::String.nullable(nullable),
-
             RecordGet(i) => match input_type.scalar_type {
                 ScalarType::Record { mut fields, .. } => {
                     let (_name, mut ty) = fields.swap_remove(*i);
@@ -4149,8 +4079,6 @@ impl UnaryFunc {
             },
 
             ListLength | MapLength => ScalarType::Int32.nullable(nullable),
-
-            RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(nullable),
 
             RescaleNumeric(scale) => (ScalarType::Numeric {
                 max_scale: Some(*scale),
@@ -4347,21 +4275,23 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
             | BitLengthString(_)
             | ByteLengthString(_)
             | Upper(_)
             | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
-            // Always returns null
-            // Returns null if the regex did not match
-            RegexpMatch(_) => true,
-            // Returns null on non-array input
-            JsonbArrayLength => true,
 
-            BitLengthBytes | ByteLengthBytes => false,
-            IsLikeMatch(_) | IsRegexpMatch(_) => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
@@ -4371,7 +4301,7 @@ impl UnaryFunc {
             TimezoneTimestampTz(_) => false,
             TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
-            JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength | MapLength => false,
+            ListLength | MapLength => false,
             ExtractInterval(_)
             | ExtractTime(_)
             | ExtractTimestamp(_)
@@ -4470,10 +4400,19 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
             | BitLengthString(_)
             | ByteLengthString(_)
             | Upper(_)
             | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4657,10 +4596,19 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
             | BitLengthString(_)
             | ByteLengthString(_)
             | Upper(_)
             | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4669,11 +4617,6 @@ impl UnaryFunc {
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
-            BitLengthBytes => f.write_str("bit_length"),
-            ByteLengthBytes => f.write_str("octet_length"),
-            IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
-            IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
-            RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
             ExtractTime(units) => write!(f, "extract_{}_t", units),
             ExtractTimestamp(units) => write!(f, "extract_{}_ts", units),
@@ -4688,10 +4631,6 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
             TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
             TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
-            JsonbArrayLength => f.write_str("jsonb_array_length"),
-            JsonbTypeof => f.write_str("jsonb_typeof"),
-            JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
-            JsonbPretty => f.write_str("jsonb_pretty"),
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
@@ -5470,11 +5409,6 @@ fn like_escape<'a>(
     Ok(Datum::String(temp_storage.push_string(normalized)))
 }
 
-fn is_like_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
-}
-
 fn is_like_match_dynamic<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -5483,11 +5417,6 @@ fn is_like_match_dynamic<'a>(
     let haystack = a.unwrap_str();
     let needle = like_pattern::compile(b.unwrap_str(), case_insensitive)?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
-}
-
-fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
 }
 
 fn is_regexp_match_dynamic<'a>(

@@ -355,9 +355,9 @@ impl MirScalarExpr {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
                                 *e = match like_pattern::compile(&pattern, *case_insensitive) {
-                                    Ok(matcher) => {
-                                        expr1.take().call_unary(UnaryFunc::IsLikeMatch(matcher))
-                                    }
+                                    Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
+                                        func::IsLikeMatch(matcher),
+                                    )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
                                         e.typ(&relation_type).scalar_type,
@@ -369,9 +369,9 @@ impl MirScalarExpr {
                                 let flags = if *case_insensitive { "i" } else { "" };
                                 *e = match func::build_regex(row.unpack_first().unwrap_str(), flags)
                                 {
-                                    Ok(regex) => expr1
-                                        .take()
-                                        .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
+                                    Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
+                                        func::IsRegexpMatch(Regex(regex)),
+                                    )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
                                         e.typ(&relation_type).scalar_type,
@@ -631,9 +631,9 @@ impl MirScalarExpr {
                                 _ => "",
                             };
                             *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs)
-                                    .into_first()
-                                    .call_unary(UnaryFunc::RegexpMatch(Regex(regex))),
+                                Ok(regex) => mem::take(exprs).into_first().call_unary(
+                                    UnaryFunc::RegexpMatch(func::RegexpMatch(Regex(regex))),
+                                ),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
                                     e.typ(&relation_type).scalar_type,

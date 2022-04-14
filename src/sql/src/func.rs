@@ -1774,7 +1774,7 @@ lazy_static! {
                 params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Interval, 2106;
             },
             "bit_length" => Scalar {
-                params!(Bytes) => UnaryFunc::BitLengthBytes, 1810;
+                params!(Bytes) => UnaryFunc::BitLengthBytes(func::BitLengthBytes), 1810;
                 params!(String) => UnaryFunc::BitLengthString(func::BitLengthString), 1811;
             },
             "btrim" => Scalar {
@@ -1915,7 +1915,7 @@ lazy_static! {
                 params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
             },
             "jsonb_array_length" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbArrayLength => Int32, 3207;
+                params!(Jsonb) => UnaryFunc::JsonbArrayLength(func::JsonbArrayLength) => Int32, 3207;
             },
             "jsonb_build_array" => Scalar {
                 params!() => VariadicFunc::JsonbBuildArray, 3272;
@@ -1941,13 +1941,13 @@ lazy_static! {
                 }) => Jsonb, 3273;
             },
             "jsonb_pretty" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbPretty, 3306;
+                params!(Jsonb) => UnaryFunc::JsonbPretty(func::JsonbPretty), 3306;
             },
             "jsonb_strip_nulls" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbStripNulls, 3262;
+                params!(Jsonb) => UnaryFunc::JsonbStripNulls(func::JsonbStripNulls), 3262;
             },
             "jsonb_typeof" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
+                params!(Jsonb) => UnaryFunc::JsonbTypeof(func::JsonbTypeof), 3210;
             },
             "justify_days" => Scalar {
                 params!(Interval) => UnaryFunc::JustifyDays(func::JustifyDays), 1295;
@@ -1962,7 +1962,7 @@ lazy_static! {
                 params!(String, Int32) => BinaryFunc::Left, 3060;
             },
             "length" => Scalar {
-                params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
+                params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes), 2010;
                 // bpcharlen is redundant with automatic coercion to string, 1318.
                 params!(String) => UnaryFunc::CharLength(func::CharLength), 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
@@ -2019,7 +2019,7 @@ lazy_static! {
                 params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
             },
             "octet_length" => Scalar {
-                params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
+                params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes), 720;
                 params!(String) => UnaryFunc::ByteLengthString(func::ByteLengthString), 1374;
                 params!(Char) => Operation::unary(|ecx, e| {
                     let length = ecx.scalar_type(&e).unwrap_char_length();

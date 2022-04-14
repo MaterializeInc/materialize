@@ -18,16 +18,19 @@ use uuid::Uuid;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
+use mz_ore::str::StrExt;
+use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char::{format_str_trim, Char};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
-use crate::{EvalError, MirScalarExpr, UnaryFunc};
+use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
     #[sqlname = "strtobool"]
@@ -573,3 +576,127 @@ sqlfunc!(
         a.to_lowercase()
     }
 );
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct IsLikeMatch(pub like_pattern::Matcher);
+
+impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
+    type Input = &'a str;
+    type Output = bool;
+
+    fn call(&self, haystack: &'a str) -> bool {
+        self.0.is_match(haystack)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for IsLikeMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} ~~", self.0.pattern.quoted())
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct IsRegexpMatch(pub Regex);
+
+impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
+    type Input = &'a str;
+    type Output = bool;
+
+    fn call(&self, haystack: &'a str) -> bool {
+        self.0.is_match(haystack)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for IsRegexpMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} ~", self.0.as_str().quoted())
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RegexpMatch(pub Regex);
+
+impl LazyUnaryFunc for RegexpMatch {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let haystack = a.eval(datums, temp_storage)?;
+        if haystack.is_null() {
+            return Ok(Datum::Null);
+        }
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        if self.0.captures_len() > 1 {
+            // The regex contains capture groups, so return an array containing the
+            // matched text in each capture group, unless the entire match fails.
+            // Individual capture groups may also be null if that group did not
+            // participate in the match.
+            match self.0.captures(haystack.unwrap_str()) {
+                None => packer.push(Datum::Null),
+                Some(captures) => packer.push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: captures.len() - 1,
+                    }],
+                    // Skip the 0th capture group, which is the whole match.
+                    captures.iter().skip(1).map(|mtch| match mtch {
+                        None => Datum::Null,
+                        Some(mtch) => Datum::String(mtch.as_str()),
+                    }),
+                )?,
+            }
+        } else {
+            // The regex contains no capture groups, so return a one-element array
+            // containing the match, or null if there is no match.
+            match self.0.find(haystack.unwrap_str()) {
+                None => packer.push(Datum::Null),
+                Some(mtch) => packer.push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: 1,
+                    }],
+                    std::iter::once(Datum::String(mtch.as_str())),
+                )?,
+            };
+        };
+        Ok(temp_storage.push_unary_row(row))
+    }
+
+    /// The output ColumnType of this function
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(true)
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        // Returns null if the regex did not match
+        true
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for RegexpMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "regexp_match[{}]", self.0.as_str())
+    }
+}

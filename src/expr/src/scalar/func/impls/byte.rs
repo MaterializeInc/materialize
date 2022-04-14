@@ -9,6 +9,8 @@
 
 use mz_repr::strconv;
 
+use crate::EvalError;
+
 sqlfunc!(
     #[sqlname = "bytestostr"]
     #[preserves_uniqueness = true]
@@ -16,5 +18,19 @@ sqlfunc!(
         let mut buf = String::new();
         strconv::format_bytes(&mut buf, a);
         buf
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "bit_length"]
+    fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
+        i32::try_from(a.len() * 8).or(Err(EvalError::Int32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "octet_length"]
+    fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
+        i32::try_from(a.len()).or(Err(EvalError::Int32OutOfRange))
     }
 );
