@@ -203,6 +203,7 @@ class Kafka(Service):
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
             "KAFKA_MESSAGE_MAX_BYTES=15728640",
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
+            "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
         depends_on: List[str] = ["zookeeper"],
         volumes: List[str] = [],

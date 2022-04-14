@@ -82,7 +82,7 @@ def progress(
     print(msg, file=sys.stderr, flush=True, end=end)
 
 
-def timeout_loop(timeout: int, tick: int = 1) -> Generator[float, None, None]:
+def timeout_loop(timeout: int, tick: float = 1.0) -> Generator[float, None, None]:
     """Loop until timeout, optionally sleeping until tick
 
     Always iterates at least once
@@ -106,7 +106,7 @@ def timeout_loop(timeout: int, tick: int = 1) -> Generator[float, None, None]:
 
 
 async def async_timeout_loop(
-    timeout: int, tick: int = 1
+    timeout: int, tick: float = 1.0
 ) -> AsyncGenerator[float, None]:
     """Loop until timeout, asynchronously sleeping until tick
 

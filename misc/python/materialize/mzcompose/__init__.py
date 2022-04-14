@@ -737,19 +737,14 @@ class Composition:
         if isinstance(port, str):
             port = int(port.split(":")[0])
         ui.progress(f"waiting for {host}:{port}", "C")
-        for remaining in ui.timeout_loop(timeout_secs):
-            cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
-
-            try:
-                _check_tcp(cmd[:], host, port, timeout_secs)
-            except subprocess.CalledProcessError:
-                ui.progress(" {}".format(int(remaining)))
-            else:
-                ui.progress(" success!", finish=True)
-                return
-
-        ui.progress(" error!", finish=True)
-        raise UIError(f"unable to connect to {host}:{port}")
+        cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
+        try:
+            _check_tcp(cmd[:], host, port, timeout_secs)
+        except subprocess.CalledProcessError:
+            ui.progress(" error!", finish=True)
+            raise UIError(f"unable to connect to {host}:{port}")
+        else:
+            ui.progress(" success!", finish=True)
 
     # TODO(benesch): replace with Docker health checks.
     def wait_for_postgres(
@@ -955,7 +950,7 @@ def _check_tcp(
             str(timeout_secs),
             "bash",
             "-c",
-            f"cat < /dev/null > /dev/tcp/{host}/{port}",
+            f"until [ cat < /dev/null > /dev/tcp/{host}/{port} ] ; do sleep 0.1 ; done",
         ]
     )
     try:
@@ -986,7 +981,7 @@ def _wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user} password={password}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    for remaining in ui.timeout_loop(timeout_secs):
+    for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
         try:
             conn = pg8000.connect(
                 database=dbname,
