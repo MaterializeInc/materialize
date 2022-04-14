@@ -210,5 +210,6 @@ use. They are described here because some non-experimental features (e.g.,
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
 - [`CREATE SINK`](/sql/create-sink)
+- [Timely and Differential Dataflow](../timely-differential)
 
 [Debezium]: http://debezium.io
