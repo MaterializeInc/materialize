@@ -2489,26 +2489,12 @@ impl Catalog {
                         ComputeInstanceConfig::Local => InstanceConfig::Local,
                         ComputeInstanceConfig::Remote {
                             replicas,
-                            introspection,
-                        } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
-                            InstanceConfig::Remote { replicas }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Remote { replicas },
                         ComputeInstanceConfig::Managed {
                             size,
-                            introspection,
-                        } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
-                            InstanceConfig::Managed { size }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Managed { size },
                     };
                     vec![Action::UpdateComputeInstanceConfig { id, config }]
                 }
