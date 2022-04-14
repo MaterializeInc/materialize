@@ -3347,9 +3347,9 @@ pub enum UnaryFunc {
     FloorNumeric(FloorNumeric),
     Ascii(Ascii),
     BitLengthBytes,
-    BitLengthString,
+    BitLengthString(BitLengthString),
     ByteLengthBytes,
-    ByteLengthString,
+    ByteLengthString(ByteLengthString),
     CharLength(CharLength),
     Chr(Chr),
     IsLikeMatch(like_pattern::Matcher),
@@ -3389,8 +3389,8 @@ pub enum UnaryFunc {
     RecordGet(usize),
     ListLength,
     MapLength,
-    Upper,
-    Lower,
+    Upper(Upper),
+    Lower(Lower),
     Cos(Cos),
     Acos(Acos),
     Cosh(Cosh),
@@ -3657,7 +3657,11 @@ derive_unary!(
     CharLength,
     TrimWhitespace,
     TrimTrailingWhitespace,
-    TrimLeadingWhitespace
+    TrimLeadingWhitespace,
+    BitLengthString,
+    ByteLengthString,
+    Upper,
+    Lower
 );
 
 impl UnaryFunc {
@@ -3849,6 +3853,10 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -3861,9 +3869,7 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            BitLengthString => bit_length(a.unwrap_str()),
             BitLengthBytes => bit_length(a.unwrap_bytes()),
-            ByteLengthString => byte_length(a.unwrap_str()),
             ByteLengthBytes => byte_length(a.unwrap_bytes()),
             IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
@@ -3897,8 +3903,6 @@ impl UnaryFunc {
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
-            Upper => Ok(upper(a, temp_storage)),
-            Lower => Ok(lower(a, temp_storage)),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
     }
@@ -4088,11 +4092,13 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
             | Chr(_) => unreachable!(),
 
-            BitLengthBytes | BitLengthString | ByteLengthBytes | ByteLengthString => {
-                ScalarType::Int32.nullable(nullable)
-            }
+            BitLengthBytes | ByteLengthBytes => ScalarType::Int32.nullable(nullable),
 
             IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
@@ -4100,9 +4106,7 @@ impl UnaryFunc {
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
-            | CastInt2VectorToString
-            | Upper
-            | Lower => ScalarType::String.nullable(nullable),
+            | CastInt2VectorToString => ScalarType::String.nullable(nullable),
 
             TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
 
@@ -4343,6 +4347,10 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
@@ -4352,15 +4360,13 @@ impl UnaryFunc {
             // Returns null on non-array input
             JsonbArrayLength => true,
 
-            BitLengthBytes | BitLengthString | ByteLengthBytes | ByteLengthString => false,
+            BitLengthBytes | ByteLengthBytes => false,
             IsLikeMatch(_) | IsRegexpMatch(_) => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
-            | CastInt2VectorToString
-            | Upper
-            | Lower => false,
+            | CastInt2VectorToString => false,
             TimezoneTime { .. } => false,
             TimezoneTimestampTz(_) => false,
             TimezoneTimestamp(_) => false,
@@ -4464,6 +4470,10 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4647,6 +4657,10 @@ impl UnaryFunc {
             | TrimWhitespace(_)
             | TrimTrailingWhitespace(_)
             | TrimLeadingWhitespace(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4656,9 +4670,7 @@ impl UnaryFunc {
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
             BitLengthBytes => f.write_str("bit_length"),
-            BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
-            ByteLengthString => f.write_str("octet_length"),
             IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
@@ -4683,8 +4695,6 @@ impl UnaryFunc {
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
-            Upper => f.write_str("upper"),
-            Lower => f.write_str("lower"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }
@@ -5980,14 +5990,6 @@ fn list_length(a: Datum) -> Result<Datum, EvalError> {
         Ok(c) => Ok(Datum::Int32(c)),
         Err(_) => Err(EvalError::Int32OutOfRange),
     }
-}
-
-fn upper<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_uppercase()))
-}
-
-fn lower<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_lowercase()))
 }
 
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {

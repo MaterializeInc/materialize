@@ -1775,7 +1775,7 @@ lazy_static! {
             },
             "bit_length" => Scalar {
                 params!(Bytes) => UnaryFunc::BitLengthBytes, 1810;
-                params!(String) => UnaryFunc::BitLengthString, 1811;
+                params!(String) => UnaryFunc::BitLengthString(func::BitLengthString), 1811;
             },
             "btrim" => Scalar {
                 params!(String) => UnaryFunc::TrimWhitespace(func::TrimWhitespace), 885;
@@ -1984,7 +1984,7 @@ lazy_static! {
                 params!(Numeric, Numeric) => BinaryFunc::LogNumeric, 1736;
             },
             "lower" => Scalar {
-                params!(String) => UnaryFunc::Lower, 870;
+                params!(String) => UnaryFunc::Lower(func::Lower), 870;
             },
             "lpad" => Scalar {
                 params!(String, Int64) => VariadicFunc::PadLeading, 879;
@@ -2020,11 +2020,11 @@ lazy_static! {
             },
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
-                params!(String) => UnaryFunc::ByteLengthString, 1374;
+                params!(String) => UnaryFunc::ByteLengthString(func::ByteLengthString), 1374;
                 params!(Char) => Operation::unary(|ecx, e| {
                     let length = ecx.scalar_type(&e).unwrap_char_length();
                     Ok(e.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                        .call_unary(UnaryFunc::ByteLengthString)
+                        .call_unary(UnaryFunc::ByteLengthString(func::ByteLengthString))
                     )
                 }), 1375;
             },
@@ -2331,7 +2331,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp), 1158;
             },
             "upper" => Scalar {
-                params!(String) => UnaryFunc::Upper, 871;
+                params!(String) => UnaryFunc::Upper(func::Upper), 871;
             },
             "variance" => Scalar {
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
