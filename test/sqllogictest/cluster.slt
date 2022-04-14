@@ -188,3 +188,13 @@ DROP CLUSTER baz CASCADE
 query T
 SELECT name FROM mz_indexes;
 ----
+
+# Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
+statement ok
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234'), INTROSPECTION GRANULARITY '1s'
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo REMOTE r1 ('localhost:1234'), INTROSPECTION GRANULARITY '1s'

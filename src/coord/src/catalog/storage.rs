@@ -110,9 +110,9 @@ const MIGRATIONS: &[&dyn Migration] = &[
      );
 
      CREATE TABLE compute_introspection_source_indexes (
-        compute_id integer NOT NULL,
+        compute_id integer NOT NULL REFERENCES compute_instances,
         name text NOT NULL,
-        index_id integer NOT NULL,
+        index_id integer NOT NULL UNIQUE,
         PRIMARY KEY (compute_id, name)
      );
 
@@ -400,7 +400,7 @@ impl Connection {
 
     pub fn load_introspection_source_index_gids(
         &self,
-        compute_id: i64,
+        compute_id: ComputeInstanceId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
         self.inner
             .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
@@ -444,7 +444,7 @@ impl Connection {
     /// Panics if provided id is not a system id
     pub fn set_introspection_source_index_gids(
         &mut self,
-        mappings: Vec<(i64, &str, GlobalId)>,
+        mappings: Vec<(ComputeInstanceId, &str, GlobalId)>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
@@ -602,7 +602,7 @@ impl Transaction<'_> {
         cluster_name: &str,
         config: &ComputeInstanceConfig,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<i64, Error> {
+    ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         let id = match self
@@ -718,6 +718,14 @@ impl Transaction<'_> {
     }
 
     pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
+        let _ = self
+            .inner
+            .prepare_cached(
+                "DELETE FROM compute_introspection_source_indexes WHERE compute_id =
+                    (SELECT id FROM compute_instances WHERE name = ?)",
+            )?
+            .execute(params![name])?;
+
         let n = self
             .inner
             .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
