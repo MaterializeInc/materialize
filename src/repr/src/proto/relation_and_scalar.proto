@@ -30,9 +30,6 @@ message ProtoColumnType {
 }
 
 message ProtoScalarType {
-    message ProtoNumeric {
-        adt.numeric.ProtoNumericMaxScale max_scale = 1;
-    }
     message ProtoChar {
         adt.char.ProtoCharLength length = 1;
     }
@@ -69,7 +66,7 @@ message ProtoScalarType {
         google.protobuf.Empty Int64 = 4;
         google.protobuf.Empty Float32 = 5;
         google.protobuf.Empty Float64 = 6;
-        ProtoNumeric Numeric = 7;
+        adt.numeric.ProtoOptionalNumericMaxScale Numeric = 7;
         google.protobuf.Empty Date = 8;
         google.protobuf.Empty Time = 9;
         google.protobuf.Empty Timestamp = 10;

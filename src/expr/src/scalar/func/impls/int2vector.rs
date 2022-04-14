@@ -18,6 +18,7 @@ use crate::scalar::func::LazyUnaryFunc;
 use crate::{EvalError, MirScalarExpr};
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[cfg_attr(feature = "test-utils", derive(proptest_derive::Arbitrary))]
 pub struct CastInt2VectorToArray;
 
 // This could be simplified to an EagerUnaryFunc once we have
