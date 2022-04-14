@@ -9,11 +9,11 @@
 
 use std::fmt;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::{strconv, ColumnType, ScalarType};
@@ -278,5 +278,156 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
 impl fmt::Display for DatePartTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_part_{}_tstz", self.0)
+    }
+}
+
+pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: T) -> Result<T, EvalError> {
+    match units {
+        DateTimeUnits::Millennium => Ok(ts.truncate_millennium()),
+        DateTimeUnits::Century => Ok(ts.truncate_century()),
+        DateTimeUnits::Decade => Ok(ts.truncate_decade()),
+        DateTimeUnits::Year => Ok(ts.truncate_year()),
+        DateTimeUnits::Quarter => Ok(ts.truncate_quarter()),
+        DateTimeUnits::Week => Ok(ts.truncate_week()?),
+        DateTimeUnits::Day => Ok(ts.truncate_day()),
+        DateTimeUnits::Hour => Ok(ts.truncate_hour()),
+        DateTimeUnits::Minute => Ok(ts.truncate_minute()),
+        DateTimeUnits::Second => Ok(ts.truncate_second()),
+        DateTimeUnits::Month => Ok(ts.truncate_month()),
+        DateTimeUnits::Milliseconds => Ok(ts.truncate_milliseconds()),
+        DateTimeUnits::Microseconds => Ok(ts.truncate_microseconds()),
+        DateTimeUnits::Epoch
+        | DateTimeUnits::Timezone
+        | DateTimeUnits::TimezoneHour
+        | DateTimeUnits::TimezoneMinute
+        | DateTimeUnits::DayOfWeek
+        | DateTimeUnits::DayOfYear
+        | DateTimeUnits::IsoDayOfWeek
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct DateTruncTimestamp(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
+    type Input = NaiveDateTime;
+    type Output = Result<NaiveDateTime, EvalError>;
+
+    fn call(&self, a: NaiveDateTime) -> Result<NaiveDateTime, EvalError> {
+        date_trunc_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for DateTruncTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "date_trunc_{}_ts", self.0)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct DateTruncTimestampTz(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
+    type Input = DateTime<Utc>;
+    type Output = Result<DateTime<Utc>, EvalError>;
+
+    fn call(&self, a: DateTime<Utc>) -> Result<DateTime<Utc>, EvalError> {
+        date_trunc_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for DateTruncTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "date_trunc_{}_tstz", self.0)
+    }
+}
+
+/// Converts the timestamp `dt`, which is assumed to be in the time of the timezone `tz` to a timestamptz in UTC.
+/// This operation is fallible because certain timestamps at timezones that observe DST are simply impossible or
+/// ambiguous. In case of ambiguity (when a hour repeats) we will prefer the latest variant, and when an hour is
+/// impossible, we will attempt to fix it by advancing it. For example, `EST` and `2020-11-11T12:39:14` would return
+/// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
+/// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
+/// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
+pub fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<DateTime<Utc>, EvalError> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt += Duration::hours(1);
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or(EvalError::InvalidTimezoneConversion)?
+                    .fix()
+            }
+        },
+    };
+    Ok(DateTime::from_utc(dt - offset, Utc))
+}
+
+/// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
+/// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
+pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> NaiveDateTime {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
+    };
+    utc.naive_utc() + offset
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct TimezoneTimestamp(pub Timezone);
+
+impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
+    type Input = NaiveDateTime;
+    type Output = Result<DateTime<Utc>, EvalError>;
+
+    fn call(&self, a: NaiveDateTime) -> Result<DateTime<Utc>, EvalError> {
+        timezone_timestamp(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for TimezoneTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "timezone_{}_ts", self.0)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct TimezoneTimestampTz(pub Timezone);
+
+impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
+    type Input = DateTime<Utc>;
+    type Output = NaiveDateTime;
+
+    fn call(&self, a: DateTime<Utc>) -> NaiveDateTime {
+        timezone_timestamptz(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for TimezoneTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "timezone_{}_tstz", self.0)
     }
 }
