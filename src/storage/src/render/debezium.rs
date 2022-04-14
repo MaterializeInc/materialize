@@ -181,18 +181,24 @@ where
         // If we can't pull out the transaction_id, it doesn't matter which worker we end up on.  Position seems a good
         // way to spread around the work as it comes in and is likely uncorrelated to the hash.
         let default_hash = result.position.hashed();
+
+        // The logic below mirrors inline decoding of the data.  The shape of the value is validated
+        // when constructing the source.
         let value = match result.value.as_ref() {
             Some(Ok(v)) => v,
             _ => return default_hash,
         };
         let transaction = match value.iter().nth(transaction_idx) {
             Some(Datum::List(l)) => l,
-            _ => return default_hash,
+            Some(Datum::Null) => return default_hash,
+            _ => panic!("Previously validated to be nullable list"),
         };
-        match transaction.iter().nth(data_transaction_id_idx) {
-            Some(Datum::String(s)) => s.hashed(),
-            _ => default_hash,
-        }
+        transaction
+            .iter()
+            .nth(data_transaction_id_idx)
+            .unwrap()
+            .unwrap_str()
+            .hashed()
     };
 
     tx_ok
