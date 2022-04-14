@@ -193,6 +193,30 @@ build apply=ReductionPushdown
 ----
 ----
 
+## Distinct pushdown to two constant inputs
+
+build apply=ReductionPushdown
+(reduce
+    (join [(constant [] [int32 string]) (constant [] [int32 string])] [[#1 #3]])
+    [#1]
+    [])
+----
+----
+%0 =
+| Constant
+| Distinct group=(#1)
+
+%1 =
+| Constant
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+----
+----
+
 ## Distinct pushdown across more than two inputs
 ## Make sure no cross joins happen.
 
@@ -242,6 +266,36 @@ build apply=ReductionPushdown
 | Join %0 %3 (= #0 #1)
 | | implementation = Unimplemented
 | Project (#0, #2)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join
+        [(get x) (constant [] [int32 string]) (constant [] [string int32])]
+        [[#1 #3] [#2 #4]])
+    [#1 #5]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+
+%2 =
+| Constant
+
+%3 =
+| Join %1 %2 (= #0 #2)
+| | implementation = Unimplemented
+| Distinct group=(#1, #3)
+
+%4 =
+| Join %0 %3 (= #1 #2)
+| | implementation = Unimplemented
+| Distinct group=(#1, #3)
 ----
 ----
 
@@ -429,6 +483,316 @@ build apply=ReductionPushdown
 ----
 ----
 
+# Partial Distinct Pushdown tests
+
+build apply=ReductionPushdown
+(reduce (join [(get x) (constant [] [int32 string])] [[#1 #3]]) [#1] [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Unimplemented
+| Distinct group=(#1)
+----
+----
+
+## distinct(<multiple columns from same input>)
+
+build apply=ReductionPushdown
+(reduce (join [(constant [] [int32 string]) (get y)] [[#1 #3]]) [#0 #1] [])
+----
+----
+%0 =
+| Constant
+| Distinct group=(#0, #1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= #1 #3)
+| | implementation = Unimplemented
+| Distinct group=(#0, #1)
+----
+----
+
+## distinct(<multiple columns from differing inputs>)
+
+build apply=ReductionPushdown
+(reduce (join [(get x) (constant [] [int32 string])] [[#1 #3]]) [#0 #1 #2] [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+| Distinct group=(#1, #0)
+
+%2 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Unimplemented
+| Distinct group=(#0, #1, #3)
+----
+----
+
+## Expressions in join equivalence classes
+
+build apply=ReductionPushdown
+(reduce
+    (join [(constant [] [int32 string]) (get y)] [[(call_variadic substr [#1 5]) #3]])
+    [#3]
+    [])
+----
+----
+%0 =
+| Constant
+| Distinct group=(substr(#1, 5))
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Distinct group=(#2)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string])]
+        [[(call_variadic substr [#1 5]) #3]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= substr(#1, 5) #2)
+| | implementation = Unimplemented
+| Distinct group=(substr(#1, 5))
+----
+----
+
+### Negative test: Do not do reduction pushdown
+### if there are multi-component expressions in the join equivalence
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string])]
+        [[(call_variadic substr [#1 5]) (call_binary text_concat #1 #3)]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+
+%2 =
+| Join %0 %1 (= substr(#1, 5) (#1 || #3))
+| | implementation = Unimplemented
+| Distinct group=(substr(#1, 5))
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join [(constant [] [int32 string]) (get y)]
+        [[(call_variadic substr [#1 5]) #3]
+         [(call_binary text_concat #1 #3) "hello"]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= substr(#1, 5) #3) (= (#1 || #3) "hello")
+| | implementation = Unimplemented
+| Distinct group=(substr(#1, 5))
+----
+----
+
+### Negative test: multi-input expression in group by key
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string])]
+        [[(call_binary text_concat #1 #3) "hello"]])
+    [(call_binary text_concat #1 #3)]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+
+%2 =
+| Join %0 %1 (= (#1 || #3) "hello")
+| | implementation = Unimplemented
+| Distinct group=((#1 || #3))
+----
+----
+
+## Distinct pushdown across more than two inputs
+## Make sure no cross joins happen.
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y) (constant [] [int32 string] y)] [[#1 #3 #5]])
+    [#1]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Constant
+| Distinct group=(#1)
+
+%3 =
+| Join %0 %1 %2 (= #1 #3 #4)
+| | implementation = Unimplemented
+| Distinct group=(#1)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join
+        [(get x) (constant [] [int32 string]) (constant [] [string int32])]
+        [[#1 #3] [#2 #4]])
+    [#1 #5]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+
+%2 =
+| Constant
+
+%3 =
+| Join %1 %2 (= #0 #2)
+| | implementation = Unimplemented
+| Distinct group=(#1, #3)
+
+%4 =
+| Join %0 %3 (= #1 #2)
+| | implementation = Unimplemented
+| Distinct group=(#1, #3)
+----
+----
+
+### Non-partial pushdown, because each sub-join is non-constant
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string]) (get z)] [[#0 #2] [#1 #5]])
+    [#3 #5]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Distinct group=(#3, #1)
+
+%3 =
+| Get z (u3)
+| Distinct group=(#1)
+
+%4 =
+| Join %2 %3 (= #1 #2)
+| | implementation = Unimplemented
+| Project (#0, #2)
+----
+----
+
+## Cross join tests
+
+build apply=ReductionPushdown
+(reduce (join [(constant [] [int32 string]) (get y) (get z)] [[#3 #5]]) [#5] [])
+----
+----
+%0 =
+| Constant
+| Distinct group=()
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %0 %1 %2 (= #1 #3)
+| | implementation = Unimplemented
+| Distinct group=(#3)
+----
+----
+
+build apply=ReductionPushdown
+(reduce (join [(constant [] [int32 string]) (get y) (get z)] [[#3 #5]]) [#0] [])
+----
+----
+%0 =
+| Constant
+| Distinct group=(#0)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %1 %2 (= #1 #3)
+| | implementation = Unimplemented
+
+%4 =
+| Join %0 %3
+| | implementation = Unimplemented
+| Distinct group=(#0)
+----
+----
+
 # Pushdown agg(distinct <single-input-expression>)
 
 build apply=ReductionPushdown
@@ -503,6 +867,84 @@ build apply=ReductionPushdown
 ----
 ----
 
+# Partial pushdown agg(distinct <single-input-expression>)
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string])] [[#1 #3]])
+    [#1]
+    [(sum_int32 #0 true)])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Unimplemented
+| Reduce group=(#1)
+| | agg sum(distinct #0)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (constant [] [int32 string]) (get z)] [[#1 #3]])
+    [#3]
+    [(sum_int16 #2 true)])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Constant
+| Reduce group=(#1)
+| | agg sum(distinct #0)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %0 %1 %2 (= #1 #2)
+| | implementation = Unimplemented
+| Distinct group=(#2, #3)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join
+        [(constant [] [int32 string]) (constant [] [int32 string]) (get z)]
+        [[#1 #3 #5]])
+    [#3]
+    [(sum_int32 (call_unary neg_int32 #0) true) (sum_int16 #2 true)])
+----
+----
+%0 =
+| Constant
+| Reduce group=(#1)
+| | agg sum(distinct -(#0))
+
+%1 =
+| Constant
+| Reduce group=(#1)
+| | agg sum(distinct #0)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %0 %1 %2 (= #0 #2 #5)
+| | implementation = Unimplemented
+| Distinct group=(#2, #1, #3)
+----
+----
+
 # Pushdown agg(distinct <single-component multi-input expression>)
 
 build apply=ReductionPushdown
@@ -537,6 +979,47 @@ build apply=ReductionPushdown
 | Join %3 %4 (= #0 #3)
 | | implementation = Unimplemented
 | Project (#3, #1, #2)
+----
+----
+
+# Partial pushdown agg(distinct <single-component multi-input expression>)
+
+build apply=ReductionPushdown
+(reduce
+    (join
+        [(constant [] [int32 string])
+         (constant [] [int32 string])
+         (constant [] [int32 string])
+         (get w)]
+        [[#1 #3 #5] [#4 #6]])
+    [#6]
+    [(sum_int32 (call_binary add_int32 #0 (call_unary cast_int16_to_int32 #2)) true)
+     (sum_int16 (call_binary mul_int16 #2 #4) true)])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Constant
+
+%3 =
+| Join %0 %1 %2 (= #1 #3 #5)
+| | implementation = Unimplemented
+| Reduce group=(#4)
+| | agg sum(distinct (#0 + i16toi32(#2)))
+| | agg sum(distinct (#2 * #4))
+
+%4 =
+| Get w (u0)
+
+%5 =
+| Join %3 %4 (= #0 #3)
+| | implementation = Unimplemented
+| Distinct group=(#3, #1, #2)
 ----
 ----
 

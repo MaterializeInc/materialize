@@ -1038,6 +1038,14 @@ impl MirRelationExpr {
         }
     }
 
+    /// Indicates if this is a constant collection.
+    ///
+    /// A false value does not mean the collection is known to be non-constant,
+    /// only that we cannot currently determine that it is constant.
+    pub fn is_constant(&self) -> bool {
+        matches!(self, MirRelationExpr::Constant { .. })
+    }
+
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate

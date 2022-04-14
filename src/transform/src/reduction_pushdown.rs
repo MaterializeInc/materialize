@@ -167,41 +167,54 @@ fn try_push_reduce_through_join(
     // }
     // ```
     //
-    // `<component>` is either `Join {<subset of inputs>}` or
-    // `<element of inputs>`.
+    // ... or, for a partial pushdown:
+    // ```
+    // Reduce {
+    //     Join {
+    //       <join input>, ..., <join input>
+    //     }
+    // }
+    // ```
+    //
+    // ... where:
+    //   - `<component>` is either `Join {<subset of inputs>}` or
+    //      `<element of inputs>`.
+    //   - `<join input>` is either `Reduce { <component> }` or
+    //     `<component>`.
 
-    let old_join_mapper =
-        JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
-    // 1) Partition the join constraints into constraints containing a group
-    //    key and constraints that don't.
+    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+    let old_join_mapper = JoinInputMapper::new_from_input_types(&input_types);
+
+    // Partition the join constraints into constraints containing a group
+    // key and constraints that don't.
     let (new_join_equivalences, component_equivalences): (Vec<_>, Vec<_>) = equivalences
         .iter()
         .cloned()
         .partition(|cls| cls.iter().any(|expr| group_key.contains(expr)));
 
-    // 2) Find the connected components that remain after removing constraints
-    //    containing the group_key. Also, track the set of constraints that
-    //    connect the inputs in each component.
+    // Find the connected components that remain after removing constraints
+    // containing the group_key. Also, track the set of constraints that
+    // connect the inputs in each component.
     let mut components = (0..inputs.len()).map(Component::new).collect::<Vec<_>>();
     for equivalence in component_equivalences {
-        // a) Find the inputs referenced by the constraint.
+        // Find the inputs referenced by the constraint.
         let inputs_to_connect = HashSet::<usize>::from_iter(
             equivalence
                 .iter()
                 .flat_map(|expr| old_join_mapper.lookup_inputs(expr)),
         );
-        // b) Extract the set of components that covers the inputs.
+        // Extract the set of components that covers the inputs.
         let (mut components_to_connect, other): (Vec<_>, Vec<_>) = components
             .into_iter()
             .partition(|c| c.inputs.iter().any(|i| inputs_to_connect.contains(i)));
         components = other;
-        // c) Connect the components and push the result back into the list of
+        // Connect the components and push the result back into the list of
         // components.
         if let Some(mut connected_component) = components_to_connect.pop() {
             connected_component.connect(components_to_connect, equivalence);
             components.push(connected_component);
         }
-        // d) Abort reduction pushdown if there are less than two connected components.
+        // Abort reduction pushdown if there are less than two connected components.
         if components.len() < 2 {
             return None;
         }
@@ -216,6 +229,48 @@ fn try_push_reduce_through_join(
     // where foo.a * bar.a = 24 group by foo.a * bar.a
     // ```
 
+    // Perform a partial pushdown if some (but not all) of the components are
+    // constant.
+    let constants = components
+        .iter()
+        .filter(|c| is_constant_component(c, inputs))
+        .count();
+
+    if constants > 0 && constants < components.len() {
+        try_partial_pushdown_to_constants(
+            inputs,
+            group_key,
+            aggregates,
+            monotonic,
+            expected_group_size,
+            &old_join_mapper,
+            components,
+            new_join_equivalences,
+        )
+    } else {
+        try_full_pushdown(
+            inputs,
+            group_key,
+            aggregates,
+            monotonic,
+            expected_group_size,
+            &old_join_mapper,
+            components,
+            new_join_equivalences,
+        )
+    }
+}
+
+fn try_full_pushdown(
+    inputs: &Vec<MirRelationExpr>,
+    group_key: &Vec<MirScalarExpr>,
+    aggregates: &Vec<AggregateExpr>,
+    monotonic: bool,
+    expected_group_size: Option<usize>,
+    old_join_mapper: &JoinInputMapper,
+    components: Vec<Component>,
+    new_join_equivalences: Vec<Vec<MirScalarExpr>>,
+) -> Option<MirRelationExpr> {
     // Maps (input idxs from old join) -> (idx of component it belongs to)
     let input_component_map = HashMap::from_iter(
         components
@@ -224,10 +279,10 @@ fn try_push_reduce_through_join(
             .flat_map(|(c_idx, c)| c.inputs.iter().map(move |i| (*i, c_idx))),
     );
 
-    // 3) Construct a reduce to push to each input
+    // Construct a reduce to push to each input.
     let mut new_reduces = components
         .into_iter()
-        .map(|component| ReduceBuilder::new(component, inputs, &old_join_mapper))
+        .map(|component| JoinInputBuilder::new_reduce(component, inputs, &old_join_mapper))
         .collect::<Vec<_>>();
 
     // The new projection and new join equivalences will reference columns
@@ -237,17 +292,17 @@ fn try_push_reduce_through_join(
     let mut new_projection = Vec::with_capacity(group_key.len());
     let mut new_join_equivalences_by_component = Vec::new();
 
-    // 3a) Calculate the group key for each new reduce. We must make sure that
+    // Calculate the group key for each new reduce. We must make sure that
     // the union of group keys across the new reduces can produce:
     // (1) the group keys of the old reduce.
     // (2) every expression in the equivalences of the new join.
     for key in group_key {
-        // i) Find the equivalence class that the key is in.
+        // Find the equivalence class that the key is in.
         if let Some(cls) = new_join_equivalences
             .iter()
             .find(|cls| cls.iter().any(|expr| expr == key))
         {
-            // ii) Rewrite the join equivalence in terms of columns produced by
+            // Rewrite the join equivalence in terms of columns produced by
             // the pushed down reduction.
             let mut new_join_cls = Vec::new();
             for expr in cls {
@@ -283,7 +338,7 @@ fn try_push_reduce_through_join(
         }
     }
 
-    // 3b) Deduce the aggregates that each reduce needs to calculate in order to
+    // Deduce the aggregates that each reduce needs to calculate in order to
     // reconstruct each aggregate in the old reduce.
     for agg in aggregates {
         if let Some(component) =
@@ -303,13 +358,13 @@ fn try_push_reduce_through_join(
         }
     }
 
-    // 4) Construct the new `MirRelationExpr`.
+    // Construct the new `MirRelationExpr`.
     let new_join_mapper =
         JoinInputMapper::new_from_input_arities(new_reduces.iter().map(|builder| builder.arity()));
 
     let new_inputs = new_reduces
         .into_iter()
-        .map(|builder| builder.construct_reduce(monotonic, expected_group_size))
+        .map(|builder| builder.construct(monotonic, expected_group_size))
         .collect::<Vec<_>>();
 
     let new_equivalences = new_join_equivalences_by_component
@@ -331,6 +386,167 @@ fn try_push_reduce_through_join(
     return Some(
         MirRelationExpr::join_scalars(new_inputs, new_equivalences).project(new_projection),
     );
+}
+
+fn try_partial_pushdown_to_constants(
+    inputs: &Vec<MirRelationExpr>,
+    group_key: &Vec<MirScalarExpr>,
+    aggregates: &Vec<AggregateExpr>,
+    monotonic: bool,
+    expected_group_size: Option<usize>,
+    old_join_mapper: &JoinInputMapper,
+    components: Vec<Component>,
+    new_join_equivalences: Vec<Vec<MirScalarExpr>>,
+) -> Option<MirRelationExpr> {
+    // Maps (input idxs from old join) -> (idx of component it belongs to)
+    let input_component_map = HashMap::from_iter(
+        components
+            .iter()
+            .enumerate()
+            .flat_map(|(c_idx, c)| c.inputs.iter().map(move |i| (*i, c_idx))),
+    );
+
+    // Construct inputs for the new join. Push reduces to constant inputs.
+    let mut new_inputs = components
+        .into_iter()
+        .map(|component| {
+            if is_constant_component(&component, inputs) {
+                JoinInputBuilder::new_reduce(component, inputs, &old_join_mapper)
+            } else {
+                JoinInputBuilder::new(component, inputs, &old_join_mapper)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // The new group key and new join equivalences will reference columns
+    // produced by the new inputs, but we don't know the arities of the new
+    // reduces yet. Thus, they are temporarily stored as
+    // `(component_idx, column_idx_relative_to_new_input)`.
+    let mut new_group_key = Vec::with_capacity(group_key.len());
+    let mut new_join_equivalences_by_component = Vec::new();
+
+    // Calculate the group key for each new reduce.
+    for key in group_key {
+        // Find the equivalence class that the key is in.
+        if let Some(cls) = new_join_equivalences
+            .iter()
+            .find(|cls| cls.iter().any(|expr| expr == key))
+        {
+            // Rewrite the join equivalence in terms of columns produced by
+            // the new join input.
+            let mut new_join_cls = Vec::new();
+            for expr in cls {
+                if let Some(component) =
+                    lookup_corresponding_component(expr, &old_join_mapper, &input_component_map)
+                {
+                    let input = &mut new_inputs[component];
+                    if input.is_reduce() {
+                        let column = MirScalarExpr::Column(input.arity());
+                        if key == expr {
+                            new_group_key.push((component, column.clone()));
+                        }
+                        new_join_cls.push((component, column));
+                        input.add_group_key(expr.clone());
+                    } else {
+                        let mut local_expr = expr.clone();
+                        local_expr.permute_map(&input.localize_map);
+                        if key == expr {
+                            new_group_key.push((component, local_expr.clone()));
+                        }
+                        new_join_cls.push((component, local_expr));
+                    }
+                } else {
+                    // Abort reduction pushdown if the expression does not
+                    // refer to exactly one component.
+                    return None;
+                }
+            }
+            new_join_equivalences_by_component.push(new_join_cls);
+        } else {
+            // If GroupBy key does not belong in an equivalence class,
+            // add the key to new group key + add it as a GroupBy key to
+            // the new reduce.
+            if let Some(component) =
+                lookup_corresponding_component(key, &old_join_mapper, &input_component_map)
+            {
+                let input = &mut new_inputs[component];
+                if input.is_reduce() {
+                    new_group_key.push((component, MirScalarExpr::Column(input.arity())));
+                    input.add_group_key(key.clone())
+                } else {
+                    let mut local_key = key.clone();
+                    local_key.permute_map(&input.localize_map);
+                    new_group_key.push((component, local_key));
+                }
+            } else {
+                // Abort reduction pushdown if the expression does not
+                // refer to exactly one component.
+                return None;
+            }
+        }
+    }
+
+    // Deduce the aggregates that each reduce needs to calculate in order to
+    // reconstruct each aggregate in the old reduce.
+    let mut new_aggregates = Vec::new();
+    for agg in aggregates {
+        if let Some(component) =
+            lookup_corresponding_component(&agg.expr, &old_join_mapper, &input_component_map)
+        {
+            if !agg.distinct {
+                // TODO: support non-distinct aggs
+                return None;
+            }
+            let input = &mut new_inputs[component];
+            if input.is_reduce() {
+                new_group_key.push((component, MirScalarExpr::Column(input.arity())));
+                input.add_aggregate(agg.clone());
+            } else {
+                new_aggregates.push(agg.clone());
+            }
+        } else {
+            // TODO: support multi- and zero- component aggs
+            return None;
+        }
+    }
+
+    // Construct the new `MirRelationExpr`.
+    let new_join_mapper =
+        JoinInputMapper::new_from_input_arities(new_inputs.iter().map(|input| input.arity()));
+
+    let new_inputs = new_inputs
+        .into_iter()
+        .map(|builder| builder.construct(monotonic, expected_group_size))
+        .collect::<Vec<_>>();
+
+    let new_equivalences = new_join_equivalences_by_component
+        .into_iter()
+        .map(|cls| {
+            cls.into_iter()
+                .map(|(idx, expr)| new_join_mapper.map_expr_to_global(expr, idx))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let new_join = MirRelationExpr::join_scalars(new_inputs, new_equivalences);
+
+    let new_group_key = new_group_key
+        .into_iter()
+        .map(|(idx, col)| new_join_mapper.map_expr_to_global(col, idx))
+        .collect::<Vec<_>>();
+
+    Some(MirRelationExpr::Reduce {
+        input: Box::new(new_join),
+        group_key: new_group_key,
+        aggregates: new_aggregates,
+        monotonic,
+        expected_group_size,
+    })
+}
+
+/// Returns `true` iff all of the component's inputs are constants.
+fn is_constant_component(component: &Component, inputs: &[MirRelationExpr]) -> bool {
+    component.inputs.iter().all(|i| inputs[*i].is_constant())
 }
 
 /// Returns None if `expr` does not belong to exactly one component.
@@ -381,16 +597,20 @@ impl Component {
     }
 }
 
-/// Constructs a Reduce around a component, localizing column references.
-struct ReduceBuilder {
+struct JoinInputBuilder {
     input: MirRelationExpr,
-    group_key: Vec<MirScalarExpr>,
-    aggregates: Vec<AggregateExpr>,
     /// Maps (global column relative to old join) -> (local column relative to `input`)
     localize_map: HashMap<usize, usize>,
+    reduce: Option<ReduceArgs>,
 }
 
-impl ReduceBuilder {
+#[derive(Default)]
+struct ReduceArgs {
+    group_key: Vec<MirScalarExpr>,
+    aggregates: Vec<AggregateExpr>,
+}
+
+impl JoinInputBuilder {
     fn new(
         mut component: Component,
         inputs: &Vec<MirRelationExpr>,
@@ -423,37 +643,56 @@ impl ReduceBuilder {
         };
         Self {
             input,
-            group_key: Vec::new(),
-            aggregates: Vec::new(),
             localize_map,
+            reduce: None,
         }
     }
 
+    fn new_reduce(
+        component: Component,
+        inputs: &Vec<MirRelationExpr>,
+        old_join_mapper: &JoinInputMapper,
+    ) -> Self {
+        let mut builder = Self::new(component, inputs, old_join_mapper);
+        builder.reduce = Some(Default::default());
+        builder
+    }
+
+    fn is_reduce(&self) -> bool {
+        self.reduce.is_some()
+    }
+
     fn add_group_key(&mut self, mut key: MirScalarExpr) {
+        let reduce = self.reduce.as_mut().expect("not a reduce");
         key.permute_map(&self.localize_map);
-        self.group_key.push(key);
+        reduce.group_key.push(key);
     }
 
     fn add_aggregate(&mut self, mut agg: AggregateExpr) {
+        let reduce = self.reduce.as_mut().expect("not a reduce");
         agg.expr.permute_map(&self.localize_map);
-        self.aggregates.push(agg);
+        reduce.aggregates.push(agg);
     }
 
     fn arity(&self) -> usize {
-        self.group_key.len() + self.aggregates.len()
+        if let Some(reduce) = &self.reduce {
+            reduce.group_key.len() + reduce.aggregates.len()
+        } else {
+            self.input.arity()
+        }
     }
 
-    fn construct_reduce(
-        self,
-        monotonic: bool,
-        expected_group_size: Option<usize>,
-    ) -> MirRelationExpr {
-        MirRelationExpr::Reduce {
-            input: Box::new(self.input),
-            group_key: self.group_key,
-            aggregates: self.aggregates,
-            monotonic,
-            expected_group_size,
+    fn construct(self, monotonic: bool, expected_group_size: Option<usize>) -> MirRelationExpr {
+        if let Some(reduce) = self.reduce {
+            MirRelationExpr::Reduce {
+                input: Box::new(self.input),
+                group_key: reduce.group_key,
+                aggregates: reduce.aggregates,
+                monotonic,
+                expected_group_size,
+            }
+        } else {
+            self.input
         }
     }
 }
