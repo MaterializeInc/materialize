@@ -82,7 +82,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--min-version",
         metavar="VERSION",
         type=Version.parse,
-        default=Version.parse("0.8.0"),
+        default=Version.parse("0.27.0"),
         help="the minimum version to test from",
     )
     parser.add_argument(

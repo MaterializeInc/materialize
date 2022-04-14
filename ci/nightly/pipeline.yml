@@ -109,6 +109,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
+          args: [--most-recent, "0"]
 
   - id: limits
     label: "Product limits test"
