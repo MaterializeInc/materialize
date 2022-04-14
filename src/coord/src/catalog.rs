@@ -2491,22 +2491,12 @@ impl Catalog {
                             replicas,
                             introspection,
                         } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
                             InstanceConfig::Remote { replicas }
                         }
                         ComputeInstanceConfig::Managed {
                             size,
                             introspection,
                         } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
                             InstanceConfig::Managed { size }
                         }
                     };
