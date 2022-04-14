@@ -3266,12 +3266,12 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => JsonbContainsJsonb, 3246;
                 params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(
-                        rhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        rhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb)),
                         JsonbContainsJsonb,
                     ))
                 }), oid::OP_CONTAINS_JSONB_STRING_OID;
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
-                    Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb)
+                    Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb))
                           .call_binary(rhs, JsonbContainsJsonb))
                 }), oid::OP_CONTAINS_STRING_JSONB_OID;
                 params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
@@ -3284,12 +3284,12 @@ lazy_static! {
                     ))
                 }), 3246;
                 params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
-                    Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb)
+                    Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb))
                           .call_binary(lhs, BinaryFunc::JsonbContainsJsonb))
                 }), oid::OP_CONTAINED_JSONB_STRING_OID;
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(rhs.call_binary(
-                        lhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        lhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb)),
                         BinaryFunc::JsonbContainsJsonb,
                     ))
                 }), oid::OP_CONTAINED_STRING_JSONB_OID;

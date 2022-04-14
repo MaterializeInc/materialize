@@ -25,6 +25,7 @@ use mz_lowertest::MzReflect;
 use crate::adt::array::Array;
 use crate::adt::char::{Char, CharLength};
 use crate::adt::interval::Interval;
+use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
@@ -1419,6 +1420,57 @@ impl<'a, E> DatumType<'a, E> for VarChar<String> {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Jsonb {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        Ok(JsonbRef::try_from_result(res)?.to_owned())
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(temp_storage.push_unary_row(self.into_row()))
+    }
+}
+
+impl AsColumnType for Jsonb {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Jsonb.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(
+                d @ (Datum::JsonNull
+                | Datum::True
+                | Datum::False
+                | Datum::Numeric(_)
+                | Datum::String(_)
+                | Datum::List(_)
+                | Datum::Map(_)),
+            ) => Ok(JsonbRef::from_datum(d)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(self.into_datum())
+    }
+}
+
+impl<'a> AsColumnType for JsonbRef<'a> {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Jsonb.nullable(false)
     }
 }
 
