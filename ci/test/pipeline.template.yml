@@ -236,7 +236,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
-          args: [--most-recent, "3"]
+          args: [--most-recent, "0"]
 
   - id: metabase-demo
     label: Metabase smoke test
