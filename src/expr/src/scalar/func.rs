@@ -1782,41 +1782,8 @@ where
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_timestamp_inner::<_, D>(units, ts),
+        Ok(units) => Ok(date_part_timestamp_inner::<_, D>(units, ts)?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_timestamp_inner<'a, T, D>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-    D: DecimalLike + Into<Datum<'a>>,
-{
-    match units {
-        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch::<D>(&ts).into()),
-        DateTimeUnits::Millennium => Ok(D::from(ts.millennium()).into()),
-        DateTimeUnits::Century => Ok(D::from(ts.century()).into()),
-        DateTimeUnits::Decade => Ok(D::from(ts.decade()).into()),
-        DateTimeUnits::Year => Ok(D::from(ts.year()).into()),
-        DateTimeUnits::Quarter => Ok(D::from(ts.quarter()).into()),
-        DateTimeUnits::Week => Ok(D::from(ts.week()).into()),
-        DateTimeUnits::Month => Ok(D::from(ts.month()).into()),
-        DateTimeUnits::Day => Ok(D::from(ts.day()).into()),
-        DateTimeUnits::DayOfWeek => Ok(D::from(ts.day_of_week()).into()),
-        DateTimeUnits::DayOfYear => Ok(D::from(ts.ordinal()).into()),
-        DateTimeUnits::IsoDayOfWeek => Ok(D::from(ts.iso_day_of_week()).into()),
-        DateTimeUnits::Hour => Ok(D::from(ts.hour()).into()),
-        DateTimeUnits::Minute => Ok(D::from(ts.minute()).into()),
-        DateTimeUnits::Second => Ok(ts.extract_second::<D>().into()),
-        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond::<D>().into()),
-        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond::<D>().into()),
-        DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
     }
 }
 
@@ -3242,14 +3209,16 @@ pub enum UnaryFunc {
     RegexpMatch(RegexpMatch),
 
     ExtractInterval(ExtractInterval),
-    ExtractTime(DateTimeUnits),
-    ExtractTimestamp(DateTimeUnits),
-    ExtractTimestampTz(DateTimeUnits),
-    ExtractDate(DateTimeUnits),
     DatePartInterval(DatePartInterval),
+
+    ExtractTimestamp(ExtractTimestamp),
+    ExtractTimestampTz(ExtractTimestampTz),
+    DatePartTimestamp(DatePartTimestamp),
+    DatePartTimestampTz(DatePartTimestampTz),
+
+    ExtractDate(DateTimeUnits),
+    ExtractTime(DateTimeUnits),
     DatePartTime(DateTimeUnits),
-    DatePartTimestamp(DateTimeUnits),
-    DatePartTimestampTz(DateTimeUnits),
     DateTruncTimestamp(DateTimeUnits),
     DateTruncTimestampTz(DateTimeUnits),
     TimezoneTimestamp(Timezone),
@@ -3559,7 +3528,11 @@ derive_unary!(
     IsRegexpMatch,
     RegexpMatch,
     ExtractInterval,
-    DatePartInterval
+    DatePartInterval,
+    ExtractTimestamp,
+    ExtractTimestampTz,
+    DatePartTimestamp,
+    DatePartTimestampTz
 );
 
 impl UnaryFunc {
@@ -3766,6 +3739,10 @@ impl UnaryFunc {
             | RegexpMatch(_)
             | ExtractInterval(_)
             | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -3779,20 +3756,8 @@ impl UnaryFunc {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
             ExtractTime(units) => date_part_time_inner::<Numeric>(*units, a),
-            ExtractTimestamp(units) => {
-                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamp())
-            }
-            ExtractTimestampTz(units) => {
-                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamptz())
-            }
             ExtractDate(units) => extract_date_inner(*units, a),
             DatePartTime(units) => date_part_time_inner::<f64>(*units, a),
-            DatePartTimestamp(units) => {
-                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamp())
-            }
-            DatePartTimestampTz(units) => {
-                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamptz())
-            }
             DateTruncTimestamp(units) => date_trunc_inner(*units, a.unwrap_timestamp()),
             DateTruncTimestampTz(units) => date_trunc_inner(*units, a.unwrap_timestamptz()),
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
@@ -4005,6 +3970,10 @@ impl UnaryFunc {
             | RegexpMatch(_)
             | ExtractInterval(_)
             | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
             | Chr(_) => unreachable!(),
 
             CastRecordToString { .. }
@@ -4025,13 +3994,11 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. } => return_ty.without_modifiers().nullable(false),
 
-            ExtractTime(_) | ExtractTimestamp(_) | ExtractTimestampTz(_) | ExtractDate(_) => {
+            ExtractTime(_) | ExtractDate(_) => {
                 ScalarType::Numeric { max_scale: None }.nullable(nullable)
             }
 
-            DatePartTime(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
-                ScalarType::Float64.nullable(nullable)
-            }
+            DatePartTime(_) => ScalarType::Float64.nullable(nullable),
 
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
@@ -4257,6 +4224,10 @@ impl UnaryFunc {
             | RegexpMatch(_)
             | ExtractInterval(_)
             | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
@@ -4271,8 +4242,8 @@ impl UnaryFunc {
             TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
             ListLength | MapLength => false,
-            ExtractTime(_) | ExtractTimestamp(_) | ExtractTimestampTz(_) | ExtractDate(_) => false,
-            DatePartTime(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
+            ExtractTime(_) | ExtractDate(_) => false,
+            DatePartTime(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             RescaleNumeric(_) => false,
         }
@@ -4377,6 +4348,10 @@ impl UnaryFunc {
             | RegexpMatch(_)
             | ExtractInterval(_)
             | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4575,6 +4550,10 @@ impl UnaryFunc {
             | RegexpMatch(_)
             | ExtractInterval(_)
             | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4584,12 +4563,8 @@ impl UnaryFunc {
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
             ExtractTime(units) => write!(f, "extract_{}_t", units),
-            ExtractTimestamp(units) => write!(f, "extract_{}_ts", units),
-            ExtractTimestampTz(units) => write!(f, "extract_{}_tstz", units),
             ExtractDate(units) => write!(f, "extract_{}_d", units),
             DatePartTime(units) => write!(f, "date_part_{}_t", units),
-            DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
-            DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
             DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
             DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
             TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),

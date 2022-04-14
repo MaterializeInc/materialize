@@ -406,7 +406,9 @@ impl MirScalarExpr {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractTimestamp(units),
+                                    func: UnaryFunc::ExtractTimestamp(func::ExtractTimestamp(
+                                        units,
+                                    )),
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
@@ -418,7 +420,9 @@ impl MirScalarExpr {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractTimestampTz(units),
+                                    func: UnaryFunc::ExtractTimestampTz(func::ExtractTimestampTz(
+                                        units,
+                                    )),
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
@@ -468,7 +472,9 @@ impl MirScalarExpr {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartTimestamp(units),
+                                    func: UnaryFunc::DatePartTimestamp(func::DatePartTimestamp(
+                                        units,
+                                    )),
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
@@ -480,7 +486,9 @@ impl MirScalarExpr {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartTimestampTz(units),
+                                    func: UnaryFunc::DatePartTimestampTz(
+                                        func::DatePartTimestampTz(units),
+                                    ),
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(

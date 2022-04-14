@@ -18,7 +18,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::{strconv, ColumnType, ScalarType};
 
-use crate::scalar::func::EagerUnaryFunc;
+use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 use crate::EvalError;
 
 sqlfunc!(
@@ -157,5 +157,126 @@ impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
 impl fmt::Display for DatePartInterval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_part_{}_iv", self.0)
+    }
+}
+
+pub fn date_part_timestamp_inner<T, D>(units: DateTimeUnits, ts: T) -> Result<D, EvalError>
+where
+    T: TimestampLike,
+    D: DecimalLike,
+{
+    match units {
+        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch(&ts)),
+        DateTimeUnits::Millennium => Ok(D::from(ts.millennium())),
+        DateTimeUnits::Century => Ok(D::from(ts.century())),
+        DateTimeUnits::Decade => Ok(D::from(ts.decade())),
+        DateTimeUnits::Year => Ok(D::from(ts.year())),
+        DateTimeUnits::Quarter => Ok(D::from(ts.quarter())),
+        DateTimeUnits::Week => Ok(D::from(ts.week())),
+        DateTimeUnits::Month => Ok(D::from(ts.month())),
+        DateTimeUnits::Day => Ok(D::from(ts.day())),
+        DateTimeUnits::DayOfWeek => Ok(D::from(ts.day_of_week())),
+        DateTimeUnits::DayOfYear => Ok(D::from(ts.ordinal())),
+        DateTimeUnits::IsoDayOfWeek => Ok(D::from(ts.iso_day_of_week())),
+        DateTimeUnits::Hour => Ok(D::from(ts.hour())),
+        DateTimeUnits::Minute => Ok(D::from(ts.minute())),
+        DateTimeUnits::Second => Ok(ts.extract_second()),
+        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond()),
+        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond()),
+        DateTimeUnits::Timezone
+        | DateTimeUnits::TimezoneHour
+        | DateTimeUnits::TimezoneMinute
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct ExtractTimestamp(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
+    type Input = NaiveDateTime;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, a: NaiveDateTime) -> Result<Numeric, EvalError> {
+        date_part_timestamp_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for ExtractTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "extract_{}_ts", self.0)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct ExtractTimestampTz(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
+    type Input = DateTime<Utc>;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, a: DateTime<Utc>) -> Result<Numeric, EvalError> {
+        date_part_timestamp_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for ExtractTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "extract_{}_tstz", self.0)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct DatePartTimestamp(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
+    type Input = NaiveDateTime;
+    type Output = Result<f64, EvalError>;
+
+    fn call(&self, a: NaiveDateTime) -> Result<f64, EvalError> {
+        date_part_timestamp_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Float64.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for DatePartTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "date_part_{}_ts", self.0)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct DatePartTimestampTz(pub DateTimeUnits);
+
+impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
+    type Input = DateTime<Utc>;
+    type Output = Result<f64, EvalError>;
+
+    fn call(&self, a: DateTime<Utc>) -> Result<f64, EvalError> {
+        date_part_timestamp_inner(self.0, a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Float64.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for DatePartTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "date_part_{}_tstz", self.0)
     }
 }
