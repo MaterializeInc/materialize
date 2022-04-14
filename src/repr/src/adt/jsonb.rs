@@ -162,10 +162,20 @@ pub struct JsonbRef<'a> {
 impl JsonbRef<'_> {
     /// Constructs a `JsonbRef` from a [`Datum`].
     ///
-    /// Note that `datum` is not checked for validity. Not all `Datum`s are
-    /// valid JSON.
+    /// # Panics
+    ///
+    /// Panics if the passed datum is not representable as JSON.
     pub fn from_datum(datum: Datum) -> JsonbRef {
-        JsonbRef { datum }
+        match datum {
+            Datum::JsonNull
+            | Datum::False
+            | Datum::True
+            | Datum::String(_)
+            | Datum::Numeric(_)
+            | Datum::List(_)
+            | Datum::Map(_) => JsonbRef { datum },
+            _ => panic!("JsonbRef::from_datum called on invalid datum {:?}", datum),
+        }
     }
 
     /// Constructs an owned [`Jsonb`] from this `JsonbRef`.
