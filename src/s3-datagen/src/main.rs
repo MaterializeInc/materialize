@@ -19,7 +19,6 @@ use tracing::event;
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
 
 /// Generate meaningless data in S3 to test download speeds
@@ -101,7 +100,7 @@ async fn run() -> anyhow::Result<()> {
         })
         .collect::<String>();
 
-    let config = AwsConfig::load_from_env().await;
+    let config = aws_config::load_from_env().await;
     let client = mz_aws_util::s3::client(&config);
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);

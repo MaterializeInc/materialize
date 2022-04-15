@@ -10,16 +10,12 @@
 //! AWS STS client and utilities.
 
 use aws_sdk_sts::Client;
+use aws_types::SdkConfig;
 
-use crate::config::AwsConfig;
 use crate::util;
 
 /// Constructs a new AWS STS client that respects the
 /// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
-pub fn client(config: &AwsConfig) -> Client {
-    let mut builder = aws_sdk_sts::config::Builder::from(config.inner());
-    if let Some(endpoint) = config.endpoint() {
-        builder = builder.endpoint_resolver(endpoint.clone());
-    }
-    Client::from_conf_conn(builder.build(), util::connector())
+pub fn client(config: &SdkConfig) -> Client {
+    Client::from_conf_conn(config.into(), util::connector())
 }

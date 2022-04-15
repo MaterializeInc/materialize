@@ -13,18 +13,14 @@ use aws_sdk_kinesis::error::{GetShardIteratorError, ListShardsError};
 use aws_sdk_kinesis::model::{Shard, ShardIteratorType};
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client;
+use aws_types::SdkConfig;
 
-use crate::config::AwsConfig;
 use crate::util;
 
 /// Constructs a new AWS Kinesis client that respects the
 /// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
-pub fn client(config: &AwsConfig) -> Client {
-    let mut builder = aws_sdk_kinesis::config::Builder::from(config.inner());
-    if let Some(endpoint) = config.endpoint() {
-        builder = builder.endpoint_resolver(endpoint.clone());
-    }
-    Client::from_conf_conn(builder.build(), util::connector())
+pub fn client(config: &SdkConfig) -> Client {
+    Client::from_conf_conn(config.into(), util::connector())
 }
 
 /// Lists the shards of the named Kinesis stream.
