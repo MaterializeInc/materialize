@@ -6,6 +6,5 @@ menu:
     parent: reference
     identifier: 'sql-spellbook'
     weight: 85
-disable_list: true
-disable_toc: true
+draft: true
 ---

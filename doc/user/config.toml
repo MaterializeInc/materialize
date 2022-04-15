@@ -113,7 +113,7 @@ weight= 50
 identifier = "commands"
 parent = "reference"
 weight = 100
-name = "**SQL Commands**"
+name = "SQL Commands"
 
 [[menu.main]]
 identifier = "integration-guides"
