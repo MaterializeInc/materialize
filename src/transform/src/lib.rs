@@ -25,6 +25,7 @@ use std::error::Error;
 use std::fmt;
 use std::iter;
 
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;

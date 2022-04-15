@@ -15,6 +15,7 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
+use mz_expr::visit::Visit;
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_repr::{Datum, RelationType, ScalarType};
 

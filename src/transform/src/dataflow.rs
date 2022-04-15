@@ -15,6 +15,7 @@
 //! in which the views will be executed.
 
 use mz_dataflow_types::{DataflowDesc, LinearOperator};
+use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;

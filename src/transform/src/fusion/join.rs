@@ -22,6 +22,7 @@
 //! we may find joins with zero or one input, which can be further simplified.
 
 use crate::TransformArgs;
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
 

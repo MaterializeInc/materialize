@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 
+use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 

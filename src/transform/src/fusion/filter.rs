@@ -45,6 +45,7 @@
 //! ```
 
 use crate::TransformArgs;
+use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.

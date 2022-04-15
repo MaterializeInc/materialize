@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
