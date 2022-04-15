@@ -3485,7 +3485,16 @@ impl<'a> Parser<'a> {
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
     fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.consume_identifier() {
-            Some(id) => Ok(id),
+            Some(id) => {
+                if id.as_str().is_empty() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "zero-length delimited identifier",
+                    );
+                }
+                Ok(id)
+            }
             None => self.expected(self.peek_pos(), "identifier", self.peek_token()),
         }
     }
