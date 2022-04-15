@@ -124,6 +124,8 @@ def run_one_scenario(
             c.start_and_wait_for_tcp(services=["materialized"])
             c.wait_for_materialized()
 
+            c.up("testdrive", persistent=True)
+
             executor = Docker(
                 composition=c,
                 seed=common_seed,
@@ -142,7 +144,7 @@ def run_one_scenario(
             outcome, iterations = benchmark.run()
             comparator.append(outcome)
 
-            c.kill("materialized")
+            c.kill("materialized", "testdrive")
             c.rm("materialized", "testdrive")
             c.rm_volumes("mzdata")
 
