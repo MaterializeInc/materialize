@@ -3,7 +3,7 @@ title: "DROP TYPE"
 description: "`DROP TYPE` removes a user-defined data type."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 {{< version-added v0.7.1 />}}

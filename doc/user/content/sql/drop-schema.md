@@ -3,7 +3,7 @@ title: "DROP SCHEMA"
 description: "`DROP SCHEMA` removes a schema from your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `DROP SCHEMA` removes a schema from your Materialize instances.

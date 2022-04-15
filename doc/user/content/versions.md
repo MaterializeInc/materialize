@@ -1,8 +1,10 @@
 ---
 title: "Versions"
 description: "Materialize's version information"
-menu: "main"
-weight: 300
+menu:
+  main:
+    parent: 'about'
+    weight: 20
 ---
 
 ## Stable releases

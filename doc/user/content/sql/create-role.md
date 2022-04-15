@@ -3,7 +3,7 @@ title: "CREATE ROLE"
 description: "`CREATE ROLE` creates a new role."
 menu:
   main:
-    parent: sql
+    parent: commands
 ---
 
 {{< version-added v0.7.0 />}}
@@ -14,7 +14,7 @@ menu:
 
 A role is a user account in a Materialize instance.
 
-When you [connect to a Materialize instance](/connect/cli), you must specify
+When you [connect to a Materialize instance](/integrations/psql), you must specify
 the name of a valid role in the system.
 
 {{< warning >}}

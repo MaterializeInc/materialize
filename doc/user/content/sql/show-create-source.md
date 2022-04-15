@@ -3,7 +3,7 @@ title: "SHOW CREATE SOURCE"
 description: "`SHOW CREATE SOURCE` returns the URL used to create the source."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW CREATE SOURCE` returns the URL used to create the source.

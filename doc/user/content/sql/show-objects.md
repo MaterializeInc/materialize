@@ -3,7 +3,7 @@ title: "SHOW OBJECTS"
 description: "`SHOW OBJECTS` returns a list of all objects available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 aliases:
     - /sql/show-object
 ---

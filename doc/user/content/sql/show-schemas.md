@@ -3,7 +3,7 @@ title: "SHOW SCHEMAS"
 description: "`SHOW SCHEMAS` returns a list of all schemas available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW SCHEMAS` returns a list of all schemas available to your Materialize

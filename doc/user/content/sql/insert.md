@@ -3,7 +3,7 @@ title: "INSERT"
 description: "`INSERT` inserts values into a table."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 {{< version-added v0.5.0 />}}

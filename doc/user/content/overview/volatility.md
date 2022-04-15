@@ -3,7 +3,7 @@ title: "Volatility"
 description: "Understand volatility in Materialize."
 menu:
   main:
-    parent: 'overview'
+    parent: advanced
     weight: 5
 ---
 

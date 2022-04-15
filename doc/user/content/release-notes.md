@@ -1,8 +1,10 @@
 ---
 title: "Release Notes"
 description: "What's new in this version of Materialize"
-menu: "main"
-weight: 500
+menu:
+  main:
+    parent: 'about'
+    weight: 10
 ---
 
 This page details changes between versions of Materialize, including:
@@ -73,7 +75,7 @@ process by the release notes team.
     [`arrangement`](/overview/arrangements) as the only valid method.
 
   Together these changes enable support for [Apache Superset] and the
-  `\d <object>` command in the  [psql terminal](/connect/cli).
+  `\d <object>` command in the  [psql terminal](/integrations/psql).
 
 - Support calling [`date_trunc`](/sql/functions/#date_trunc) with
   [`interval`](/sql/types/interval) values {{% gh 9871 %}}.
@@ -87,7 +89,7 @@ process by the release notes team.
   all `NULL` inputs {{% gh 11139 %}}.
 
 - Include information about the experimental
-  [cluster feature](/overview/api-components/#clusters) in
+  [cluster feature](/overview/key-concepts/#clusters) in
   [`SHOW INDEX`](/sql/show-index) and [`SHOW SINKS`](/sql/show-sinks).
 
 - Improve recovery of [Postgres sources](/sql/create-source/postgres) when
@@ -121,7 +123,7 @@ process by the release notes team.
   refuse to create an index that directly or indirectly depends on a
   unmaterializable function. The one exception is [`mz_logical_timestamp`],
   which can be used in limited contexts in a materialized view as a [temporal
-  filter](/guides/temporal-filters).
+  filter](/sql/spellbook/temporal-filters/).
 
   Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
   incorrectly disallowed in unmaterialized views, while the remaining
@@ -443,8 +445,8 @@ process by the release notes team.
 - **Breaking change.** Disallow the string `'sNaN'` (in any casing) as a valid
   [`numeric`] value.
 
-- Add the [`array_remove`](https://materialize.com/docs/sql/functions/#array-func)
-  and [`list_remove`](https://materialize.com/docs/sql/functions/#list-func)
+- Add the [`array_remove`](/sql/functions/#array-func)
+  and [`list_remove`](/sql/functions/#list-func)
   functions.
 
 - Support the special PostgreSQL syntax
@@ -636,7 +638,7 @@ Improve PostgreSQL compatibility:
     {{% gh 9366 %}}.
 
   These changes enable the `\dt <pattern>` command in the
-  [psql terminal](/connect/cli) and PgJDBC's `getPrimaryKeys()` API.
+  [psql terminal](/integrations/psql) and PgJDBC's `getPrimaryKeys()` API.
 
 - Fix a query optimization that could produce wrong results when a condition in
   a `CASE` expression returned `NULL` rather than `FALSE` {{% gh 9287 %}}.
@@ -793,7 +795,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char
   list` columns and custom types. This type is not meant to be supported.
-- Beta support for [Redpanda sources](/third-party/redpanda/).
+- Beta support for [Redpanda sources](/integrations/redpanda/).
 
 - Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
 
@@ -1192,7 +1194,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   It will be restored in the next release.
 
 - **Breaking change.** Require a valid user name when [connecting to
-  Materialize](/connect/cli#connection-details). Previously, Materialize did not
+  Materialize](/integrations/psql#connection-details). Previously, Materialize did not
   support the concept of [roles](/sql/create-role), so it accepted all user
   names.
 
@@ -1552,7 +1554,7 @@ a problem with PostgreSQL JDBC 42.3.0.
     `pg_encoding_to_char` [compatibility functions](/sql/functions#postgresql-compatibility-func).
 
   Together these changes enable the `\l`, `\d`, `\dv`, `\dt`, `\di` commands
-  in the [psql terminal](/connect/cli).
+  in the [psql terminal](/integrations/psql).
 
 - Correct a query optimization that could misplan queries that referenced the
   same relation multiple times with varying filters {{% gh 4361 %}}.
@@ -1684,7 +1686,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in
     joins. `LATERAL` subqueries can be used to express [Top-K by group
-    queries](/guides/top-k/)
+    queries](/sql/spellbook/top-k/)
 
   - Add the [regular expression matching operators](/sql/functions/#string) `~`,
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match
@@ -1754,7 +1756,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Change the default [`TAIL` snapshot behavior](/sql/tail/#snapshot)
   from `WITHOUT SNAPSHOT` to `WITH SNAPSHOT`. **Backwards-incompatible change.**
 
-- Actively shut down [Kafka sinks](https://materialize.com/docs/sql/create-sink/#kafka-sinks)
+- Actively shut down [Kafka sinks](/sql/create-sink/#kafka-sinks)
   that encounter an unrecoverable error, rather than attempting to produce data
   until the sink is dropped {{% gh 3419 %}}.
 
@@ -1824,11 +1826,11 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
-  [index](/overview/api-components/#indexes) on a view that would have been
+  [index](/overview/key-concepts/#indexes) on a view that would have been
   created if you had used [`CREATE MATERIALIZED VIEW`].
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
-  via three new [`WITH` options](https://materialize.com/docs/sql/create-source/kafka#with-options):
+  via three new [`WITH` options](/sql/create-source/kafka#with-options):
     - `timestamp_frequency_ms`
     - `max_timestamp_batch_size`
     - `topic_metadata_refresh_interval_ms`

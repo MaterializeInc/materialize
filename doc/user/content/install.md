@@ -1,8 +1,12 @@
 ---
-title: "Install"
+title: "Install Materialize Locally"
 description: "Install the Materialize binary"
-menu: "main"
-weight: 2
+menu:
+  main:
+    parent: quickstarts
+weight: 1
+aliases:
+ - /install
 ---
 
 {{< cta target="_blank" full_width="true" href="https://materialize.com/s/chat" >}}
@@ -12,8 +16,6 @@ Want to connect with Materialize? Join our growing community on Slack! →
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
 instructions install the latest release of Materialize, **{{< version >}}**. For prior releases and unstable builds, see the [Versions page](/versions).
-
-**Have any questions?** [Ask us on Slack](https://materialize.com/s/chat)
 
 {{< warning >}}
 Support for the ARM CPU architecture is in beta. You may encounter performance
@@ -161,7 +163,7 @@ systemctl enable materialized.service
 
 ## CLI Connections
 
-To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
+To connect to a running instance, you can use any [Materialize-compatible CLI](/integrations/psql/),
 like `psql` or `mzcli`. To install the `psql` client:
 
 {{< tabs >}}

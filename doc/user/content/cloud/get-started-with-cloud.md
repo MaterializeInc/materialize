@@ -87,9 +87,9 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
     FROM market_orders_raw;
     ```
 
-    One thing to note here is that we created a [non-materialized view](/overview/api-components/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement.
+    One thing to note here is that we created a [non-materialized view](/overview/key-concepts/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement.
 
-1. We can now use this view as a base to create a [materialized view](/overview/api-components/#materialized-views) that computes the average bid price:
+1. We can now use this view as a base to create a [materialized view](/overview/key-concepts/#materialized-views) that computes the average bid price:
 
     ```sql
     CREATE MATERIALIZED VIEW avg_bid AS
@@ -180,7 +180,7 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
 ### Temporal filters
 
-In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This can be useful for things like modeling business processes or limiting resource usage.
+In Materialize, [temporal filters](/sql/spellbook/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This can be useful for things like modeling business processes or limiting resource usage.
 
 1. If, instead of computing and maintaining the _overall_ count of market orders, we want to get the _moving_ count from the past minute, we'd use a temporal filter defined by the `mz_logical_timestamp()` function:
 
