@@ -3,7 +3,7 @@ title: "Architecture Overview"
 description: "Understand Materialize's architecture."
 menu:
   main:
-    parent: 'overview'
+    parent: advanced
     weight: 2
 ---
 
@@ -148,7 +148,7 @@ Implicit in this design are a few key points:
 
 Check out:
 
-- [API components](../api-components) to better understand Materialize's API
+- [Key Concepts](/overview/key-concepts/) to better understand Materialize's API
 - [Get started](/get-started) to try out Materialize
 
 [1]:

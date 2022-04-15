@@ -4,6 +4,8 @@ description: "Using Materialize to read from local files"
 menu:
   main:
     parent: 'create-source'
+    weight: 50
+    name: "Local Files"
 aliases:
     - /sql/create-source/files
     - /sql/create-source/avro-file

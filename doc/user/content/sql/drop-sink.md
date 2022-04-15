@@ -3,7 +3,7 @@ title: "DROP SINK"
 description: "`DROP SINK` removes a sink from your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `DROP SINK` removes a sink from your Materialize instances.

@@ -3,7 +3,7 @@ title: "SHOW CREATE VIEW"
 description: "`SHOW CREATE VIEW` returns the `SELECT` statement used to create the view."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW CREATE VIEW` returns the [`SELECT`](../select) statement used to create the view. This works on both materialized and non-materialized views.

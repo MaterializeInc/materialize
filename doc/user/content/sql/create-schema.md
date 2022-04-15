@@ -3,7 +3,7 @@ title: "CREATE SCHEMA"
 description: "`CREATE SCHEMA` creates a new schema."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE SCHEMA` creates a new schema.

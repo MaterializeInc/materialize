@@ -3,7 +3,7 @@ title: "DECLARE"
 description: "`DECLARE` creates a cursor."
 menu:
   main:
-    parent: "sql"
+    parent: "commands"
 ---
 
 {{< version-added v0.5.3 />}}

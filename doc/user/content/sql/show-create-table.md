@@ -3,7 +3,7 @@ title: "SHOW CREATE TABLE"
 description: "`SHOW CREATE TABLE` returns the SQL used to create the table."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW CREATE TABLE` returns the SQL used to create the table.

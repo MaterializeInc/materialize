@@ -1,10 +1,11 @@
 ---
 title: "Identifiers"
 description: "SQL identifiers are names of columns and database objects such as sources and views."
-weight: 30
 menu:
   main:
-    parent: 'sql'
+    parent: reference
+    name: 'SQL Identifiers'
+    weight: 125
 ---
 
 In Materialize, identifiers are used to refer to columns and database objects

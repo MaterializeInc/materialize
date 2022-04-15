@@ -3,7 +3,7 @@ title: "SHOW CREATE SINK"
 description: "`SHOW CREATE SINK` returns the URL used to create the sink."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW CREATE SINK` returns the [`CREATE SINK`](../create-sink) statement used to create the sink.

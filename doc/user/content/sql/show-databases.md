@@ -3,7 +3,7 @@ title: "SHOW DATABASES"
 description: "`SHOW DATABASES` returns a list of all databases available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW DATABASES` returns a list of all databases available to your Materialize

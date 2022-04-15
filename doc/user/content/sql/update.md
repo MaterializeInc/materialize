@@ -3,7 +3,7 @@ title: "UPDATE"
 description: "`UPDATE` changes values stored in tables."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `UPDATE` changes values stored in [user-created tables](../create-table).

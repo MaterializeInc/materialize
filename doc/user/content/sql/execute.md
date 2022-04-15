@@ -3,7 +3,7 @@ title: "EXECUTE"
 description: "`EXECUTE`"
 menu:
   main:
-    parent: "sql"
+    parent: commands
 ---
 
 {{< version-added v0.9.7 />}}

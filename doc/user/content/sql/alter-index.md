@@ -3,7 +3,7 @@ title: "ALTER INDEX"
 description: "`ALTER INDEX` changes the parameters of an index."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< version-added v0.4.3 />}}

@@ -2,7 +2,7 @@
 title: "COMMIT"
 menu:
   main:
-    parent: "sql"
+    parent: "commands"
 ---
 
 `COMMIT` commits the current transaction.

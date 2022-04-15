@@ -3,7 +3,7 @@ title: "EXPLAIN"
 description: "`EXPLAIN` displays the plan used for a `SELECT` statement or a view."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `EXPLAIN` displays the plan used for a `SELECT` statement or a view.

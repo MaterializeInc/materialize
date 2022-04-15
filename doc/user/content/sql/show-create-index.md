@@ -3,7 +3,7 @@ title: "SHOW CREATE INDEX"
 description: "`SHOW CREATE INDEX` returns the statement used to create the index."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 {{< version-added v0.4.0 />}}

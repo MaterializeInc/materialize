@@ -3,7 +3,7 @@ title: "PREPARE"
 description: "`PREPARE` creates a prepared statement."
 menu:
   main:
-    parent: "sql"
+    parent: commands
 ---
 
 {{< version-added v0.9.7 />}}

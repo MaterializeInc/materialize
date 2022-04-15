@@ -3,7 +3,7 @@ title: "DROP ROLE"
 description: "`DROP ROLE` removes a role from your Materialize instance."
 menu:
   main:
-    parent: sql
+    parent: commands
 ---
 
 {{< version-added v0.7.0 />}}
@@ -17,7 +17,7 @@ menu:
 Field | Use
 ------|-----
 **IF EXISTS** | Do not return an error if the specified role does not exist.
-_role_name_ | The role you want to drop. For available roles, see [`mz_roles`](../system-catalog#mz_roles).
+_role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/sql/system-catalog/#mz_roles).
 
 ## Details
 
