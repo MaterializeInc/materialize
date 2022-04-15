@@ -16,7 +16,7 @@ services:
     networks:
       antithesis-net:
         ipv4_address: 10.0.0.11
-    image: antithesis-cp-combined
+    image: antithesis-cp-combined:${ANT_IMAGE_TAG}
   materialized:
     hostname: materialized
     container_name: materialized
@@ -33,7 +33,7 @@ services:
       --disable-telemetry
       --retain-prometheus-metrics 1s
       --no-sigbus-sigsegv-backtraces
-    image: antithesis-materialized
+    image: antithesis-materialized:${ANT_IMAGE_TAG}
     volumes:
       - mzdata:/share/mzdata:rw
       - tmp:/share/tmp:rw
@@ -63,7 +63,7 @@ services:
       - bash
     environment:
       TMPDIR: /share/tmp
-    image: antithesis-testdrive
+    image: antithesis-testdrive:${ANT_IMAGE_TAG}
     init: true
     volumes:
       - mzdata:/share/mzdata:rw

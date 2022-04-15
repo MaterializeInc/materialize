@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import os
+import sys
 from pathlib import Path
 
 from materialize import mzbuild, spawn
@@ -27,9 +28,14 @@ def main() -> None:
     repo = mzbuild.Repository(root)
     deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
     deps.acquire()
+
+    tag = sys.argv[1] if sys.argv[1] is not None else "latest"
+
     for mzimage in IMAGES:
-        spawn.runv(["docker", "tag", deps[mzimage].spec(), f"{REGISTRY}/{mzimage}"])
-        spawn.runv(["docker", "push", f"{REGISTRY}/{mzimage}"])
+        spawn.runv(
+            ["docker", "tag", deps[mzimage].spec(), f"{REGISTRY}/{mzimage}:{tag}"]
+        )
+        spawn.runv(["docker", "push", f"{REGISTRY}/{mzimage}:{tag}"])
 
 
 if __name__ == "__main__":
