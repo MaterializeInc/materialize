@@ -15,6 +15,7 @@ pub(crate) mod arrangement;
 pub mod compute_state;
 pub(crate) mod logging;
 pub(crate) mod render;
+pub mod server;
 pub(crate) mod sink;
 
 pub use arrangement::manager::{TraceManager, TraceMetrics};
