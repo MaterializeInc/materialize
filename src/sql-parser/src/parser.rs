@@ -1867,7 +1867,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_create_source_connector()?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = dbg!(self.parse_opt_with_sql_options()?);
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
         let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
@@ -2479,7 +2479,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[REMOTE, SIZE, INTROSPECTION])? {
             REMOTE => {
                 let name = self.parse_identifier()?;
@@ -2862,7 +2862,7 @@ impl<'a> Parser<'a> {
         Ok(option)
     }
 
-    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption>, ParserError> {
+    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_with_options(true)
         } else {
@@ -2870,7 +2870,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_with_options(&mut self, require_equals: bool) -> Result<Vec<WithOption>, ParserError> {
+    fn parse_with_options(
+        &mut self,
+        require_equals: bool,
+    ) -> Result<Vec<WithOption<Raw>>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let options =
             self.parse_comma_separated(|parser| parser.parse_with_option(require_equals))?;
@@ -2880,7 +2883,7 @@ impl<'a> Parser<'a> {
 
     /// If require_equals is true, parse options of the form `KEY = VALUE` or just
     /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
-    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption, ParserError> {
+    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
         let key = self.parse_identifier()?;
         let has_eq = self.consume_token(&Token::Eq);
         // No = was encountered and require_equals is false, so the next token might be
@@ -2899,7 +2902,7 @@ impl<'a> Parser<'a> {
         Ok(WithOption { key, value })
     }
 
-    fn parse_with_option_value(&mut self) -> Result<WithOptionValue, ParserError> {
+    fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
@@ -4770,7 +4773,7 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = self.parse_opt_with_options()?;
+        let options = dbg!(self.parse_opt_with_options()?);
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,

@@ -2675,7 +2675,7 @@ pub fn plan_create_role(
 
 pub fn describe_create_cluster(
     _: &StatementContext,
-    _: &CreateClusterStatement,
+    _: &CreateClusterStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2686,7 +2686,7 @@ pub fn plan_create_cluster(
         name,
         if_not_exists,
         options,
-    }: CreateClusterStatement,
+    }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CLUSTER")?;
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
@@ -2703,7 +2703,7 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
 };
 
 fn plan_cluster_options(
-    options: Vec<ClusterOption>,
+    options: Vec<ClusterOption<Aug>>,
 ) -> Result<ComputeInstanceConfig, anyhow::Error> {
     let mut remote_replicas = BTreeMap::new();
     let mut size = None;
@@ -3124,7 +3124,7 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
-fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, anyhow::Error> {
+fn plan_index_options(with_opts: Vec<WithOption<Aug>>) -> Result<Vec<IndexOption>, anyhow::Error> {
     let with_opts = IndexWithOptions::try_from(with_opts)?;
     let mut out = vec![];
 
@@ -3290,7 +3290,7 @@ pub fn plan_alter_secret(
 
 pub fn describe_alter_cluster(
     _: &StatementContext,
-    _: &AlterClusterStatement,
+    _: &AlterClusterStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3301,7 +3301,7 @@ pub fn plan_alter_cluster(
         name,
         if_exists,
         options,
-    }: AlterClusterStatement,
+    }: AlterClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("ALTER CLUSTER")?;
     let id = match scx.resolve_compute_instance(Some(&name)) {

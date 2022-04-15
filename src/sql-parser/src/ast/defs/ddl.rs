@@ -62,7 +62,7 @@ pub enum AvroSchema<T: AstInfo> {
     },
     InlineSchema {
         schema: Schema,
-        with_options: Vec<WithOption>,
+        with_options: Vec<WithOption<T>>,
     },
 }
 

@@ -26,9 +26,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption,
-    Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Raw,
+    SqlOption, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
+    Value, ViewDefinition,
 };
 
 use crate::names::{
@@ -539,16 +539,16 @@ macro_rules! with_options {
             pub $($field_name: Option<$field_type>,)*
         }
 
-        impl ::std::convert::TryFrom<Vec<crate::ast::WithOption>> for $name {
+        impl ::std::convert::TryFrom<Vec<crate::ast::WithOption<Aug>>> for $name {
             type Error = anyhow::Error;
 
-            fn try_from(mut options: Vec<crate::ast::WithOption>) -> Result<Self, Self::Error> {
+            fn try_from(mut options: Vec<crate::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
                 let v = Self {
                     $($field_name: {
                         match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
                             None => None,
                             Some(pos) => {
-                                let value: Option<crate::ast::WithOptionValue> = options.swap_remove(pos).value;
+                                let value: Option<crate::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
                                 let value: $field_type = with_option_type!(value, $field_type);
                                 Some(value)
                             },
