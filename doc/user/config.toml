@@ -116,6 +116,12 @@ weight = 100
 name = "SQL Commands"
 
 [[menu.main]]
+name = "SQL Spellbook 🪄"
+parent = 'reference'
+identifier = 'sql-spellbook'
+weight = 85
+
+[[menu.main]]
 identifier = "integration-guides"
 name = "Integration Guides"
 parent = "integrations"
