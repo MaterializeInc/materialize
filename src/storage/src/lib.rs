@@ -14,12 +14,14 @@
 pub mod boundary;
 pub(crate) mod decode;
 pub(crate) mod render;
+pub(crate) mod server;
 pub mod source;
 pub mod storage_state;
 
 pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
 pub use decode::metrics::DecodeMetrics;
 pub use render::sources::PersistedSourceManager;
+pub use server::{serve_boundary_requests, Config, Server};
 
 use timely::logging::WorkerIdentifier;
 

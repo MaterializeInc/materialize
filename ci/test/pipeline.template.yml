@@ -122,15 +122,6 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2]
 
-  - id: persistence
-    label: Persistence tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
