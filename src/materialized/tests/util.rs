@@ -167,7 +167,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         introspection_frequency: Duration::from_secs(1),
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
-        third_party_metrics_listen_addr: None,
+        metrics_listen_addr: None,
         now: config.now,
         cors_allowed_origin: Origin::list([]).into(),
     }))?;

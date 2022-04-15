@@ -112,8 +112,8 @@ pub struct Config {
     // === Connection options. ===
     /// The IP address and port to listen on.
     pub listen_addr: SocketAddr,
-    /// The IP address and port to serve the "third party" metrics registry from.
-    pub third_party_metrics_listen_addr: Option<SocketAddr>,
+    /// The IP address and port to serve the metrics registry from.
+    pub metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
     /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
@@ -499,12 +499,12 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     .await?;
 
     // Listen on the third-party metrics port if we are configured for it.
-    if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
+    if let Some(addr) = config.metrics_listen_addr {
         let metrics_registry = config.metrics_registry.clone();
         task::spawn(|| "metrics_server", {
-            let server = http::ThirdPartyServer::new(metrics_registry);
+            let server = http::MetricsServer::new(metrics_registry);
             async move {
-                server.serve(third_party_addr).await;
+                server.serve(addr).await;
             }
         });
     }
@@ -528,7 +528,6 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             tls: http_tls,
             frontegg: config.frontegg,
             coord_client: coord_client.clone(),
-            metrics_registry: config.metrics_registry,
             allowed_origin: config.cors_allowed_origin,
         });
         let mut mux = Mux::new();

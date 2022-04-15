@@ -48,8 +48,6 @@ use mz_coord::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::netio::SniffedStream;
 
-use crate::http::metrics::MetricsVariant;
-
 mod catalog;
 mod memory;
 mod metrics;
@@ -75,7 +73,6 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
     pub coord_client: mz_coord::Client,
-    pub metrics_registry: MetricsRegistry,
     pub allowed_origin: AnyOr<Origin>,
 }
 
@@ -106,7 +103,6 @@ impl Server {
             tls,
             frontegg,
             coord_client,
-            metrics_registry,
             allowed_origin,
         }: Config,
     ) -> Server {
@@ -115,12 +111,6 @@ impl Server {
         let router = Router::new()
             .route("/", routing::get(root::handle_home))
             .route("/memory", routing::get(memory::handle_memory))
-            .route(
-                "/metrics",
-                routing::get(move || async move {
-                    metrics::handle_prometheus(&metrics_registry, MetricsVariant::Regular).await
-                }),
-            )
             .route(
                 "/hierarchical-memory",
                 routing::get(memory::handle_hierarchical_memory),
@@ -354,11 +344,11 @@ async fn auth<B>(
 }
 
 #[derive(Clone)]
-pub struct ThirdPartyServer {
+pub struct MetricsServer {
     metrics_registry: MetricsRegistry,
 }
 
-impl ThirdPartyServer {
+impl MetricsServer {
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         Self { metrics_registry }
     }
@@ -367,13 +357,9 @@ impl ThirdPartyServer {
         let metrics_registry = self.metrics_registry;
         let router = Router::new().route(
             "/metrics",
-            routing::get(move || async move {
-                metrics::handle_prometheus(
-                    &metrics_registry,
-                    metrics::MetricsVariant::ThirdPartyVisible,
-                )
-                .await
-            }),
+            routing::get(
+                move || async move { metrics::handle_prometheus(&metrics_registry).await },
+            ),
         );
         let server = axum::Server::bind(&addr).serve(router.into_make_service());
         if let Err(err) = server.await {
