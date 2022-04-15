@@ -632,6 +632,19 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
         .transpose()?;
 
+    let mut cors_allowed_origins = args.cors_allowed_origin;
+    if cors_allowed_origins.is_empty() {
+        let port = args.listen_addr.port();
+        cors_allowed_origins = vec![
+            HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+        ];
+    }
+
     // Configure orchestrator.
     let orchestrator = match args.orchestrator {
         None => {
@@ -856,7 +869,7 @@ max log level: {max_log_level}",
         third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
         frontegg,
-        cors_allowed_origins: args.cors_allowed_origin,
+        cors_allowed_origins,
         data_directory,
         orchestrator,
         storage,
