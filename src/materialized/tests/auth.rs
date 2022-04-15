@@ -46,6 +46,7 @@ use postgres::config::SslMode;
 use postgres::error::SqlState;
 use postgres_openssl::MakeTlsConnector;
 use serde::Deserialize;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -281,7 +282,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         Ipv4Addr::LOCALHOST,
                         server.inner.local_addr().port()
                     ))
-                    .path_and_query("/sql")
+                    .path_and_query("/api/sql")
                     .build()
                     .unwrap();
                 let res = runtime.block_on(
@@ -294,10 +295,12 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                             }
                             req.headers_mut().unwrap().insert(
                                 "Content-Type",
-                                HeaderValue::from_static("application/x-www-form-urlencoded"),
+                                HeaderValue::from_static("application/json"),
                             );
-                            req.body(Body::from("sql=SELECT pg_catalog.current_user()"))
-                                .unwrap()
+                            req.body(Body::from(
+                                json!({"sql": "SELECT pg_catalog.current_user()"}).to_string(),
+                            ))
+                            .unwrap()
                         }),
                 );
                 match assert {
