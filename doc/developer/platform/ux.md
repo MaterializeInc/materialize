@@ -787,6 +787,35 @@ running will be hidden from users. Any log messages in `materialized` today that
 are meant for end-users will need to instead make their messages available via
 tables or sources in the system catalog.
 
+### Correctness
+
+Materialize maintains three correctness guarantees.
+
+1. *Transactions in Materialize are strictly serializable with
+   respect to the operations that occur inside of Materialize.*
+   Operations include:
+    * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
+    * Materialize initiated acknowledgements of upstream sources (*e.g., the
+      commit of an offset by a Kafka source, the acknowledge of an LSN by a
+      PostgresSQL source, etcetera*)
+2. *Materialize respects the explicit or implied event order of its sources.
+   This includes partial orders.*  In practice this means Materialize assigns
+   new timestamps to events in sources.  This assignment of new timestamps is called
+   reclocking. Once reclocking occurs, it defines a permanent order of events within
+   Materialize. For sources without transactional semantics (basic Kafka streams)
+   Maerialize reclocks the events to reflect the order in which the source emits
+   each event. For sources that do have transactional semantics (Postgres, Debezium)
+   Materialize reclocks events to respect the transactional boundaries.  For partially
+   ordered events x and y:
+    1.  if *x < y* in the source, then *x ≤ y* in Materialize
+    2.  if *x = y* in the source, then *x = y* in Materialize
+3. *Materialize provides real time recency guarantees.* This means any write
+   committed by an upstream source is reflected in future queries against
+   Materialize. Guaranteeing real time recency means that Materialize
+   must block on a query until it has complete certainty about the events.
+   Blocking may not be desirable in practice, so Materialize makes the behavior
+   optional. Non-blocking behavior comes with no guarantees of recency.
+
 ## Discussion
 
 What follows are my (@benesch's) thoughts on the design tradeoffs that were
