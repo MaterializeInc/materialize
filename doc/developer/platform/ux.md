@@ -795,11 +795,10 @@ Materialize maintains three correctness guarantees.
     2.  if *x = y* in the source, then *x = y* in Materialize
 3. *Materialize provides real time recency guarantees.* This means any write 
    committed by an upstream source is reflected in future queries against 
-   Materialize (unless the user explicitly requests weaker guarantees). Guaranteeing 
-   real time recency guarantees means that Materialize may choose to block on a 
-   query until we have complete certainty about the events.  Blocking may not be 
-   desirable in practice, so Materialize makes the behavior optional. Non-blocking 
-   behavior comes with no guarantees of recency.
+   Materialize. Guaranteeing real time recency means that Materialize
+   must block on a query until it has complete certainty about the events.
+   Blocking may not be desirable in practice, so Materialize makes the behavior
+   optional. Non-blocking behavior comes with no guarantees of recency.
 
 
 ## Discussion
