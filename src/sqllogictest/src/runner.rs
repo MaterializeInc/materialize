@@ -54,6 +54,7 @@ use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
+use tower_http::cors::Origin;
 use uuid::Uuid;
 
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
@@ -564,7 +565,7 @@ impl Runner {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
-            cors_allowed_origins: vec![],
+            cors_allowed_origin: Origin::list([]).into(),
             experimental_mode: true,
             disable_user_indexes: false,
             safe_mode: false,

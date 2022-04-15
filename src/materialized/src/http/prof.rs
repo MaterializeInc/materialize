@@ -9,31 +9,25 @@
 
 //! Profiling HTTP endpoints.
 
-use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::time::Duration;
 
 use askama::Template;
+use axum::response::IntoResponse;
 use cfg_if::cfg_if;
-use hyper::{Body, Request, Response};
+use http::StatusCode;
 
 use mz_prof::{ProfStartTime, StackProfile};
 
 use crate::http::util;
 use crate::BUILD_INFO;
 
-pub async fn handle_prof(
-    req: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            disabled::handle(req).await
-        } else {
-            enabled::handle(req).await
-        }
+cfg_if! {
+    if #[cfg(target_os = "macos")] {
+        pub use disabled::{handle_get, handle_post};
+    } else {
+        pub use enabled::{handle_get, handle_post};
     }
 }
 
@@ -60,10 +54,8 @@ struct FlamegraphTemplate<'a> {
     extras: &'a [&'a str],
 }
 
-#[allow(clippy::drop_copy, clippy::unit_arg)]
-async fn time_prof<'a>(
-    params: &HashMap<Cow<'a, str>, Cow<'a, str>>,
-) -> anyhow::Result<Response<Body>> {
+#[allow(clippy::drop_copy)]
+async fn time_prof<'a>(merge_threads: bool) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
         if #[cfg(target_os = "macos")] {
@@ -71,21 +63,21 @@ async fn time_prof<'a>(
         } else {
             ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
-                borrow.deactivate()?;
+                borrow.deactivate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Some(borrow)
             } else {
                 None
             };
         }
     }
-    let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
-    let stacks =
-        unsafe { mz_prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
+    let stacks = unsafe { mz_prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
-    flamegraph(stacks, "CPU Time Flamegraph", false, &[])
+    Ok::<_, (StatusCode, String)>(flamegraph(stacks, "CPU Time Flamegraph", false, &[]))
 }
 
 fn flamegraph(
@@ -93,7 +85,7 @@ fn flamegraph(
     title: &str,
     display_bytes: bool,
     extras: &[&str],
-) -> anyhow::Result<Response<Body>> {
+) -> impl IntoResponse {
     let collated = mz_prof::collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
@@ -114,56 +106,48 @@ fn flamegraph(
         },
     );
     let data_json = &*data_json.borrow();
-    Ok(util::template_response(FlamegraphTemplate {
+    util::template_response(FlamegraphTemplate {
         version: BUILD_INFO.version,
         title,
         data_json,
         display_bytes,
         extras,
-    }))
+    })
 }
 
+#[cfg(target_os = "macos")]
 mod disabled {
-    use std::collections::HashMap;
-
-    use hyper::{Body, Method, Request, Response, StatusCode};
-    use url::form_urlencoded;
+    use axum::extract::Form;
+    use axum::response::IntoResponse;
+    use http::StatusCode;
+    use serde::Deserialize;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
     use crate::BUILD_INFO;
 
-    pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
-        match req.method() {
-            &Method::GET => Ok(util::template_response(ProfTemplate {
-                version: BUILD_INFO.version,
-                mem_prof: MemProfilingStatus::Disabled,
-            })),
-            &Method::POST => handle_post(req).await,
-            method => Ok(util::error_response(
-                StatusCode::BAD_REQUEST,
-                format!("Unrecognized request method: {:?}", method),
-            )),
-        }
+    pub async fn handle_get() -> impl IntoResponse {
+        util::template_response(ProfTemplate {
+            version: BUILD_INFO.version,
+            mem_prof: MemProfilingStatus::Disabled,
+        })
     }
 
-    async fn handle_post(body: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
-        let body = hyper::body::to_bytes(body).await?;
-        let params: HashMap<_, _> = form_urlencoded::parse(&body).collect();
-        let action = match params.get("action") {
-            Some(action) => action,
-            None => {
-                return Ok(util::error_response(
-                    StatusCode::BAD_REQUEST,
-                    "expected `action` parameter",
-                ))
-            }
-        };
+    #[derive(Deserialize)]
+    pub struct ProfForm {
+        action: String,
+        threads: Option<String>,
+    }
+
+    pub async fn handle_post(
+        Form(ProfForm { action, threads }): Form<ProfForm>,
+    ) -> impl IntoResponse {
+        let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
-            "time_fg" => time_prof(&params).await,
-            x => Ok(util::error_response(
+            "time_fg" => Ok(time_prof(merge_threads).await),
+            _ => Err((
                 StatusCode::BAD_REQUEST,
-                format!("unrecognized `action` parameter: {}", x),
+                format!("unrecognized `action` parameter: {}", action),
             )),
         }
     }
@@ -172,18 +156,21 @@ mod disabled {
 #[cfg(not(target_os = "macos"))]
 mod enabled {
     use std::borrow::Cow;
-    use std::collections::HashMap;
     use std::fmt::Write;
     use std::io::{BufReader, Read};
     use std::sync::Arc;
 
-    use hyper::http::HeaderValue;
-    use hyper::{header, Body, Method, Request, Response, StatusCode};
-    use mz_prof::symbolicate;
+    use axum::extract::{Form, Query};
+    use axum::response::IntoResponse;
+    use axum::TypedHeader;
+    use headers::ContentType;
+    use http::header::{HeaderMap, CONTENT_DISPOSITION};
+    use http::{HeaderValue, StatusCode};
+    use serde::Deserialize;
     use tokio::sync::Mutex;
-    use url::form_urlencoded;
 
     use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
+    use mz_prof::symbolicate;
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
@@ -205,68 +192,61 @@ mod enabled {
         }
     }
 
-    pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
-        let accept = req.headers().get("Accept").cloned();
-        match (req.method(), &*PROF_CTL) {
-            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), accept, prof_ctl).await,
-
-            (&Method::POST, Some(prof_ctl)) => handle_post(req, accept, prof_ctl).await,
-
-            _ => super::disabled::handle(req).await,
-        }
+    #[derive(Deserialize)]
+    pub struct ProfForm {
+        action: String,
+        threads: Option<String>,
     }
 
     pub async fn handle_post(
-        body: Request<Body>,
-        accept: Option<HeaderValue>,
-        prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
-    ) -> Result<Response<Body>, anyhow::Error> {
-        let query = body.uri().query().map(str::to_string);
-        let body = hyper::body::to_bytes(body).await?;
-        let params: HashMap<_, _> = form_urlencoded::parse(&body).collect();
-        let action = match params.get("action") {
-            Some(action) => action,
-            None => {
-                return Ok(util::error_response(
-                    StatusCode::BAD_REQUEST,
-                    "expected `action` parameter",
-                ))
-            }
-        };
-        match action.as_ref() {
+        Form(ProfForm { action, threads }): Form<ProfForm>,
+    ) -> impl IntoResponse {
+        let prof_ctl = PROF_CTL.as_ref().unwrap();
+        let merge_threads = threads.as_deref() == Some("merge");
+        match action.as_str() {
             "activate" => {
                 {
                     let mut borrow = prof_ctl.lock().await;
-                    borrow.activate()?;
+                    borrow
+                        .activate()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 };
-                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
+                Ok(render_template(prof_ctl).await.into_response())
             }
             "deactivate" => {
                 {
                     let mut borrow = prof_ctl.lock().await;
-                    borrow.deactivate()?;
+                    borrow
+                        .deactivate()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 };
-                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
+                Ok(render_template(prof_ctl).await.into_response())
             }
             "dump_file" => {
                 let mut borrow = prof_ctl.lock().await;
-                let mut f = borrow.dump()?;
+                let mut f = borrow
+                    .dump()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                Ok(Response::builder()
-                    .header(
-                        header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"jeprof.heap\"",
-                    )
-                    .body(Body::from(s))
-                    .unwrap())
+                f.read_to_string(&mut s)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                Ok((
+                    HeaderMap::from_iter([(
+                        CONTENT_DISPOSITION,
+                        HeaderValue::from_static("attachment; filename=\"jeprof.heap\""),
+                    )]),
+                    s,
+                )
+                    .into_response())
             }
-            "dump_stats" => handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await,
             "dump_symbolicated_file" => {
                 let mut borrow = prof_ctl.lock().await;
-                let f = borrow.dump()?;
+                let f = borrow
+                    .dump()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)?;
+                let stacks = parse_jeheap(r)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let syms = symbolicate(&stacks);
                 let mut s = String::new();
                 // Emitting the format expected by Brendan Gregg's flamegraph tool.
@@ -290,20 +270,26 @@ mod enabled {
                     }
                     writeln!(&mut s, " {}", stack.weight).unwrap();
                 }
-                Ok(Response::builder()
-                    .header(
-                        header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"mz.fg\"",
-                    )
-                    .body(Body::from(s))
-                    .unwrap())
+                Ok((
+                    HeaderMap::from_iter([(
+                        CONTENT_DISPOSITION,
+                        HeaderValue::from_static("attachment; filename=\"mz.fg\""),
+                    )]),
+                    s,
+                )
+                    .into_response())
             }
             "mem_fg" => {
                 let mut borrow = prof_ctl.lock().await;
-                let f = borrow.dump()?;
+                let f = borrow
+                    .dump()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)?;
-                let stats = borrow.stats()?;
+                let stacks = parse_jeheap(r)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let stats = borrow
+                    .stats()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats_rendered = &[
                     format!("Allocated: {}", HumanFormattedBytes(stats.allocated)),
                     format!("In active pages: {}", HumanFormattedBytes(stats.active)),
@@ -322,42 +308,54 @@ mod enabled {
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered)
+                Ok(flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered).into_response())
             }
-            "time_fg" => time_prof(&params).await,
-            x => Ok(util::error_response(
+            "time_fg" => Ok(time_prof(merge_threads).await.into_response()),
+            x => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),
             )),
         }
     }
 
+    #[derive(Deserialize)]
+    pub struct ProfQuery {
+        action: Option<String>,
+    }
+
     pub async fn handle_get(
-        query: Option<&str>,
-        accept: Option<HeaderValue>,
-        prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
-    ) -> anyhow::Result<Response<Body>> {
-        match query {
+        Query(query): Query<ProfQuery>,
+        headers: HeaderMap,
+    ) -> impl IntoResponse {
+        let prof_ctl = PROF_CTL.as_ref().unwrap();
+        match query.action.as_deref() {
             Some("dump_stats") => {
-                let json = accept.map_or(false, |accept| accept.as_bytes() == b"application/json");
+                let json = headers
+                    .get("accept")
+                    .map_or(false, |accept| accept.as_bytes() == b"application/json");
                 let mut borrow = prof_ctl.lock().await;
-                let s = borrow.dump_stats(json)?;
-                Ok(Response::builder()
-                    .header(header::CONTENT_TYPE, "text/plain")
-                    .body(Body::from(s))
-                    .unwrap())
+                let s = borrow
+                    .dump_stats(json)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let content_type = match json {
+                    false => ContentType::text(),
+                    true => ContentType::json(),
+                };
+                Ok((TypedHeader(content_type), s).into_response())
             }
-            Some(x) => Ok(util::error_response(
+            Some(x) => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized query: {}", x),
             )),
-            None => {
-                let prof_md = prof_ctl.lock().await.get_md();
-                return Ok(util::template_response(ProfTemplate {
-                    version: BUILD_INFO.version,
-                    mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
-                }));
-            }
+            None => Ok(render_template(prof_ctl).await.into_response()),
         }
+    }
+
+    async fn render_template(prof_ctl: &Arc<Mutex<JemallocProfCtl>>) -> impl IntoResponse {
+        let prof_md = prof_ctl.lock().await.get_md();
+        util::template_response(ProfTemplate {
+            version: BUILD_INFO.version,
+            mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
+        })
     }
 }

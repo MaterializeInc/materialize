@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ::http::header::HeaderValue;
 use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
@@ -38,6 +37,7 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::{AnyOr, Origin};
 
 use mz_build_info::BuildInfo;
 use mz_coord::LoggingConfig;
@@ -122,7 +122,7 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
-    pub cors_allowed_origins: Vec<HeaderValue>,
+    pub cors_allowed_origin: AnyOr<Origin>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
@@ -537,7 +537,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
-            allowed_origins: config.cors_allowed_origins,
+            allowed_origin: config.cors_allowed_origin,
         });
         let mut mux = Mux::new();
         mux.add_handler(pgwire_server);

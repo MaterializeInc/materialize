@@ -7,34 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use axum::extract::Form;
+use axum::response::IntoResponse;
+use axum::Json;
+use http::StatusCode;
+use serde::Deserialize;
 
-use anyhow::bail;
-use hyper::{header, Body, Request, Response, StatusCode};
-use url::form_urlencoded;
+use crate::http::AuthedClient;
 
-use crate::http::util;
+#[derive(Deserialize)]
+pub struct SqlForm {
+    sql: String,
+}
 
 pub async fn handle_sql(
-    req: Request<Body>,
-    coord_client: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    let res = async {
-        let body = hyper::body::to_bytes(req).await?;
-        let body: HashMap<_, _> = form_urlencoded::parse(&body).collect();
-        let sql = match body.get("sql") {
-            Some(sql) => sql,
-            None => bail!("expected `sql` parameter"),
-        };
-        let res = coord_client.simple_execute(sql).await?;
-        Ok(Response::builder()
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(serde_json::to_string(&res)?))
-            .unwrap())
-    }
-    .await;
-    match res {
-        Ok(res) => Ok(res),
-        Err(e) => Ok(util::error_response(StatusCode::BAD_REQUEST, e.to_string())),
+    AuthedClient(mut client): AuthedClient,
+    Form(SqlForm { sql }): Form<SqlForm>,
+) -> impl IntoResponse {
+    match client.simple_execute(&sql).await {
+        Ok(res) => Ok(Json(res)),
+        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
 }

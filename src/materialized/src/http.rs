@@ -13,27 +13,39 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 
+// Axum handlers must use async, but often don't actually use `await`.
+#![allow(clippy::unused_async)]
+
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use axum::extract::{FromRequest, RequestParts};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
-use http::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use hyper::{Body, Method, Request, Response, StatusCode};
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_coord::SessionClient;
 use mz_ore::metrics::MetricsRegistry;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use openssl::x509::X509;
+use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
-use tower::ServiceBuilder;
-use tower_http::cors::{self, AnyOr, CorsLayer, Origin};
-use tracing::error;
+use tower_http::cors::{Any, AnyOr, CorsLayer, Origin};
+use tracing::{error, warn};
 
 use mz_coord::session::Session;
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::netio::SniffedStream;
 
 use crate::http::metrics::MetricsVariant;
@@ -67,7 +79,7 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
     pub pgwire_metrics: mz_pgwire::Metrics,
-    pub allowed_origins: Vec<HeaderValue>,
+    pub allowed_origin: AnyOr<Origin>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,38 +97,75 @@ pub enum TlsMode {
 #[derive(Debug)]
 pub struct Server {
     tls: Option<TlsConfig>,
-    frontegg: Option<FronteggAuthentication>,
-    coord_client: mz_coord::Client,
-    metrics_registry: MetricsRegistry,
-    global_metrics: Metrics,
-    pgwire_metrics: mz_pgwire::Metrics,
-    allowed_origin: AnyOr<Origin>,
+    // NOTE(benesch): this `Mutex` is silly, but necessary because using this
+    // server requires `Sync` and `Router` is not `Sync` by default. It is
+    // unlikely to be a performance problem in practice.
+    router: Mutex<Router>,
 }
 
 impl Server {
-    pub fn new(config: Config) -> Server {
-        let allowed_origin = if config
-            .allowed_origins
-            .iter()
-            .any(|val| val.as_bytes() == b"*")
-        {
-            tower_http::cors::Any.into()
-        } else {
-            Origin::list(config.allowed_origins).into()
-        };
-        Server {
-            tls: config.tls,
-            frontegg: config.frontegg,
-            coord_client: config.coord_client,
-            metrics_registry: config.metrics_registry,
-            global_metrics: config.global_metrics,
-            pgwire_metrics: config.pgwire_metrics,
+    pub fn new(
+        Config {
+            tls,
+            frontegg,
+            coord_client,
+            metrics_registry,
+            global_metrics,
+            pgwire_metrics,
             allowed_origin,
+        }: Config,
+    ) -> Server {
+        let tls_mode = tls.as_ref().map(|tls| tls.mode);
+        let frontegg = Arc::new(frontegg);
+        let router = Router::new()
+            .route("/", routing::get(root::handle_home))
+            .route("/memory", routing::get(memory::handle_memory))
+            .route(
+                "/metrics",
+                routing::get(move || async move {
+                    metrics::handle_prometheus(&metrics_registry, MetricsVariant::Regular).await
+                }),
+            )
+            .route(
+                "/hierarchical-memory",
+                routing::get(memory::handle_hierarchical_memory),
+            )
+            .route(
+                "/internal/catalog",
+                routing::get(catalog::handle_internal_catalog),
+            )
+            .route("/prof", routing::get(prof::handle_get))
+            .route("/prof", routing::post(prof::handle_post))
+            .route("/sql", routing::post(sql::handle_sql))
+            .route("/static/*path", routing::get(root::handle_static))
+            .route(
+                "/status",
+                routing::get(move || async move {
+                    metrics::handle_status(&global_metrics, &pgwire_metrics).await
+                }),
+            )
+            .layer(
+                CorsLayer::new()
+                    .allow_credentials(false)
+                    .allow_headers([
+                        AUTHORIZATION,
+                        CONTENT_TYPE,
+                        HeaderName::from_static("x-materialize-version"),
+                    ])
+                    .allow_methods(Any)
+                    .allow_origin(allowed_origin)
+                    .expose_headers(Any)
+                    .max_age(Duration::from_secs(60) * 60),
+            )
+            .layer(middleware::from_fn(move |req, next| {
+                let frontegg = Arc::clone(&frontegg);
+                async move { auth(req, next, tls_mode, &frontegg).await }
+            }))
+            .layer(Extension(coord_client));
+        Server {
+            tls,
+            router: Mutex::new(router),
         }
-    }
-
-    fn tls_mode(&self) -> Option<TlsMode> {
-        self.tls.as_ref().map(|tls| tls.mode)
     }
 
     fn tls_context(&self) -> Option<&SslContext> {
@@ -135,142 +184,27 @@ impl Server {
         METHODS.contains(&buf)
     }
 
-    pub async fn handle_connection<A>(&self, conn: SniffedStream<A>) -> Result<(), anyhow::Error>
-    where
-        A: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-    {
-        let conn = match (&self.tls_context(), sniff_tls(&conn.sniff_buffer())) {
+    pub async fn handle_connection(
+        &self,
+        conn: SniffedStream<TcpStream>,
+    ) -> Result<(), anyhow::Error> {
+        let (conn, conn_protocol) = match (&self.tls_context(), sniff_tls(&conn.sniff_buffer())) {
             (Some(tls_context), true) => {
                 let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                     let _ = ssl_stream.get_mut().shutdown().await;
                     return Err(e.into());
                 }
-                MaybeHttpsStream::Https(ssl_stream)
+                let client_cert = ssl_stream.ssl().peer_certificate();
+                (
+                    MaybeHttpsStream::Https(ssl_stream),
+                    ConnProtocol::Https { client_cert },
+                )
             }
-            _ => MaybeHttpsStream::Http(conn),
+            _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
         };
-
-        // Validate that the connection is compatible with the TLS mode.
-        //
-        // The match here explicitly spells out all cases to be resilient to
-        // future changes to TlsMode.
-        let cert_user: Result<Option<String>, _> = match (self.tls_mode(), &conn) {
-            (None, MaybeHttpsStream::Http(_)) => Ok(None),
-            (None, MaybeHttpsStream::Https(_)) => unreachable!(),
-            (Some(TlsMode::Require), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),
-            (Some(TlsMode::Require), MaybeHttpsStream::Https(_)) => Ok(None),
-            (Some(TlsMode::AssumeUser), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),
-            (Some(TlsMode::AssumeUser), MaybeHttpsStream::Https(conn)) => conn
-                .ssl()
-                .peer_certificate()
-                .as_ref()
-                .and_then(|cert| cert.subject_name().entries_by_nid(Nid::COMMONNAME).next())
-                .and_then(|cn| cn.data().as_utf8().ok())
-                .map(|cn| Some(cn.to_string()))
-                .ok_or("invalid user name in client certificate"),
-        };
-
-        let router = tower::service_fn(move |req| {
-            let cert_user = cert_user.clone();
-            let coord_client = self.coord_client.clone();
-            let metrics_registry = self.metrics_registry.clone();
-            let global_metrics = self.global_metrics.clone();
-            let pgwire_metrics = self.pgwire_metrics.clone();
-            let frontegg = self.frontegg.clone();
-            async move {
-                // There are three places a username may be specified:
-                // - certificate common name
-                // - HTTP Basic authentication
-                // - JWT email address
-                // We verify that if any of these are present, they must match any other that
-                // is also present.
-
-                let user = if let Err(e) = cert_user {
-                    Err(e)
-                } else if let Some(frontegg) = &frontegg {
-                    // If we require mzcloud auth, fetch credentials from the http auth
-                    // header. Basic auth comes with a username/password, where the password
-                    // is the client+secret pair. Bearer auth is an existing JWT that must be
-                    // validated. In either case, if a username was specified in the client cert,
-                    // it must match that of the JWT.
-                    validate_http_frontegg_authentication(&req, &frontegg)
-                        .await
-                        .and_then(|email| {
-                            if let Ok(Some(cert_user)) = cert_user {
-                                if email != cert_user {
-                                    anyhow::bail!(
-                                        "JWT email does not match certificate common name"
-                                    );
-                                }
-                            }
-                            Ok(email)
-                        })
-                        .map_err(|_e| "unauthorized")
-                } else {
-                    // If there was no mzcloud auth, we can use the cert's username if present,
-                    // otherwise the system user.
-                    cert_user.map(|cert_user| cert_user.unwrap_or_else(|| SYSTEM_USER.to_string()))
-                };
-
-                let user = match user {
-                    Ok(user) => user,
-                    Err(e) => return Ok(util::error_response(StatusCode::UNAUTHORIZED, e)),
-                };
-
-                let coord_client = coord_client.new_conn()?;
-                let session = Session::new(coord_client.conn_id(), user);
-                let (mut coord_client, _) =
-                    match coord_client.startup(session, frontegg.is_some()).await {
-                        Ok(coord_client) => coord_client,
-                        Err(e) => {
-                            return Ok(util::error_response(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                e.to_string(),
-                            ))
-                        }
-                    };
-
-                match (req.method(), req.uri().path()) {
-                    (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
-                    (&Method::GET, "/metrics") => {
-                        metrics::handle_prometheus(req, &metrics_registry, MetricsVariant::Regular)
-                    }
-                    (&Method::GET, "/status") => metrics::handle_status(
-                        req,
-                        &mut coord_client,
-                        &global_metrics,
-                        &pgwire_metrics,
-                    ),
-                    (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
-                    (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
-                    (&Method::GET, "/hierarchical-memory") => {
-                        memory::handle_hierarchical_memory(req, &mut coord_client)
-                    }
-                    (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
-                    (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
-                    (&Method::GET, "/internal/catalog") => {
-                        catalog::handle_internal_catalog(req, &mut coord_client).await
-                    }
-                    _ => root::handle_static(req, &mut coord_client),
-                }
-            }
-        });
-        let svc = ServiceBuilder::new()
-            .layer(
-                CorsLayer::new()
-                    .allow_credentials(false)
-                    .allow_headers([
-                        AUTHORIZATION,
-                        CONTENT_TYPE,
-                        HeaderName::from_static("x-materialize-version"),
-                    ])
-                    .allow_methods(cors::Any)
-                    .allow_origin(self.allowed_origin.clone())
-                    .expose_headers(cors::Any)
-                    .max_age(Duration::from_secs(60) * 60),
-            )
-            .service(router);
+        let router = self.router.lock().expect("lock poisoned").clone();
+        let svc = router.layer(Extension(conn_protocol));
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
     }
@@ -285,6 +219,152 @@ impl Server {
 }
 
 #[derive(Clone)]
+enum ConnProtocol {
+    Http,
+    Https { client_cert: Option<X509> },
+}
+
+struct AuthedUser {
+    user: String,
+    create_if_not_exists: bool,
+}
+
+pub struct AuthedClient(pub SessionClient);
+
+#[async_trait]
+impl<B> FromRequest<B> for AuthedClient
+where
+    B: Send,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        let AuthedUser {
+            user,
+            create_if_not_exists,
+        } = req.extensions().get::<AuthedUser>().unwrap();
+        let coord_client = req.extensions().get::<mz_coord::Client>().unwrap();
+
+        let coord_client = coord_client
+            .new_conn()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let session = Session::new(coord_client.conn_id(), user.clone());
+        let (coord_client, _) = match coord_client.startup(session, *create_if_not_exists).await {
+            Ok(coord_client) => coord_client,
+            Err(e) => {
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+            }
+        };
+
+        Ok(AuthedClient(coord_client))
+    }
+}
+
+#[derive(Debug, Error)]
+enum AuthError {
+    #[error("HTTPS is required")]
+    HttpsRequired,
+    #[error("invalid username in client certificate")]
+    InvalidCertUserName,
+    #[error("{0}")]
+    Frontegg(#[from] FronteggError),
+    #[error("missing authorization header")]
+    MissingHttpAuthentication,
+    #[error("{0}")]
+    MismatchedUser(&'static str),
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        warn!("HTTP request failed authentication: {}", self);
+        // We omit most detail from the error message we send to the client, to
+        // avoid giving attackers unnecessary information.
+        let message = match self {
+            AuthError::HttpsRequired => self.to_string(),
+            _ => "unauthorized".into(),
+        };
+        (StatusCode::UNAUTHORIZED, message).into_response()
+    }
+}
+
+async fn auth<B>(
+    mut req: Request<B>,
+    next: Next<B>,
+    tls_mode: Option<TlsMode>,
+    frontegg: &Option<FronteggAuthentication>,
+) -> impl IntoResponse {
+    // There are three places a username may be specified:
+    //
+    //   - certificate common name
+    //   - HTTP Basic authentication
+    //   - JWT email address
+    //
+    // We verify that if any of these are present, they must match any other
+    // that is also present.
+
+    // First, extract the username from the certificate, validating that the
+    // connection matches the TLS configuration along the way.
+    let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
+    let mut user = match (tls_mode, &conn_protocol) {
+        (None, ConnProtocol::Http) => None,
+        (None, ConnProtocol::Https { .. }) => unreachable!(),
+        (Some(TlsMode::Require), ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (Some(TlsMode::Require), ConnProtocol::Https { .. }) => None,
+        (Some(TlsMode::AssumeUser), ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (Some(TlsMode::AssumeUser), ConnProtocol::Https { client_cert }) => client_cert
+            .as_ref()
+            .and_then(|cert| cert.subject_name().entries_by_nid(Nid::COMMONNAME).next())
+            .and_then(|cn| cn.data().as_utf8().ok())
+            .map(|cn| Some(cn.to_string()))
+            .ok_or(AuthError::InvalidCertUserName)?,
+    };
+
+    // Then, handle Frontegg authentication if required.
+    let user = match frontegg {
+        // If no Frontegg authentication, we can use the cert's username if
+        // present, otherwise the system user.
+        None => user.unwrap_or_else(|| SYSTEM_USER.to_string()),
+        // If we require Frontegg auth, fetch credentials from the HTTP auth
+        // header. Basic auth comes with a username/password, where the password
+        // is the client+secret pair. Bearer auth is an existing JWT that must
+        // be validated. In either case, if a username was specified in the
+        // client cert, it must match that of the JWT.
+        Some(frontegg) => {
+            let token = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+                if let Some(user) = user {
+                    if basic.username() != user {
+                        return Err(AuthError::MismatchedUser(
+                            "user in client certificate did not match user specified in authorization header",
+                        ));
+                    }
+                }
+                user = Some(basic.username().to_string());
+                frontegg
+                    .exchange_password_for_token(basic.0.password())
+                    .await?
+                    .access_token
+            } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
+                bearer.token().to_string()
+            } else {
+                return Err(AuthError::MissingHttpAuthentication);
+            };
+            let claims = frontegg.validate_access_token(&token, user.as_deref())?;
+            claims.email
+        }
+    };
+
+    // Add the authenticated user as an extension so downstream handlers can
+    // inspect it if necessary.
+    req.extensions_mut().insert(AuthedUser {
+        user,
+        create_if_not_exists: frontegg.is_some(),
+    });
+
+    // Run the request.
+    Ok(next.run(req).await)
+}
+
+#[derive(Clone)]
 pub struct ThirdPartyServer {
     metrics_registry: MetricsRegistry,
 }
@@ -295,81 +375,20 @@ impl ThirdPartyServer {
     }
 
     pub async fn serve(self, addr: SocketAddr) {
-        if let Err(err) = hyper::Server::bind(&addr)
-            .serve(hyper::service::make_service_fn(|_| {
-                let server = self.clone();
-                async { Ok::<_, hyper::Error>(server) }
-            }))
-            .await
-        {
+        let metrics_registry = self.metrics_registry;
+        let router = Router::new().route(
+            "/metrics",
+            routing::get(move || async move {
+                metrics::handle_prometheus(
+                    &metrics_registry,
+                    metrics::MetricsVariant::ThirdPartyVisible,
+                )
+                .await
+            }),
+        );
+        let server = axum::Server::bind(&addr).serve(router.into_make_service());
+        if let Err(err) = server.await {
             error!("error serving metrics endpoint: {}", err);
         }
     }
-}
-
-impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
-    type Response = Response<Body>;
-    type Error = hyper::http::Error;
-    type Future =
-        Pin<Box<dyn futures::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(
-        &mut self,
-        _: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        match req.uri().path() {
-            "/metrics" => Box::pin({
-                let server = self.clone();
-                async move {
-                    match metrics::handle_prometheus(
-                        req,
-                        &server.metrics_registry,
-                        metrics::MetricsVariant::ThirdPartyVisible,
-                    ) {
-                        Ok(response) => Ok(response),
-                        Err(err) => {
-                            error!("could not retrieve third-party metrics: {}", err);
-                            Response::builder()
-                                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Body::from("Error retrieving prometheus metrics"))
-                        }
-                    }
-                }
-            }),
-            _ => Box::pin(async move {
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from(
-                        "The resource you have requested does not exist. Did you mean /metrics?",
-                    ))
-            }),
-        }
-    }
-}
-
-// Uses the HTTP Authorization header to fetch a JWT. Basic auth requires a
-// username and password that is "client,secret" that is exchanged for a JWT,
-// and whose username must match the JWT's email. Bearer auth can provide the
-// JWT directly. The JWT is validated and its email address is returned.
-async fn validate_http_frontegg_authentication(
-    req: &Request<Body>,
-    frontegg: &FronteggAuthentication,
-) -> Result<String, anyhow::Error> {
-    let (http_user, jwt) = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
-        let jwt = frontegg
-            .exchange_password_for_token(basic.0.password())
-            .await?;
-        (Some(basic.0.username().to_string()), jwt.access_token)
-    } else if let Some(basic) = req.headers().typed_get::<Authorization<Bearer>>() {
-        (None, basic.0.token().to_string())
-    } else {
-        anyhow::bail!("expected authorization");
-    };
-
-    let claims = frontegg.validate_access_token(&jwt, http_user.as_deref())?;
-    Ok(claims.email)
 }

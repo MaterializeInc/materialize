@@ -27,6 +27,7 @@ use postgres::types::{FromSql, Type};
 use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tower_http::cors::Origin;
 
 use materialized::{StorageConfig, TlsMode};
 
@@ -168,7 +169,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         persist: PersistConfig::disabled(),
         third_party_metrics_listen_addr: None,
         now: config.now,
-        cors_allowed_origins: vec![],
+        cors_allowed_origin: Origin::list([]).into(),
     }))?;
     let server = Server {
         inner,

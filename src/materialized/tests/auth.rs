@@ -29,7 +29,7 @@ use hyper::http::uri::Scheme;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
-use jsonwebtoken::{self, EncodingKey};
+use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_ore::now::SYSTEM_TIME;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
@@ -292,6 +292,10 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                             for (k, v) in headers.iter() {
                                 req.headers_mut().unwrap().insert(k, v.clone());
                             }
+                            req.headers_mut().unwrap().insert(
+                                "Content-Type",
+                                HeaderValue::from_static("application/x-www-form-urlencoded"),
+                            );
                             req.body(Body::from("sql=SELECT pg_catalog.current_user()"))
                                 .unwrap()
                         }),
@@ -494,11 +498,11 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     )?;
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url.clone(),
-        jwk_rsa_pem: &ca.pkey.public_key_to_pem()?,
+        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem()?)?,
         tenant_id,
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: REFRESH_BEFORE_SECS as i64,
-    })?;
+    });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("{client_id}{secret}");
 
@@ -633,11 +637,11 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let frontegg_server = start_mzcloud(encoding_key, tenant_id, users, now.clone(), 1_000)?;
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url,
-        jwk_rsa_pem: &ca.pkey.public_key_to_pem()?,
+        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem()?)?,
         tenant_id,
         now,
         refresh_before_secs: 0,
-    })?;
+    });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);

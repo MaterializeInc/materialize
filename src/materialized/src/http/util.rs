@@ -10,24 +10,12 @@
 //! HTTP utilities.
 
 use askama::Template;
-use hyper::{Body, Response, StatusCode};
+use axum::response::Html;
 
 /// Renders a template into an HTTP response.
-pub fn template_response<T>(template: T) -> Response<Body>
+pub fn template_response<T>(template: T) -> Html<String>
 where
     T: Template,
 {
-    let contents = template.render().expect("template rendering cannot fail");
-    Response::new(Body::from(contents))
-}
-
-/// Renders a status code and error message into an HTTP response.
-pub fn error_response<S>(code: StatusCode, message: S) -> Response<Body>
-where
-    S: Into<String>,
-{
-    Response::builder()
-        .status(code)
-        .body(Body::from(message.into()))
-        .unwrap()
+    Html(template.render().expect("template rendering cannot fail"))
 }

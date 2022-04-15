@@ -9,11 +9,14 @@
 
 //! HTTP endpoints for the homepage and static files.
 
-use std::future::Future;
+use std::path::Path;
 
 use askama::Template;
-use futures::future;
-use hyper::{Body, Method, Request, Response, StatusCode};
+use axum::extract::Path as RequestPath;
+use axum::response::IntoResponse;
+use axum::TypedHeader;
+use headers::ContentType;
+use http::StatusCode;
 #[cfg(feature = "dev-web")]
 use tracing::debug;
 
@@ -28,30 +31,24 @@ struct HomeTemplate<'a> {
     build_sha: &'static str,
 }
 
-pub fn handle_home(
-    _: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-    future::ok(util::template_response(HomeTemplate {
+pub async fn handle_home() -> impl IntoResponse {
+    util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
         build_time: BUILD_INFO.time,
         build_sha: BUILD_INFO.sha,
-    }))
+    })
 }
 
-pub fn handle_static(
-    req: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    if req.method() == Method::GET {
-        let path = req.uri().path();
-        let path = path.strip_prefix('/').unwrap_or(path);
-        match get_static_file(path) {
-            Some(body) => Ok(Response::new(body)),
-            None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
-        }
-    } else {
-        Ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
+pub async fn handle_static(path: RequestPath<String>) -> impl IntoResponse {
+    let path = path.strip_prefix('/').unwrap_or(&path);
+    let content_type = match Path::new(path).extension().and_then(|e| e.to_str()) {
+        Some("js") => Some(TypedHeader(ContentType::from(mime::TEXT_JAVASCRIPT))),
+        Some("css") => Some(TypedHeader(ContentType::from(mime::TEXT_CSS))),
+        None | Some(_) => None,
+    };
+    match get_static_file(path) {
+        Some(body) => Ok((content_type, body)),
+        None => Err((StatusCode::NOT_FOUND, "not found")),
     }
 }
 
@@ -60,12 +57,12 @@ const STATIC_DIR: include_dir::Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static");
 
 #[cfg(not(feature = "dev-web"))]
-fn get_static_file(path: &str) -> Option<Body> {
-    STATIC_DIR.get_file(path).map(|f| Body::from(f.contents()))
+fn get_static_file(path: &str) -> Option<&'static [u8]> {
+    STATIC_DIR.get_file(path).map(|f| f.contents())
 }
 
 #[cfg(feature = "dev-web")]
-fn get_static_file(path: &str) -> Option<Body> {
+fn get_static_file(path: &str) -> Option<Vec<u8>> {
     use std::fs;
 
     #[cfg(not(debug_assertions))]
@@ -79,7 +76,7 @@ fn get_static_file(path: &str) -> Option<Body> {
     );
     let prod_path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
     match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
-        Ok(contents) => Some(Body::from(contents)),
+        Ok(contents) => Some(contents),
         Err(e) => {
             debug!("dev-web failed to load static file: {}: {}", path, e);
             None
