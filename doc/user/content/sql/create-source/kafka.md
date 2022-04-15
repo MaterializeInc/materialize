@@ -4,6 +4,8 @@ description: "Connecting Materialize to a Kafka or Redpanda broker"
 menu:
   main:
     parent: 'create-source'
+    name: Kafka
+    weight: 10
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka
@@ -17,7 +19,7 @@ This page details how to connect Materialize to a Kafka broker to read data from
 {{% /create-source/intro %}}
 
 {{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/third-party/redpanda/) broker, unless stated otherwise.
+The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker, unless stated otherwise.
 {{</ note >}}
 
 ## Syntax
@@ -112,7 +114,7 @@ Note that:
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/third-party/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/integrations/debezium/).
 
 ### Exposing source metadata
 
@@ -245,14 +247,14 @@ The `kafka_time_offset` option is not supported yet for Redpanda sources ([Redpa
 
 It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
 
-If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/guides/temporal-filters/) instead.
+If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/spellbook/temporal-filters/) instead.
 
 #### `WITH` options
 
 Field               | Value | Description
 --------------------|-------|--------------------
 `start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `(DEBEZIUM) UPSERT`.
-`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used. **This option is not currently supported for [Redpanda](/third-party/redpanda).**
+`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used. **This option is not currently supported for [Redpanda](/integrations/redpanda).**
 
 
 ## Authentication
@@ -420,4 +422,4 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 ## Related pages
 
 - [`CREATE SOURCE`](../)
-- [Using Debezium](/third-party/debezium/)
+- [Using Debezium](/integrations/debezium/)

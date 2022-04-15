@@ -3,10 +3,10 @@ title: "System Catalog"
 description: "The system catalog stores metadata about your Materialize instance."
 aliases:
   - /sql/system-tables
-weight: 50
 menu:
   main:
-    parent: 'sql'
+    parent: 'reference'
+    weight: 160
 ---
 
 {{< version-added v0.5.0 />}}

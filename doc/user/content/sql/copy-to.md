@@ -3,7 +3,7 @@ title: "COPY TO"
 description: "`COPY TO` outputs a query via the COPY protocol."
 menu:
     main:
-        parent: "sql"
+        parent: "commands"
 ---
 
 `COPY TO` sends rows using the [Postgres COPY protocol](https://www.postgresql.org/docs/current/sql-copy.html).

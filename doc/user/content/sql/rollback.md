@@ -2,7 +2,7 @@
 title: "ROLLBACK"
 menu:
   main:
-    parent: "sql"
+    parent: commands
 ---
 
 `ROLLBACK` aborts the current transaction.

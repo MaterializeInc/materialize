@@ -3,7 +3,7 @@ title: "CREATE TYPE"
 description: "`CREATE TYPE` defines a new data type."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< version-added v0.6.1 />}}

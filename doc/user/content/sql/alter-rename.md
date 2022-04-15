@@ -3,7 +3,7 @@ title: "ALTER ... RENAME"
 description: "`ALTER ... RENAME` renames an item."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< version-added v0.4.0 />}}

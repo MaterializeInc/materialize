@@ -4,7 +4,9 @@ description: "SQL namespaces let you create a taxonomy of objects in your Materi
 weight: 40
 menu:
   main:
-    parent: 'sql'
+    parent: 'reference'
+    name: 'SQL Namespaces'
+    weight: 126
 ---
 
 Materialize mimics SQL standard's namespace hierarchy, which is:

@@ -5,7 +5,8 @@ aliases:
   - /monitoring
 menu:
   main:
-    parent: operations
+    parent: ops
+    weight: 50
 ---
 
 {{< note >}}

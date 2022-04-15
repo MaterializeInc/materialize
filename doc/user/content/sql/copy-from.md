@@ -3,7 +3,7 @@ title: "COPY FROM"
 description: "`COPY FROM` copies data into a table using the COPY protocol."
 menu:
     main:
-        parent: "sql"
+        parent: "commands"
 ---
 
 `COPY FROM` copies data into a table using the [Postgres `COPY` protocol][pg-copy-from].

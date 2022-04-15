@@ -3,7 +3,7 @@ title: "FETCH"
 description: "`FETCH` retrieves rows from a cursor."
 menu:
   main:
-    parent: "sql"
+    parent: commands
 ---
 
 {{< version-added v0.5.3 />}}

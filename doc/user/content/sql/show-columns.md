@@ -3,7 +3,7 @@ title: "SHOW COLUMNS"
 description: "`SHOW COLUMNS` lists the columns available from an item."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 aliases:
     - /sql/show-column
 ---

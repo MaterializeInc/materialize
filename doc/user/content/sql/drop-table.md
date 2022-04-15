@@ -3,7 +3,7 @@ title: "DROP TABLE"
 description: "`DROP TABLE` removes a table from your Materialize instance."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `DROP TABLE` removes a table from your Materialize instance.

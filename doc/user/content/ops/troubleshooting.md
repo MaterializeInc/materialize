@@ -3,7 +3,8 @@ title: "Troubleshooting"
 description: "Troubleshoot performance issues."
 menu:
   main:
-    parent: operations
+    parent: ops
+    weight: 80
 aliases:
   - /ops/diagnosing-using-sql
 ---
@@ -129,7 +130,7 @@ group by mdo.id, mdo.name
 order by sum(mas.records) desc;
 ```
 
-We've also bundled a [memory usage visualization tool](https://materialize.com/docs/ops/monitoring/#memory-usage-visualization)
+We've also bundled a [memory usage visualization tool](/ops/monitoring/#memory-usage-visualization)
 to aid in debugging. The SQL queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
 only user-created arrangements, grouped by dataflow. The amount of
