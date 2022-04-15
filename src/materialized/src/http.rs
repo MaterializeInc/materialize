@@ -119,6 +119,11 @@ impl Server {
         let frontegg = Arc::new(frontegg);
         let router = Router::new()
             .route("/", routing::get(root::handle_home))
+            .route(
+                "/api/internal/catalog",
+                routing::get(catalog::handle_internal_catalog),
+            )
+            .route("/api/sql", routing::post(sql::handle_sql))
             .route("/memory", routing::get(memory::handle_memory))
             .route(
                 "/metrics",
@@ -130,13 +135,8 @@ impl Server {
                 "/hierarchical-memory",
                 routing::get(memory::handle_hierarchical_memory),
             )
-            .route(
-                "/internal/catalog",
-                routing::get(catalog::handle_internal_catalog),
-            )
             .route("/prof", routing::get(prof::handle_get))
             .route("/prof", routing::post(prof::handle_post))
-            .route("/sql", routing::post(sql::handle_sql))
             .route("/static/*path", routing::get(root::handle_static))
             .route(
                 "/status",
