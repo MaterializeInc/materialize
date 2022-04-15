@@ -679,8 +679,19 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         .any(|val| val.as_bytes() == b"*")
     {
         cors::Any.into()
-    } else {
+    } else if !args.cors_allowed_origin.is_empty() {
         Origin::list(args.cors_allowed_origin).into()
+    } else {
+        let port = args.listen_addr.port();
+        Origin::list([
+            HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+        ])
+        .into()
     };
 
     // Configure orchestrator.
