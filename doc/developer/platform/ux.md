@@ -799,8 +799,7 @@ Materialize maintains three correctness guarantees.
    must block on a query until it has complete certainty about the events.
    Blocking may not be desirable in practice, so Materialize makes the behavior
    optional. Non-blocking behavior comes with no guarantees of recency.
-
-
+   
 ## Discussion
 
 What follows are my (@benesch's) thoughts on the design tradeoffs that were
