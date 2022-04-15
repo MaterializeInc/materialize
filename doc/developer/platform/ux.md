@@ -790,7 +790,7 @@ Materialize maintains three correctness guarantees.
    Maerialize reclocks the events to reflect the order in which the source emits 
    each event. For sources that do have transactional semantics (Postgres, Debezium) 
    Materialize reclocks events to respect the transactional boundaries.  For partially 
-   ordered elements x and y:
+   ordered events x and y:
     1.  if *x < y* in the source, then *x ≤ y* in Materialize
     2.  if *x = y* in the source, then *x = y* in Materialize
 3. *Materialize provides real time recency guarantees.* This means any write 
