@@ -587,6 +587,7 @@ class Composition:
         service: str,
         *args: str,
         detach: bool = False,
+        capture: bool = False,
         stdin: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
@@ -612,6 +613,7 @@ class Composition:
                 else []
             ),
             *args,
+            capture=capture,
             stdin=stdin,
         )
 
