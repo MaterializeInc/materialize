@@ -382,7 +382,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connector: CreateSourceConnector,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
     pub envelope: Envelope,
@@ -447,7 +447,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub in_cluster: Option<T::ClusterName>,
     pub from: T::ObjectName,
     pub connector: CreateSinkConnector<T>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
@@ -502,7 +502,7 @@ pub struct ViewDefinition<T: AstInfo> {
     /// View name
     pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub query: Query<T>,
 }
 
@@ -656,7 +656,7 @@ pub struct CreateTableStatement<T: AstInfo> {
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub if_not_exists: bool,
     pub temporary: bool,
 }
@@ -921,8 +921,8 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateTypeAs<T: AstInfo> {
-    List { with_options: Vec<SqlOption<T>> },
-    Map { with_options: Vec<SqlOption<T>> },
+    List { with_options: Vec<WithOption<T>> },
+    Map { with_options: Vec<WithOption<T>> },
     Record { column_defs: Vec<ColumnDef<T>> },
 }
 
@@ -1686,55 +1686,6 @@ impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
     }
 }
 impl_display_t!(ShowStatementFilter);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SqlOption<T: AstInfo> {
-    Value {
-        name: Ident,
-        value: Value,
-    },
-    ObjectName {
-        name: Ident,
-        object_name: UnresolvedObjectName,
-    },
-    DataType {
-        name: Ident,
-        data_type: T::DataType,
-    },
-}
-
-impl<T: AstInfo> SqlOption<T> {
-    pub fn name(&self) -> &Ident {
-        match self {
-            SqlOption::Value { name, .. } => name,
-            SqlOption::ObjectName { name, .. } => name,
-            SqlOption::DataType { name, .. } => name,
-        }
-    }
-}
-
-impl<T: AstInfo> AstDisplay for SqlOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            SqlOption::Value { name, value } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(value);
-            }
-            SqlOption::ObjectName { name, object_name } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(object_name);
-            }
-            SqlOption::DataType { name, data_type } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(data_type);
-            }
-        }
-    }
-}
-impl_display_t!(SqlOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WithOption<T: AstInfo> {

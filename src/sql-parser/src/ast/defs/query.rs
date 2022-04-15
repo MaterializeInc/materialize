@@ -24,8 +24,8 @@ use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    Expr, FunctionArgs, Ident, SqlOption, UnresolvedDataType, UnresolvedDatabaseName,
-    UnresolvedObjectName, UnresolvedSchemaName,
+    Expr, FunctionArgs, Ident, UnresolvedDataType, UnresolvedDatabaseName, UnresolvedObjectName,
+    UnresolvedSchemaName, WithOption,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -299,7 +299,7 @@ pub struct Select<T: AstInfo> {
     /// HAVING
     pub having: Option<Expr<T>>,
     /// OPTION
-    pub options: Vec<SqlOption<T>>,
+    pub options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {

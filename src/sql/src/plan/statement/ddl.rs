@@ -25,6 +25,7 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_postgres_util::TableInfo;
 use mz_repr::adt::interval::Interval;
+use mz_sql_parser::ast::WithOptionValue;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -67,7 +68,7 @@ use crate::ast::{
     DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
     DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption, Statement, SubscriptPosition,
+    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
     TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
     Value, ViewDefinition, WithOption,
 };
@@ -635,10 +636,7 @@ pub fn plan_create_source(
                 DbzMode::Plain => {
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let tx_metadata = match with_option_objects.remove("tx_metadata") {
-                        Some(SqlOption::ObjectName {
-                            name: _,
-                            object_name: tx_metadata,
-                        }) => {
+                        Some(WithOptionValue::ObjectName(tx_metadata)) => {
                             scx.require_experimental_mode("DEBEZIUM TX_METADATA")?;
                             // `with_option_objects` and `with_options` should correspond.  We want
                             // to keep the `ObjectName` information but we also need to remove the
@@ -1180,7 +1178,7 @@ fn typecheck_debezium_transaction_metadata(
 fn get_encoding(
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
-    with_options: &Vec<SqlOption<Aug>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
@@ -1212,7 +1210,7 @@ fn get_encoding(
 
 fn get_encoding_inner(
     format: &Format<Aug>,
-    with_options: &Vec<SqlOption<Aug>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -2555,7 +2553,7 @@ pub fn plan_create_type(
 
             for key in option_keys {
                 match with_options.remove(&key.to_string()) {
-                    Some(SqlOption::DataType { data_type, .. }) => {
+                    Some(WithOptionValue::DataType(data_type)) => {
                         ensure_valid_data_type(scx, &data_type, &as_type, key)?;
                         depends_on.extend(data_type.get_ids());
                     }

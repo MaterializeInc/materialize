@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -124,7 +124,7 @@ impl_display_t!(ProtobufSchema);
 pub struct CsrConnectorAvro<T: AstInfo> {
     pub url: String,
     pub seed: Option<CsrSeed>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
@@ -149,7 +149,7 @@ impl_display_t!(CsrConnectorAvro);
 pub struct CsrConnectorProto<T: AstInfo> {
     pub url: String,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
@@ -461,7 +461,7 @@ impl_display!(DbzMode);
 pub enum CreateConnector<T: AstInfo> {
     Kafka {
         broker: String,
-        with_options: Vec<SqlOption<T>>,
+        with_options: Vec<WithOption<T>>,
     },
 }
 

@@ -1741,7 +1741,7 @@ impl<'a> Parser<'a> {
         // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
         // accept `WITH (...)` here.
         let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_sql_options()?
+            self.parse_opt_with_options()?
         } else {
             vec![]
         };
@@ -1802,7 +1802,7 @@ impl<'a> Parser<'a> {
         // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
         // accept `WITH (...)` here.
         let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_sql_options()?
+            self.parse_opt_with_options()?
         } else {
             vec![]
         };
@@ -1867,7 +1867,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_create_source_connector()?;
-        let with_options = dbg!(self.parse_opt_with_sql_options()?);
+        let with_options = self.parse_opt_with_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
         let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
@@ -1976,7 +1976,7 @@ impl<'a> Parser<'a> {
             if let Some(Token::LParen) = self.next_token() {
                 self.prev_token();
                 self.prev_token();
-                with_options = self.parse_opt_with_sql_options()?;
+                with_options = self.parse_opt_with_options()?;
             }
         }
         let format = if self.parse_keyword(FORMAT) {
@@ -2248,7 +2248,7 @@ impl<'a> Parser<'a> {
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
         let name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = self.parse_opt_with_options()?;
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
@@ -2453,12 +2453,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
+    fn parse_data_type_option(&mut self) -> Result<WithOption<Raw>, ParserError> {
+        let key = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
-        Ok(SqlOption::DataType {
-            name,
-            data_type: self.parse_data_type()?,
+        Ok(WithOption {
+            key,
+            value: Some(WithOptionValue::DataType(self.parse_data_type()?)),
         })
     }
 
@@ -2657,7 +2657,7 @@ impl<'a> Parser<'a> {
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns(Mandatory)?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = self.parse_opt_with_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
@@ -2828,38 +2828,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
-        if self.parse_keyword(WITH) {
-            self.parse_options()
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    fn parse_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
-        self.expect_token(&Token::LParen)?;
-        let options = self.parse_comma_separated(Parser::parse_sql_option)?;
-        self.expect_token(&Token::RParen)?;
-        Ok(options)
-    }
-
-    fn parse_sql_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
-        self.expect_token(&Token::Eq)?;
-        let token = self.peek_token();
-        let option = if let Ok(value) = self.parse_value() {
-            SqlOption::Value { name, value }
-        } else {
-            self.prev_token();
-            if let Ok(object_name) = self.parse_object_name() {
-                SqlOption::ObjectName { name, object_name }
-            } else {
-                self.expected(self.peek_pos(), "option value", token)?
-            }
-        };
-        Ok(option)
     }
 
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
@@ -3906,7 +3874,7 @@ impl<'a> Parser<'a> {
         };
 
         let options = if self.parse_keyword(OPTION) {
-            self.parse_options()?
+            self.parse_with_options(true)?
         } else {
             vec![]
         };
@@ -4773,7 +4741,7 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = dbg!(self.parse_opt_with_options()?);
+        let options = self.parse_opt_with_options()?;
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,
