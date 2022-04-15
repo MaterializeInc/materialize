@@ -49,7 +49,6 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::netio::SniffedStream;
 
 use crate::http::metrics::MetricsVariant;
-use crate::Metrics;
 
 mod catalog;
 mod memory;
@@ -77,8 +76,6 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthentication>,
     pub coord_client: mz_coord::Client,
     pub metrics_registry: MetricsRegistry,
-    pub global_metrics: Metrics,
-    pub pgwire_metrics: mz_pgwire::Metrics,
     pub allowed_origin: AnyOr<Origin>,
 }
 
@@ -110,8 +107,6 @@ impl Server {
             frontegg,
             coord_client,
             metrics_registry,
-            global_metrics,
-            pgwire_metrics,
             allowed_origin,
         }: Config,
     ) -> Server {
@@ -138,12 +133,6 @@ impl Server {
             .route("/prof", routing::post(prof::handle_post))
             .route("/sql", routing::post(sql::handle_sql))
             .route("/static/*path", routing::get(root::handle_static))
-            .route(
-                "/status",
-                routing::get(move || async move {
-                    metrics::handle_status(&global_metrics, &pgwire_metrics).await
-                }),
-            )
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)

@@ -9,24 +9,12 @@
 
 //! Metrics HTTP endpoints.
 
-use askama::Template;
 use axum::response::IntoResponse;
 use axum::TypedHeader;
 use headers::ContentType;
 use http::StatusCode;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
-
-use crate::http::util;
-use crate::{Metrics, BUILD_INFO};
-
-#[derive(Template)]
-#[template(path = "http/templates/status.html")]
-struct StatusTemplate<'a> {
-    version: &'a str,
-    query_count: u64,
-    uptime_seconds: f64,
-}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MetricsVariant {
@@ -49,15 +37,4 @@ pub async fn handle_prometheus(
         .encode(&metric_families, &mut buffer)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
-}
-
-pub async fn handle_status(
-    global_metrics: &Metrics,
-    pgwire_metrics: &mz_pgwire::Metrics,
-) -> impl IntoResponse {
-    util::template_response(StatusTemplate {
-        version: BUILD_INFO.version,
-        query_count: pgwire_metrics.query_count.get(),
-        uptime_seconds: global_metrics.uptime.get(),
-    })
 }
