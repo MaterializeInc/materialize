@@ -91,7 +91,7 @@ def cargo(
         extra_env = {
             f"CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            f"CARGO_TARGET_DIR": ROOT / "target-xcompile",
+            f"CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
             f"TARGET_AR": f"{_target}-ar",
             f"TARGET_CPP": f"{_target}-cpp",
             f"TARGET_CC": f"{_target}-cc",
