@@ -630,6 +630,7 @@ checksum = "ab2504b827a8bef941ba3dd64bdffe9cf56ca182908a147edd6189c95fbcae7d"
 dependencies = [
  "async-trait",
  "axum-core",
+ "base64",
  "bitflags",
  "bytes",
  "futures-util",
@@ -646,8 +647,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "sha-1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-http",
  "tower-layer",
@@ -3134,6 +3137,9 @@ name = "mz-coord"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
+ "bincode",
+ "byteorder",
  "bytes",
  "chrono",
  "const_format",

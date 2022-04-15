@@ -11,6 +11,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
+use async_stream::stream;
+use futures::Stream;
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -391,51 +395,6 @@ impl SessionClient {
         &mut self,
         stmts: &str,
     ) -> Result<SimpleExecuteResponse, CoordError> {
-        // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
-        // Infinity, so those will still be rendered as strings.
-        fn float_to_json(f: f64) -> serde_json::Value {
-            match serde_json::Number::from_f64(f) {
-                Some(n) => serde_json::Value::Number(n),
-                None => serde_json::Value::String(f.to_string()),
-            }
-        }
-
-        fn datum_to_json(datum: &Datum) -> serde_json::Value {
-            match datum {
-                // Convert some common things to a native JSON value. This doesn't need to be
-                // too exhaustive because the SQL-over-HTTP interface is currently not hooked
-                // up to arbitrary external user queries.
-                Datum::Null | Datum::JsonNull => serde_json::Value::Null,
-                Datum::False => serde_json::Value::Bool(false),
-                Datum::True => serde_json::Value::Bool(true),
-                Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Float32(n) => float_to_json(n.into_inner() as f64),
-                Datum::Float64(n) => float_to_json(n.into_inner()),
-                Datum::Numeric(d) => {
-                    // serde_json requires floats to be finite
-                    if d.0.is_infinite() {
-                        serde_json::Value::String(d.0.to_string())
-                    } else {
-                        serde_json::Value::Number(
-                            serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
-                        )
-                    }
-                }
-                Datum::String(s) => serde_json::Value::String(s.to_string()),
-                Datum::List(list) => serde_json::Value::Array(
-                    list.iter().map(|entry| datum_to_json(&entry)).collect(),
-                ),
-                Datum::Map(map) => serde_json::Value::Object(
-                    map.iter()
-                        .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
-                        .collect(),
-                ),
-                _ => serde_json::Value::String(datum.to_string()),
-            }
-        }
-
         let stmts = mz_sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
         let num_stmts = stmts.len();
         const EMPTY_PORTAL: &str = "";
@@ -571,6 +530,47 @@ impl SessionClient {
         Ok(SimpleExecuteResponse { results })
     }
 
+    /// Like [`SessionClient::simple_execute`], but for `TAIL` queries.
+    pub async fn simple_tail(
+        &mut self,
+        stmt: &str,
+    ) -> Result<impl Stream<Item = Result<Vec<Value>, CoordError>>, CoordError> {
+        let stmts = mz_sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
+        if stmts.len() != 1 {
+            coord_bail!("only one statement is supported");
+        }
+        self.start_transaction(None).await?;
+        const EMPTY_PORTAL: &str = "";
+        self.declare(EMPTY_PORTAL.into(), stmts.into_element(), vec![])
+            .await?;
+        let desc = self
+            .session()
+            .get_portal_unverified(EMPTY_PORTAL)
+            .map(|portal| portal.desc.clone())
+            .expect("unnamed portal should be present");
+        if !desc.param_types.is_empty() {
+            return Err(CoordError::Unsupported("parameters"));
+        }
+        match self.execute(EMPTY_PORTAL.into()).await? {
+            ExecuteResponse::Tailing { mut rx } => Ok(stream! {
+                while let Some(res) = rx.recv().await {
+                    match res {
+                        PeekResponseUnary::Rows(rows) => {
+                            let mut datum_vec = mz_repr::DatumVec::new();
+                            for row in rows {
+                                let datums = datum_vec.borrow_with(&row);
+                                yield Ok(datums.iter().map(datum_to_json).collect());
+                            }
+                        }
+                        PeekResponseUnary::Error(e) => yield Err(CoordError::Unstructured(anyhow!(e))),
+                        PeekResponseUnary::Canceled => yield Err(CoordError::Unstructured(anyhow!("execution canceled"))),
+                    }
+                }
+            }),
+            _ => coord_bail!("statements of the executed type"),
+        }
+    }
+
     /// Returns a mutable reference to the session bound to this client.
     pub fn session(&mut self) -> &mut Session {
         self.session.as_mut().unwrap()
@@ -599,5 +599,50 @@ impl Drop for SessionClient {
                 .send(Command::Terminate { session })
                 .expect("coordinator unexpectedly gone");
         }
+    }
+}
+
+// Convert most floats to a JSON Number. JSON Numbers don't support NaN or
+// Infinity, so those will still be rendered as strings.
+fn float_to_json(f: f64) -> serde_json::Value {
+    match serde_json::Number::from_f64(f) {
+        Some(n) => serde_json::Value::Number(n),
+        None => serde_json::Value::String(f.to_string()),
+    }
+}
+
+fn datum_to_json(datum: &Datum) -> serde_json::Value {
+    match datum {
+        // Convert some common things to a native JSON value. This doesn't need to be
+        // too exhaustive because the SQL-over-HTTP interface is currently not hooked
+        // up to arbitrary external user queries.
+        Datum::Null | Datum::JsonNull => serde_json::Value::Null,
+        Datum::False => serde_json::Value::Bool(false),
+        Datum::True => serde_json::Value::Bool(true),
+        Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+        Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+        Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+        Datum::Float32(n) => float_to_json(n.into_inner() as f64),
+        Datum::Float64(n) => float_to_json(n.into_inner()),
+        Datum::Numeric(d) => {
+            // serde_json requires floats to be finite
+            if d.0.is_infinite() {
+                serde_json::Value::String(d.0.to_string())
+            } else {
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
+                )
+            }
+        }
+        Datum::String(s) => serde_json::Value::String(s.to_string()),
+        Datum::List(list) => {
+            serde_json::Value::Array(list.iter().map(|entry| datum_to_json(&entry)).collect())
+        }
+        Datum::Map(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
+                .collect(),
+        ),
+        _ => serde_json::Value::String(datum.to_string()),
     }
 }

@@ -114,6 +114,7 @@ impl Server {
                 "/api/internal/catalog",
                 routing::get(catalog::handle_internal_catalog),
             )
+            .route("/api/sql", routing::get(sql::handle_sql_ws))
             .route("/api/sql", routing::post(sql::handle_sql))
             .route("/memory", routing::get(memory::handle_memory))
             .route(
@@ -184,7 +185,10 @@ impl Server {
         let router = self.router.lock().expect("lock poisoned").clone();
         let svc = router.layer(Extension(conn_protocol));
         let http = hyper::server::conn::Http::new();
-        http.serve_connection(conn, svc).err_into().await
+        http.serve_connection(conn, svc)
+            .with_upgrades()
+            .err_into()
+            .await
     }
 
     // Handler functions are attached by various submodules. They all have a
