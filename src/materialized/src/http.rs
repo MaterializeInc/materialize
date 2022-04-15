@@ -133,6 +133,11 @@ impl Server {
             .route("/prof", routing::post(prof::handle_post))
             .route("/sql", routing::post(sql::handle_sql))
             .route("/static/*path", routing::get(root::handle_static))
+            .layer(Extension(coord_client))
+            .layer(middleware::from_fn(move |req, next| {
+                let frontegg = Arc::clone(&frontegg);
+                async move { auth(req, next, tls_mode, &frontegg).await }
+            }))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -145,12 +150,7 @@ impl Server {
                     .allow_origin(allowed_origin)
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
-            )
-            .layer(middleware::from_fn(move |req, next| {
-                let frontegg = Arc::clone(&frontegg);
-                async move { auth(req, next, tls_mode, &frontegg).await }
-            }))
-            .layer(Extension(coord_client));
+            );
         Server {
             tls,
             router: Mutex::new(router),
