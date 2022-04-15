@@ -776,11 +776,30 @@ tables or sources in the system catalog.
 
 Materialize maintains three correctness guarantees.
 
-1. *Materialize is serializable (or strictly serializable) against all internal reads and writes.*
-2. *Materialize respects the explicit or implied event order of its sources.  This includes partial orders*  In practice this means Materialize assigns new timestamps to sources.  This assignment of new timestamps is called reclocking.  For sources without transactional semantics (basic Kafka streams) Maerialize reclocks the events to reflect the order in which the source emits each event. For sources that do have transactional semantics (Postgres, Debezium) Materialize reclocks events to respect the transactional boundaries.  For partially ordered elements x and y:
-    1.  if x < y in the source, then x <= y in Materialize
-    2.  if x = y in the source, then x = y in Materialize
-3. *Materialize provides real time recency guarantees.* This means any write committed by an upstream source is reflected in future queries against Materialize (unless the user explicitly requests weaker guarantees). Guaranteeing real time recency guarantees means that Materialize may choose to block on a query until we have complete certainty about the events.  Blocking may not be desirable in practice, so Materialize makes the behavior optional. Non-blocking behavior comes with no guarantees of recency.
+1. *Transactions in Materialize are strictly serializable with 
+   respect to the operations that occur inside of Materialize.* 
+   Operations include:
+    * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
+    * Materialize initiated acknowledgements of upstream sources (*e.g., the 
+      commit of an offset by a Kafka source, the acknowledge of an LSN by a 
+      PostgresSQL source, etceterea*)
+2. *Materialize respects the explicit or implied event order of its sources.  
+   This includes partial orders*  In practice this means Materialize assigns 
+   new timestamps to sources.  This assignment of new timestamps is called 
+   reclocking.  For sources without transactional semantics (basic Kafka streams)
+   Maerialize reclocks the events to reflect the order in which the source emits 
+   each event. For sources that do have transactional semantics (Postgres, Debezium) 
+   Materialize reclocks events to respect the transactional boundaries.  For partially 
+   ordered elements x and y:
+    1.  if *x < y* in the source, then *x ≤ y* in Materialize
+    2.  if *x = y* in the source, then *x = y* in Materialize
+3. *Materialize provides real time recency guarantees.* This means any write 
+   committed by an upstream source is reflected in future queries against 
+   Materialize (unless the user explicitly requests weaker guarantees). Guaranteeing 
+   real time recency guarantees means that Materialize may choose to block on a 
+   query until we have complete certainty about the events.  Blocking may not be 
+   desirable in practice, so Materialize makes the behavior optional. Non-blocking 
+   behavior comes with no guarantees of recency.
 
 
 ## Discussion
