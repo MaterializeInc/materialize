@@ -11,11 +11,13 @@ fn main() {
     prost_build::Config::new()
         .compile_protos(
             &[
+                "chrono.proto",
                 "row.proto",
                 "strconv.proto",
                 "relation_and_scalar.proto",
                 "adt/array.proto",
                 "adt/char.proto",
+                "adt/datetime.proto",
                 "adt/numeric.proto",
                 "adt/varchar.proto",
             ],

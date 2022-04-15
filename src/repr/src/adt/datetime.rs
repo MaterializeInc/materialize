@@ -24,6 +24,15 @@ use crate::adt::interval::Interval;
 
 use mz_lowertest::MzReflect;
 
+// The `Arbitrary` impls are only used during testing and we gate them
+// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
+// See https://github.com/MaterializeInc/materialize/pull/11717.
+#[cfg(feature = "test-utils")]
+use {
+    crate::chrono::any_fixed_offset, crate::chrono::any_timezone, proptest::prelude::*,
+    proptest_derive::Arbitrary,
+};
+
 /// Units of measurements associated with dates and times.
 ///
 /// TODO(benesch): with enough thinking, this type could probably be merged with
@@ -31,6 +40,7 @@ use mz_lowertest::MzReflect;
 #[derive(
     Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect,
 )]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum DateTimeUnits {
     Epoch,
     Millennium,
@@ -326,10 +336,13 @@ impl DateTimeFieldValue {
 
 /// Parsed timezone.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
+#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
-    FixedOffset(FixedOffset),
-    Tz(Tz),
+    FixedOffset(
+        #[cfg_attr(feature = "test-utils", proptest(strategy = "any_fixed_offset()"))] FixedOffset,
+    ),
+    Tz(#[cfg_attr(feature = "test-utils", proptest(strategy = "any_timezone()"))] Tz),
 }
 
 // We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.

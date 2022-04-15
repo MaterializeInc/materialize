@@ -28,11 +28,12 @@ mod row;
 mod scalar;
 
 pub mod adt;
+pub mod chrono;
+pub mod proto;
 pub mod strconv;
 pub mod util;
 
 pub use datum_vec::{DatumVec, DatumVecBorrow};
-pub mod proto;
 pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,

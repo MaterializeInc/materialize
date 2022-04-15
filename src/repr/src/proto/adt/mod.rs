@@ -11,5 +11,6 @@
 
 pub mod array;
 pub mod char;
+pub mod datetime;
 pub mod numeric;
 pub mod varchar;
