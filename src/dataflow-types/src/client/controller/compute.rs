@@ -27,6 +27,7 @@ use std::error::Error;
 use std::fmt;
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_types::Codec64;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
@@ -196,7 +197,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
 {
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
@@ -481,7 +482,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
 {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub(super) fn collection_mut(

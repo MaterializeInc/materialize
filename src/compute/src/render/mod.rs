@@ -104,6 +104,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_storage::source::persist_source;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -158,15 +160,38 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let request = SourceInstanceRequest {
-                    source_id: *source_id,
-                    dataflow_id: dataflow.id,
-                    arguments: source.arguments.clone(),
-                    as_of: dataflow.as_of.clone().unwrap(),
-                };
+                let (mut ok, mut err, token) = if let SourceConnector::External {
+                    connector: ExternalSourceConnector::Persist(persist_connector),
+                    ..
+                } = &source.description.connector
+                {
+                    let source_instance_id = mz_expr::SourceInstanceId {
+                        source_id: source_id.clone(),
+                        dataflow_id: context.dataflow_id,
+                    };
+                    let (ok_stream, err_stream, token) = persist_source::persist_source(
+                        region,
+                        source_instance_id,
+                        persist_connector.consensus_uri.clone(),
+                        persist_connector.blob_uri.clone(),
+                        persist_connector.shard_id.clone(),
+                        dataflow.as_of.clone().unwrap(),
+                    );
 
-                let (mut ok, mut err, token) =
-                    boundary.replay(region, &format!("{name}-{source_id}"), request);
+                    (ok_stream.as_collection(), err_stream.as_collection(), token)
+                } else {
+                    // NOTE(aljoscha): In the post-platform, post-storage-compute-split world, we
+                    // will remove the boundary and only the branch that reads directly from
+                    // persist/STORAGE will remain.
+                    let request = SourceInstanceRequest {
+                        source_id: *source_id,
+                        dataflow_id: dataflow.id,
+                        arguments: source.arguments.clone(),
+                        as_of: dataflow.as_of.clone().unwrap(),
+                    };
+
+                    boundary.replay(region, &format!("{name}-{source_id}"), request)
+                };
 
                 // We do not trust `replay` to correctly advance times.
                 use timely::dataflow::operators::Map;

@@ -203,7 +203,10 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
     let err = client
         .batch_execute("CREATE SINK snk FROM mz_sources INTO FILE '/ignored' FORMAT BYTES")
         .unwrap_db_error();
-    assert_eq!(err.message(), "Expected one of KAFKA or AVRO, found FILE");
+    assert_eq!(
+        err.message(),
+        "Expected one of KAFKA or AVRO or PERSIST, found FILE"
+    );
 
     Ok(())
 }

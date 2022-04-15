@@ -9,8 +9,8 @@ publish = false
 [dependencies]
 anyhow = "1.0.57"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"], optional = true }
-async-trait = "0.1.53"
 async-stream = "0.3.3"
+async-trait = "0.1.53"
 aws-sdk-kinesis = { version = "0.10.1", default-features = false, optional = true }
 aws-sdk-s3 = { version = "0.10.1", default-features = false, optional = true }
 aws-sdk-sqs = { version = "0.10.1", default-features = false, optional = true }
@@ -22,6 +22,8 @@ csv-core = { version = "0.1.10", optional = true }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 flate2 = { version = "1.0.23", optional = true }
 futures = "0.3.21"
+futures-executor = "0.3.21"
+futures-util = "0.3.19"
 globset = { version = "0.4.8", optional = true }
 inotify = { version = "0.10.0", optional = true }
 lazy_static = { version = "1.4.0", optional = true }
@@ -34,6 +36,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange", optional = true }
 mz-kafka-util = { path = "../kafka-util", optional = true }
 mz-ore = { path = "../ore", features = ["task"] }
+mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client", optional = true }
 mz-persist-types = { path = "../persist-types", optional = true }
 mz-pgcopy = { path = "../pgcopy", optional = true }

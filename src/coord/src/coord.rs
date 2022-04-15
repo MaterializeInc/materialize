@@ -81,7 +81,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};

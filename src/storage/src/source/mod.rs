@@ -59,10 +59,11 @@ mod file;
 mod kafka;
 mod kinesis;
 pub mod metrics;
+pub mod persist_source;
 mod postgres;
 mod pubnub;
 mod s3;
-mod util;
+pub mod util;
 
 pub mod timestamp;
 

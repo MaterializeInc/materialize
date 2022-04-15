@@ -29,6 +29,8 @@ mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore" }
 mz-orchestrator = { path = "../orchestrator" }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }

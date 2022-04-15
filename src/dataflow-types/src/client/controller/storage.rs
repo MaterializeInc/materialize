@@ -24,7 +24,9 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use timely::order::{PartialOrder, TotalOrder};
@@ -33,7 +35,11 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
+use mz_persist_client::read::ReadHandle;
+use mz_persist_types::Codec64;
+use mz_repr::Diff;
 use mz_repr::GlobalId;
+use mz_repr::Row;
 use mz_stash::{self, Stash, StashError};
 
 use crate::client::controller::ReadPolicy;
@@ -46,7 +52,7 @@ use crate::Update;
 
 #[async_trait]
 pub trait StorageController: Debug + Send {
-    type Timestamp: Timestamp;
+    type Timestamp;
 
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
@@ -211,7 +217,7 @@ impl<T> StorageControllerState<T> {
 #[async_trait]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64>,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
@@ -258,6 +264,22 @@ where
 
         // Install collection state for each bound source.
         for (id, (desc, since)) in bindings {
+            let read_handle = desc.connector.get_read_handle::<T>().await.map_err(|e| {
+                StorageError::ClientError(anyhow!("external persist error: {:?}", e))
+            })?;
+
+            // If we got a persist read handle the since we get from coord is meaningless. It's
+            // most likely `T::minimum()`, which is just the coordinator telling us that it _hopes_
+            // that this is the since. We can go to the source (ha!) of the information.
+            let since = read_handle
+                .as_ref()
+                .map(|read| read.since().clone())
+                .unwrap_or(since);
+
+            // TODO(aljoscha): We don't need a timestamp bindings collection for all types of
+            // sources but right now we always create one. Perhaps the responsibility for creating
+            // this should be moved to the `SourceConnector`, similar to how we have
+            // `get_read_handle()` for the persist read handle.
             let ts_binding_collection = self
                 .state
                 .stash
@@ -277,7 +299,13 @@ where
                 prev_offset.offset += diff;
             }
 
-            let collection_state = CollectionState::new(desc.clone(), since.clone(), last_bindings);
+            let read_handle = read_handle.map(|read| {
+                Box::new(ReadHandleWrapper { read_handle: read })
+                    as Box<dyn CollectionReadHandle<T>>
+            });
+
+            let collection_state =
+                CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
             self.state.collections.insert(id, collection_state);
 
             let command = CreateSourceCommand {
@@ -537,7 +565,12 @@ where
                 );
                 stash_compactions.push((ts_binding_collection, since));
                 stash_consolidations.push(ts_binding_collection);
-                compaction_commands.push((*id, frontier));
+                compaction_commands.push((*id, frontier.clone()));
+
+                let collection = self.collection_mut(*id).unwrap();
+                if let Some(read) = collection.read_handle.as_mut() {
+                    read.downgrade_since(frontier).await?;
+                }
             }
         }
         self.state.stash.compact_batch(&stash_compactions)?;
@@ -579,7 +612,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64>,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
@@ -625,6 +658,12 @@ pub struct CollectionState<T> {
     /// The last reported timestamp bindings, if any.
     /// This is used to differentialize timestamp bindings received before storing them in stash
     pub(super) last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
+
+    /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
+    /// since frontier and we need to downgrade that when the read capabilities change.
+    // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
+    // being optional
+    pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -632,6 +671,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: SourceDesc,
         since: Antichain<T>,
+        read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -643,6 +683,34 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             last_reported_ts_bindings,
+            read_handle,
         }
+    }
+}
+
+/// A type that hides the details of a real persist read handle and only exposes the methods that
+/// the controller needs to know about.
+#[async_trait]
+pub trait CollectionReadHandle<T>: Send + Sync + Debug {
+    /// Forwards the since frontier of this handle, giving up the ability to
+    /// read at times not greater or equal to `new_since`.
+    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError>;
+}
+
+#[derive(Debug)]
+struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
+    read_handle: ReadHandle<Row, Row, T, Diff>,
+}
+
+#[async_trait]
+impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
+    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
+        self.read_handle
+            .downgrade_since(Duration::from_secs(60), since)
+            .await
+            .map_err(|e| StorageError::ClientError(anyhow!("external persist error: {:?}", e)))?
+            .expect("invalid usage");
+
+        Ok(())
     }
 }
