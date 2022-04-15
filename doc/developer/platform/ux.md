@@ -782,7 +782,7 @@ Materialize maintains three correctness guarantees.
     * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
     * Materialize initiated acknowledgements of upstream sources (*e.g., the 
       commit of an offset by a Kafka source, the acknowledge of an LSN by a 
-      PostgresSQL source, etceterea*)
+      PostgresSQL source, etcetera*)
 2. *Materialize respects the explicit or implied event order of its sources.  
    This includes partial orders*  In practice this means Materialize assigns 
    new timestamps to sources.  This assignment of new timestamps is called 
