@@ -573,7 +573,7 @@ impl Runner {
             introspection_frequency: Duration::from_secs(1),
             metrics_registry: MetricsRegistry::new(),
             persist: PersistConfig::disabled(),
-            third_party_metrics_listen_addr: None,
+            metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
         };
         let server = materialized::serve(mz_config).await?;
