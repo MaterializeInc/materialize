@@ -29,7 +29,6 @@ use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::path::PathExt;
 
 use mz_testdrive::Config;
@@ -186,8 +185,10 @@ async fn main() {
         Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let loader = aws_config::from_env().region(Region::new(region));
-            let config = AwsConfig::from_loader(loader).await;
+            let config = aws_config::from_env()
+                .region(Region::new(region))
+                .load()
+                .await;
             let account = async {
                 let sts_client = mz_aws_util::sts::client(&config);
                 Ok::<_, Box<dyn Error>>(
@@ -212,15 +213,16 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
-            let loader = aws_config::from_env()
+            let config = aws_config::from_env()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
                     "dummy-access-key-id",
                     "dummy-secret-access-key",
                     None,
-                ));
-            let mut config = AwsConfig::from_loader(loader).await;
-            config.set_endpoint(Endpoint::immutable(endpoint));
+                ))
+                .endpoint_resolver(Endpoint::immutable(endpoint))
+                .load()
+                .await;
             let account = "000000000000".into();
             (config, account)
         }

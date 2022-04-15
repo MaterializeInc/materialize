@@ -29,7 +29,6 @@ use tokio::runtime::Handle as AsyncHandle;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
@@ -66,8 +65,7 @@ impl S3BlobConfig {
                 SharedCredentialsProvider::new(credentials::default_provider().await);
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
-        let config = AwsConfig::from_loader(loader).await;
-        let client = mz_aws_util::s3::client(&config);
+        let client = mz_aws_util::s3::client(&loader.load().await);
         Ok(S3BlobConfig {
             client,
             bucket,

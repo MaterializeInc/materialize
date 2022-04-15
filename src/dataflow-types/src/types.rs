@@ -1656,7 +1656,7 @@ pub mod sources {
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
-        pub async fn load(&self, external_id: AwsExternalId) -> mz_aws_util::config::AwsConfig {
+        pub async fn load(&self, external_id: AwsExternalId) -> aws_types::SdkConfig {
             use aws_config::default_provider::credentials::DefaultCredentialsChain;
             use aws_config::default_provider::region::DefaultRegionChain;
             use aws_config::sts::AssumeRoleProvider;
@@ -1713,14 +1713,13 @@ pub mod sources {
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }
 
-            let loader = aws_config::from_env()
+            let mut loader = aws_config::from_env()
                 .region(region)
                 .credentials_provider(cred_provider);
-            let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
             if let Some(endpoint) = &self.endpoint {
-                config.set_endpoint(Endpoint::immutable(endpoint.0.clone()));
+                loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
             }
-            config
+            loader.load().await
         }
     }
 }
