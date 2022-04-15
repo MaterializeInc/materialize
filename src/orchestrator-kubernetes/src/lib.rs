@@ -206,6 +206,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     name: "default".into(),
                     image: Some(image),
                     args: Some(args(&ports)),
+                    image_pull_policy: Some("Always".into()),
                     ports: Some(
                         ports_in
                             .iter()
