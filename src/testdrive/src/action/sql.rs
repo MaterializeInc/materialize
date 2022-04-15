@@ -195,7 +195,7 @@ impl Action for SqlAction {
                     let path = temp_mzdata.path();
                     let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
-                        "http://{}/internal/catalog",
+                        "http://{}/api/internal/catalog",
                         state.materialized_addr,
                     ))
                     .await?

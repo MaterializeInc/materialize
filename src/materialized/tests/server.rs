@@ -9,12 +9,12 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
 use reqwest::{blocking::Client, StatusCode, Url};
+use serde_json::json;
 use tempfile::NamedTempFile;
 
 use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
@@ -254,8 +254,7 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(util::Config::default())?;
-    let url = Url::parse(&format!("http://{}/sql", server.inner.local_addr()))?;
-    let mut params = HashMap::new();
+    let url = Url::parse(&format!("http://{}/api/sql", server.inner.local_addr()))?;
 
     struct TestCase {
         query: &'static str,
@@ -285,8 +284,10 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     ];
 
     for tc in tests {
-        params.insert("sql", tc.query);
-        let res = Client::new().post(url.clone()).form(&params).send()?;
+        let res = Client::new()
+            .post(url.clone())
+            .json(&json!({"sql": tc.query}))
+            .send()?;
         assert_eq!(res.status(), tc.status);
         assert_eq!(res.text()?, tc.body);
     }

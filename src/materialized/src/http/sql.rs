@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use axum::extract::Form;
 use axum::response::IntoResponse;
 use axum::Json;
 use http::StatusCode;
@@ -16,13 +15,13 @@ use serde::Deserialize;
 use crate::http::AuthedClient;
 
 #[derive(Deserialize)]
-pub struct SqlForm {
+pub struct SqlRequest {
     sql: String,
 }
 
 pub async fn handle_sql(
     AuthedClient(mut client): AuthedClient,
-    Form(SqlForm { sql }): Form<SqlForm>,
+    Json(SqlRequest { sql }): Json<SqlRequest>,
 ) -> impl IntoResponse {
     match client.simple_execute(&sql).await {
         Ok(res) => Ok(Json(res)),
