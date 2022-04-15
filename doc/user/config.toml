@@ -100,7 +100,7 @@ weight= 70
 [[menu.main]]
 name = "Subscriptions (`TAIL`)"
 parent = "reference"
-url = "/sql/create-index/"
+url = "/sql/tail/"
 weight= 80
 
 [[menu.main]]

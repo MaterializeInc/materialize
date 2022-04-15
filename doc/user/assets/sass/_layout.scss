@@ -149,6 +149,10 @@ body {
         }
     }
 
+    code {
+        font-family: 'Fira Code', Courier, monospace;
+    }
+
     .no-children > a,
     .level-3 a {
         border-left: 2px solid $grey-extra-light;
