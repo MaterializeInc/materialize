@@ -6,6 +6,7 @@ aliases:
 menu:
   main:
     parent: "integration-guides"
+    name: "Metabase BI"
 ---
 
 You can use [Metabase] to create business intelligence dashboards using the
