@@ -784,7 +784,7 @@ Materialize maintains three correctness guarantees.
       commit of an offset by a Kafka source, the acknowledge of an LSN by a 
       PostgresSQL source, etcetera*)
 2. *Materialize respects the explicit or implied event order of its sources.  
-   This includes partial orders*  In practice this means Materialize assigns 
+   This includes partial orders.*  In practice this means Materialize assigns 
    new timestamps to sources.  This assignment of new timestamps is called 
    reclocking.  For sources without transactional semantics (basic Kafka streams)
    Maerialize reclocks the events to reflect the order in which the source emits 
