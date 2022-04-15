@@ -389,7 +389,6 @@ mz_worker_materialization_frontiers           system true          volatile    l
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
-mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
@@ -419,7 +418,6 @@ mz_views
 name                  type
 ----------------------------
 mz_array_types        system
-mz_avro_ocf_sinks     system
 mz_base_types         system
 mz_clusters           system
 mz_columns            system
@@ -451,7 +449,6 @@ mz_views              system
 
 > SHOW EXTENDED tables FROM tester
 mz_array_types
-mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
@@ -484,7 +481,6 @@ test_table
 
 > SHOW EXTENDED tables FROM tester
 mz_array_types
-mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns

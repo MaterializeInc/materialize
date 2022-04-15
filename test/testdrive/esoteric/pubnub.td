@@ -41,8 +41,13 @@ nonvol   nonvolatile
 > SELECT name, volatility from mz_views WHERE name = 'depends_vol_nonvol'
 depends_vol_nonvol   volatile
 $ file-append path=test
+$ kafka-create-topic topic=test
+$ kafka-ingest topic=test format=bytes
 ignored
-> CREATE MATERIALIZED SOURCE file_src FROM FILE '${testdrive.temp-dir}/test' FORMAT BYTES
+> CREATE MATERIALIZED SOURCE file_src
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-request-log-${testdrive.seed}'
+  FORMAT BYTES
 > SELECT name, volatility FROM mz_sources WHERE name = 'file_src'
 file_src  unknown
 > CREATE MATERIALIZED VIEW depends_nonvol_unknown AS SELECT * FROM nonvol, file_src

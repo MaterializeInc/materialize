@@ -9,7 +9,7 @@
 
 $ set-regex match=u\d+|cluster1|default replacement=<VARIABLE_OUTPUT>
 
-$ set writer-schema={
+$ set schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -18,12 +18,15 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
+$ kafka-create-topic topic=av
+$ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"a": 1, "b": "dog"}
 
 # Create library of objects and verify names
 > CREATE MATERIALIZED SOURCE mz_data
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SINK sink1 FROM mz_data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'

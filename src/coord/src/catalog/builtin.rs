@@ -965,15 +965,6 @@ lazy_static! {
             .with_key(vec![0]),
         persistent: false,
     };
-    pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
-        name: "mz_avro_ocf_sinks",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("sink_id", ScalarType::String.nullable(false))
-            .with_column("path", ScalarType::Bytes.nullable(false))
-            .with_key(vec![0]),
-        persistent: false,
-    };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
         name: "mz_databases",
         schema: MZ_CATALOG_SCHEMA,
@@ -2105,7 +2096,6 @@ lazy_static! {
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
-            Builtin::Table(&MZ_AVRO_OCF_SINKS),
             Builtin::Table(&MZ_DATABASES),
             Builtin::Table(&MZ_SCHEMAS),
             Builtin::Table(&MZ_COLUMNS),

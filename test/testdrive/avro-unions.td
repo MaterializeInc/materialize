@@ -10,7 +10,7 @@
 # Test how Avro unions of varying sizes and nullabilities are converted
 # to Materialize types.
 
-$ set writer-schema={
+$ set schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -21,13 +21,16 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
+$ kafka-create-topic topic=av
+$ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"a": {"long": 1}, "b": null, "c": null, "d": {"string": "d"}}
 {"a": {"long": 2}, "b": {"long": 2}, "c": {"string": "foo"}, "d": {"long": 4}}
 {"a": {"long": 2}, "b": {"long": 2}, "c": {"long": 3}, "d": {"string": "d"}}
 
 > CREATE MATERIALIZED SOURCE unions
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
 
 > SHOW COLUMNS FROM unions
 name       nullable  type
@@ -38,11 +41,10 @@ c1         true      bigint
 c2         true      text
 d1         true      bigint
 d2         true      text
-mz_obj_no  false     bigint
 
 > SELECT * FROM unions
-a   b       c1      c2     d1      d2      mz_obj_no
-----------------------------------------------------
-1   <null>  <null>  <null>  <null>  d      1
-2   2       <null>  foo     4       <null> 2
-2   2       3       <null>  <null>  d      3
+a   b       c1      c2     d1      d2
+------------------------------------------
+1   <null>  <null>  <null>  <null>  d
+2   2       <null>  foo     4       <null>
+2   2       3       <null>  <null>  d

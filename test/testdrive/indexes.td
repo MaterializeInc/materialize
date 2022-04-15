@@ -9,7 +9,7 @@
 
 $ set-regex match=cluster1|default|\[\d\] replacement=<VARIABLE_OUTPUT>
 
-$ set writer-schema={
+$ set schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -18,37 +18,39 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
+$ kafka-create-topic topic=av
+$ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"a": 1, "b": 1}
 
 # Materialized sources are synonymous with having an index automatically created
 > CREATE MATERIALIZED SOURCE mz_data
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT index_position FROM mz_index_columns WHERE index_id LIKE '%u%'
 index_position
 --------------
 1
 2
-3
 
 > SELECT position, name FROM mz_columns where id LIKE '%u%';
 position         name
 ----------------------
 1                a
 2                b
-3                mz_obj_no
 
 > SHOW INDEXES FROM mz_data
 cluster on_name  key_name             seq_in_index  column_name  expression  nullable enabled
 --------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx  3             mz_obj_no    <null>      false    true
 
 # Non-materialized views do not have indexes automatically created
 > CREATE SOURCE data
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
 
 > SHOW INDEXES FROM data
 cluster on_name  key_name  seq_in_index  column_name  expression  nullable  enabled
@@ -62,7 +64,6 @@ cluster on_name  key_name          seq_in_index column_name  expression  nullabl
 ----------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data     data_primary_idx  1            a            <null>      false    true
 <VARIABLE_OUTPUT> data     data_primary_idx  2            b            <null>      false    true
-<VARIABLE_OUTPUT> data     data_primary_idx  3            mz_obj_no    <null>      false    true
 
 > CREATE DEFAULT INDEX ON mz_data
 
@@ -71,10 +72,8 @@ cluster on_name  key_name              seq_in_index  column_name  expression  nu
 ----------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx   1             a            <null>      false     true
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx   2             b            <null>      false     true
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx   3             mz_obj_no    <null>      false     true
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx1  1             a            <null>      false     true
 <VARIABLE_OUTPUT> mz_data  mz_data_primary_idx1  2             b            <null>      false     true
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx1  3             mz_obj_no    <null>      false     true
 
 # Materialized views are synonymous with having an index automatically created
 > CREATE MATERIALIZED VIEW matv AS
@@ -100,7 +99,6 @@ cluster on_name    key_name               seq_in_index  column_name  expression 
 ----------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> data_view  data_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 # Default indexes are equivalent in structure to indexes added automatically with the "MATERIALIZED" keyword
 > CREATE MATERIALIZED VIEW mz_data_view as SELECT * from data
@@ -110,7 +108,6 @@ cluster on_name       key_name                  seq_in_index  column_name  expre
 ------------------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> mz_data_view  mz_data_view_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> mz_data_view  mz_data_view_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> mz_data_view  mz_data_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 # IF NOT EXISTS prevents adding multiple default indexes
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
@@ -120,7 +117,6 @@ cluster on_name    key_name               seq_in_index  column_name  expression 
 ------------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> data_view  data_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 # IF NOT EXISTS works for both automatically and explicitly created default indexes
 > CREATE DEFAULT INDEX IF NOT EXISTS ON matv
@@ -147,10 +143,8 @@ cluster on_name    key_name               seq_in_index  column_name  expression 
 ----------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> data_view  data_view_primary_idx  3             mz_obj_no    <null>      false    true
 <VARIABLE_OUTPUT> data_view  named_idx              1             a            <null>      false    true
 <VARIABLE_OUTPUT> data_view  named_idx              2             b            <null>      false    true
-<VARIABLE_OUTPUT> data_view  named_idx              3             mz_obj_no    <null>      false    true
 
 > DROP INDEX data_view_primary_idx
 > DROP INDEX named_idx

@@ -49,11 +49,10 @@ exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   ENVELOPE MATERIALIZE
 exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
+# TODO(guswynn): figure out if there is a way to trigger this error
 # even the csv header validation doesn't happen before this error
-$ file-append path=static.csv
-
-! CREATE SOURCE headers_src
-  FROM FILE '${testdrive.temp-dir}/static.csv'
-  FORMAT CSV WITH HEADER (city, state, zip)
-  INCLUDE HEADERS
-exact:INCLUDE HEADERS with non-Kafka sources not supported
+#! CREATE SOURCE headers_src
+#  FROM KINESIS ARN 'arn:aws:kinesis:aws-region::stream/fake-stream'
+#  FORMAT CSV WITH 3 COLUMNS
+#  INCLUDE HEADERS
+#exact:INCLUDE HEADERS with non-Kafka sources not supported

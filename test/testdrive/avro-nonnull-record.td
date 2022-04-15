@@ -10,7 +10,7 @@
 # Regression test for #7170, in which non-nullable fields of nullable records
 # were not correctly handled.
 
-$ set writer-schema={
+$ set schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -28,12 +28,15 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema}
+$ kafka-create-topic topic=av
+$ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"a": {"b": 1, "c": 1}}
 {"a": {"b": 2, "c": 1}}
 
 > CREATE MATERIALIZED SOURCE basic
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT (b1.a).b, (b2.a).b FROM basic b1 LEFT JOIN basic b2 ON (b1.a).b = (b2.a).c
 1 1
