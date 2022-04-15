@@ -776,11 +776,11 @@ tables or sources in the system catalog.
 
 Materialize maintains three correctness guarantees.
 
-1. *Transactions in Materialize are strictly serializable with 
+1. *Transactions in Materialize are strictly serializable with
    respect to the operations that occur inside of Materialize.*
    Operations include:
     * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
-    * Materialize initiated acknowledgements of upstream sources (*e.g., the 
+    * Materialize initiated acknowledgements of upstream sources (*e.g., the
       commit of an offset by a Kafka source, the acknowledge of an LSN by a
       PostgresSQL source, etcetera*)
 2. *Materialize respects the explicit or implied event order of its sources.
