@@ -135,7 +135,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        persister: None,
         aws_external_id: args
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)

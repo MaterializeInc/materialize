@@ -134,7 +134,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
-                        dataflow.import_source(*id, source_description, None);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::Source(source) => {
                         if source.requires_single_materialization() {
@@ -163,7 +163,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
-                        dataflow.import_source(*id, source_description, None);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();

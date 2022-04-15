@@ -144,7 +144,6 @@ impl CatalogState {
             CatalogItem::Table(table) => {
                 let connector = SourceConnector::Local {
                     timeline: table.timeline(),
-                    persisted_name: None,
                 };
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connector,
@@ -1230,7 +1229,6 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             connector: mz_dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
-                                persisted_name: None,
                             },
                             desc: log.variant.desc(),
                             depends_on: vec![],

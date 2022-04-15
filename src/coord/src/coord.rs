@@ -93,8 +93,7 @@ use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ComputeResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
-    Response as DataflowResponse, StorageResponse, TimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
+    Response as DataflowResponse, StorageResponse, DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -808,12 +807,7 @@ impl Coordinator {
                 }
             }
             DataflowResponse::Compute(ComputeResponse::FrontierUppers(_updates)) => {}
-            DataflowResponse::Storage(StorageResponse::TimestampBindings(
-                TimestampBindingFeedback {
-                    bindings: _,
-                    changes: _,
-                },
-            )) => {}
+            DataflowResponse::Storage(StorageResponse::TimestampBindings(_)) => {}
             DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
                 LinearizedTimestampBindingFeedback {
                     timestamp: _,
@@ -4331,9 +4325,6 @@ impl Coordinator {
             }
         }
         for (id, updates) in updates_by_id {
-            // TODO: It'd be nice to unify this with the similar logic in
-            // sequence_end_transaction, but it's not initially clear how to do
-            // that.
             self.volatile_updates.entry(id).or_default().extend(updates);
         }
     }

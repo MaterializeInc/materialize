@@ -117,7 +117,6 @@ use crate::boundary::StorageCapture;
 use crate::storage_state::StorageState;
 
 mod debezium;
-mod envelope_none;
 pub mod sources;
 mod upsert;
 

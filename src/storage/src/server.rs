@@ -33,7 +33,6 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::ActiveStorageState;
 use crate::storage_state::StorageState;
 use crate::DecodeMetrics;
-use crate::PersistedSourceManager;
 
 /// Configures a dataflow server.
 pub struct Config {
@@ -47,8 +46,6 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// A handle to a persistence runtime, if persistence is enabled.
-    pub persister: Option<mz_persist::client::RuntimeClient>,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
 }
@@ -133,9 +130,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 source_uppers: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
-                persisted_sources: PersistedSourceManager::new(),
                 decode_metrics,
-                persist: config.persister.clone(),
                 reported_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 now: now.clone(),
