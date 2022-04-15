@@ -52,11 +52,9 @@ use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::KubernetesSecretsController;
 
 use crate::mux::Mux;
-use crate::server_metrics::Metrics;
 
 pub mod http;
 pub mod mux;
-pub mod server_metrics;
 pub mod telemetry;
 
 pub const BUILD_INFO: BuildInfo = BuildInfo {
@@ -500,15 +498,11 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     })
     .await?;
 
-    // Register metrics.
-    let mut metrics_registry = config.metrics_registry;
-    let metrics =
-        Metrics::register_with(&mut metrics_registry, workers, coord_handle.start_instant());
-
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
+        let metrics_registry = config.metrics_registry.clone();
         task::spawn(|| "metrics_server", {
-            let server = http::ThirdPartyServer::new(metrics_registry.clone());
+            let server = http::ThirdPartyServer::new(metrics_registry);
             async move {
                 server.serve(third_party_addr).await;
             }
@@ -527,16 +521,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
-            metrics_registry: &metrics_registry,
+            metrics_registry: &config.metrics_registry,
             frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
             frontegg: config.frontegg,
             coord_client: coord_client.clone(),
-            metrics_registry,
-            global_metrics: metrics,
-            pgwire_metrics: pgwire_server.metrics(),
+            metrics_registry: config.metrics_registry,
             allowed_origin: config.cors_allowed_origin,
         });
         let mut mux = Mux::new();

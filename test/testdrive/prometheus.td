@@ -33,10 +33,6 @@
 # to in CI (where we scrape metrics every second).
 $ set-sql-timeout duration=60s
 
-> SELECT value > 0 AND labels ? 'os' FROM mz_metrics WHERE metric = 'mz_server_metadata_seconds'
-  ORDER BY time DESC LIMIT 1
-true
-
 > SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_arrangement_maintenance_active_info'
 true
 
