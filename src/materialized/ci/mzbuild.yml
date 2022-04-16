@@ -10,6 +10,9 @@
 name: materialized
 pre-image:
   - type: cargo-build
+    bin: dataflowd
+    strip: false
+  - type: cargo-build
     bin: materialized
     strip: false
     extract:

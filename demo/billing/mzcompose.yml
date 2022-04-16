@@ -15,7 +15,6 @@ services:
     volumes:
     - db-data:/share/billing-demo/data
     ports: [6875]
-    command: --disable-telemetry
     environment:
       - MZ_DEV=1
   zookeeper:

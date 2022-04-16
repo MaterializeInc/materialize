@@ -23,7 +23,6 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::bail;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -63,13 +62,9 @@ pub struct OrchestratorConfig {
 /// referred to as the `dataflow_client` in the coordinator to be very
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
-    orchestrator: Option<OrchestratorConfig>,
+    orchestrator: OrchestratorConfig,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
-    /// A stashed local compute client to service the first call to
-    /// `Controller::create_instance` with `InstanceConfig::Local`. Only
-    /// one local compute client can be created.
-    local_compute: Option<Box<dyn ComputeClient<T>>>,
 }
 
 impl<T> Controller<T>
@@ -90,16 +85,6 @@ where
 
         // Add replicas backing that instance.
         match config {
-            InstanceConfig::Local => {
-                let client = self
-                    .local_compute
-                    .take()
-                    .expect("cannot create more than one local compute instance");
-                self.compute_mut(instance)
-                    .unwrap()
-                    .add_replica("default".into(), client)
-                    .await;
-            }
             InstanceConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance).unwrap();
                 for (name, hosts) in replicas {
@@ -111,15 +96,9 @@ where
             InstanceConfig::Managed { size: _ } => {
                 let OrchestratorConfig {
                     orchestrator,
-                    storage_addr,
                     dataflowd_image,
-                } = match &mut self.orchestrator {
-                    Some(orchestrator) => orchestrator,
-                    // TODO(benesch): bailing here is too late. Something
-                    // earlier needs to recognize when we can't create managed
-                    // instances.
-                    _ => bail!("cannot create managed instances in this configuration"),
-                };
+                    storage_addr,
+                } = &self.orchestrator;
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(
@@ -172,12 +151,11 @@ where
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
-            if let Some(OrchestratorConfig { orchestrator, .. }) = &mut self.orchestrator {
-                orchestrator
-                    .namespace("compute")
-                    .drop_service(&format!("cluster-{instance}"))
-                    .await?;
-            }
+            self.orchestrator
+                .orchestrator
+                .namespace("compute")
+                .drop_service(&format!("cluster-{instance}"))
+                .await?;
             compute.client.send(ComputeCommand::DropInstance).await?;
         }
         Ok(())
@@ -303,15 +281,13 @@ where
 impl<T> Controller<T> {
     /// Create a new controller from a client it should wrap.
     pub fn new<S: StorageController<Timestamp = T> + 'static>(
-        orchestrator: Option<OrchestratorConfig>,
+        orchestrator: OrchestratorConfig,
         storage_controller: S,
-        local_compute: Box<dyn ComputeClient<T>>,
     ) -> Self {
         Self {
             orchestrator,
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
-            local_compute: Some(local_compute),
         }
     }
 }

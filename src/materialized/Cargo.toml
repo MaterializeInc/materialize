@@ -60,7 +60,6 @@ libc = "0.2.122"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
-mz-dataflow = { path = "../dataflow" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }

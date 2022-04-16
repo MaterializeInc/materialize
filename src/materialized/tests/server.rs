@@ -253,6 +253,7 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
     let server = util::start_server(util::Config::default())?;
     let url = Url::parse(&format!("http://{}/api/sql", server.inner.local_addr()))?;
 

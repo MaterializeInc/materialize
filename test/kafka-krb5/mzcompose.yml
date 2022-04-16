@@ -68,7 +68,6 @@ services:
 
   materialized:
     mzbuild: materialized
-    command: -w1 --disable-telemetry
     volumes:
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf

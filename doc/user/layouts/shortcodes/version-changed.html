@@ -4,14 +4,14 @@
       <em>Changed in {{.Get 0}}:</em>
       {{.Inner|$.Page.RenderString}}
     {{else}}
-      <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>:</em>
+      <em>Changed in unstable builds:</em>
       {{.Inner|$.Page.RenderString}}
     {{end}}
   {{else}}
     {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
       <em>Changed in {{.Get 0}}.</em>
     {{else}}
-      <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>.</em>
+      <em>Changed in unstable builds.</em>
     {{end}}
   {{end}}
 </p>

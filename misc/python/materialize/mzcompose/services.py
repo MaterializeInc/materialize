@@ -27,7 +27,7 @@ class Materialized(Service):
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         port: Union[int, str] = 6875,
-        workers: Optional[int] = None,
+        extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         timestamp_frequency: str = "100ms",
@@ -78,10 +78,8 @@ class Materialized(Service):
         command_list = [
             f"--data-directory={data_directory}",
             f"--listen-addr 0.0.0.0:{guest_port}",
-            "--disable-telemetry",
             "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
-            f"--introspection-frequency {timestamp_frequency}",
             "--retain-prometheus-metrics 1s",
         ]
 
@@ -90,9 +88,6 @@ class Materialized(Service):
                 command_list.append(options)
             else:
                 command_list.extend(options)
-
-        if workers:
-            command_list.append(f"--workers {workers}")
 
         config: ServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}
@@ -110,7 +105,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port],
+                "ports": [port, *extra_ports],
                 "environment": environment,
                 "volumes": volumes,
             }

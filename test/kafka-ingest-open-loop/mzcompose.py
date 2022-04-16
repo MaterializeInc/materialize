@@ -168,7 +168,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     override = [
         Materialized(
-            workers=args.workers,
             timestamp_frequency="1s",
             options=options,
         )

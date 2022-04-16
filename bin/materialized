@@ -17,7 +17,6 @@ set -euo pipefail
 
 release=false
 build_flags=()
-run_flags=(--orchestrator=process)
 
 if [[ "${1:-}" = --release ]]; then
     shift
@@ -25,11 +24,9 @@ if [[ "${1:-}" = --release ]]; then
     build_flags+=(--release)
 fi
 
-run_flags+=("$@")
-
 cargo build "${build_flags[@]}" --bin materialized --bin dataflowd
 if $release; then
-    target/release/materialized "${run_flags[@]}"
+    target/release/materialized "$@"
 else
-    target/debug/materialized --dev "${run_flags[@]}"
+    target/debug/materialized --dev "$@"
 fi

@@ -47,7 +47,6 @@ services:
     depends_on: [kafka, zookeeper, schema-registry, materialized, test-certs]
   materialized:
     mzbuild: materialized
-    command: -w1 --disable-telemetry
     environment:
       - MZ_DEV=1
       - SASL_PASSWORD=sekurity

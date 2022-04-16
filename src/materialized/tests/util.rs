@@ -15,12 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use mz_coord::PersistConfig;
-use mz_dataflow_types::sources::AwsExternalId;
-use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{NowFn, SYSTEM_TIME};
-use mz_ore::task;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -29,13 +23,22 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::Origin;
 
-use materialized::{StorageConfig, TlsMode};
+use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
+use mz_coord::PersistConfig;
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_ore::id_gen::IdAllocator;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::task;
 
 lazy_static! {
     pub static ref KAFKA_ADDRS: mz_kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     };
+    static ref PORT_ALLOCATOR: Arc<IdAllocator<i32>> = Arc::new(IdAllocator::new(2100, 2200));
 }
 
 #[derive(Clone)]
@@ -143,19 +146,28 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         logging: config
             .logging_granularity
             .map(|granularity| mz_coord::LoggingConfig {
-                granularity,
-                log_logging: false,
                 retain_readings_for: granularity,
                 metrics_scraping_interval: Some(granularity),
             }),
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
-        workers: config.workers,
-        timely_worker: timely::WorkerConfig::default(),
         data_directory,
-        orchestrator: None,
+        orchestrator: OrchestratorConfig {
+            backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
+                image_dir: env::current_exe()?
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+                port_allocator: PORT_ALLOCATOR.clone(),
+                // NOTE(benesch): would be nice to not have to do this, but
+                // the subprocess output wreaks havoc on cargo2junit.
+                suppress_output: true,
+            }),
+            dataflowd_image: "dataflowd".into(),
+        },
         secrets_controller: None,
-        storage: StorageConfig::Local,
         aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
@@ -163,8 +175,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         disable_user_indexes: false,
-        telemetry: None,
-        introspection_frequency: Duration::from_secs(1),
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
         metrics_listen_addr: None,

@@ -154,7 +154,6 @@ pub struct CreateComputeInstancePlan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeInstanceConfig {
-    Local,
     Remote {
         /// A map from replica name to hostnames.
         replicas: BTreeMap<String, BTreeSet<String>>,
@@ -169,7 +168,6 @@ pub enum ComputeInstanceConfig {
 impl ComputeInstanceConfig {
     pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
         match self {
-            Self::Local => &None,
             Self::Remote { introspection, .. } => introspection,
             Self::Managed { introspection, .. } => introspection,
         }

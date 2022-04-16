@@ -45,12 +45,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified AWS region instead of localstack",
     )
     parser.add_argument(
-        "--workers",
-        type=int,
-        metavar="N",
-        help="set the number of materialized dataflow workers",
-    )
-    parser.add_argument(
         "--kafka-default-partitions",
         type=int,
         metavar="N",
@@ -83,7 +77,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
     materialized = Materialized(
-        workers=args.workers,
         options=["--persistent-user-tables"] if args.persistent_user_tables else [],
     )
 

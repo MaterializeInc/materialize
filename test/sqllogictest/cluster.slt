@@ -121,7 +121,7 @@ statement ok
 SET cluster = 'default'
 
 query T
-SELECT name FROM mz_indexes;
+SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 ----
 v_primary_idx
 
@@ -149,9 +149,6 @@ DROP CLUSTER baz
 
 statement error cannot drop cluster with active indexes or sinks
 DROP CLUSTER bar
-
-statement error cannot drop the default cluster
-DROP CLUSTER default CASCADE
 
 query TTTTTTTT
 SHOW INDEXES IN CLUSTER bar;
@@ -186,7 +183,7 @@ statement ok
 DROP CLUSTER baz CASCADE
 
 query T
-SELECT name FROM mz_indexes;
+SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 ----
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled

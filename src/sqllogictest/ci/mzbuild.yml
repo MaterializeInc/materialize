@@ -10,4 +10,6 @@
 name: sqllogictest
 pre-image:
   - type: cargo-build
+    bin: dataflowd
+  - type: cargo-build
     bin: sqllogictest

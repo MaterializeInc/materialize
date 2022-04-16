@@ -49,9 +49,8 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc,
+    ComputeInstanceConfig, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -378,11 +377,9 @@ impl CatalogState {
         id: ComputeInstanceId,
         name: String,
         config: ComputeInstanceConfig,
-        local_compute_introspection: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let (config, introspection) = match config {
-            ComputeInstanceConfig::Local => (InstanceConfig::Local, local_compute_introspection),
             ComputeInstanceConfig::Remote {
                 replicas,
                 introspection,
@@ -1097,7 +1094,7 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn open(config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1334,18 +1331,7 @@ impl Catalog {
 
         let compute_instances = catalog.storage().load_compute_instances()?;
         for (id, name, conf) in compute_instances {
-            // Only one virtual compute instance can configure logging or
-            // else the virtual compute host will panic. We arbitrarily
-            // choose to attach the virtual compute host's logging to the
-            // first virtual cluster we see. If the user drops this cluster
-            // then they lose access to the logs. This is a bit silly, but
-            // it preserves the existing behavior of the binary without
-            // inventing a bunch of new concepts just to support virtual
-            // clusters.
-            let local_logging = config.local_compute_introspection.take();
-            let introspection_sources = if conf.introspection().is_some()
-                || matches!(conf, ComputeInstanceConfig::Local if local_logging.is_some())
-            {
+            let introspection_sources = if conf.introspection().is_some() {
                 let introspection_source_index_gids =
                     catalog.storage().load_introspection_source_index_gids(id)?;
 
@@ -1372,13 +1358,9 @@ impl Catalog {
             } else {
                 Vec::new()
             };
-            catalog.state.insert_compute_instance(
-                id,
-                name,
-                conf,
-                local_logging,
-                introspection_sources,
-            );
+            catalog
+                .state
+                .insert_compute_instance(id, name, conf, introspection_sources);
         }
 
         if !config.skip_migrations {
@@ -1642,10 +1624,6 @@ impl Catalog {
         let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
-            local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
-                granularity: Duration::from_secs(1),
-                debugging: false,
-            }),
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -2379,9 +2357,6 @@ impl Catalog {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
-                    if name == "default" {
-                        coord_bail!("cannot drop the default cluster");
-                    }
                     tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     vec![Action::DropComputeInstance { name }]
@@ -2500,7 +2475,6 @@ impl Catalog {
                 Op::UpdateComputeInstanceConfig { id, config } => {
                     tx.update_compute_instance_config(id, &config)?;
                     let config = match config {
-                        ComputeInstanceConfig::Local => InstanceConfig::Local,
                         ComputeInstanceConfig::Remote {
                             replicas,
                             introspection: _,
@@ -2585,13 +2559,7 @@ impl Catalog {
                     introspection_sources,
                 } => {
                     info!("create cluster {}", name);
-                    state.insert_compute_instance(
-                        id,
-                        name.clone(),
-                        config,
-                        None,
-                        introspection_sources,
-                    );
+                    state.insert_compute_instance(id, name.clone(), config, introspection_sources);
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                 }
 

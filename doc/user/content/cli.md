@@ -16,17 +16,13 @@ The `materialized` binary supports the following command line flags:
 Flag | Default | Modifies
 -----|---------|----------
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
-[`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
-[`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
-[`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--metrics-scraping-interval`](#prometheus-metrics) | 30s | The update interval for the `mz_metrics` table, see [prometheus metrics](#prometheus-metrics).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit
-[`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
@@ -336,46 +332,6 @@ or things you'd like to see changed, let us know on [GitHub][gh-feature].
 You cannot disable experimental mode for a server. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new server with those items.
-
-### Telemetry
-
-Materialize periodically communicates with `telemetry.materialize.com` to report
-usage data and check for new versions. You can opt out of this communication
-with the `--disable-telemetry` flag.
-
-We record the following data:
-
-* Public IP of the host running Materialize
-* Cluster ID, a unique ID which is persistent across Materialize restarts
-* Session ID, a unique ID which is reset on each Materialize restart
-* Materialize version
-* Number of worker threads
-* Uptime
-* Count of sinks, sources, and views by type
-* System architecture (ARM or x86_64)
-* Operating system type (Linux or macOS)
-
-We use this data to guide our product roadmap. Unless you are using [Materialize
-Cloud](/cloud/), we do not and cannot correlate this
-data to your identity.
-
-### Dataflow tuning
-
-{{< warning >}}
-The dataflow tuning parameters are not stable. Backwards-incompatible changes
-to the dataflow tuning parameters may be made at any time.
-{{< /warning >}}
-
-There are several command-line options that tune various parameters for
-Materialize's underlying dataflow engine:
-
-  * `--differential-idle-merge-effort` controls how aggressively Materialize
-    will perform compaction when idle.
-  * `--timely-progress-mode` sets Timely Dataflow's progress tracking mode.
-
-Using these parameters correctly requires substantial knowledge about how
-the underlying Timely and Differential Dataflow engines work. Typically you
-should only set these parameters in consultation with Materialize engineers.
 
 ### Disable user indexes
 
