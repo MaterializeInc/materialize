@@ -49,7 +49,7 @@ To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branc
    ```
    git push
    ```
-5. Open a PR - if this was a cherry-picked commit that has already been reviewed, approved and merged to main you can just merge it once CI turns green. If it has conflicts or it is a unique PR for `lts-docs` then you'll need a review.
+5. Open a PR - if this was a cherry-picked commit that has already been reviewed, approved and merged to `main`, you can just merge it once CI turns green. If it has conflicts or it is a unique PR for `lts-docs`, then you'll need a review.
 
 
 ### Updating CSS
