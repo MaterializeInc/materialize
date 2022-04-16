@@ -35,7 +35,7 @@ PR's to materialize/main will trigger new builds of materialize.com/docs/unstabl
 
 #### Shipping updates to LTS Docs
 
-To update materialize.com/docs you need to merge a PR to the `lts-docs` branch. Typically this will follow a PR to unstable, in which case the process is:
+To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branch (typically, following a PR to `main`) to backport the changes, in which case the process is:
 
 1. Create a new branch on your fork that references lts-docs
    ```
