@@ -260,7 +260,6 @@ select distinct a from x
 round_trip
 select (select true from x), true
 ----
-----
 %0 =
 | Constant ()
 | Map select(%1), true
@@ -270,8 +269,6 @@ select (select true from x), true
 | | | Map true
 | | | Project (#3)
 | |
-----
-----
 
 round_trip
 select y.b, y.c + 1 from y where (select a from x) = y.a

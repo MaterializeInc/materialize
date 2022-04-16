@@ -26,9 +26,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption,
-    Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
+    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -108,29 +108,57 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
 }
 
 /// Normalizes a list of `WITH` options.
-pub fn options<T: AstInfo>(options: &[SqlOption<T>]) -> BTreeMap<String, Value> {
+///
+/// # Panics
+/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
+///   values during parsing.
+pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
     options
         .iter()
-        .map(|o| match o {
-            SqlOption::Value { name, value } => (ident(name.clone()), value.clone()),
-            SqlOption::ObjectName { name, object_name } => (
-                ident(name.clone()),
-                Value::String(object_name.to_ast_string()),
-            ),
-            SqlOption::DataType { name, data_type } => (
-                ident(name.clone()),
-                Value::String(data_type.to_ast_string()),
-            ),
+        .map(|o| {
+            (
+                o.key.to_string(),
+                match o
+                    .value
+                    .as_ref()
+                    // The only places that generate options that do not require
+                    // keys and values do not currently use this code path.
+                    .expect("check that all entries have values before calling `options`")
+                {
+                    WithOptionValue::Value(value) => value.clone(),
+                    WithOptionValue::ObjectName(object_name) => {
+                        Value::String(object_name.to_ast_string())
+                    }
+                    WithOptionValue::DataType(data_type) => {
+                        Value::String(data_type.to_ast_string())
+                    }
+                },
+            )
         })
         .collect()
 }
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
 /// values.
-pub fn option_objects(options: &[SqlOption<Aug>]) -> BTreeMap<String, SqlOption<Aug>> {
+///
+/// # Panics
+/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
+///   values during parsing.
+pub fn option_objects(options: &[WithOption<Aug>]) -> BTreeMap<String, WithOptionValue<Aug>> {
     options
         .iter()
-        .map(|o| (ident(o.name().clone()), o.clone()))
+        .map(|o| {
+            (
+                ident(o.key.clone()),
+                o.value
+                    .as_ref()
+                    .clone()
+                    // The only places that generate options that do not require
+                    // keys and values do not currently use this code path.
+                    .expect("check that all entries have values before calling `option_objects`")
+                    .clone(),
+            )
+        })
         .collect()
 }
 
@@ -308,8 +336,8 @@ pub fn create_statement(
             *materialized = false;
 
             for opt in with_options.iter_mut() {
-                if let SqlOption::ObjectName { name, object_name } = opt {
-                    if ident_ref(name) == "tx_metadata" {
+                if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
+                    if ident_ref(&opt.key) == "tx_metadata" {
                         // Use the catalog to resolve to a fully qualified name
                         *object_name = unresolve(
                             scx.catalog.resolve_full_name(
@@ -415,8 +443,8 @@ pub fn create_statement(
                 *name = allocate_name(name)?;
                 let mut normalizer = QueryNormalizer::new(scx);
                 for option in with_options {
-                    match option {
-                        SqlOption::DataType { data_type, .. } => {
+                    match &mut option.value {
+                        Some(WithOptionValue::DataType(ref mut data_type)) => {
                             normalizer.visit_data_type_mut(data_type);
                         }
                         _ => unreachable!(),
@@ -539,16 +567,16 @@ macro_rules! with_options {
             pub $($field_name: Option<$field_type>,)*
         }
 
-        impl ::std::convert::TryFrom<Vec<crate::ast::WithOption>> for $name {
+        impl ::std::convert::TryFrom<Vec<mz_sql_parser::ast::WithOption<Aug>>> for $name {
             type Error = anyhow::Error;
 
-            fn try_from(mut options: Vec<crate::ast::WithOption>) -> Result<Self, Self::Error> {
+            fn try_from(mut options: Vec<mz_sql_parser::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
                 let v = Self {
                     $($field_name: {
                         match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
                             None => None,
                             Some(pos) => {
-                                let value: Option<crate::ast::WithOptionValue> = options.swap_remove(pos).value;
+                                let value: Option<mz_sql_parser::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
                                 let value: $field_type = with_option_type!(value, $field_type);
                                 Some(value)
                             },
