@@ -3354,73 +3354,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-dataflow"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-compression",
- "async-trait",
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "bincode",
- "byteorder",
- "bytes",
- "chrono",
- "crossbeam-channel",
- "csv-core",
- "dec",
- "differential-dataflow",
- "dogsdogsdogs",
- "enum-iterator",
- "flate2",
- "futures",
- "globset",
- "inotify",
- "itertools",
- "lazy_static",
- "log",
- "mz-avro",
- "mz-aws-util",
- "mz-ccsr",
- "mz-compute",
- "mz-dataflow-types",
- "mz-expr",
- "mz-interchange",
- "mz-kafka-util",
- "mz-ore",
- "mz-persist",
- "mz-persist-types",
- "mz-pgcopy",
- "mz-postgres-util",
- "mz-repr",
- "mz-storage",
- "mz-timely-util",
- "postgres-protocol",
- "prometheus",
- "prost",
- "prost-build",
- "pubnub-hyper",
- "rand",
- "rdkafka",
- "regex",
- "scopeguard",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "timely",
- "tokio",
- "tokio-byteorder",
- "tokio-postgres",
- "tokio-serde",
- "tokio-util 0.7.1",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "mz-dataflow-bin"
 version = "0.0.0"
 dependencies = [
@@ -3479,28 +3412,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "mz-dataflowd"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "futures",
- "mz-dataflow",
- "mz-dataflow-types",
- "mz-ore",
- "mz-repr",
- "serde",
- "tikv-jemallocator",
- "timely",
- "tokio",
- "tokio-serde",
- "tokio-util 0.7.1",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

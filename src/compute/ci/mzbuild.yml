@@ -7,8 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-COPY storaged computed sqllogictest /usr/local/bin/
-
-WORKDIR /workdir
+name: computed
+pre-image:
+  - type: cargo-build
+    bin: computed
+    strip: false
+    extract:
+      krb5-src:
+        install/bin/kinit: .
+        install/bin/kdestroy: .

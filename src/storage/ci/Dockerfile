@@ -9,6 +9,8 @@
 
 MZFROM ubuntu-base
 
-COPY storaged computed sqllogictest /usr/local/bin/
+RUN apt-get update && apt-get -qy install ca-certificates curl tini
 
-WORKDIR /workdir
+COPY kdestroy kinit storaged /usr/local/bin/
+
+ENTRYPOINT ["tini", "--", "storaged", "--listen-addr=0.0.0.0:2100"]

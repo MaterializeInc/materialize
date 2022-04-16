@@ -182,8 +182,10 @@ pub enum TlsMode {
 pub struct OrchestratorConfig {
     /// Which orchestrator backend to use.
     pub backend: OrchestratorBackend,
-    /// The dataflowd image reference to use.
-    pub dataflowd_image: String,
+    /// The storaged image reference to use.
+    pub storaged_image: String,
+    /// The computed image reference to use.
+    pub computed_image: String,
 }
 
 /// The orchestrator itself.
@@ -298,10 +300,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .ensure_service(
             "runtime",
             ServiceConfig {
-                image: config.orchestrator.dataflowd_image.clone(),
+                image: config.orchestrator.storaged_image.clone(),
                 args: &|ports| {
                     vec![
-                        "--runtime=storage".into(),
                         format!("--workers=1"),
                         format!("--storage-addr=0.0.0.0:{}", ports["compute"]),
                         format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
@@ -327,7 +328,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .await?;
     let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
         orchestrator,
-        dataflowd_image: config.orchestrator.dataflowd_image,
+        computed_image: config.orchestrator.computed_image,
         storage_addr: storage_service.addresses("compute").into_element(),
     };
 

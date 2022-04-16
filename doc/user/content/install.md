@@ -69,7 +69,7 @@ for the correct release.
 git clone https://github.com/MaterializeInc/materialize.git
 cd materialize
 git checkout {{< version >}}
-cargo build --release --bin materialized --bin dataflowd
+cargo build --release --bin storaged --bin computed --bin materialized
 ```
 
 ### Run the binary

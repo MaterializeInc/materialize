@@ -114,10 +114,10 @@ class Materialized(Service):
         super().__init__(name=name, config=config)
 
 
-class Dataflowd(Service):
+class Computed(Service):
     def __init__(
         self,
-        name: str = "dataflowd",
+        name: str = "storaged",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         ports: List[int] = [6876],
@@ -130,16 +130,16 @@ class Dataflowd(Service):
 
         if environment is None:
             environment = [
-                "DATAFLOWD_LOG_FILTER",
+                "STORAGED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
             ]
 
         if volumes is None:
-            # We currently give dataflowd access to /tmp so that it can load CSV files
+            # We currently give computed access to /tmp so that it can load CSV files
             # but this requirement is expected to go away in the future.
             volumes = DEFAULT_MZ_VOLUMES
 
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": "dataflowd"}
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": "computed"}
 
         if hostname:
             config["hostname"] = hostname
