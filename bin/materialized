@@ -24,7 +24,7 @@ if [[ "${1:-}" = --release ]]; then
     build_flags+=(--release)
 fi
 
-cargo build "${build_flags[@]}" --bin materialized --bin dataflowd
+cargo build "${build_flags[@]}" --bin storaged --bin computed --bin materialized
 if $release; then
     target/release/materialized "$@"
 else

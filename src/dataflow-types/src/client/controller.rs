@@ -50,8 +50,8 @@ mod compute;
 pub struct OrchestratorConfig {
     /// The orchestrator implementation to use.
     pub orchestrator: Box<dyn Orchestrator>,
-    /// The dataflowd image to use when starting new compute instances.
-    pub dataflowd_image: String,
+    /// The computed image to use when starting new compute instances.
+    pub computed_image: String,
     /// The storage address that compute instances should connect to.
     pub storage_addr: String,
 }
@@ -96,7 +96,7 @@ where
             InstanceConfig::Managed { size: _ } => {
                 let OrchestratorConfig {
                     orchestrator,
-                    dataflowd_image,
+                    computed_image,
                     storage_addr,
                 } = &self.orchestrator;
                 let service = orchestrator
@@ -104,10 +104,9 @@ where
                     .ensure_service(
                         &format!("cluster-{instance}"),
                         ServiceConfig {
-                            image: dataflowd_image.clone(),
+                            image: computed_image.clone(),
                             args: &|ports| {
                                 vec![
-                                    "--runtime=compute".into(),
                                     format!("--storage-addr={storage_addr}"),
                                     format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
                                     format!("0.0.0.0:{}", ports["compute"]),

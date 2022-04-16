@@ -192,16 +192,24 @@ pub struct Args {
     /// production cluster that happens to be the active Kubernetes context.)
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
-    /// The dataflowd image reference to use.
+    /// The storaged image reference to use.
     #[structopt(
         long,
         hide = true,
         required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("dataflowd"))
+        default_value_if("orchestrator", Some("process"), Some("storaged"))
     )]
-    dataflowd_image: Option<String>,
+    storaged_image: Option<String>,
+    /// The computed image reference to use.
+    #[structopt(
+        long,
+        hide = true,
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("computed"))
+    )]
+    computed_image: Option<String>,
 
-    // === Secrets Controller options. ===
+    // === Secrets controller options. ===
     /// The secrets controller implementation to use
     #[structopt(long, hide = true, arg_enum)]
     secrets_controller: Option<SecretsController>,
@@ -663,7 +671,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 })
             }
         },
-        dataflowd_image: args.dataflowd_image.expect("clap enforced"),
+        storaged_image: args.storaged_image.expect("clap enforced"),
+        computed_image: args.computed_image.expect("clap enforced"),
     };
 
     // Configure secrets controller.

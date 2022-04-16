@@ -7,10 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && apt-get -qy install ca-certificates curl tini
-
-COPY kdestroy kinit dataflowd /usr/local/bin/
-
-ENTRYPOINT ["tini", "--", "dataflowd", "--listen-addr=0.0.0.0:2100"]
+name: storaged
+pre-image:
+  - type: cargo-build
+    bin: storaged
+    strip: false
+    extract:
+      krb5-src:
+        install/bin/kinit: .
+        install/bin/kdestroy: .

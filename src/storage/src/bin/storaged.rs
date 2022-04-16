@@ -40,21 +40,13 @@ use mz_storage::Server;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-enum RuntimeType {
-    /// Host only the compute portion of the dataflow.
-    Compute,
-    /// Host only the storage portion of the dataflow.
-    Storage,
-}
-
-/// Independent dataflow server for Materialize.
+/// Independent storage server for Materialize.
 #[derive(clap::Parser)]
 struct Args {
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
-        env = "DATAFLOWD_LISTEN_ADDR",
+        env = "STORAGED_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
@@ -63,12 +55,12 @@ struct Args {
     #[clap(
         short,
         long,
-        env = "DATAFLOWD_WORKERS",
+        env = "STORAGED_WORKERS",
         value_name = "W",
         default_value = "1"
     )]
     workers: usize,
-    /// The hostnames of all dataflowd processes in the cluster.
+    /// The hostnames of all storaged processes in the cluster.
     #[clap()]
     hosts: Vec<String>,
 
@@ -80,7 +72,7 @@ struct Args {
     /// The address of the storage server to bind or connect to.
     #[clap(
         long,
-        env = "DATAFLOWD_STORAGE_ADDR",
+        env = "STORAGED_STORAGE_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2101"
     )]
@@ -119,7 +111,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("DATAFLOWD_LOG_FILTER")
+            EnvFilter::try_from_env("STORAGED_LOG_FILTER")
                 .unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();

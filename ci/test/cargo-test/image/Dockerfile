@@ -15,7 +15,7 @@ RUN apt-get update && apt-get -qy install \
     psmisc
 
 COPY tests /tests/
-COPY dataflowd /
+COPY storaged computed /
 COPY run-tests /usr/local/bin
 
 # Install the Protobuf compiler from protobuf-src for use by mz_protoc's tests.

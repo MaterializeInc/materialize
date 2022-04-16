@@ -165,7 +165,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
             }),
-            dataflowd_image: "dataflowd".into(),
+            storaged_image: "storaged".into(),
+            computed_image: "computed".into(),
         },
         secrets_controller: None,
         aws_external_id: config.aws_external_id,
