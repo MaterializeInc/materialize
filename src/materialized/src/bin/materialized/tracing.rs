@@ -76,7 +76,7 @@ where
         ));
 
         // TODO(guswynn): investigate if this should be non-lazy
-        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector())?;
+        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector());
         let otlp_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_channel(channel);

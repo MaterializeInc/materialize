@@ -36,7 +36,7 @@ num-iter = "0.1.42"
 num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 paste = "1.0.7"
-prost = "0.9.0"
+prost = "0.10.1"
 regex = "1.5.4"
 regex-syntax = "0.6.25"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -58,7 +58,7 @@ mz-expr = { path = ".", features = ["test-utils"] }
 proc-macro2 = "1.0.37"
 
 [build-dependencies]
-prost-build = "0.9.1"
+prost-build = "0.10.1"
 
 [features]
 test-utils = ["mz-repr/test-utils", "proptest", "proptest-derive"]

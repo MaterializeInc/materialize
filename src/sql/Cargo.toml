@@ -35,7 +35,7 @@ mz-sql-parser = { path = "../sql-parser" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 protobuf-native = "0.2.1"
-prost = "0.9.0"
+prost = "0.10.1"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.5.4"
 reqwest = "0.11.10"

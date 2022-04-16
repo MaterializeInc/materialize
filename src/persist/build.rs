@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
+        .include_file("mod.rs")
         .compile_protos(&["persist.proto"], &["src"])
         .unwrap();
 }
