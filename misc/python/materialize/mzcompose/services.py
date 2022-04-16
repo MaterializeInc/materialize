@@ -42,7 +42,6 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "MZ_METRICS_SCRAPING_INTERVAL=1s",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -80,7 +79,6 @@ class Materialized(Service):
             f"--listen-addr 0.0.0.0:{guest_port}",
             "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
-            "--retain-prometheus-metrics 1s",
         ]
 
         if options:
@@ -604,17 +602,6 @@ class SqlLogicTest(Service):
                 "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
-            },
-        )
-
-
-class PrometheusSQLExporter(Service):
-    def __init__(self) -> None:
-        super().__init__(
-            name="prometheus-sql-exporter",
-            config={
-                "mzbuild": "ci-mz-sql-exporter",
-                "ports": ["9400"],
             },
         )
 

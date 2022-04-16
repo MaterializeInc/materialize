@@ -57,7 +57,6 @@ use mz_repr::MessagePayload;
 use tracing::{debug, error, trace, warn};
 
 use crate::source::{NextMessage, SourceMessage, SourceReader};
-use crate::Logger;
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -785,7 +784,6 @@ impl SourceReader for S3SourceReader {
         aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _: Option<Logger>,
         metrics: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let s3_conn = match connector {

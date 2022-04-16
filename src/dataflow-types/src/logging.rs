@@ -61,10 +61,8 @@ pub enum MaterializedLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
-    KafkaSourceStatistics,
     PeekCurrent,
     PeekDuration,
-    SourceInfo,
 }
 
 impl LogVariant {
@@ -162,15 +160,6 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Materialized(MaterializedLog::SourceInfo) => RelationDesc::empty()
-                .with_column("source_name", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
-                .with_column("dataflow_id", ScalarType::Int64.nullable(false))
-                .with_column("partition_id", ScalarType::String.nullable(true))
-                .with_column("offset", ScalarType::Int64.nullable(false))
-                .with_column("timestamp", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2, 3]),
-
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
                 .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
@@ -180,14 +169,6 @@ impl LogVariant {
                 .with_column("global_id", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
-
-            LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics) => {
-                RelationDesc::empty()
-                    .with_column("source_id", ScalarType::String.nullable(false))
-                    .with_column("worker", ScalarType::Int64.nullable(false))
-                    .with_column("statistics", ScalarType::Jsonb.nullable(false))
-                    .with_key(vec![0, 1])
-            }
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
@@ -246,12 +227,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics) => vec![(
-                LogVariant::Materialized(MaterializedLog::SourceInfo),
-                vec![(0, 1)],
-            )],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
         }
     }

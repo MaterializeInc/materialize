@@ -556,7 +556,6 @@ impl Runner {
     pub async fn start() -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let mz_config = materialized::Config {
-            logging: None,
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
             data_directory: temp_dir.path().to_path_buf(),

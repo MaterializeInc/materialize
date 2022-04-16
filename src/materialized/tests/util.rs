@@ -142,12 +142,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     };
     let metrics_registry = MetricsRegistry::new();
     let inner = runtime.block_on(materialized::serve(materialized::Config {
-        logging: config
-            .logging_granularity
-            .map(|granularity| mz_coord::LoggingConfig {
-                retain_readings_for: granularity,
-                metrics_scraping_interval: Some(granularity),
-            }),
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
         data_directory,

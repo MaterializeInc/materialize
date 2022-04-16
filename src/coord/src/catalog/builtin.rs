@@ -896,12 +896,6 @@ pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
 };
 
-pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
-    name: "mz_source_info",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
-};
-
 pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_internal",
     schema: MZ_CATALOG_SCHEMA,
@@ -924,12 +918,6 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_records_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
-};
-
-pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_source_statistics",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
 };
 
 lazy_static! {
@@ -1127,36 +1115,6 @@ lazy_static! {
             .with_column("variadic_id", ScalarType::String.nullable(true))
             .with_column("ret_id", ScalarType::String.nullable(true))
             .with_column("ret_set", ScalarType::Bool.nullable(false)),
-    };
-    pub static ref MZ_PROMETHEUS_READINGS: BuiltinTable = BuiltinTable {
-        name: "mz_metrics",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::TimestampTz.nullable(false))
-                .with_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_column("value", ScalarType::Float64.nullable(false))
-                .with_key(vec![0, 1, 2]),
-    };
-    pub static ref MZ_PROMETHEUS_METRICS: BuiltinTable = BuiltinTable {
-        name: "mz_metrics_meta",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("type", ScalarType::String.nullable(false))
-                .with_column("help", ScalarType::String.nullable(false))
-                .with_key(vec![0]),
-    };
-    pub static ref MZ_PROMETHEUS_HISTOGRAMS: BuiltinTable = BuiltinTable {
-        name: "mz_metric_histograms",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::Timestamp.nullable(false))
-                .with_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_column("bound", ScalarType::Float64.nullable(false))
-                .with_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
     };
     pub static ref MZ_CLUSTERS: BuiltinTable = BuiltinTable {
         name: "mz_clusters",
@@ -1381,30 +1339,6 @@ pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_aggregates AS SELECT worker, pg_catalog.sum(duration_ns * count) AS sum, pg_catalog.sum(count) AS count
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
-};
-
-pub const MZ_PERF_DEPENDENCY_FRONTIERS: BuiltinView = BuiltinView {
-    name: "mz_perf_dependency_frontiers",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_perf_dependency_frontiers AS SELECT DISTINCT
-    mcn.name AS dataflow,
-    mcn_source.name AS source,
-    frontier_source.time - frontier_df.time AS lag_ms
-FROM mz_catalog.mz_materialization_dependencies index_deps
-JOIN mz_catalog.mz_materialization_frontiers frontier_source ON index_deps.source = frontier_source.global_id
-JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
-JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
-JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id
-UNION
-SELECT DISTINCT
-    mcn.name AS dataflow,
-    mcn_source.name AS source,
-    CASE WHEN source_info.time < frontier_df.time THEN 0 ELSE source_info.time - frontier_df.time END AS lag_ms
-FROM mz_catalog.mz_materialization_dependencies index_deps
-JOIN (SELECT source_id, pg_catalog.MAX(timestamp) time FROM mz_catalog.mz_source_info GROUP BY source_id) source_info ON index_deps.source = source_info.source_id
-JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
-JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
-JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = source_info.source_id",
 };
 
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
@@ -2069,7 +2003,6 @@ lazy_static! {
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-            Builtin::Log(&MZ_KAFKA_SOURCE_STATISTICS),
             Builtin::Log(&MZ_MATERIALIZATIONS),
             Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
             Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
@@ -2079,7 +2012,6 @@ lazy_static! {
             Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
             Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
             Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-            Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
@@ -2102,9 +2034,6 @@ lazy_static! {
             Builtin::Table(&MZ_ROLES),
             Builtin::Table(&MZ_PSEUDO_TYPES),
             Builtin::Table(&MZ_FUNCTIONS),
-            Builtin::Table(&MZ_PROMETHEUS_READINGS),
-            Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
-            Builtin::Table(&MZ_PROMETHEUS_METRICS),
             Builtin::Table(&MZ_CLUSTERS),
             Builtin::Table(&MZ_SECRETS),
             Builtin::View(&MZ_RELATIONS),
@@ -2118,7 +2047,6 @@ lazy_static! {
             Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
             Builtin::View(&MZ_MESSAGE_COUNTS),
             Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
-            Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),

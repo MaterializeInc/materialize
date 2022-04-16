@@ -15,7 +15,6 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
-use differential_dataflow::operators::Count;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -27,7 +26,6 @@ use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
-use mz_storage::StorageEvent;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
@@ -80,7 +78,6 @@ impl Peek {
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `compute`: The source to read compute log events from.
-/// * `storage`: The source to read storage log events from.
 /// * `activator`: A handle to acknowledge activations.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
@@ -89,7 +86,6 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_dataflow_types::logging::LoggingConfig,
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
-    storage: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, StorageEvent)>>,
     activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, KeysValsHandle> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
@@ -100,12 +96,6 @@ pub fn construct<A: Allocate>(
             "materialized logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator.clone(),
-        );
-        let storage_logs = Some(storage).mz_replay(
-            scope,
-            "materialized logs",
-            Duration::from_nanos(config.granularity_ns as u64),
-            activator,
         );
 
         let mut demux = OperatorBuilder::new(
@@ -238,71 +228,6 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let mut demux = OperatorBuilder::new(
-            "Materialize Storage Logging Demux".to_string(),
-            scope.clone(),
-        );
-        let mut input = demux.new_input(&storage_logs, Pipeline);
-        let (mut kafka_source_statistics_out, kafka_source_statistics) = demux.new_output();
-        let (mut source_info_out, source_info) = demux.new_output();
-
-        let mut demux_buffer = Vec::new();
-        demux.build(move |_capability| {
-            move |_frontiers| {
-                let mut kafka_source_statistics = kafka_source_statistics_out.activate();
-                let mut source_info = source_info_out.activate();
-
-                input.for_each(|time, data| {
-                    data.swap(&mut demux_buffer);
-
-                    let mut kafka_source_statistics_session =
-                        kafka_source_statistics.session(&time);
-                    let mut source_info_session = source_info.session(&time);
-
-                    for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                            * granularity_ms) as Timestamp;
-
-                        match datum {
-                            StorageEvent::KafkaSourceStatistics {
-                                source_id,
-                                old,
-                                new,
-                            } => {
-                                if let Some(old) = old {
-                                    kafka_source_statistics_session.give((
-                                        (source_id, worker, old),
-                                        time_ms,
-                                        -1,
-                                    ));
-                                }
-                                if let Some(new) = new {
-                                    kafka_source_statistics_session.give((
-                                        (source_id, worker, new),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
-                            }
-                            StorageEvent::SourceInfo {
-                                source_name,
-                                source_id,
-                                partition_id,
-                                offset,
-                                timestamp,
-                            } => {
-                                source_info_session.give((
-                                    (source_name, source_id, partition_id),
-                                    time_ms,
-                                    (offset, timestamp),
-                                ));
-                            }
-                        }
-                    }
-                });
-            }
-        });
-
         let dataflow_current = dataflow.as_collection().map({
             move |(name, worker)| {
                 Row::pack_slice(&[
@@ -324,17 +249,6 @@ pub fn construct<A: Allocate>(
 
         let frontier_current = frontier.as_collection();
 
-        let kafka_source_statistics_current = kafka_source_statistics.as_collection().map({
-            move |(source_id, worker, stats)| {
-                let mut row = Row::default();
-                let mut packer = row.packer();
-                packer.push(Datum::String(&source_id.to_string()));
-                packer.push(Datum::Int64(worker as i64));
-                packer.extend_by_row(&stats.into_row());
-                row
-            }
-        });
-
         let peek_current = peek.as_collection().map({
             move |(peek, worker)| {
                 Row::pack_slice(&[
@@ -342,19 +256,6 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(worker as i64),
                     Datum::String(&peek.id.to_string()),
                     Datum::Int64(peek.time as i64),
-                ])
-            }
-        });
-
-        let source_info_current = source_info.as_collection().count_core().map({
-            move |((name, id, pid), (offset, timestamp))| {
-                Row::pack_slice(&[
-                    Datum::String(&name),
-                    Datum::String(&id.source_id.to_string()),
-                    Datum::Int64(id.dataflow_id as i64),
-                    Datum::from(pid.as_deref()),
-                    Datum::Int64(offset),
-                    Datum::Int64(timestamp),
                 ])
             }
         });
@@ -384,20 +285,12 @@ pub fn construct<A: Allocate>(
                 frontier_current,
             ),
             (
-                LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
-                kafka_source_statistics_current,
-            ),
-            (
                 LogVariant::Materialized(MaterializedLog::PeekCurrent),
                 peek_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekDuration),
                 peek_duration,
-            ),
-            (
-                LogVariant::Materialized(MaterializedLog::SourceInfo),
-                source_info_current,
             ),
         ];
 

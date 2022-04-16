@@ -33,7 +33,6 @@ use crate::source::{
     KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, S3SourceReader, SourceConfig,
 };
 use crate::storage_state::LocalInput;
-use crate::Logger;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -104,7 +103,6 @@ pub(crate) fn import_source<G>(
     }: SourceInstanceDesc,
     storage_state: &mut crate::storage_state::StorageState,
     scope: &mut G,
-    materialized_logging: Option<Logger>,
     src_id: GlobalId,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
@@ -221,7 +219,6 @@ where
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
-                logger: materialized_logging.clone(),
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
@@ -387,7 +384,6 @@ where
                                                     },
                                                     storage_state,
                                                     scope,
-                                                    materialized_logging,
                                                     tx_metadata.tx_metadata_global_id,
                                                 );
                                             needed_tokens.push(tx_token);
