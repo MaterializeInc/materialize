@@ -21,7 +21,10 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ### (Temporary) Updating LTS Docs
 
-As we start to break apart the binary, we have to work through a temporary phase where some users will need the 0.26 binary docs and some will need the distributed-mode docs. For now, https://materialize.com/docs/ is the binary and https://materialize.com/docs/unstable/ is distributed mode.
+As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches: 
+
+* `lts-docs`: capturing the state of the docs at `v0.26 LTS`, deploying to `https://materialize.com/docs/`
+* `main`: ongoing development branch, deploying to `https://materialize.com/docs/unstable/`
 
 #### Shipping updates to Unstable Docs
 
