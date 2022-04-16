@@ -45,7 +45,7 @@ To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branc
    ```
    git cherry-pick COMMIT-SHA-FROM-MAIN
    ```
-4. Push your branch
+4. Push your branch.
    ```
    git push
    ```
