@@ -18,6 +18,7 @@ import "google/protobuf/empty.proto";
 import "adt/char.proto";
 import "adt/numeric.proto";
 import "adt/varchar.proto";
+import "global_id.proto";
 
 
 message ProtoColumnName {
@@ -39,8 +40,10 @@ message ProtoScalarType {
     }
 
     message ProtoList {
+        reserved 2;
+        reserved "custom_oid";
         ProtoScalarType element_type = 1;
-        optional uint32 custom_oid = 2;
+        optional global_id.ProtoGlobalId custom_id = 3;
     }
 
     message ProtoRecordField {
@@ -49,14 +52,18 @@ message ProtoScalarType {
     }
 
     message ProtoRecord {
+        reserved 2;
+        reserved "custom_oid";
         repeated ProtoRecordField fields = 1;
-        optional uint32 custom_oid = 2;
         optional string custom_name = 3;
+        optional global_id.ProtoGlobalId custom_id = 4;
     }
 
     message ProtoMap {
+        reserved 2;
+        reserved "custom_oid";
         ProtoScalarType value_type = 1;
-        optional uint32 custom_oid = 2;
+        optional global_id.ProtoGlobalId custom_id = 3;
     }
 
     oneof kind  {

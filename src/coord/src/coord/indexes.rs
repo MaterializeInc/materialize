@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::GlobalId;
 use mz_expr::MirScalarExpr;
+use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};

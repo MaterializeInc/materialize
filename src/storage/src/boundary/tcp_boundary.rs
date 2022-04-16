@@ -276,7 +276,7 @@ pub mod server {
     impl StorageCapture for TcpEventLinkHandle {
         fn capture<G: Scope<Timestamp = Timestamp>>(
             &mut self,
-            id: mz_expr::GlobalId,
+            id: mz_repr::GlobalId,
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
             token: Rc<dyn Any>,

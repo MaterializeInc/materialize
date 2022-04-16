@@ -94,10 +94,10 @@ impl TypeCategory {
             | ScalarType::VarChar { .. } => Self::String,
             ScalarType::Record {
                 custom_name,
-                custom_oid,
+                custom_id,
                 ..
             } => {
-                if custom_name.is_some() || custom_oid.is_some() {
+                if custom_name.is_some() || custom_id.is_some() {
                     Self::Composite
                 } else {
                     Self::Pseudo
@@ -450,9 +450,9 @@ pub struct FuncImpl<R> {
 #[derive(Debug)]
 pub struct FuncImplCatalogDetails {
     pub oid: u32,
-    pub arg_oids: Vec<u32>,
-    pub variadic_oid: Option<u32>,
-    pub return_oid: Option<u32>,
+    pub arg_typs: Vec<&'static str>,
+    pub variadic_typ: Option<&'static str>,
+    pub return_typ: Option<&'static str>,
     pub return_is_set: bool,
 }
 
@@ -460,9 +460,9 @@ impl<R: GetReturnType> FuncImpl<R> {
     fn details(&self) -> FuncImplCatalogDetails {
         FuncImplCatalogDetails {
             oid: self.oid,
-            arg_oids: self.params.arg_oids(),
-            variadic_oid: self.params.variadic_oid(),
-            return_oid: self.return_type.typ.as_ref().map(|t| t.oid()),
+            arg_typs: self.params.arg_names(),
+            variadic_typ: self.params.variadic_name(),
+            return_typ: self.return_type.typ.as_ref().map(|t| t.name()),
             return_is_set: self.return_type.is_set_of,
         }
     }
@@ -581,18 +581,18 @@ impl ParamList {
     }
 
     /// Generates values underlying data for for `mz_catalog.mz_functions.arg_ids`.
-    fn arg_oids(&self) -> Vec<u32> {
+    fn arg_names(&self) -> Vec<&'static str> {
         match self {
-            ParamList::Exact(p) => p.iter().map(|p| p.oid()).collect::<Vec<_>>(),
-            ParamList::Variadic(p) => vec![p.oid()],
+            ParamList::Exact(p) => p.iter().map(|p| p.name()).collect::<Vec<_>>(),
+            ParamList::Variadic(p) => vec![p.name()],
         }
     }
 
     /// Generates values for `mz_catalog.mz_functions.variadic_id`.
-    fn variadic_oid(&self) -> Option<u32> {
+    fn variadic_name(&self) -> Option<&'static str> {
         match self {
             ParamList::Exact(_) => None,
-            ParamList::Variadic(p) => Some(p.oid()),
+            ParamList::Variadic(p) => Some(p.name()),
         }
     }
 
@@ -754,27 +754,27 @@ impl ParamType {
         }
     }
 
-    fn oid(&self) -> u32 {
+    fn name(&self) -> &'static str {
         match self {
             ParamType::Plain(t) => {
                 assert!(!t.is_custom_type(),
                     "custom types cannot currently be used as parameters; use a polymorphic parameter that accepts the custom type instead"
                 );
                 let t: mz_pgrepr::Type = t.into();
-                t.oid()
+                t.catalog_name()
             }
-            ParamType::Any => postgres_types::Type::ANY.oid(),
-            ParamType::AnyCompatible => postgres_types::Type::ANYCOMPATIBLE.oid(),
-            ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
-            ParamType::ArrayAnyCompatible => postgres_types::Type::ANYCOMPATIBLEARRAY.oid(),
-            ParamType::ListAny => mz_pgrepr::LIST.oid(),
-            ParamType::ListAnyCompatible => mz_pgrepr::ANYCOMPATIBLELIST.oid(),
-            // ListElementAnyCompatible is not identical to AnyCompatible, but reusing its OID appears harmless
-            ParamType::ListElementAnyCompatible => postgres_types::Type::ANYCOMPATIBLE.oid(),
-            ParamType::MapAny => mz_pgrepr::MAP.oid(),
-            ParamType::MapAnyCompatible => mz_pgrepr::ANYCOMPATIBLEMAP.oid(),
-            ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
-            ParamType::RecordAny => postgres_types::Type::RECORD.oid(),
+            ParamType::Any => "any",
+            ParamType::AnyCompatible => "anycompatible",
+            ParamType::ArrayAny => "anyarray",
+            ParamType::ArrayAnyCompatible => "anycompatiblearray",
+            ParamType::ListAny => "list",
+            ParamType::ListAnyCompatible => "anycompatiblelist",
+            // ListElementAnyCompatible is not identical to AnyCompatible, but reusing its ID appears harmless
+            ParamType::ListElementAnyCompatible => "anycompatible",
+            ParamType::MapAny => "map",
+            ParamType::MapAnyCompatible => "anycompatiblemap",
+            ParamType::NonVecAny => "anynonarray",
+            ParamType::RecordAny => "record",
         }
     }
 }
@@ -1410,7 +1410,7 @@ impl PolymorphicSolution {
             | NonVecAny | RecordAny => seen,
             ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
             ListElementAnyCompatible => seen.map(|el| ScalarType::List {
-                custom_oid: None,
+                custom_id: None,
                 element_type: Box::new(el),
             }),
             o => {
@@ -1453,12 +1453,12 @@ impl PolymorphicSolution {
                 Some(t) => match t {
                     PolymorphicCompatClass::BestCommonAny => Some(ScalarType::String),
                     PolymorphicCompatClass::BestCommonList => Some(ScalarType::List {
-                        custom_oid: None,
+                        custom_id: None,
                         element_type: Box::new(ScalarType::String),
                     }),
                     PolymorphicCompatClass::BestCommonMap => Some(ScalarType::Map {
                         value_type: Box::new(ScalarType::String),
-                        custom_oid: None,
+                        custom_id: None,
                     }),
                     // Do not infer type.
                     PolymorphicCompatClass::StructuralEq | PolymorphicCompatClass::BaseEq => None,

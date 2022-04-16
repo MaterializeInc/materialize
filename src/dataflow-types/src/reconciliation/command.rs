@@ -33,7 +33,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::ChangeBatch;
 use tracing::warn;
 
-use mz_expr::GlobalId;
+use mz_repr::GlobalId;
 
 use crate::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
 use crate::{DataflowDescription, Plan};

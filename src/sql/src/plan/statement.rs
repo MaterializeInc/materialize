@@ -16,8 +16,7 @@ use std::collections::BTreeMap;
 
 use anyhow::bail;
 
-use mz_expr::GlobalId;
-use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};

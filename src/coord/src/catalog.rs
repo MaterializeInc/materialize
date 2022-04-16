@@ -30,12 +30,12 @@ use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersist
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, SourceConnector, Timeline,
 };
-use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -116,7 +116,6 @@ pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
     database_by_id: BTreeMap<DatabaseId, Database>,
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
-    entry_by_oid: HashMap<u32, GlobalId>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -232,11 +231,6 @@ impl CatalogState {
         &self.entry_by_id[id]
     }
 
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        let id = &self.entry_by_oid[oid];
-        &self.entry_by_id[id]
-    }
-
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
@@ -250,6 +244,32 @@ impl CatalogState {
         .items
         .get(&name.item)
         .and_then(|id| self.try_get_entry(id))
+    }
+
+    /// Gets an entry named `item` from exactly one of system schemas.
+    ///
+    /// # Panics
+    /// - If `item` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `item`.
+    fn get_entry_in_system_schemas(&self, item: &str) -> &CatalogEntry {
+        let mut res = None;
+        for system_schema in &[
+            PG_CATALOG_SCHEMA,
+            INFORMATION_SCHEMA,
+            MZ_CATALOG_SCHEMA,
+            MZ_INTERNAL_SCHEMA,
+        ] {
+            let schema_id = &self.ambient_schemas_by_name[*system_schema];
+            let schema = &self.ambient_schemas_by_id[schema_id];
+            if let Some(global_id) = schema.items.get(item) {
+                match res {
+                    None => res = Some(self.get_entry(global_id)),
+                    Some(_) => panic!("only call get_entry_in_system_schemas on objects uniquely identifiable in one system schema"),
+                }
+            }
+        }
+
+        res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
     pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
@@ -346,7 +366,6 @@ impl CatalogState {
             schema.items.insert(entry.name.item.clone(), entry.id);
         }
 
-        self.entry_by_oid.insert(oid, entry.id);
         self.entry_by_id.insert(entry.id, entry.clone());
     }
 
@@ -1084,7 +1103,6 @@ impl Catalog {
                 database_by_name: BTreeMap::new(),
                 database_by_id: BTreeMap::new(),
                 entry_by_id: BTreeMap::new(),
-                entry_by_oid: HashMap::new(),
                 ambient_schemas_by_name: BTreeMap::new(),
                 ambient_schemas_by_id: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
@@ -1956,10 +1974,6 @@ impl Catalog {
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         self.state.get_entry(id)
-    }
-
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        self.state.get_entry_by_oid(oid)
     }
 
     pub fn get_schema(
@@ -3147,8 +3161,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
-            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
-                let item = self.get_item_by_oid(&custom_oid.unwrap());
+            List {
+                custom_id: Some(global_id),
+                ..
+            }
+            | Map {
+                custom_id: Some(global_id),
+                ..
+            } => {
+                let item = self.get_item(global_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -3160,10 +3181,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_oid: Some(oid),
+                custom_id: Some(id),
                 ..
             } => {
-                let item = self.get_item_by_oid(oid);
+                let item = self.get_item(id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record {
@@ -3182,6 +3203,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =
                     SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone());
+
                 let res = if self
                     .search_path
                     .iter()
@@ -3191,8 +3213,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 } else {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.
-                    let name = self.get_item_by_oid(&pgrepr_type.oid()).name();
-                    self.resolve_full_name(name).to_string()
+                    let name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: pg_catalog_schema,
+                        },
+                        item: pgrepr_type.name().to_string(),
+                    };
+                    self.resolve_full_name(&name).to_string()
                 };
                 res
             }
@@ -3325,11 +3353,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
         self.catalog.get_entry(id)
-    }
-
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn mz_sql::catalog::CatalogItem {
-        let id = self.catalog.state.entry_by_oid[oid];
-        self.catalog.get_entry(&id)
     }
 
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {

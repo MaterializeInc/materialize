@@ -46,7 +46,6 @@ use mz_avro::types::Value;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
 };
-use mz_expr::GlobalId;
 use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
@@ -57,7 +56,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, RelationDesc, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowPacker, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 

@@ -899,10 +899,10 @@ impl AggregateFunc {
                                 inner.nullable(false)
                             }),
                         ],
-                        custom_oid: None,
+                        custom_id: None,
                         custom_name: None,
                     }),
-                    custom_oid: None,
+                    custom_id: None,
                 },
                 _ => unreachable!(),
             },
@@ -922,10 +922,10 @@ impl AggregateFunc {
                                 inner.nullable(false)
                             }),
                         ],
-                        custom_oid: None,
+                        custom_id: None,
                         custom_name: None,
                     }),
-                    custom_oid: None,
+                    custom_id: None,
                 },
                 _ => unreachable!(),
             },
@@ -946,10 +946,10 @@ impl AggregateFunc {
                             (ColumnName::from("?lag?"), value_type),
                             (ColumnName::from("?record?"), original_row_type),
                         ],
-                        custom_oid: None,
+                        custom_id: None,
                         custom_name: None,
                     }),
-                    custom_oid: None,
+                    custom_id: None,
                 }
             }
             // Note AggregateFunc::MaxString, MinString rely on returning input

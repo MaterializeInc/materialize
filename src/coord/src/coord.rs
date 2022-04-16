@@ -105,8 +105,8 @@ use mz_dataflow_types::{
     Update,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, GlobalId, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -116,7 +116,9 @@ use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::{Datum, Diff, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp};
+use mz_repr::{
+    Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
+};
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
@@ -5217,8 +5219,8 @@ pub mod fast_path_peek {
 
     use crate::coord::PendingPeek;
     use crate::CoordError;
-    use mz_expr::{EvalError, GlobalId, Id, MirScalarExpr};
-    use mz_repr::{Diff, Row};
+    use mz_expr::{EvalError, Id, MirScalarExpr};
+    use mz_repr::{Diff, GlobalId, Row};
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan<T> {

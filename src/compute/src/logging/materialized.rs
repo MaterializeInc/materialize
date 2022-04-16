@@ -25,8 +25,8 @@ use uuid::Uuid;
 
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
-use mz_expr::{permutation_for_arrangement, GlobalId, MirScalarExpr};
-use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_storage::StorageEvent;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;

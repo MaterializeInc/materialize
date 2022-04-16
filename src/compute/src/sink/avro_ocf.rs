@@ -20,9 +20,8 @@ use timely::dataflow::Scope;
 use tracing::error;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, SinkDesc};
-use mz_expr::GlobalId;
 use mz_interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 

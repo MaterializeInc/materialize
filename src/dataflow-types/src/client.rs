@@ -31,8 +31,8 @@ use crate::{
     sources::{MzOffset, SourceDesc},
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
-use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
-use mz_repr::Row;
+use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::{GlobalId, Row};
 
 pub mod controller;
 pub use controller::Controller;

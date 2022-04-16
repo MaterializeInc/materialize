@@ -11,8 +11,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use mz_expr::GlobalId;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,7 +116,7 @@ impl LogVariant {
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
-                        custom_oid: None,
+                        custom_id: None,
                     }
                     .nullable(false),
                 )
@@ -143,7 +142,7 @@ impl LogVariant {
                     "address",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::Int64),
-                        custom_oid: None,
+                        custom_id: None,
                     }
                     .nullable(false),
                 )

@@ -84,27 +84,27 @@ impl From<&ScalarType> for ProtoScalarType {
 
                 ScalarType::List {
                     element_type,
-                    custom_oid,
+                    custom_id,
                 } => List(Box::new(ProtoList {
                     element_type: Some(element_type.as_ref().into()),
-                    custom_oid: *custom_oid,
+                    custom_id: custom_id.map(|id| (&id).into()),
                 })),
                 ScalarType::Record {
-                    custom_oid,
+                    custom_id,
                     fields,
                     custom_name,
                 } => Record(ProtoRecord {
-                    custom_oid: *custom_oid,
+                    custom_id: custom_id.map(|id| (&id).into()),
                     fields: fields.into_iter().map(Into::into).collect(),
                     custom_name: custom_name.clone(),
                 }),
                 ScalarType::Array(typ) => Array(typ.as_ref().into()),
                 ScalarType::Map {
                     value_type,
-                    custom_oid,
+                    custom_id,
                 } => Map(Box::new(ProtoMap {
                     value_type: Some(value_type.as_ref().into()),
-                    custom_oid: *custom_oid,
+                    custom_id: custom_id.map(|id| (&id).into()),
                 })),
             }),
         }
@@ -164,10 +164,10 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         .map(|x| *x)
                         .try_into_if_some("ProtoList::element_type")?,
                 ),
-                custom_oid: x.custom_oid,
+                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
             }),
             Record(x) => Ok(ScalarType::Record {
-                custom_oid: x.custom_oid,
+                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
                 fields: x
                     .fields
                     .into_iter()
@@ -181,7 +181,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         .map(|x| *x)
                         .try_into_if_some("ProtoMap::value_type")?,
                 ),
-                custom_oid: x.custom_oid,
+                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
             }),
         }
     }

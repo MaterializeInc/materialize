@@ -37,9 +37,8 @@ use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
-use mz_expr::GlobalId;
 use mz_expr::RowSetFinishing;
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
 

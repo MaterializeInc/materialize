@@ -22,9 +22,9 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -165,11 +165,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
-
-    /// Gets an item by its OID.
-    ///
-    /// Panics if `oid` does not specify a valid item.
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &QualifiedObjectName) -> bool;
@@ -658,10 +653,6 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
         unimplemented!();
     }
 

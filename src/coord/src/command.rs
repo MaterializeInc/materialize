@@ -17,9 +17,8 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 
 use mz_dataflow_types::PeekResponseUnary;
-use mz_expr::GlobalId;
 use mz_ore::str::StrExt;
-use mz_repr::{Row, ScalarType};
+use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;

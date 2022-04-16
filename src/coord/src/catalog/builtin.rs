@@ -2224,7 +2224,7 @@ mod tests {
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
-    use mz_sql::catalog::CatalogSchema;
+    use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
 
     use super::*;
@@ -2319,6 +2319,19 @@ mod tests {
 
         let data_dir = TempDir::new()?;
         let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let conn_catalog = catalog.for_system_session();
+        let resolve_type_oid = |item: &str| {
+            conn_catalog
+                .resolve_item(&PartialObjectName {
+                    database: None,
+                    // All functions we check exist in PG, so the types must, as
+                    // well
+                    schema: Some(PG_CATALOG_SCHEMA.into()),
+                    item: item.to_string(),
+                })
+                .unwrap()
+                .oid()
+        };
 
         let mut proc_oids = HashSet::new();
         let mut type_oids = HashSet::new();
@@ -2465,17 +2478,25 @@ mod tests {
 
                         // Complain, but don't fail, if argument oids don't match.
                         // TODO: make these match.
-                        if imp.arg_oids != pg_fn.arg_oids {
+                        let imp_arg_oids = imp
+                            .arg_typs
+                            .iter()
+                            .map(|item| resolve_type_oid(item))
+                            .collect::<Vec<_>>();
+
+                        if imp_arg_oids != pg_fn.arg_oids {
                             println!(
                                 "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                                imp.oid, func.name, imp_arg_oids, pg_fn.arg_oids
                             );
                         }
 
-                        if imp.return_oid != pg_fn.ret_oid {
+                        let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
+
+                        if imp_return_oid != pg_fn.ret_oid {
                             println!(
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp.return_oid, pg_fn.ret_oid
+                                imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
                         }
 

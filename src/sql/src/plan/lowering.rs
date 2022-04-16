@@ -937,7 +937,7 @@ impl HirScalarExpr {
                                             };
                                             let record_type = ScalarType::Record {
                                                 fields,
-                                                custom_oid: None,
+                                                custom_id: None,
                                                 custom_name: None,
                                             };
                                             let agg_input = mz_expr::MirScalarExpr::CallVariadic {
@@ -958,7 +958,7 @@ impl HirScalarExpr {
                                             };
                                             let list_type = ScalarType::List {
                                                 element_type: Box::new(record_type),
-                                                custom_oid: None,
+                                                custom_id: None,
                                             };
                                             let agg_input_type = ScalarType::Record {
                                                 fields: std::iter::once(&list_type)
@@ -969,7 +969,7 @@ impl HirScalarExpr {
                                                         )
                                                     })
                                                     .collect_vec(),
-                                                custom_oid: None,
+                                                custom_id: None,
                                                 custom_name: None,
                                             }
                                             .nullable(false);
@@ -1128,7 +1128,7 @@ impl HirScalarExpr {
                                                 };
                                             let original_row_record_type = ScalarType::Record {
                                                 fields,
-                                                custom_oid: None,
+                                                custom_id: None,
                                                 custom_name: None,
                                             };
 
@@ -1158,7 +1158,7 @@ impl HirScalarExpr {
                                                 };
                                             let fn_input_record_type = ScalarType::Record {
                                                 fields: fn_input_record_fields,
-                                                custom_oid: None,
+                                                custom_id: None,
                                                 custom_name: None,
                                             }
                                             .nullable(false);
@@ -1181,7 +1181,7 @@ impl HirScalarExpr {
                                                     ColumnName::from("?column?"),
                                                     fn_input_record_type.nullable(false),
                                                 )],
-                                                custom_oid: None,
+                                                custom_id: None,
                                                 custom_name: None,
                                             }
                                             .nullable(false);

@@ -22,9 +22,8 @@ use tokio_stream::StreamMap;
 use tracing::debug;
 use uuid::Uuid;
 
-use mz_expr::GlobalId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
     ComputeCommand, ComputeResponse, GenericClient, PeekResponse, StorageCommand, StorageResponse,

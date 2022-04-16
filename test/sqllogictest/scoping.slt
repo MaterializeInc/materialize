@@ -174,3 +174,12 @@ SELECT CASE WHEN TRUE THEN 1 ELSE 1::int END
 ----
 case
 1
+
+statement ok
+CREATE TYPE scoping_composite AS (i int);
+
+query T colnames
+SELECT ROW(1)::scoping_composite
+----
+row
+(1)

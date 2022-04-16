@@ -17,7 +17,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{ColumnType, GlobalId, ScalarType};
 
 mod id;
 mod linear;
@@ -29,7 +29,7 @@ pub mod proto;
 
 pub use relation::canonicalize;
 
-pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
+pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},

@@ -38,7 +38,6 @@ use mz_dataflow_types::{
     sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
     SourceError,
 };
-use mz_expr::{GlobalId, PartitionId, SourceInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::now::NowFn;
@@ -46,7 +45,8 @@ use mz_ore::task;
 use prometheus::core::{AtomicI64, AtomicU64};
 use tracing::{debug, error, trace};
 
-use mz_repr::{Diff, Row, Timestamp};
+use mz_expr::{PartitionId, SourceInstanceId};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::{operator, OutputHandle};
 use timely::dataflow::{Scope, Stream};
