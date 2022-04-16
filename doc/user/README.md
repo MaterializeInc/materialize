@@ -41,7 +41,7 @@ To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branc
    ```
    git checkout -b my-branch-name lts-docs
    ```
-2. Cherry-pick the commit from main with the changes you need, or just make the necessary changes as you would normally.
+2. Cherry-pick the commit from `main` with the changes you need, or just make the necessary changes as you would normally.
    ```
    git cherry-pick COMMIT-SHA-FROM-MAIN
    ```
