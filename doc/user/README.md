@@ -21,7 +21,7 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ### (Temporary) Updating LTS Docs
 
-As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches: 
+As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches:
 
 * `lts-docs`: capturing the state of the docs at `v0.26 LTS`, deploying to `https://materialize.com/docs/`
 * `main`: ongoing development branch, deploying to `https://materialize.com/docs/unstable/`
