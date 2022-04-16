@@ -316,12 +316,11 @@ shared 1Password account.
 ## Other repositories
 
 Where possible, we prefer to keep things in the main repository (a "monorepo"
-approach). There are a few notable exceptions:
+approach). There are a few exceptions:
 
-  * **[rust-sasl]**, Cyrus SASL bindings for Rust
-  * **[rust-krb5-src]**, Rust build system integration for libkrb5, MIT's
-    Kerberos implementation.
-  * **[dbt-materialize]**, data build tool (dbt) adapter for Materialize
+  * **[rust-dec]**, libdecnumber bindings for Rust
+  * **[materialize-dbt-utils]**, data build tool (dbt) utilities for Materialize
+  * Many Pulumi providers
 
 Don't add to this list without good reason! Separate repositories are
 acceptable for:
@@ -331,10 +330,15 @@ acceptable for:
     burdensome. When the code is more stable, the repository should be
     integrated into the main Materialize repository.
 
+  * External requirements that require a separate repository. For example,
+    Pulumi providers are conventionally developed each in their own repository.
+    Similarly, materialize-dbt-utils can only appear on [dbt hub] if it is
+    developed in a standalone repository.
+
   * Stable foundational components where community contribution is desirable.
-    For example, rust-sasl is a very small package, and asking contributors
+    For example, rust-dec is a very small package, and asking contributors
     to clone the entire Materialize repository would be a large barrier to
-    entry. Changes to Materialize very rarely require changes in rust-sasl, so
+    entry. Changes to Materialize very rarely require changes in rust-dec, so
     maintaining the two separately does not introduce much overhead.
 
 ## Code organization
@@ -403,6 +407,7 @@ of choice.
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
+[dbt hub]: https://hub.getdbt.com
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [CMake]: https://cmake.org
 [Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
@@ -413,8 +418,8 @@ of choice.
 [dbt-materialize]: https://github.com/materializeInc/dbt-materialize
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [Homebrew]: https://brew.sh
-[rust-krb5-src]: https://github.com/MaterializeInc/rust-krb5-src
-[rust-sasl]: https://github.com/MaterializeInc/rust-sasl
+[rust-dec]: https://github.com/MaterializeInc/rust-dec
+[materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
 [Rust]: https://www.rust-lang.org
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install

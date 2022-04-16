@@ -27,7 +27,6 @@ globset = "0.4.8"
 http = "0.2.6"
 itertools = "0.10.3"
 junit-report = "0.7.0"
-krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 maplit = "1.0.2"
 md-5 = "0.10.1"
@@ -73,7 +72,3 @@ walkdir = "2.3.2"
 [dev-dependencies]
 assert_cmd = "2.0.4"
 predicates = "2.1.1"
-
-[package.metadata.cargo-udeps.ignore]
-# used to build a binary
-normal = ["krb5-src"]

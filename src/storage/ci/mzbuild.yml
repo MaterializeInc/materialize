@@ -12,7 +12,3 @@ pre-image:
   - type: cargo-build
     bin: storaged
     strip: false
-    extract:
-      krb5-src:
-        install/bin/kinit: .
-        install/bin/kdestroy: .

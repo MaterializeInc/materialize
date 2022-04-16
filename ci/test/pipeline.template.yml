@@ -140,16 +140,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-ssl
 
-  - id: kafka-krb5
-    label: Kafka Kerberos smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-krb5/smoketest.td]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-krb5
-          run: testdrive
-
   - id: kafka-sasl-plain
     label: Kafka SASL PLAIN smoke test
     depends_on: build-x86_64
