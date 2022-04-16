@@ -11,7 +11,12 @@
       {{range $i, $version := .Site.Params.Versions}}
         <tr>
           <td>
-            <strong><a href="../release-notes/#{{$version.name}}">{{$version.name}}</a></strong>
+            <strong>
+              <a href="../release-notes/#{{$version.name}}">
+                {{$version.name}}
+                {{if $version.lts}}LTS{{end}}
+              </a>
+            </strong>
           </td>
           <td>{{$version.date}}</td>
           <td>
@@ -25,7 +30,7 @@
               </a>
             {{end}}
           </td>
-          <td><span class="symbol">{{if lt $i 2}}✓{{end}}</span></td>
+          <td><span class="symbol">{{if lt $i 1}}✓{{end}}</span></td>
       {{end}}
     </tbody>
   </table>
