@@ -21,6 +21,35 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
+{{% version-header v0.26.0 %}}
+
+v0.26.0 is a **long-term support (LTS)** release of Materialize. We will support
+the v0.26 series through at least August 31, 2022, issuing patch releases as
+necessary to address severe bugs and security vulnerabilities.
+
+- **Breaking change.** Change the return type of the
+  [`list_length`](/sql/functions/#list-func) function from [`bigint`] to
+  [`integer`].
+
+- Optionally emit the message headers in [Kafka
+  sources](/sql/create-source/kafka/) via the new
+  [`INCLUDE HEADERS`](/sql/create-source/kafka/#headers) option.
+
+- Allow `ROW` literals to be used as arguments to the
+  [`coalesce`](/sql/functions/#generic) function and in `VALUES` clauses
+  {{% gh 8597 10422 %}}.
+
+- Change most functions that accept [polymorphic
+  parameters](/sql/types/#polymorphism) to promote arguments to a "best common
+  type." For example, when concatenating a `smallint list` to a `bigint list`,
+  Materialize will now cast the `smallint list` to a `bigint list`, resulting in
+  a concanated list of type `bigint list`.
+
+- Add the [`map_length`](/sql/types/map/#count-entries-in-map-map_length) function, which computes the
+  number of entries in a [`map`] value.
+
+- Fix a memory leak in [`TAIL`](/sql/tail) {{% gh 11540 %}}.
+
 {{% version-header v0.25.0 %}}
 
 - Fix `base64` decoding to support numerals in encoded strings. Previously, if the encoded string contained a numeral, decoding would fail.
@@ -1731,7 +1760,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Add the `--experimental` command-line option to enable a new [experimental
   mode], which grants access to experimental features
   at the risk of compromising stability and backwards compatibility. Forthcoming
-  features that require experimental mode will be marked as such in their
+  features that require [experimental mode] will be marked as such in their
   documentation.
 
 - Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/kafka/#sasl).
@@ -2122,6 +2151,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
 [experimental mode]: /cli/#experimental-mode
+[`integer`]: /sql/types/integer/
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
