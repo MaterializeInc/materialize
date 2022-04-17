@@ -26,7 +26,7 @@ shtab==1.5.3
 sqlparse==0.4.2
 twine==4.0.0
 types-prettytable==2.1.2
-types-psutil==5.8.20
+types-psutil==5.8.22
 types-PyMYSQL==1.0.15
 types-PyYAML==6.0.5
 types-requests==2.27.16
