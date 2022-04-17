@@ -19,9 +19,7 @@ use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{
-    Command, ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient, Sender,
-};
+use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -117,19 +115,7 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let compute_client = LocalClient::new(
-        compute_response_rxs,
-        command_txs
-            .into_iter()
-            .map(|tx| {
-                Sender::new(move |cmd| {
-                    tx.send(Command::Compute(cmd))
-                        .expect("worker command receiver should not drop first")
-                })
-            })
-            .collect(),
-        worker_threads,
-    );
+    let compute_client = LocalClient::new(compute_response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
@@ -148,7 +134,7 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<Command>,
+    command_rx: crossbeam_channel::Receiver<ComputeCommand>,
     /// The state associated with rendering dataflows.
     compute_state: Option<ComputeState>,
     /// The boundary between storage and compute layers, compute side.
@@ -200,7 +186,7 @@ where
             for cmd in cmds {
                 let mut should_drop_compute = false;
                 match &cmd {
-                    Command::Compute(ComputeCommand::CreateInstance(_logging)) => {
+                    ComputeCommand::CreateInstance(_logging) => {
                         self.compute_state = Some(ComputeState {
                             traces: TraceManager::new(
                                 self.metrics_bundle.1.clone(),
@@ -217,13 +203,13 @@ where
                             materialized_logger: None,
                         });
                     }
-                    Command::Compute(ComputeCommand::DropInstance) => {
+                    ComputeCommand::DropInstance => {
                         should_drop_compute = true;
                     }
                     _ => (),
                 }
 
-                self.handle_command(cmd);
+                self.activate_compute().unwrap().handle_compute_command(cmd);
 
                 if should_drop_compute {
                     self.compute_state = None;
@@ -251,13 +237,6 @@ where
             })
         } else {
             None
-        }
-    }
-
-    fn handle_command(&mut self, cmd: Command) {
-        match cmd {
-            Command::Compute(cmd) => self.activate_compute().unwrap().handle_compute_command(cmd),
-            Command::Storage(_cmd) => unimplemented!(),
         }
     }
 }
