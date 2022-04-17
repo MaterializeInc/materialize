@@ -55,7 +55,7 @@ hyper-proxy = { version = "0.9.1" }
 hyper-tls = { version = "0.5.0" }
 include_dir = "0.7.2"
 itertools = "0.10.3"
-jsonwebtoken = "8.0.1"
+jsonwebtoken = "8.1.0"
 lazy_static = "1.4.0"
 libc = "0.2.122"
 mime = "0.3.16"
@@ -124,7 +124,7 @@ bytes = "1.1.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
-jsonwebtoken = "8.0.1"
+jsonwebtoken = "8.1.0"
 mz-kafka-util = { path = "../kafka-util" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
