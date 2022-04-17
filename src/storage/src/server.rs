@@ -20,9 +20,7 @@ use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{
-    Command, LocalClient, LocalStorageClient, Sender, StorageResponse,
-};
+use mz_dataflow_types::client::{LocalClient, LocalStorageClient, StorageCommand, StorageResponse};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -150,20 +148,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let storage_client = LocalClient::new(
-        storage_response_rxs,
-        command_txs
-            .iter()
-            .map(|tx| {
-                let tx = tx.clone();
-                Sender::new(move |cmd| {
-                    tx.send(Command::Storage(cmd))
-                        .expect("worker command receiver should not drop first")
-                })
-            })
-            .collect(),
-        worker_threads,
-    );
+    let storage_client = LocalClient::new(storage_response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
@@ -182,7 +167,7 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<Command>,
+    command_rx: crossbeam_channel::Receiver<StorageCommand>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
     /// The boundary between storage and compute layers, storage side.
@@ -224,7 +209,7 @@ where
                 }
             }
             for cmd in cmds {
-                self.handle_command(cmd);
+                self.activate_storage().handle_storage_command(cmd);
             }
         }
     }
@@ -235,13 +220,6 @@ where
             storage_state: &mut self.storage_state,
             response_tx: &mut self.storage_response_tx,
             boundary: &mut self.storage_boundary,
-        }
-    }
-
-    fn handle_command(&mut self, cmd: Command) {
-        match cmd {
-            Command::Compute(_cmd) => unimplemented!(),
-            Command::Storage(cmd) => self.activate_storage().handle_storage_command(cmd),
         }
     }
 }

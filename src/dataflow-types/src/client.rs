@@ -40,15 +40,6 @@ pub use controller::Controller;
 pub mod partitioned;
 pub mod replicated;
 
-/// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Command<T = mz_repr::Timestamp> {
-    /// A compute command.
-    Compute(ComputeCommand<T>),
-    /// A storage command.
-    Storage(StorageCommand<T>),
-}
-
 /// An abstraction allowing us to name difference compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
 // support natively storing `u64`. Revisit this before shipping Platform, as we
@@ -513,32 +504,6 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-/// An generic command sender.
-pub struct Sender<C> {
-    inner: Box<dyn FnMut(C) + Send>,
-}
-
-impl<C> Sender<C> {
-    /// Construct a new command sender from a function.
-    pub fn new<F>(f: F) -> Sender<C>
-    where
-        F: FnMut(C) + Send + 'static,
-    {
-        Sender { inner: Box::new(f) }
-    }
-
-    /// Sends a command to the destination.
-    pub fn send(&mut self, command: C) {
-        (self.inner)(command)
-    }
-}
-
-impl<C> fmt::Debug for Sender<C> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Sender").finish()
-    }
-}
-
 /// A convenience type for compatibility.
 #[derive(Debug)]
 pub struct LocalClient<C, R>
@@ -558,7 +523,7 @@ where
 {
     pub fn new(
         feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<R>>,
-        worker_txs: Vec<Sender<C>>,
+        worker_txs: Vec<crossbeam_channel::Sender<C>>,
         worker_threads: Vec<std::thread::Thread>,
     ) -> Self {
         assert_eq!(feedback_rxs.len(), worker_threads.len());
@@ -659,13 +624,13 @@ pub mod process_local {
 
     use async_trait::async_trait;
 
-    use super::{GenericClient, Sender};
+    use super::GenericClient;
 
     /// A client to a dataflow server running in the current process.
     #[derive(Debug)]
     pub struct ProcessLocal<C, R> {
         feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-        worker_tx: Sender<C>,
+        worker_tx: crossbeam_channel::Sender<C>,
         worker_thread: std::thread::Thread,
     }
 
@@ -676,7 +641,9 @@ pub mod process_local {
         R: fmt::Debug + Send,
     {
         async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            self.worker_tx.send(cmd);
+            self.worker_tx
+                .send(cmd)
+                .expect("worker command receiver should not drop first");
             self.worker_thread.unpark();
             Ok(())
         }
@@ -690,7 +657,7 @@ pub mod process_local {
         /// Create a new instance of [ProcessLocal] from its parts.
         pub fn new(
             feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-            worker_tx: Sender<C>,
+            worker_tx: crossbeam_channel::Sender<C>,
             worker_thread: std::thread::Thread,
         ) -> Self {
             Self {
@@ -705,7 +672,8 @@ pub mod process_local {
     impl<C, R> Drop for ProcessLocal<C, R> {
         fn drop(&mut self) {
             // Drop the worker handle.
-            self.worker_tx = Sender::new(|_| ());
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            self.worker_tx = tx;
             // Unpark the thread once the handle is dropped, so that it can observe the emptiness.
             self.worker_thread.unpark();
         }
