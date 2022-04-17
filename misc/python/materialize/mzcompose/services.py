@@ -58,10 +58,6 @@ class Materialized(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        # Make sure MZ_DEV=1 is always present
-        if "MZ_DEV=1" not in environment:
-            environment.append("MZ_DEV=1")
-
         if environment_extra:
             environment.extend(environment_extra)
 

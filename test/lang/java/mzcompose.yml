@@ -11,8 +11,6 @@ version: "3"
 services:
   materialized:
     mzbuild: materialized
-    environment:
-      - MZ_DEV=1
   java-smoketest:
     mzbuild: ci-java-smoketest
     command: mvn test

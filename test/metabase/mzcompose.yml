@@ -11,8 +11,6 @@ version: '3.7'
 services:
   materialized:
     mzbuild: materialized
-    environment:
-      - MZ_DEV=1
   metabase:
     image: metabase/metabase:v0.41.4
     ports: [3000]

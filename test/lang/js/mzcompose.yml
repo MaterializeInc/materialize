@@ -11,8 +11,6 @@ version: "3"
 services:
   materialized:
     mzbuild: materialized
-    environment:
-      - MZ_DEV=1
   js:
     image: node:14.15.0
     command: /workdir/test/lang/js/test.sh

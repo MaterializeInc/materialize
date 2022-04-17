@@ -2,24 +2,19 @@
 
 This guide details what you'll need to contribute to Materialize.
 
-Materialize is written in [Rust] and should compile on any recent stable
-version.
+Materialize is a collection of services written in [Rust] that should compile on
+any recent stable version.
 
 Materialize can be connected to many different types of event sources:
 
-* Local files with line-by-line textual events, where structured data can be
-  extracted via regular expressions or CSV parsing.
 * Custom Kafka topics, where events are encoded with Protobuf or Avro, with
   support for additional encoding formats coming soon.
 * Kafka topics managed by a CDC tool like Debezium, where events adhere to a
   particular "envelope" format that distinguishes updates from insertions and
   deletions.
+* PostgreSQL tables, where events are read from PostgreSQL's replication log.
 * Streaming HTTP sources? Apache Pulsar sources? With a bit of elbow grease,
   support for any message bus can be added to Materialize!
-
-Note that local file sources are intended only for ad-hoc experimentation and
-analysis. Production use cases are expected to use Kafka sources, which have a
-better availability and durability story.
 
 ## Installing
 
@@ -60,7 +55,9 @@ package manager is likely too old to build Materialize.
 
 ### Editors and IDEs
 
-In principle, any text editor can be used to edit Rust code. There is nothing special about Materialize's codebase: any general Rust development setup should work fine.
+In principle, any text editor can be used to edit Rust code. There is nothing
+special about Materialize's codebase: any general Rust development setup should
+work fine.
 
 By default, we recomend that developers without a strong preference of editor use
 Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
@@ -187,12 +184,14 @@ writing, only Java 8 and 11 are supported.
 
 ## Building Materialize
 
-Materialize is fully integrated with Cargo, so building it is dead simple:
+Materialize is a collection of several Rust services that need to be built
+together. Each service can be built individually via Cargo, but we recommend
+using the `bin/materialized` script to drive the process:
 
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
 cd materialize
-cargo run --release -- --workers 2
+bin/materialized [--release] [<materialized arg>...]
 ```
 
 Because the MaterializeInc organization requires two-factor authentication
@@ -246,7 +245,8 @@ To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
 cd src/materialized
-cargo run --features=dev-web -- --dev
+cargo build --bin storaged --bin computed
+cargo run --bin materialized --features=dev-web
 ```
 
 In this mode, every request for a static file will reload the file from disk.
@@ -283,10 +283,12 @@ recommendations.
 
 ### Unused dependencies
 
-Use `.bin/unused-deps`. This is also run in ci; use this
-[guide][https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies]
-for information about how to ignore false-positives. Common examples are
-dependencies only used on certain platforms.
+Use `bin/unused-deps` to find unused dependencies in Cargo.toml manifests.
+
+This script is run in CI, though due to a bug in Cargo failures in the script do
+not fail the build. If necessary, you can [ignore false
+positives][udeps-false-positives], which commonly occur with dependencies that
+are used only on certain platforms.
 
 ## Submitting and reviewing changes
 
@@ -299,6 +301,7 @@ See [Developer guide: submitting and reviewing changes](guide-changes.md).
 Before publishing internal Rust crates to `crates.io`(https://crates.io/), be sure to
 indicate that `MaterializeInc` is the reponsible maintainer by running the following
 command:
+
 ```shell
 cargo owner --rm <your personal login>
 cargo owner --add github:MaterializeInc:crate-owners
@@ -336,9 +339,14 @@ acceptable for:
 
 ## Code organization
 
-We break our code into crates for several reasons, but primarily to promote organization of code by team, thereby introducing ownership and autonomy. As such, many crates are owned by a specific team (which does not preclude the existence of shared, cross-team crates).
+We break our code into crates primarily to promote organization of code by team,
+thereby introducing ownership and autonomy. As such, many crates are owned by a
+specific team (which does not preclude the existence of shared, cross-team
+crates).
 
-Although the primary unit of code organization at the inter-team level is the crate, modules within a crate are also useful for code organization, especially because they are the level at which `pub` visibility operates.
+Although the primary unit of code organization at the inter-team level is the
+crate, modules within a crate are also useful for code organization, especially
+because they are the level at which `pub` visibility operates.
 
 You can view a relationship diagram of our crates by running the following
 command:
@@ -347,7 +355,8 @@ command:
 bin/crate-diagram
 ```
 
-It is possible to view transitive dependencies of a select subset of roots by specifying the `--roots` flag with a comma separated list of crates:
+It is possible to view transitive dependencies of a select subset of roots by
+specifying the `--roots` flag with a comma separated list of crates:
 
 ```shell
 bin/crate-diagram --roots mz-sql,mz-dataflow
@@ -355,13 +364,13 @@ bin/crate-diagram --roots mz-sql,mz-dataflow
 
 ## Developer tools
 
-The Materialize repo contains many useful scripts that can be included in your environment
-to improve your development experience.
+The repository contains several useful scripts that can improve your development
+experience.
 
 ### Automatic style checks
 
-To ensure each code change passes all style nits before pushing to GitHub, symlink `pre-push`
-into your local git hooks:
+To ensure each code change passes all style nits before pushing to GitHub,
+symlink `pre-push` into your local git hooks:
 
 ```sh
 ln -s ./misc/githooks/pre-push .git/hooks/pre-push
@@ -395,7 +404,6 @@ of choice.
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
 [Clippy]: https://github.com/rust-lang/rust-clippy
-[Unused dependencies]: https://github.com/est31/cargo-udeps
 [CMake]: https://cmake.org
 [Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 [Confluent Platform]: https://www.confluent.io/product/confluent-platform/
@@ -411,3 +419,5 @@ of choice.
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
+[udeps-false-positives]: https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies
+[Unused dependencies]: https://github.com/est31/cargo-udeps

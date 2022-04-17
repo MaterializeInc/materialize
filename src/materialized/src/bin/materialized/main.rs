@@ -92,10 +92,6 @@ pub struct Args {
     /// dependencies.
     #[clap(short, long, parse(from_occurrences))]
     version: usize,
-    /// Allow running this dev (unoptimized) build.
-    #[cfg(debug_assertions)]
-    #[clap(long, env = "MZ_DEV")]
-    dev: bool,
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
@@ -493,16 +489,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             }
         }
         return Ok(());
-    }
-
-    // Prevent accidental usage of development builds.
-    #[cfg(debug_assertions)]
-    if !args.dev {
-        bail!(
-            "refusing to run dev (unoptimized) binary without explicit opt-in\n\
-             hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\
-             hint: Or perhaps you meant to use a release binary?"
-        );
     }
 
     // Configure connections.

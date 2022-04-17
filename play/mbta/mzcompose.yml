@@ -16,8 +16,6 @@ services:
 
   materialized:
     mzbuild: materialized
-    environment:
-      - MZ_DEV=1
     ports: [6875]
     volumes: [.:/workdir]
 
