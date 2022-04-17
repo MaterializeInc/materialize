@@ -91,8 +91,8 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::ReadPolicy;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ComputeResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
-    Response as DataflowResponse, StorageResponse, DEFAULT_COMPUTE_INSTANCE_ID,
+    ComputeInstanceId, ControllerResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
+    DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -169,7 +169,7 @@ mod indexes;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Worker(mz_dataflow_types::client::Response),
+    Controller(ControllerResponse),
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectorReady(SinkConnectorReady),
     SendDiffs(SendDiffs),
@@ -673,7 +673,7 @@ impl Coordinator {
                 m = self.dataflow_client.recv() => {
                     match m.unwrap() {
                         None => break,
-                        Some(r) => Message::Worker(r),
+                        Some(r) => Message::Controller(r),
                     }
                 },
                 m = cmd_rx.recv() => match m {
@@ -684,7 +684,7 @@ impl Coordinator {
 
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
-                Message::Worker(worker) => self.message_worker(worker).await,
+                Message::Controller(worker) => self.message_controller(worker).await,
                 Message::CreateSourceStatementReady(ready) => {
                     self.message_create_source_statement_ready(ready).await
                 }
@@ -740,9 +740,9 @@ impl Coordinator {
             .unwrap();
     }
 
-    async fn message_worker(&mut self, message: DataflowResponse) {
+    async fn message_controller(&mut self, message: ControllerResponse) {
         match message {
-            DataflowResponse::Compute(ComputeResponse::PeekResponse(uuid, response)) => {
+            ControllerResponse::PeekResponse(uuid, response) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
                 if let Some(PendingPeek {
@@ -765,7 +765,7 @@ impl Coordinator {
                     warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::TailResponse(sink_id, response)) => {
+            ControllerResponse::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -776,14 +776,10 @@ impl Coordinator {
                     }
                 }
             }
-            DataflowResponse::Compute(ComputeResponse::FrontierUppers(_updates)) => {}
-            DataflowResponse::Storage(StorageResponse::TimestampBindings(_)) => {}
-            DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
-                LinearizedTimestampBindingFeedback {
-                    timestamp: _,
-                    peek_id: _,
-                },
-            )) => {
+            ControllerResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
+                timestamp: _,
+                peek_id: _,
+            }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
         }

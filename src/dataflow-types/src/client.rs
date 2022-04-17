@@ -387,13 +387,17 @@ pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
 }
 
-/// Responses that the worker/dataflow can provide back to the coordinator.
+/// Responses that the controller can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response<T = mz_repr::Timestamp> {
-    /// A compute response.
-    Compute(ComputeResponse<T>),
-    /// A storage response.
-    Storage(StorageResponse<T>),
+pub enum ControllerResponse<T = mz_repr::Timestamp> {
+    /// The worker's response to a specified (by connection id) peek.
+    PeekResponse(Uuid, PeekResponse),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse<T>),
+    /// Data about timestamp bindings, sent to the coordinator, in service
+    /// of a specific "linearized" read request.
+    // TODO(benesch,gus): update language to avoid the term "linearizability".
+    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.

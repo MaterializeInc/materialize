@@ -35,8 +35,8 @@ use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 
 use crate::client::GenericClient;
 use crate::client::{
-    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, InstanceConfig,
-    RemoteClient, Response, StorageResponse,
+    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ControllerResponse,
+    InstanceConfig, RemoteClient, StorageResponse,
 };
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
@@ -201,78 +201,76 @@ impl<T> Controller<T>
 where
     T: Timestamp + Lattice,
 {
-    pub async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-        let mut compute_stream: StreamMap<_, _> = self
-            .compute
-            .iter_mut()
-            .map(|(id, compute)| (*id, compute.client.as_stream()))
-            .collect();
-        tokio::select! {
-            Some((instance, response)) = compute_stream.next() => {
-                drop(compute_stream);
-                let response = response?;
-                match &response {
-                    ComputeResponse::FrontierUppers(updates) => {
-                        self.compute_mut(instance)
-                            // TODO: determine if this is an error, or perhaps just a late
-                            // response about a terminated instance.
-                            .expect("Reference to absent instance")
-                            .update_write_frontiers(updates)
-                            .await?;
-                    }
-                    ComputeResponse::PeekResponse(uuid, _response) => {
-                        self.compute_mut(instance)
-                            .expect("Reference to absent instance")
-                            .remove_peeks(std::iter::once(*uuid))
-                            .await?;
-                    }
-                    ComputeResponse::TailResponse(global_id, response) => {
-                        let mut changes = timely::progress::ChangeBatch::new();
-                        match response {
-                            TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                                changes.extend(upper.iter().map(|time| (time.clone(), 1)));
-                                changes.extend(lower.iter().map(|time| (time.clone(), -1)));
-                            }
-                            TailResponse::DroppedAt(frontier) => {
-                                // The tail will not be written to again, but we should not confuse that
-                                // with the source of the TAIL being complete through this time.
-                                changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                            }
+    pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let mut storage_alive = true;
+        loop {
+            let mut compute_stream: StreamMap<_, _> = self
+                .compute
+                .iter_mut()
+                .map(|(id, compute)| (*id, compute.client.as_stream()))
+                .collect();
+            tokio::select! {
+                Some((instance, response)) = compute_stream.next() => {
+                    drop(compute_stream);
+                    match response? {
+                        ComputeResponse::FrontierUppers(updates) => {
+                            self.compute_mut(instance)
+                                // TODO: determine if this is an error, or perhaps just a late
+                                // response about a terminated instance.
+                                .expect("Reference to absent instance")
+                                .update_write_frontiers(&updates)
+                                .await?;
                         }
-                        self.compute_mut(instance)
-                            .expect("Reference to absent instance")
-                            .update_write_frontiers(&[(*global_id, changes)])
-                            .await?;
+                        ComputeResponse::PeekResponse(uuid, response) => {
+                            self.compute_mut(instance)
+                                .expect("Reference to absent instance")
+                                .remove_peeks(std::iter::once(uuid))
+                                .await?;
+                            return Ok(Some(ControllerResponse::PeekResponse(uuid, response)));
+                        }
+                        ComputeResponse::TailResponse(global_id, response) => {
+                            let mut changes = timely::progress::ChangeBatch::new();
+                            match &response {
+                                TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                                    changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                                    changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                                }
+                                TailResponse::DroppedAt(frontier) => {
+                                    // The tail will not be written to again, but we should not confuse that
+                                    // with the source of the TAIL being complete through this time.
+                                    changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                                }
+                            }
+                            self.compute_mut(instance)
+                                .expect("Reference to absent instance")
+                                .update_write_frontiers(&[(global_id, changes)])
+                                .await?;
+                            return Ok(Some(ControllerResponse::TailResponse(global_id, response)));
+                        }
                     }
                 }
-                Ok(Some(Response::Compute(response)))
-            }
-            response = self.storage_controller.recv() => {
-                let response = response?;
-                match &response {
-                    Some(StorageResponse::TimestampBindings(feedback)) => {
+                response = self.storage_controller.recv(), if storage_alive => {
+                    match response? {
+                        Some(StorageResponse::TimestampBindings(feedback)) => {
+                            // Order is important here. We must durably record
+                            // the timestamp bindings before we act on them, or
+                            // an ill-timed crash could cause data loss.
+                            self.storage_controller
+                                .persist_timestamp_bindings(&feedback)
+                                .await?;
 
-                        // !!! The ordering is important here. We can never
-                        // communicate a new upper or save them in a local
-                        // datastructure before we durably record ts bindings
-                        // as otherwise a crash could cause dataloss
-
-                        self.storage_controller
-                            .persist_timestamp_bindings(&feedback)
-                            .await?;
-
-                        self.storage_controller
-                            .update_write_frontiers(&feedback.changes)
-                            .await?;
+                            self.storage_controller
+                                .update_write_frontiers(&feedback.changes)
+                                .await?;
+                        }
+                        Some(StorageResponse::LinearizedTimestamps(res)) => {
+                            return Ok(Some(ControllerResponse::LinearizedTimestamps(res)));
+                        }
+                        None => storage_alive = false,
                     }
-                    Some(StorageResponse::LinearizedTimestamps(_)) => {
-                        // Nothing to do here.
-                    }
-                    None => (),
                 }
-                Ok(response.map(Response::Storage))
+                else => return Ok(None),
             }
-            else => Ok(None),
         }
     }
 }
