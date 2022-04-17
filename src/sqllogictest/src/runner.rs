@@ -55,7 +55,6 @@ use tower_http::cors::Origin;
 use uuid::Uuid;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig};
-use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::id_gen::IdAllocator;
@@ -580,7 +579,6 @@ impl Runner {
             disable_user_indexes: false,
             safe_mode: false,
             metrics_registry: MetricsRegistry::new(),
-            persist: PersistConfig::disabled(),
             metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
         };

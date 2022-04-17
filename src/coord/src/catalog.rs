@@ -26,7 +26,6 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, SourceConnector, Timeline,
 };
@@ -60,7 +59,6 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -146,7 +144,6 @@ impl CatalogState {
             CatalogItem::Table(table) => {
                 let connector = SourceConnector::Local {
                     timeline: table.timeline(),
-                    persisted_name: table.persist_name.clone(),
                 };
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connector,
@@ -615,7 +612,6 @@ impl CatalogState {
                     }
                 })
             }
-            // TODO: Persisted tables should be Nonvolatile.
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
@@ -712,7 +708,6 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
-    pub persist_name: Option<String>,
 }
 
 impl Table {
@@ -727,17 +722,13 @@ impl Table {
 pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
-    pub persist_details: Option<SerializedSourcePersistDetails>,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
 }
 
 impl Source {
     pub fn requires_single_materialization(&self) -> bool {
-        // Persisted sources must only be persisted once because we use the source ID to derive the
-        // names of the persistent collections that back it. If we allowed multiple instances,
-        // those would clash when trying to write to those collections.
-        self.connector.requires_single_materialization() || self.persist_details.is_some()
+        self.connector.requires_single_materialization()
     }
 }
 
@@ -1227,11 +1218,6 @@ impl Catalog {
                 },
                 item: builtin.name().into(),
             };
-            let full_name = FullObjectName {
-                database: RawDatabaseSpecifier::Ambient,
-                schema: builtin.schema().into(),
-                item: builtin.name().into(),
-            };
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
@@ -1243,9 +1229,7 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             connector: mz_dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
-                                persisted_name: None,
                             },
-                            persist_details: None,
                             desc: log.variant.desc(),
                             depends_on: vec![],
                         }),
@@ -1254,13 +1238,6 @@ impl Catalog {
 
                 Builtin::Table(table) => {
                     let oid = catalog.allocate_oid()?;
-                    let persist_name = if table.persistent {
-                        config
-                            .persister
-                            .new_table_persist_name(id, &full_name.to_string())
-                    } else {
-                        None
-                    };
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1271,21 +1248,16 @@ impl Catalog {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
-                            persist_name,
                         }),
                     );
                 }
 
                 Builtin::View(view) => {
-                    let table_persist_name = None;
-                    let source_persist_details = None;
                     let item = catalog
                         .parse_item(
                             id,
                             view.sql.into(),
                             None,
-                            table_persist_name,
-                            source_persist_details,
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -1633,9 +1605,6 @@ impl Catalog {
             skip_migrations: true,
             metrics_registry,
             disable_user_indexes: false,
-            persister: &PersistConfig::disabled()
-                .init(Uuid::new_v4(), DUMMY_BUILD_INFO, metrics_registry)
-                .await?,
         })
         .await?;
         Ok(catalog)
@@ -2710,44 +2679,30 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: table.persist_name.clone(),
-                source_persist_details: None,
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: source.persist_details.clone(),
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
                 create_sql: secret.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
@@ -2758,60 +2713,33 @@ impl Catalog {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
-            table_persist_name,
-            source_persist_details,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(
-            id,
-            create_sql,
-            Some(&PlanContext::zero()),
-            table_persist_name,
-            source_persist_details,
-        )
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
     // Parses the given SQL string into a `CatalogItem`.
-    //
-    // The given `persist_details` are an optional description of the persisted streams that this
-    // source uses, if it is a persisted source.
     fn parse_item(
         &self,
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        table_persist_name: Option<String>,
-        source_persist_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                assert!(
-                    source_persist_details.is_none(),
-                    "got some source_persist_details while we didn't expect them for a table"
-                );
-                CatalogItem::Table(Table {
-                    create_sql: table.create_sql,
-                    desc: table.desc,
-                    defaults: table.defaults,
-                    conn_id: None,
-                    depends_on: table.depends_on,
-                    persist_name: table_persist_name,
-                })
-            }
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                assert!(
-                    table_persist_name.is_none(),
-                    "got some table_persist_name while we didn't expect them for a source"
-                );
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    connector: source.connector,
-                    persist_details: source_persist_details,
-                    desc: source.desc,
-                    depends_on: source.depends_on,
-                })
-            }
+            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
+                create_sql: table.create_sql,
+                desc: table.desc,
+                defaults: table.defaults,
+                conn_id: None,
+                depends_on: table.depends_on,
+            }),
+            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                connector: source.connector,
+                desc: source.desc,
+                depends_on: source.depends_on,
+            }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -2991,53 +2919,7 @@ enum SerializedCatalogItem {
         create_sql: String,
         // The name "eval_env" is historical.
         eval_env: Option<SerializedPlanContext>,
-        // Previous versions used "persist_name" as the field name here.
-        #[serde(alias = "persist_name")]
-        table_persist_name: Option<String>,
-        source_persist_details: Option<SerializedSourcePersistDetails>,
     },
-}
-
-/// Serialized source persistence details. See `SourcePersistDesc` for an explanation of the
-/// fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SerializedSourcePersistDetails {
-    /// Name of the primary persisted stream of this source. This is what a consumer of the
-    /// persisted data would be interested in while the secondary stream(s) of the source are an
-    /// internal implementation detail.
-    pub primary_stream: String,
-
-    /// Persisted stream of timestamp bindings.
-    pub timestamp_bindings_stream: String,
-
-    /// Any additional details that we need to make the envelope logic stateful.
-    pub envelope_details: SerializedEnvelopePersistDetails,
-}
-
-/// See `EnvelopePersistDesc` for an explanation of the fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SerializedEnvelopePersistDetails {
-    Upsert,
-    None,
-}
-
-impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
-    fn from(source_persist_desc: SourcePersistDesc) -> Self {
-        SerializedSourcePersistDetails {
-            primary_stream: source_persist_desc.primary_stream,
-            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream,
-            envelope_details: source_persist_desc.envelope_desc.into(),
-        }
-    }
-}
-
-impl From<EnvelopePersistDesc> for SerializedEnvelopePersistDetails {
-    fn from(persist_desc: EnvelopePersistDesc) -> Self {
-        match persist_desc {
-            EnvelopePersistDesc::Upsert => SerializedEnvelopePersistDetails::Upsert,
-            EnvelopePersistDesc::None => SerializedEnvelopePersistDetails::None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

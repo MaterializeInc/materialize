@@ -29,12 +29,10 @@ steps:
           - { value: testdrive-workers-1 }
           - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
-          - { value: persistence-testdrive }
           - { value: feature-benchmark }
           - { value: aws-config }
           - { value: zippy }
           - { value: secrets }
-          - { value: persistence-failpoints }
           - { value: catalog-compat }
         multiple: true
         required: false
@@ -180,6 +178,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2, --persistent-user-tables]
+    skip: Persistence tests disabled
 
   - id: aws-config
     label: "AWS credentials and role assumption"
@@ -213,6 +212,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
           run: failpoints
+    skip: Persistence tests disabled
 
   - id: catalog-compat
     label: Catalog compatibility test

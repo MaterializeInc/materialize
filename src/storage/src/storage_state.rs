@@ -29,12 +29,10 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist::client::RuntimeClient;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::boundary::StorageCapture;
 use crate::decode::metrics::DecodeMetrics;
-use crate::render::sources::PersistedSourceManager;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
@@ -65,14 +63,8 @@ pub struct StorageState {
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Handles that allow setting the compaction frontier for a persisted source. There can only
-    /// ever be one running (rendered) source of a persisted source, and if there is one, this map
-    /// will contain a handle to it.
-    pub persisted_sources: PersistedSourceManager,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the last time we sent binding durability info over `response_tx`.
@@ -237,8 +229,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
 
                         // Drop table-related state.
                         self.storage_state.table_state.remove(&id);
-                        // Clean up potentially left over persisted source state.
-                        self.storage_state.persisted_sources.del_source(&id);
                         // Clean up per-source state.
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
@@ -253,10 +243,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
                             table_state.since = frontier.clone();
                         }
-
-                        self.storage_state
-                            .persisted_sources
-                            .allow_compaction(id, frontier);
                     }
                 }
             }

@@ -25,8 +25,6 @@ where
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env,
-            table_persist_name,
-            source_persist_details,
         } = serde_json::from_slice(&def)?;
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
@@ -35,8 +33,6 @@ where
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
             eval_env,
-            table_persist_name,
-            source_persist_details,
         };
 
         let serialized_item =

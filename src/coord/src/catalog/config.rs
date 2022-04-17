@@ -14,7 +14,6 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::catalog::storage;
-use crate::persistcfg::PersisterWithConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -41,6 +40,4 @@ pub struct Config<'a> {
     pub metrics_registry: &'a MetricsRegistry,
     /// Whether or not to prevent user indexes from being considered for use.
     pub disable_user_indexes: bool,
-    /// A runtime for the `persist` crate alongside its configuration.
-    pub persister: &'a PersisterWithConfig,
 }

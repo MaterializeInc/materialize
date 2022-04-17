@@ -26,8 +26,8 @@ use crate::catalog::builtin::{
     MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
-    Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Type,
+    View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -121,9 +121,7 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
-            CatalogItem::Table(table) => {
-                self.pack_table_update(id, oid, schema_id, name, table, diff)
-            }
+            CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
                 self.pack_source_update(id, oid, schema_id, name, source, diff)
             }
@@ -171,7 +169,6 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        table: &Table,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -181,7 +178,6 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
-                Datum::from(table.persist_name.as_deref()),
             ]),
             diff,
         }]
@@ -196,10 +192,6 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persist_name = source
-            .persist_details
-            .as_ref()
-            .map(|persist| &*persist.primary_stream);
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
@@ -209,7 +201,6 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
-                Datum::from(persist_name),
             ]),
             diff,
         }]

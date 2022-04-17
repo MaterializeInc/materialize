@@ -24,7 +24,6 @@ use tokio::runtime::Runtime;
 use tower_http::cors::Origin;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
-use mz_coord::PersistConfig;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
@@ -177,7 +176,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         safe_mode: config.safe_mode,
         disable_user_indexes: false,
         metrics_registry: metrics_registry.clone(),
-        persist: PersistConfig::disabled(),
         metrics_listen_addr: None,
         now: config.now,
         cors_allowed_origin: Origin::list([]).into(),

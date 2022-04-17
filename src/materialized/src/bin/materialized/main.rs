@@ -35,7 +35,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
-use chrono::Utc;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
@@ -49,7 +48,6 @@ use uuid::Uuid;
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
@@ -126,55 +124,6 @@ pub struct Args {
         env = "MZ_THIRD_PARTY_METRICS_ADDR"
     )]
     metrics_listen_addr: Option<SocketAddr>,
-
-    /// Enable persistent user tables. Has to be used with --experimental.
-    #[clap(long, hide = true)]
-    persistent_user_tables: bool,
-
-    /// Disable persistence of all system tables.
-    ///
-    /// This is a test of the upcoming persistence system. The data is stored on
-    /// the filesystem in a sub-directory of the Materialize data_directory.
-    /// This test is enabled by default to allow us to collect data from a
-    /// variety of deployments, but setting this flag to true to opt out of the
-    /// test is always safe.
-    #[clap(long)]
-    disable_persistent_system_tables_test: Option<bool>,
-
-    /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
-    ///
-    /// The `<path>` is a prefix prepended to all S3 object keys used for
-    /// persistence and allowed to be empty.
-    ///
-    /// Additional configuration can be specified by appending url-like query
-    /// parameters: `?<key1>=<val1>&<key2>=<val2>...`
-    ///
-    /// Supported additional configurations are:
-    ///
-    /// - `aws_role_arn=arn:aws:...`
-    ///
-    /// Ignored if persistence is disabled. Ignored if --persist_storage_enabled
-    /// is false.
-    ///
-    /// If unset, files stored under `--data-directory/-D` are used instead. If
-    /// set, S3 credentials and region must be available in the process or
-    /// environment: for details see
-    /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
-    #[clap(long, hide = true, default_value_t)]
-    persist_storage: String,
-
-    /// Enable the --persist_storage flag. Has to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persist_storage_enabled: bool,
-
-    /// Enable persistent Kafka source. Has to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persistent_kafka_sources: bool,
-
-    /// Maximum allowed size of the in-memory persist storage cache, in bytes. Has
-    /// to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persist_cache_size_limit: Option<usize>,
 
     // === Platform options. ===
     /// The service orchestrator implementation to use.
@@ -759,79 +708,6 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
-    // Configure persistence core.
-    let persist_config = {
-        let user_table_enabled = if args.experimental && args.persistent_user_tables {
-            true
-        } else if args.persistent_user_tables {
-            bail!("cannot specify --persistent-user-tables without --experimental");
-        } else {
-            false
-        };
-        let system_table_disabled = args.disable_persistent_system_tables_test.unwrap_or(true);
-        let mut system_table_enabled = !system_table_disabled;
-        if system_table_enabled && args.logical_compaction_window.is_none() {
-            ::tracing::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
-            system_table_enabled = false;
-        }
-
-        let storage = if args.persist_storage_enabled {
-            if args.persist_storage.is_empty() {
-                bail!("--persist-storage must be specified with --persist-storage-enabled");
-            } else if !args.experimental {
-                bail!("cannot specify --persist-storage-enabled without --experimental");
-            } else {
-                PersistStorage::try_from(args.persist_storage)?
-            }
-        } else {
-            PersistStorage::File(PersistFileStorage {
-                blob_path: data_directory.join("persist").join("blob"),
-            })
-        };
-
-        let persistent_kafka_sources_enabled = if args.experimental && args.persistent_kafka_sources
-        {
-            true
-        } else if args.persistent_kafka_sources {
-            bail!("cannot specify --persistent-kafka-sources without --experimental");
-        } else {
-            false
-        };
-
-        let cache_size_limit = {
-            if args.persist_cache_size_limit.is_some() && !args.experimental {
-                bail!("cannot specify --persist-cache-size-limit without --experimental");
-            }
-
-            args.persist_cache_size_limit
-        };
-
-        let lock_info = format!(
-            "materialized {mz_version}\nos: {os}\nstart time: {start_time}",
-            mz_version = materialized::BUILD_INFO.human_version(),
-            os = os_info::get(),
-            start_time = Utc::now(),
-        );
-
-        // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
-        // As persist gets more sophisticated over time, we'll no longer need this knob,
-        // but in the meantime we need it to make tests reasonably performant.
-        // The --timestamp-frequency flag similarly gives testing a control over
-        // latency vs resource usage, so for simplicity we reuse it here."
-        let min_step_interval = args.timestamp_frequency;
-
-        PersistConfig {
-            async_runtime: Some(Arc::clone(&runtime)),
-            storage,
-            user_table_enabled,
-            system_table_enabled,
-            kafka_sources_enabled: persistent_kafka_sources_enabled,
-            lock_info,
-            min_step_interval,
-            cache_size_limit,
-        }
-    };
-
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logging,
         logical_compaction_window: args.logical_compaction_window,
@@ -852,7 +728,6 @@ max log level: {max_log_level}",
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
-        persist: persist_config,
         now: SYSTEM_TIME.clone(),
     }))?;
 

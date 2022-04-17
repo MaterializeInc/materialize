@@ -22,7 +22,6 @@ use timely::progress::frontier::Antichain;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
-use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 
@@ -103,20 +102,18 @@ pub struct BuildDesc<P> {
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceDesc<T = mz_repr::Timestamp> {
+pub struct SourceInstanceDesc {
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
-    pub arguments: SourceInstanceArguments<T>,
+    pub arguments: SourceInstanceArguments,
 }
 
 /// Per-source construction arguments.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceArguments<T = mz_repr::Timestamp> {
+pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::LinearOperator>,
-    /// A description of how to persist the source.
-    pub persist: Option<crate::sources::persistence::SourcePersistDesc<T>>,
 }
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
@@ -130,7 +127,7 @@ pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
     /// A dataflow identifier that should be unique across dataflows.
     pub dataflow_id: uuid::Uuid,
     /// Arguments to the source instantiation.
-    pub arguments: SourceInstanceArguments<T>,
+    pub arguments: SourceInstanceArguments,
     /// Frontier beyond which updates must be correct.
     pub as_of: Antichain<T>,
 }
@@ -146,7 +143,7 @@ impl<T> SourceInstanceRequest<T> {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -199,22 +196,14 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(
-        &mut self,
-        id: GlobalId,
-        description: SourceDesc,
-        persist: Option<SourcePersistDesc<T>>,
-    ) {
+    pub fn import_source(&mut self, id: GlobalId, description: SourceDesc) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
             id,
             SourceInstanceDesc {
                 description,
-                arguments: SourceInstanceArguments {
-                    operators: None,
-                    persist,
-                },
+                arguments: SourceInstanceArguments { operators: None },
             },
         );
     }
@@ -666,68 +655,6 @@ pub mod sources {
         use serde::{Deserialize, Serialize};
 
         use mz_expr::PartitionId;
-
-        /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-        pub struct SourcePersistDesc<T = mz_repr::Timestamp> {
-            /// The _current_ upper seal timestamp of all involved streams.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream, the seal timestamp
-            /// will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines seal timestamp
-            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub upper_seal_ts: T,
-
-            /// The _current_ compaction frontier (aka _since_) of all involved streams.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream and allowing
-            /// compaction, this will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines since timestamp
-            ///  2. timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub since_ts: T,
-
-            /// Name of the primary persisted stream of this source. This is what a consumer of the
-            /// persisted data would be interested in while the secondary stream(s) of the source are an
-            /// internal implementation detail.
-            pub primary_stream: String,
-
-            /// Persisted stream of timestamp bindings.
-            pub timestamp_bindings_stream: String,
-
-            /// Any additional details that we need to make the envelope logic stateful.
-            pub envelope_desc: EnvelopePersistDesc,
-        }
-
-        /// The persistence details we need for persisting a source envelopes data structures.
-        ///
-        /// This is a 1:1 mapping from envelope to `EnvelopePersistDesc`, as opposed to having a `None`
-        /// that covers all envelopes that don't need additional data. Mostly, to just be explicit, but
-        /// also because there is already a `NONE` envelope.
-        ///
-        /// Some envelopes will require additional streams, which should be listed in the variant.
-        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-        pub enum EnvelopePersistDesc {
-            Upsert,
-            None,
-        }
 
         /// Structure wrapping a timestamp update from a source
         /// If RT, contains a partition count
@@ -1238,27 +1165,8 @@ pub mod sources {
             timeline: Timeline,
         },
 
-        /// A local "source" is either fed by a local input handle, or by reading from a
-        /// `persisted_source()`. For non-persisted sources, values that are to be inserted
-        /// are sent from the coordinator and pushed into the handle on a worker.
-        ///
-        /// For persisted sources, the coordinator only writes new values to a persistent
-        /// stream. These values will then "show up" here because we read from the same
-        /// persistent stream.
-        // TODO: We could split this up into a `Local` source, that is only fed by a local handle and a
-        // `LocalPersistenceSource` which is fed from a `persisted_source()`. But moving the
-        // persist_name from `SourceDesc` to here is already a huge simplification/clarification. The
-        // persist description on a `SourceDesc` is now purely used to signal that a source actively
-        // persists, while a `LocalPersistenceSource` is a source that happens to read from persistence
-        // but doesn't persist itself.
-        //
-        // That additional split seems like a bigger undertaking, though, because it also needs changes
-        // to the coordinator. And I don't know if I want to invest too much time there when I don't
-        // yet know how Tables will work in a post-ingestd world.
-        Local {
-            timeline: Timeline,
-            persisted_name: Option<String>,
-        },
+        /// A local "source" is fed by a local input handle.
+        Local { timeline: Timeline },
     }
 
     impl SourceConnector {

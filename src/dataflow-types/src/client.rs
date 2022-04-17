@@ -161,7 +161,7 @@ pub struct RenderSourcesCommand<T> {
     /// An optional frontier to which the input should be advanced.
     pub as_of: Option<Antichain<T>>,
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
 }
 
 /// Commands related to the ingress and egress of collections.
