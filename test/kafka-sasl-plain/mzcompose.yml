@@ -48,7 +48,6 @@ services:
   materialized:
     mzbuild: materialized
     environment:
-      - MZ_DEV=1
       - SASL_PASSWORD=sekurity
     volumes:
       - secrets:/share/secrets

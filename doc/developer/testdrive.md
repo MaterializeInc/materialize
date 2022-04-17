@@ -106,7 +106,7 @@ testdrive script, you'll need two terminal windows open. In the first terminal,
 run Materialize:
 
 ```shell
-$ cargo run --bin materialized --release
+$ bin/materialized --release
 ```
 
 In the second terminal, run testdrive:

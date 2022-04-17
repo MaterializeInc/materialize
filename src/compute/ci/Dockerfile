@@ -11,6 +11,6 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install ca-certificates curl tini
 
-COPY kdestroy kinit computed /usr/local/bin/
+COPY computed /usr/local/bin/
 
 ENTRYPOINT ["tini", "--", "computed", "--listen-addr=0.0.0.0:2100"]

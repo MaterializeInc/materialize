@@ -49,16 +49,6 @@ class Arch(Enum):
             raise RuntimeError(f"unknown host architecture {platform.machine()}")
 
 
-# Hardcoded autoconf test results for libkrb5 about features available in the
-# cross toolchain that its configure script cannot auto-detect when cross
-# compiling.
-KRB5_CONF_OVERRIDES = {
-    "krb5_cv_attr_constructor_destructor": "yes",
-    "ac_cv_func_regcomp": "yes",
-    "ac_cv_printf_positional": "yes",
-}
-
-
 def target(arch: Arch) -> str:
     """Construct a Linux target triple for the specified architecture."""
     return f"{arch}-unknown-linux-gnu"
@@ -113,7 +103,6 @@ def cargo(
     env = {
         **extra_env,
         "RUSTFLAGS": " ".join(rustflags),
-        **KRB5_CONF_OVERRIDES,
     }
 
     return [

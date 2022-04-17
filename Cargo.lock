@@ -1524,18 +1524,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "duct"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1607fa68d55be208e83bcfbcfffbc1ec65c9fbcf9eb1a5d548dc3ac0100743b0"
-dependencies = [
- "libc",
- "once_cell",
- "os_pipe",
- "shared_child",
-]
-
-[[package]]
 name = "educe"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2562,15 +2550,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "krb5-src"
-version = "0.3.2+1.19.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44cd3b7e7735d48bc3793837041294f2eb747bd0f63bbc081e89972abb9e48fb"
-dependencies = [
- "duct",
-]
-
-[[package]]
 name = "kube"
 version = "0.70.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2882,7 +2861,6 @@ dependencies = [
  "include_dir",
  "itertools",
  "jsonwebtoken",
- "krb5-src",
  "lazy_static",
  "libc",
  "mime",
@@ -4243,7 +4221,6 @@ dependencies = [
  "http",
  "itertools",
  "junit-report",
- "krb5-src",
  "lazy_static",
  "maplit",
  "md-5",
@@ -4655,16 +4632,6 @@ checksum = "023df84d545ef479cf67fd2f4459a613585c9db4852c2fad12ab70587859d340"
 dependencies = [
  "log",
  "serde",
- "winapi",
-]
-
-[[package]]
-name = "os_pipe"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db4d06355a7090ce852965b2d08e11426c315438462638c6d721448d0b47aa22"
-dependencies = [
- "libc",
  "winapi",
 ]
 
@@ -5457,7 +5424,6 @@ dependencies = [
  "num_enum",
  "openssl-sys",
  "pkg-config",
- "sasl2-sys",
  "zstd-sys",
 ]
 
@@ -5637,19 +5603,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f20c4be53a8a1ff4c1f1b2bd14570d2f634628709752f0702ecdd2b3f9a5267"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "sasl2-sys"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c50936b766924ec8f5118bcd3d6e5dc7ac25263df4f2ea450fe7919281a4544"
-dependencies = [
- "cc",
- "duct",
- "krb5-src",
- "libc",
- "pkg-config",
 ]
 
 [[package]]
@@ -5834,16 +5787,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79c719719ee05df97490f80a45acfc99e5a30ce98a1e4fb67aee422745ae14e3"
 dependencies = [
  "lazy_static",
-]
-
-[[package]]
-name = "shared_child"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cebcf3a403e4deafaf34dc882c4a1b6a648b43e5670aa2e4bb985914eaeb2d2"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]

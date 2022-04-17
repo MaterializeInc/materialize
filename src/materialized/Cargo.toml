@@ -56,7 +56,6 @@ hyper-tls = { version = "0.5.0" }
 include_dir = "0.7.2"
 itertools = "0.10.3"
 jsonwebtoken = "8.0.1"
-krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 libc = "0.2.122"
 mime = "0.3.16"
@@ -164,6 +163,5 @@ dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
 
 [package.metadata.cargo-udeps.ignore]
-# krb5 used to build a binary
-# sysctl only used on macos
-normal = ["krb5-src", "sysctl"]
+# sysctl is only used on macOS.
+normal = ["sysctl"]

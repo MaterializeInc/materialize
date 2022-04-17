@@ -86,9 +86,7 @@ def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> 
         return
 
     for (name, service) in composition["services"].items():
-        if service.get("mzbuild") == "materialized":
-            _lint_materialized_service(path, name, service, errors)
-        elif "mzbuild" not in service and "image" in service:
+        if "mzbuild" not in service and "image" in service:
             _lint_image_name(path, service["image"], errors)
 
         if isinstance(service.get("environment"), dict):
@@ -147,24 +145,6 @@ def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     if repo == "wurstmeister" and image == "kafka":
         errors.append(
             LintError(path, f"replace {spec} with official confluentinc/cp-kafka image")
-        )
-
-
-def _lint_materialized_service(
-    path: Path, name: str, service: Any, errors: List[LintError]
-) -> None:
-    # command may be a string that is passed to the shell, or a list of
-    # arguments.
-    command = service.get("command", "")
-    if isinstance(command, str):
-        command = command.split()  # split on whitespace to extract individual arguments
-    env = service.get("environment", [])
-    if "MZ_DEV=1" not in env:
-        errors.append(
-            LintError(
-                path,
-                f"materialized service '{name}' does not specify MZ_DEV=1 in its environment: {env}",
-            )
         )
 
 

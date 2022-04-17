@@ -13,9 +13,7 @@ use assert_cmd::Command;
 
 fn cmd() -> Command {
     let mut cmd = Command::cargo_bin("materialized").unwrap();
-    cmd.env_clear()
-        .env("MZ_DEV", "1")
-        .timeout(Duration::from_secs(10));
+    cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
 }
 

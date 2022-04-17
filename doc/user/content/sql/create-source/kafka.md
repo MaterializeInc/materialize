@@ -322,37 +322,15 @@ CREATE SOURCE kafka_sasl
 
 This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
 
-#### SASL/GSSAPI (Kerberos)
-
-```sql
-CREATE SOURCE kafka_kerberos
-  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'tps-reports' WITH (
-      security_protocol = 'sasl_plaintext',
-      sasl_kerberos_keytab = '/secrets/materialized.keytab',
-      sasl_kerberos_service_name = 'kafka',
-      sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
-  )
-  FORMAT AVRO USING SCHEMA FILE '/tps-reports-schema.json';
-```
-
-Note that:
-
-- Materialize does _not_ support Kerberos authentication for the Confluent Schema Registry.
-
 #### SASL `WITH` options
 
 Field                                   | Value  | Description
 ----------------------------------------|--------|----------------------------------------
 `security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `GSSAPI` (the default), `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
 `sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
 `sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
 `sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
-`sasl_kerberos_keytab`                  | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_kinit_cmd`               | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_principal`               | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_service_name`            | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
 
 ## Examples
 

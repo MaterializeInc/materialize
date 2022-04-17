@@ -11,6 +11,6 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install ca-certificates curl tini
 
-COPY kdestroy kinit storaged /usr/local/bin/
+COPY storaged /usr/local/bin/
 
 ENTRYPOINT ["tini", "--", "storaged", "--listen-addr=0.0.0.0:2100"]

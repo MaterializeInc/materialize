@@ -4825,17 +4825,13 @@ pub fn describe(
 }
 
 fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    let (source_or_sink, typ, with_options) = match stmt {
-        Statement::CreateSource(CreateSourceStatement {
-            connector,
-            with_options,
-            ..
-        }) => ("source", SourceConnectorType::from(connector), with_options),
-        Statement::CreateSink(CreateSinkStatement {
-            connector,
-            with_options,
-            ..
-        }) => ("sink", SourceConnectorType::from(connector), with_options),
+    let (source_or_sink, typ) = match stmt {
+        Statement::CreateSource(CreateSourceStatement { connector, .. }) => {
+            ("source", SourceConnectorType::from(connector))
+        }
+        Statement::CreateSink(CreateSinkStatement { connector, .. }) => {
+            ("sink", SourceConnectorType::from(connector))
+        }
         _ => return Ok(()),
     };
     match typ {
@@ -4852,35 +4848,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
                 "Avro OCF {}",
                 source_or_sink
             )));
-        }
-        // Kerberos-authenticated Kafka sources and sinks are prohibited in
-        // safe mode because librdkafka will blindly execute the string passed
-        // as `sasl_kerberos_kinit_cmd`.
-        SourceConnectorType::Kafka => {
-            // It's too bad that we have to reinvent so much of librdkafka's
-            // option parsing and hardcode some of its defaults here. But there
-            // isn't an obvious alternative; asking librdkafka about its =
-            // defaults requires constructing a librdkafka client, and at that
-            // point it's already too late.
-            let mut with_options = mz_sql::normalize::options(with_options);
-            let with_options = mz_sql::kafka_util::extract_config(&mut with_options)?;
-            let security_protocol = with_options
-                .get("security.protocol")
-                .map(|v| v.as_str())
-                .unwrap_or("plaintext");
-            let sasl_mechanism = with_options
-                .get("sasl.mechanisms")
-                .map(|v| v.as_str())
-                .unwrap_or("GSSAPI");
-            if (security_protocol.eq_ignore_ascii_case("sasl_plaintext")
-                || security_protocol.eq_ignore_ascii_case("sasl_ssl"))
-                && sasl_mechanism.eq_ignore_ascii_case("GSSAPI")
-            {
-                return Err(CoordError::SafeModeViolation(format!(
-                    "Kerberos-authenticated Kafka {}",
-                    source_or_sink,
-                )));
-            }
         }
         _ => (),
     }

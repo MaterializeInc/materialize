@@ -14,7 +14,7 @@ RUN apt-get update && apt-get -qy install \
     postgresql-client \
     wait-for-it
 
-COPY kdestroy kinit testdrive /usr/local/bin/
+COPY testdrive /usr/local/bin/
 
 # Install the Protobuf compiler from protobuf-src.
 COPY protobuf-install /usr/local/

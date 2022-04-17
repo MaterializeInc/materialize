@@ -17,7 +17,7 @@ use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 use tempfile::NamedTempFile;
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::PostgresErrorExt;
 
 pub mod util;
 
@@ -214,38 +214,6 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
         .batch_execute("CREATE SINK snk FROM mz_sources INTO AVRO OCF '/ignored'")
         .unwrap_db_error();
     assert_eq!(err.message(), "cannot create Avro OCF sink in safe mode");
-
-    // No Kerberos-authenticated Kafka sources or sinks.
-    let err = client
-        .batch_execute(
-            "CREATE SOURCE src
-            FROM KAFKA BROKER 'ignored' TOPIC 'ignored'
-            WITH (security_protocol = 'sasl_plaintext')",
-        )
-        .unwrap_db_error();
-    assert_eq!(
-        err.message(),
-        "cannot create Kerberos-authenticated Kafka source in safe mode"
-    );
-    let err = client
-        .batch_execute(
-            "CREATE SINK src FROM mz_sources
-            INTO KAFKA BROKER 'ignored' TOPIC 'ignored'
-            WITH (security_protocol = 'sasl_plaintext')",
-        )
-        .unwrap_db_error();
-    assert_eq!(
-        err.message(),
-        "cannot create Kerberos-authenticated Kafka sink in safe mode"
-    );
-
-    // Non-Kerberos Kafka sources are okay though.
-    client.batch_execute(&*format!(
-        "CREATE SOURCE src
-        FROM KAFKA BROKER '{}' TOPIC 'foo'
-        FORMAT BYTES",
-        &*KAFKA_ADDRS,
-    ))?;
 
     Ok(())
 }

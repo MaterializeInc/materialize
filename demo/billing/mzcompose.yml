@@ -15,8 +15,6 @@ services:
     volumes:
     - db-data:/share/billing-demo/data
     ports: [6875]
-    environment:
-      - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
