@@ -172,9 +172,6 @@ pub struct Args {
         conflicts_with = "orchestrator"
     )]
     storage_controller_addr: Option<String>,
-    /// Retain prometheus metrics for this amount of time.
-    #[clap(short, long, hide = true, parse(try_from_str = mz_repr::util::parse_duration), default_value = "5min")]
-    retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
     /// How much historical detail to maintain in arrangements.
@@ -185,9 +182,6 @@ pub struct Args {
     /// Default frequency with which to advance timestamps
     #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
-    /// Default frequency with which to scrape prometheus metrics
-    #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
-    metrics_scraping_interval: OptionalDuration,
 
     // === Logging options. ===
     /// Where to emit log messages.
@@ -511,14 +505,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
-    // Configure Timely and Differential workers.
-    let retain_readings_for = args.retain_prometheus_metrics;
-    let metrics_scraping_interval = args.metrics_scraping_interval;
-    let logging = Some(mz_coord::LoggingConfig {
-        retain_readings_for,
-        metrics_scraping_interval,
-    });
-
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
         if args.tls_ca.is_some() {
@@ -709,7 +695,6 @@ max log level: {max_log_level}",
     sys::adjust_rlimits();
 
     let server = runtime.block_on(materialized::serve(materialized::Config {
-        logging,
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
         listen_addr: args.listen_addr,

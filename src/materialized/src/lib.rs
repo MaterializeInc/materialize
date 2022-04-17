@@ -38,7 +38,6 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
 use mz_build_info::BuildInfo;
-use mz_coord::LoggingConfig;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -82,7 +81,6 @@ pub const BUILD_INFO: BuildInfo = BuildInfo {
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Performance tuning options. ===
-    pub logging: Option<LoggingConfig>,
     /// The historical window in which distinctions are maintained for
     /// arrangements.
     ///
@@ -352,7 +350,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: dataflow_controller,
-        logging: config.logging,
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,

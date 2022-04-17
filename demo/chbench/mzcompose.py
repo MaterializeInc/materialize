@@ -12,7 +12,6 @@ from typing import List
 import requests
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import PrometheusSQLExporter
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -90,8 +89,3 @@ def workflow_load_test(c: Composition) -> None:
         "--mz-views=q01,q02,q05,q06,q08,q09,q12,q14,q17,q19",
         "--transactional-threads=2",
     )
-
-
-SERVICES = [
-    PrometheusSQLExporter(),
-]

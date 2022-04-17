@@ -69,7 +69,7 @@ def workflow_nightly(c: Composition) -> None:
         [
             "sh",
             "-c",
-            "grep -rLE 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td",
+            "grep -rLE 'mz_catalog|mz_records_' testdrive/*.td",
         ],
         cwd=Path(__file__).parent.parent,
     ).split()

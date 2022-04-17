@@ -232,20 +232,6 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
-### `mz_kafka_source_statistics`
-
-The `mz_kafka_source_statistics` table contains statistics for Kafka sources
-from the underlying [librdkafka] library.
-
-Note that the contents of this table may evolve without warning when Materialize
-updates the version of librdkafka in use.
-
-Field           | Type       | Meaning
-----------------|------------|--------
-`source_id`     | [`text`]   | The ID of the source. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
-`worker_id`     | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`statistics`    | [`jsonb`]  | A JSON object containing the statistics. See [`STATISTICS.md`] in the librdkafka documentation for details.
-
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
@@ -323,46 +309,6 @@ Field          | Type       | Meaning
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
 
-### `mz_metrics`
-
-The `mz_metrics` table contains recordings for each [Prometheus
-metric](/ops/monitoring#prometheus) in the system that is a counter or gauge.
-The values are recorded every 30 seconds and retained for five minutes.
-
-Field    | Type                         | Meaning
----------|------------------------------|--------
-`metric` | [`text`]                     | The name of the metric.
-`time`   | [`timestamp with time zone`] | The time at which the metric was recorded.
-`labels` | [`jsonb`]                    | The metric's labels and their associated values as a JSON object.
-`value`  | [`double precision`]         | The value of the counter or gauge.
-
-### `mz_metrics_meta`
-
-The `mz_metrics_meta` table describes metadata about each [Prometheus
-metric](/ops/monitoring#prometheus) in the system.
-
-Field    | Type     | Meaning
----------|----------|--------
-`metric` | [`text`] | The name of the metric.
-`type`   | [`text`] | The type of the metric (`counter`, `gauge`, or `histogram`).
-`help`   | [`text`] | The description of the metric.
-
-### `mz_metric_histograms`
-
-The `mz_metric_histograms` table contains recordings for each [Prometheus
-metric](/ops/monitoring#prometheus) in the system that is a histogram. The
-values are recorded every 30 seconds and retained for five minutes. Each row of
-the table represents one bucket of one histogram from one recording. Note that
-Prometheus histograms are cumulative.
-
-Field    | Type                 | Meaning
----------|----------------------|--------
-`metric` | [`text`]             | The name of the metric.
-`time`   | [`timestamp`]        | The time at which the metric was recor
-`labels` | [`jsonb`]            | The metric's labels and their associated values as a JSON object.
-`bound`  | [`double precision`] | The upper bound of the bucket.
-`count`  | [`bigint`]            | The (cumulative) count of observations in the bucket.
-
 ### `mz_objects`
 
 The `mz_objects` view contains a row for each table, source, view, sink, and
@@ -398,18 +344,6 @@ Field         | Type       | Meaning
 `worker`      | [`bigint`] | The ID of the worker thread servicing the peek.
 `duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
-
-### `mz_perf_dependency_frontiers`
-
-The `mz_perf_dependency_frontiers` view describes the lag between a dataflow's
-outputs and its sources. It contains a row for every dataflow in the system that
-depends on at least one source.
-
-Field      | Type       | Meaning
------------|------------|--------
-`dataflow` | [`text`]   | The name of the dataflow hosting the source.
-`source`   | [`text`]   | The name of the source.
-`lag_ms`   | [`bigint`] | The amount of lag between when a record is emitted by the source and when the output of the dataflow reflects that record.
 
 ### `mz_pseudo_types`
 
@@ -542,20 +476,6 @@ Field            | Type        | Meaning
 `name`           | [`text`]    | The name of the sink.
 `connector_type` | [`text`]    | The type of the sink: `avro-ocf` or `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-
-### `mz_source_info`
-
-The `mz_source_info` table contains a row for each partition of each source
-in the system.
-
-Field          | Type       | Meaning
----------------|------------|----------
-`source_name`  | [`text`]   | Materialize's internal name for the source.
-`source_id`    | [`text`]   | Materialize's unique ID for the source. Corresponds to [`mz_sources.id`](#mz_sources).
-`dataflow_id`  | [`bigint`] | The ID of the dataflow responsible for processing this source.
-`partition_id` | [`text`]   | The ID of the partition within the source. The concept of partition varies by source type. Not all sources types have multiple partitions, in which case there will be only one entry for partition ID `0`.
-`offset`       | [`bigint`] | The highest offset processed by this source.
-`timestamp`    | [`bigint`] | The largest `mz_timestamp` processed by this source.
 
 ### `mz_sources`
 

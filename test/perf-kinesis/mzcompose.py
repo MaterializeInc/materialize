@@ -10,11 +10,10 @@
 from typing import List
 
 from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Materialized, PrometheusSQLExporter
+from materialize.mzcompose.services import Materialized
 
 SERVICES = [
     Materialized(),
-    PrometheusSQLExporter(),
     Service(
         name="perf-kinesis",
         config={

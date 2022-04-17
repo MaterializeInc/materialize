@@ -130,12 +130,15 @@ group by mdo.id, mdo.name
 order by sum(mas.records) desc;
 ```
 
-We've also bundled a [memory usage visualization tool](/ops/monitoring/#memory-usage-visualization)
-to aid in debugging. The SQL queries above show all arrangements in Materialize
+We've also bundled an interactive, web-based memory usage visualization tool to
+aid in debugging. The SQL queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
-only user-created arrangements, grouped by dataflow. The amount of
-memory used by Materialize should correlate with the number of arrangement
-records that are displayed by either the visual interface or the SQL queries.
+only user-created arrangements, grouped by dataflow. The amount of memory used
+by Materialize should correlate with the number of arrangement records that are
+displayed by either the visual interface or the SQL queries.
+
+The memory usage visualization is available at `http://<materialized
+host>:6875/memory`.
 
 ### Is work distributed equally across workers?
 
@@ -244,7 +247,7 @@ To see how much disk space a Materialize installation is using, open a terminal 
 ```nofmt
 $ du -h -d 1 /path/to/materialize/mzdata
 ```
-`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its [log file](../monitoring/#logging) and the [system catalog](/sql/system-catalog).
+`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its log file and the [system catalog](/sql/system-catalog).
 
 The response lists the disk space for the data directory and any subdirectories:
 

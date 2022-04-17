@@ -21,38 +21,3 @@ pub mod storage_state;
 pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, EventLinkBoundary, StorageCapture};
 pub use decode::metrics::DecodeMetrics;
 pub use server::{serve_boundary_requests, Config, Server};
-
-use timely::logging::WorkerIdentifier;
-
-use mz_expr::SourceInstanceId;
-use mz_repr::adt::jsonb::Jsonb;
-
-/// Type alias for logging of materialized events.
-pub(crate) type Logger = timely::logging_core::Logger<StorageEvent, WorkerIdentifier>;
-
-/// Introspection events produced by the storage layer.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
-pub enum StorageEvent {
-    /// Underling librdkafka statistics for a Kafka source.
-    KafkaSourceStatistics {
-        /// Materialize source identifier.
-        source_id: SourceInstanceId,
-        /// The old JSONB statistics blob to retract, if any.
-        old: Option<Jsonb>,
-        /// The new JSONB statistics blob to produce, if any.
-        new: Option<Jsonb>,
-    },
-    /// Tracks the source name, id, partition id, and received/ingested offsets
-    SourceInfo {
-        /// Name of the source
-        source_name: String,
-        /// Source identifier
-        source_id: SourceInstanceId,
-        /// Partition identifier
-        partition_id: Option<String>,
-        /// Difference between the previous offset and current highest offset we've seen
-        offset: i64,
-        /// Difference between the previous timestamp and current highest timestamp we've seen
-        timestamp: i64,
-    },
-}

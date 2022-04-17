@@ -31,7 +31,6 @@ use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 
 use crate::source::metrics::{KinesisMetrics, SourceBaseMetrics};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
-use crate::Logger;
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -127,7 +126,6 @@ impl SourceReader for KinesisSourceReader {
         aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _: Option<Logger>,
         base_metrics: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {

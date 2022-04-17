@@ -77,7 +77,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::TryFutureExt;
-use futures::stream::StreamExt;
 use itertools::Itertools;
 use rand::Rng;
 use timely::order::PartialOrder;
@@ -143,11 +142,7 @@ use mz_sql::plan::{
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
 
-use self::prometheus::Scraper;
-use crate::catalog::builtin::{
-    BUILTINS, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,
-    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
-};
+use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
 };
@@ -170,7 +165,6 @@ pub mod id_bundle;
 
 mod dataflow_builder;
 mod indexes;
-mod prometheus;
 
 #[derive(Debug)]
 pub enum Message {
@@ -178,7 +172,6 @@ pub enum Message {
     Worker(mz_dataflow_types::client::Response),
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectorReady(SinkConnectorReady),
-    ScrapeMetrics,
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
@@ -234,17 +227,9 @@ pub struct TimestampedUpdate {
     pub timestamp_offset: u64,
 }
 
-/// Configures dataflow worker logging.
-#[derive(Clone, Debug)]
-pub struct LoggingConfig {
-    pub retain_readings_for: Duration,
-    pub metrics_scraping_interval: Option<Duration>,
-}
-
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_dataflow_types::client::Controller,
-    pub logging: Option<LoggingConfig>,
     pub storage: storage::Connection,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
@@ -282,15 +267,8 @@ pub struct Coordinator {
 
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
-    /// Dataflow logging configuration.
-    ///
-    /// TODO(clusters): make this configurable per cluster, rather than
-    /// globally.
-    logging: Option<LoggingConfig>,
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
-    /// Channel to communicate source status updates to the timestamper thread.
-    metric_scraper: Scraper,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -596,65 +574,61 @@ impl Coordinator {
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Announce primary and foreign key relationships.
-        if self.logging.is_some() {
-            let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
-            for log in BUILTINS.logs() {
-                let log_id = &self.catalog.resolve_builtin_log(log).to_string();
-                self.send_builtin_table_updates(
-                    log.variant
-                        .desc()
-                        .typ()
-                        .keys
-                        .iter()
-                        .enumerate()
-                        .flat_map(move |(index, key)| {
-                            key.iter().map(move |k| {
-                                let row = Row::pack_slice(&[
-                                    Datum::String(log_id),
-                                    Datum::Int64(*k as i64),
-                                    Datum::Int64(index as i64),
-                                ]);
-                                BuiltinTableUpdate {
-                                    id: mz_view_keys,
-                                    row,
-                                    diff: 1,
-                                }
-                            })
+        let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
+        for log in BUILTINS.logs() {
+            let log_id = &self.catalog.resolve_builtin_log(log).to_string();
+            self.send_builtin_table_updates(
+                log.variant
+                    .desc()
+                    .typ()
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(index, key)| {
+                        key.iter().map(move |k| {
+                            let row = Row::pack_slice(&[
+                                Datum::String(log_id),
+                                Datum::Int64(*k as i64),
+                                Datum::Int64(index as i64),
+                            ]);
+                            BuiltinTableUpdate {
+                                id: mz_view_keys,
+                                row,
+                                diff: 1,
+                            }
                         })
-                        .collect(),
-                )
-                .await;
+                    })
+                    .collect(),
+            )
+            .await;
 
-                let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-                self.send_builtin_table_updates(
-                    log.variant
-                        .foreign_keys()
-                        .into_iter()
-                        .enumerate()
-                        .flat_map(|(index, (parent, pairs))| {
-                            let parent_log =
-                                BUILTINS.logs().find(|src| src.variant == parent).unwrap();
-                            let parent_id =
-                                self.catalog.resolve_builtin_log(parent_log).to_string();
-                            pairs.into_iter().map(move |(c, p)| {
-                                let row = Row::pack_slice(&[
-                                    Datum::String(&log_id),
-                                    Datum::Int64(c as i64),
-                                    Datum::String(&parent_id),
-                                    Datum::Int64(p as i64),
-                                    Datum::Int64(index as i64),
-                                ]);
-                                BuiltinTableUpdate {
-                                    id: mz_foreign_keys,
-                                    row,
-                                    diff: 1,
-                                }
-                            })
+            let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
+            self.send_builtin_table_updates(
+                log.variant
+                    .foreign_keys()
+                    .into_iter()
+                    .enumerate()
+                    .flat_map(|(index, (parent, pairs))| {
+                        let parent_log = BUILTINS.logs().find(|src| src.variant == parent).unwrap();
+                        let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
+                        pairs.into_iter().map(move |(c, p)| {
+                            let row = Row::pack_slice(&[
+                                Datum::String(&log_id),
+                                Datum::Int64(c as i64),
+                                Datum::String(&parent_id),
+                                Datum::Int64(p as i64),
+                                Datum::Int64(index as i64),
+                            ]);
+                            BuiltinTableUpdate {
+                                id: mz_foreign_keys,
+                                row,
+                                diff: 1,
+                            }
                         })
-                        .collect(),
-                )
-                .await;
-            }
+                    })
+                    .collect(),
+            )
+            .await;
         }
 
         Ok(())
@@ -689,8 +663,6 @@ impl Coordinator {
             });
         }
 
-        let mut metric_scraper_stream = self.metric_scraper.tick_stream();
-
         loop {
             let msg = select! {
                 // Order matters here. We want to process internal commands
@@ -704,7 +676,6 @@ impl Coordinator {
                         Some(r) => Message::Worker(r),
                     }
                 },
-                Some(m) = metric_scraper_stream.next() => m,
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
@@ -732,7 +703,6 @@ impl Coordinator {
                     // here.
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
-                Message::ScrapeMetrics => self.message_scrape_metrics().await,
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
@@ -924,12 +894,6 @@ impl Coordinator {
                 tx.send(Err(e), session);
             }
         }
-    }
-
-    async fn message_scrape_metrics(&mut self) {
-        let scraped_metrics = self.metric_scraper.scrape_once();
-        self.send_builtin_table_updates_at_offset(scraped_metrics)
-            .await;
     }
 
     async fn message_command(&mut self, cmd: Command) {
@@ -4658,7 +4622,6 @@ impl Coordinator {
 pub async fn serve(
     Config {
         dataflow_client,
-        logging,
         storage,
         timestamp_frequency,
         logical_compaction_window,
@@ -4692,18 +4655,6 @@ pub async fn serve(
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
-    let mz_prometheus_metrics_global_id = catalog.resolve_builtin_table(&MZ_PROMETHEUS_METRICS);
-    let mz_prometheus_histograms_global_id =
-        catalog.resolve_builtin_table(&MZ_PROMETHEUS_HISTOGRAMS);
-    let mz_prometheus_readings_global_id = catalog.resolve_builtin_table(&MZ_PROMETHEUS_READINGS);
-    let metric_scraper = Scraper::new(
-        logging.as_ref(),
-        metrics_registry.clone(),
-        mz_prometheus_metrics_global_id,
-        mz_prometheus_histograms_global_id,
-        mz_prometheus_readings_global_id,
-    )?;
-
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
@@ -4720,9 +4671,7 @@ pub async fn serve(
                 volatile_updates: HashMap::new(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
-                logging,
                 internal_cmd_tx,
-                metric_scraper,
                 global_timeline: timeline::TimestampOracle::new(now(), move || (&*now)()),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),

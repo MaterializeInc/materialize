@@ -9,11 +9,6 @@
 
 //! Types related to the creation of dataflow sources.
 
-use mz_avro::types::Value;
-use mz_dataflow_types::sources::AwsExternalId;
-use mz_dataflow_types::{DecodeError, SourceErrorDetails};
-use mz_repr::MessagePayload;
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -23,40 +18,39 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use timely::dataflow::{
-    channels::pact::{Exchange, ParallelizationContract},
-    operators::{Capability, CapabilitySet, Event},
-};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use mz_dataflow_types::{
-    sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset},
-    SourceError,
-};
-use mz_ore::cast::CastFrom;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::now::NowFn;
-use mz_ore::task;
+use differential_dataflow::Hashable;
 use prometheus::core::{AtomicI64, AtomicU64};
-use tracing::error;
-
-use mz_expr::{PartitionId, SourceInstanceId};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::{Capability, CapabilitySet, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
+use tracing::error;
 
-use self::metrics::SourceBaseMetrics;
-
-use super::source::util::source;
-use crate::source::timestamp::TimestampBindingRc;
-use crate::{Logger, StorageEvent};
+use mz_avro::types::Value;
+use mz_dataflow_types::sources::encoding::SourceDataEncoding;
+use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
+use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
+use mz_expr::{PartitionId, SourceInstanceId};
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::now::NowFn;
+use mz_ore::task;
+use mz_repr::MessagePayload;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
+
+use crate::source::metrics::SourceBaseMetrics;
+use crate::source::timestamp::TimestampBindingRc;
+use crate::source::util::source;
 
 mod file;
 mod gen;
@@ -70,7 +64,6 @@ mod util;
 
 pub mod timestamp;
 
-use differential_dataflow::Hashable;
 pub use file::read_file_task;
 pub use file::FileReadStyle;
 pub use file::FileSourceReader;
@@ -109,8 +102,6 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: SourceDataEncoding,
-    /// Timely worker logger for source events
-    pub logger: Option<Logger>,
     /// The function to return a now time.
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
@@ -164,7 +155,6 @@ where
         aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
-        logger: Option<Logger>,
         metrics: crate::source::metrics::SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         S::new(
@@ -177,7 +167,6 @@ where
             aws_external_id,
             restored_offsets,
             encoding,
-            logger,
             metrics,
         )
         .map(Self)
@@ -389,7 +378,6 @@ pub(crate) trait SourceReader {
         aws_external_id: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
-        logger: Option<Logger>,
         metrics: crate::source::metrics::SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error>
     where
@@ -492,7 +480,6 @@ pub struct SourceMetrics {
     capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub partition_metrics: HashMap<PartitionId, PartitionMetrics>,
-    logger: Option<Logger>,
     source_name: String,
     source_id: SourceInstanceId,
     base_metrics: SourceBaseMetrics,
@@ -505,7 +492,6 @@ impl SourceMetrics {
         source_name: &str,
         source_id: SourceInstanceId,
         worker_id: &str,
-        logger: Option<Logger>,
     ) -> SourceMetrics {
         let labels = &[
             source_name.to_string(),
@@ -522,7 +508,6 @@ impl SourceMetrics {
                 .capability
                 .get_delete_on_drop_gauge(labels.to_vec()),
             partition_metrics: Default::default(),
-            logger,
             source_name: source_name.to_string(),
             source_id,
             base_metrics: base.clone(),
@@ -534,10 +519,6 @@ impl SourceMetrics {
         &mut self,
         offsets: HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ) {
-        if self.logger.is_none() {
-            return;
-        }
-
         for (partition, (offset, timestamp, count)) in offsets {
             let metric = self
                 .partition_metrics
@@ -554,30 +535,12 @@ impl SourceMetrics {
             metric.messages_ingested.inc_by(count);
 
             metric.record_offset(
-                &mut self.logger.as_mut().unwrap(),
                 &self.source_name,
                 self.source_id,
                 &partition,
                 offset.offset,
                 timestamp as i64,
             );
-        }
-    }
-}
-
-impl Drop for SourceMetrics {
-    fn drop(&mut self) {
-        // retract our partition from logging
-        if let Some(logger) = self.logger.as_mut() {
-            for (partition, metric) in self.partition_metrics.iter() {
-                logger.log(StorageEvent::SourceInfo {
-                    source_name: self.source_name.clone(),
-                    source_id: self.source_id,
-                    partition_id: partition.into(),
-                    offset: -metric.last_offset,
-                    timestamp: -metric.last_timestamp,
-                });
-            }
         }
     }
 }
@@ -600,21 +563,12 @@ impl PartitionMetrics {
     /// Record the latest offset ingested high-water mark
     fn record_offset(
         &mut self,
-        logger: &mut Logger,
-        source_name: &str,
-        source_id: SourceInstanceId,
-        partition_id: &PartitionId,
+        _source_name: &str,
+        _source_id: SourceInstanceId,
+        _partition_id: &PartitionId,
         offset: i64,
         timestamp: i64,
     ) {
-        logger.log(StorageEvent::SourceInfo {
-            source_name: source_name.to_string(),
-            source_id,
-            partition_id: partition_id.into(),
-            offset: offset - self.last_offset,
-            timestamp: timestamp - self.last_timestamp,
-        });
-
         self.offset_received.set(offset);
         self.offset_ingested.set(offset);
         self.last_offset = offset;
@@ -818,7 +772,6 @@ where
         active,
         worker_id,
         timestamp_frequency,
-        logger,
         now,
         base_metrics,
         ..
@@ -857,13 +810,8 @@ where
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
 
         let metrics_name = upstream_name.unwrap_or(name);
-        let mut metrics = SourceMetrics::new(
-            &base_metrics,
-            &metrics_name,
-            id,
-            &worker_id.to_string(),
-            logger,
-        );
+        let mut metrics =
+            SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
 
         move |cap, durability_cap: &mut CapabilitySet<Timestamp>, output| {
             if !active {
@@ -940,7 +888,6 @@ where
         timestamp_frequency,
         active,
         encoding,
-        logger,
         base_metrics,
         ..
     } = config;
@@ -962,13 +909,8 @@ where
         }
 
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
-        let mut source_metrics = SourceMetrics::new(
-            base_metrics,
-            &metrics_name,
-            id,
-            &worker_id.to_string(),
-            logger.clone(),
-        );
+        let mut source_metrics =
+            SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
         let restored_offsets = timestamp_histories
             .as_mut()
             .map(|ts| ts.partitions())
@@ -992,7 +934,6 @@ where
                 aws_external_id.clone(),
                 restored_offsets,
                 encoding,
-                logger,
                 base_metrics.clone(),
             ) {
                 Ok(source_reader) => Some(source_reader),
