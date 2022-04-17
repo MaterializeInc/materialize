@@ -78,7 +78,6 @@ pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
-    pub persistent: bool,
 }
 
 #[derive(Hash)]
@@ -941,7 +940,6 @@ lazy_static! {
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_foreign_keys",
@@ -953,7 +951,6 @@ lazy_static! {
             .with_column("parent_column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        persistent: false,
     };
     pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_kafka_sinks",
@@ -963,7 +960,6 @@ lazy_static! {
             .with_column("topic", ScalarType::String.nullable(false))
             .with_column("consistency_topic", ScalarType::String.nullable(true))
             .with_key(vec![0]),
-        persistent: false,
     };
     pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_avro_ocf_sinks",
@@ -972,7 +968,6 @@ lazy_static! {
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
-        persistent: false,
     };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
         name: "mz_databases",
@@ -981,7 +976,6 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
         name: "mz_schemas",
@@ -991,7 +985,6 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
             .with_column("name", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_columns",
@@ -1004,7 +997,6 @@ lazy_static! {
             .with_column("type", ScalarType::String.nullable(false))
             .with_column("default", ScalarType::String.nullable(true))
             .with_column("type_oid", ScalarType::Oid.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
         name: "mz_indexes",
@@ -1017,7 +1009,6 @@ lazy_static! {
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("enabled", ScalarType::Bool.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_index_columns",
@@ -1028,7 +1019,6 @@ lazy_static! {
             .with_column("on_position", ScalarType::Int64.nullable(true))
             .with_column("on_expression", ScalarType::String.nullable(true))
             .with_column("nullable", ScalarType::Bool.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
         name: "mz_tables",
@@ -1038,8 +1028,6 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("persisted_name", ScalarType::String.nullable(true)),
-        persistent: false,
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
@@ -1051,8 +1039,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("connector_type", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
-            .with_column("persisted_name", ScalarType::String.nullable(true)),
-        persistent: false,
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_sinks",
@@ -1065,7 +1051,6 @@ lazy_static! {
             .with_column("connector_type", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
         name: "mz_views",
@@ -1077,7 +1062,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
             .with_column("definition", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_types",
@@ -1088,7 +1072,6 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("category", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_array_types",
@@ -1096,14 +1079,12 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-                persistent: false,
     };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_base_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-                persistent: false,
     };
     pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_list_types",
@@ -1111,7 +1092,6 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-                persistent: false,
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_map_types",
@@ -1120,7 +1100,6 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
-                persistent: false,
     };
     pub static ref MZ_ROLES: BuiltinTable = BuiltinTable {
         name: "mz_roles",
@@ -1129,14 +1108,12 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_PSEUDO_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_pseudo_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_FUNCTIONS: BuiltinTable = BuiltinTable {
         name: "mz_functions",
@@ -1150,7 +1127,6 @@ lazy_static! {
             .with_column("variadic_id", ScalarType::String.nullable(true))
             .with_column("ret_id", ScalarType::String.nullable(true))
             .with_column("ret_set", ScalarType::Bool.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_PROMETHEUS_READINGS: BuiltinTable = BuiltinTable {
         name: "mz_metrics",
@@ -1161,12 +1137,6 @@ lazy_static! {
                 .with_column("labels", ScalarType::Jsonb.nullable(false))
                 .with_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
-        // NB: Until the end of our persisted system tables experiment, give
-        // persist team a heads up if you change this id, please!
-        // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable-persistent-system-tables-test) also has to be true
-        // for this to be persisted.
-        persistent: true,
     };
     pub static ref MZ_PROMETHEUS_METRICS: BuiltinTable = BuiltinTable {
         name: "mz_metrics_meta",
@@ -1176,7 +1146,6 @@ lazy_static! {
                 .with_column("type", ScalarType::String.nullable(false))
                 .with_column("help", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
-        persistent: false,
     };
     pub static ref MZ_PROMETHEUS_HISTOGRAMS: BuiltinTable = BuiltinTable {
         name: "mz_metric_histograms",
@@ -1188,12 +1157,6 @@ lazy_static! {
                 .with_column("bound", ScalarType::Float64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
-        // NB: Until the end of our persisted system tables experiment, give
-        // persist team a heads up if you change this id, please!
-        // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable-persistent-system-tables-test) also has to be true
-        // for this to be persisted.
-        persistent: true,
     };
     pub static ref MZ_CLUSTERS: BuiltinTable = BuiltinTable {
         name: "mz_clusters",
@@ -1201,7 +1164,6 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_SECRETS: BuiltinTable = BuiltinTable {
         name: "mz_secrets",
@@ -1210,7 +1172,6 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        persistent: false,
     };
 
 }

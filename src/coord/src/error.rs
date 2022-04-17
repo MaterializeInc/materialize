@@ -78,8 +78,6 @@ pub enum CoordError {
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
-    /// A persistence-related error.
-    Persistence(mz_persist::error::Error),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// An error occurred in the QGM stage of the optimizer.
@@ -194,7 +192,6 @@ impl CoordError {
                 let source_name = match source_type {
                     RematerializedSourceType::Postgres => "Postgres",
                     RematerializedSourceType::S3 => "S3 with SQS notification ",
-                    RematerializedSourceType::PersistedSource => "Persisted",
                 };
                 Some(format!(
                     "{} sources can be materialized by only one set of indexes at a time. \
@@ -261,13 +258,6 @@ impl CoordError {
                 let doc_page = match source_type {
                     RematerializedSourceType::Postgres => "postgres",
                     RematerializedSourceType::S3 => "text-s3",
-                    RematerializedSourceType::PersistedSource => {
-                        // TODO: Make this more helpful once we have documentation for persisted
-                        // sources.
-                        return Some(
-                            "Either create one materialization and base more views on that, or create another source to base this materialization upon.".to_string(),
-                        );
-                    }
                 };
                 Some(format!(
                     "See the documentation at https://materialize.com/docs/sql/create-source/{}",
@@ -346,7 +336,6 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
-            CoordError::Persistence(error) => error.fmt(f),
             CoordError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
@@ -460,7 +449,6 @@ impl Error for CoordError {}
 pub enum RematerializedSourceType {
     Postgres,
     S3,
-    PersistedSource,
 }
 
 impl RematerializedSourceType {
@@ -470,10 +458,6 @@ impl RematerializedSourceType {
     ///
     /// If the source is of a type that is allowed to be rematerialized
     pub fn for_source(source: &catalog::Source) -> RematerializedSourceType {
-        if source.persist_details.is_some() {
-            return RematerializedSourceType::PersistedSource;
-        }
-
         match &source.connector {
             SourceConnector::External { connector, .. } => match connector {
                 ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,

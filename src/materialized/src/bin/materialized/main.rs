@@ -35,7 +35,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
-use chrono::Utc;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
@@ -49,7 +48,6 @@ use uuid::Uuid;
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
@@ -710,37 +708,6 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
-    // Persistence core is disabled.
-    let persist_config = {
-        let user_table_enabled = false;
-        let system_table_enabled = false;
-        let storage = PersistStorage::File(PersistFileStorage {
-            blob_path: data_directory.join("persist").join("blob"),
-        });
-
-        let kafka_sources_enabled = false;
-
-        let lock_info = format!(
-            "materialized {mz_version}\nos: {os}\nstart time: {start_time}",
-            mz_version = materialized::BUILD_INFO.human_version(),
-            os = os_info::get(),
-            start_time = Utc::now(),
-        );
-
-        let min_step_interval = args.timestamp_frequency;
-
-        PersistConfig {
-            async_runtime: None,
-            storage,
-            user_table_enabled,
-            system_table_enabled,
-            kafka_sources_enabled,
-            lock_info,
-            min_step_interval,
-            cache_size_limit: None,
-        }
-    };
-
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logging,
         logical_compaction_window: args.logical_compaction_window,
@@ -761,7 +728,6 @@ max log level: {max_log_level}",
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
-        persist: persist_config,
         now: SYSTEM_TIME.clone(),
     }))?;
 

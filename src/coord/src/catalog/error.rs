@@ -59,8 +59,6 @@ pub enum ErrorKind {
     UnsatisfiableLoggingDependency { depender_name: String },
     #[error("sqlite error: {0}")]
     Storage(#[from] rusqlite::Error),
-    #[error("persistence error: {0}")]
-    Persistence(#[from] mz_persist::error::Error),
     #[error(transparent)]
     AmbiguousRename(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
@@ -124,12 +122,6 @@ impl From<rusqlite::Error> for Error {
 
 impl From<SqlCatalogError> for Error {
     fn from(e: SqlCatalogError) -> Error {
-        Error::new(ErrorKind::from(e))
-    }
-}
-
-impl From<mz_persist::error::Error> for Error {
-    fn from(e: mz_persist::error::Error) -> Error {
         Error::new(ErrorKind::from(e))
     }
 }

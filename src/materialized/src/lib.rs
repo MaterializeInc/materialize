@@ -25,7 +25,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
-use mz_coord::PersistConfig;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -139,8 +138,6 @@ pub struct Config {
     pub safe_mode: bool,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration of the persistence runtime and features.
-    pub persist: PersistConfig,
     /// Now generation function.
     pub now: NowFn,
 }
@@ -274,18 +271,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         Some(config.experimental_mode),
     )?;
 
-    // Initialize persistence runtime.
-    let persister = config
-        .persist
-        .init(
-            // Safe to use the cluster ID as the reentrance ID because
-            // `materialized` can only run as a single node.
-            coord_storage.cluster_id(),
-            BUILD_INFO,
-            &config.metrics_registry,
-        )
-        .await?;
-
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
         OrchestratorBackend::Kubernetes(config) => Box::new(
@@ -377,7 +362,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         build_info: &BUILD_INFO,
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
-        persister,
         now: config.now,
         secrets_controller,
     })

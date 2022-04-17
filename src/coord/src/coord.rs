@@ -76,7 +76,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{FutureExt, TryFutureExt};
+use futures::future::TryFutureExt;
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use rand::Rng;
@@ -86,7 +86,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{error, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -111,7 +111,6 @@ use mz_expr::{
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::soft_assert_eq;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
 use mz_repr::adt::interval::Interval;
@@ -160,7 +159,6 @@ use crate::command::{
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
-use crate::persistcfg::PersisterWithConfig;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
     TransactionStatus, WriteOp,
@@ -257,7 +255,6 @@ pub struct Config {
     pub build_info: &'static BuildInfo,
     pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
-    pub persister: PersisterWithConfig,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
 }
@@ -271,7 +268,6 @@ struct PendingPeek {
 pub struct CatalogTxn<'a, T> {
     dataflow_client: &'a mz_dataflow_types::client::Controller<T>,
     catalog: &'a CatalogState,
-    persister: &'a PersisterWithConfig,
 }
 
 /// Glues the external world to the Timely workers.
@@ -281,8 +277,6 @@ pub struct Coordinator {
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
-    /// A runtime for the `persist` crate alongside its configuration.
-    persister: PersisterWithConfig,
     /// An in-memory WAL that stages writes before publishing them to Storage
     // TODO: this must be backed by some durable medium, e.g a STORAGE collection
     volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
@@ -503,14 +497,7 @@ impl Coordinator {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(source) => {
-                    let since_ts = self
-                        .persister
-                        .load_source_persist_desc(&source)
-                        .map_err(CoordError::Persistence)?
-                        .map(|p| p.since_ts)
-                        .unwrap_or_else(Timestamp::minimum);
-
+                CatalogItem::Source(_) => {
                     // Re-announce the source description.
                     let source_description = self
                         .catalog
@@ -522,7 +509,10 @@ impl Coordinator {
                         .storage_mut()
                         .create_sources(vec![(
                             entry.id(),
-                            (source_description, Antichain::from_elem(since_ts)),
+                            (
+                                source_description,
+                                Antichain::from_elem(Timestamp::minimum()),
+                            ),
                         )])
                         .await
                         .unwrap();
@@ -532,17 +522,8 @@ impl Coordinator {
                     )
                     .await;
                 }
-                CatalogItem::Table(table) => {
-                    self.persister
-                        .add_table(entry.id(), &table)
-                        .map_err(CoordError::Persistence)?;
-
-                    let since_ts = self
-                        .persister
-                        .table_details
-                        .get(&entry.id())
-                        .map(|td| td.since_ts)
-                        .unwrap_or_else(|| self.get_local_write_ts());
+                CatalogItem::Table(_) => {
+                    let since_ts = self.get_local_write_ts();
 
                     // Re-announce the source description.
                     let source_description = self
@@ -771,54 +752,6 @@ impl Coordinator {
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
-        // Ensure that the persister is aware of exactly the set of tables for
-        // which persistence is enabled.
-        soft_assert_eq!(
-            self.catalog
-                .entries()
-                .filter(|entry| matches!(
-                    entry.item(),
-                    CatalogItem::Table(catalog::Table {
-                        persist_name: Some(_),
-                        ..
-                    })
-                ))
-                .map(|entry| entry.id())
-                .collect::<Vec<_>>(),
-            self.persister
-                .table_details
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-        );
-
-        if let Some(table_writer) = &mut self.persister.table_writer {
-            // Close out the timestamp for persisted tables.
-            //
-            // NB: Keep this method call outside the tokio::spawn. We're
-            // guaranteed by persist that writes and seals happen in order,
-            // but only if we synchronously wait for the (fast) registration
-            // of that work to return.
-            let seal_fut = table_writer.seal(&self.persister.all_table_ids, advance_to);
-            let _ = task::spawn(
-                || format!("advance_local_inputs:{advance_to}"),
-                async move {
-                    if let Err(err) = seal_fut.await {
-                        // TODO: Linearizability relies on this, bubble up the
-                        // error instead.
-                        //
-                        // EDIT: On further consideration, I think it doesn't
-                        // affect correctness if this fails, just availability
-                        // of the table.
-                        error!(
-                            "failed to seal persisted stream to ts {}: {}",
-                            advance_to, err
-                        );
-                    }
-                },
-            );
-        }
-
         let mut appends = vec![];
         // First advance the timestamp of untouched tables by appending an empty batch
         for table in self.catalog.entries().filter(|e| e.is_table()) {
@@ -878,31 +811,9 @@ impl Coordinator {
             DataflowResponse::Storage(StorageResponse::TimestampBindings(
                 TimestampBindingFeedback {
                     bindings: _,
-                    changes,
+                    changes: _,
                 },
-            )) => {
-                // Allow compaction of persisted tables.
-                let storage = self.dataflow_client.storage();
-                let source_since_updates: Vec<_> = changes
-                    .iter()
-                    .flat_map(|(id, _)| {
-                        storage
-                            .collection(*id)
-                            .ok()
-                            // IMPORTANT: This extracts the read *frontier*, rather than the coordinator's capability.
-                            // It is critical that we only allow compaction for the net of all read capabilities, rather
-                            // than just the capabilities known to the coordinator. There may well be other constraints,
-                            // e.g. on source compaction as a function of dependent indexes and sinks.
-                            .map(|collection| {
-                                (*id, collection.read_capabilities.frontier().to_owned())
-                            })
-                    })
-                    .collect();
-
-                if !source_since_updates.is_empty() {
-                    self.persisted_table_allow_compaction(&source_since_updates);
-                }
-            }
+            )) => {}
             DataflowResponse::Storage(StorageResponse::LinearizedTimestamps(
                 LinearizedTimestampBindingFeedback {
                     timestamp: _,
@@ -1191,54 +1102,6 @@ impl Coordinator {
                 let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
             }
-        }
-    }
-
-    /// Allows compaction of identified collections through the indicated frontiers.
-    fn persisted_table_allow_compaction(
-        &mut self,
-        since_updates: &[(GlobalId, Antichain<Timestamp>)],
-    ) {
-        // The updates of `since_updates` identified by a persistence-internal `stream_id`.
-        let mut persistence_since_updates = vec![];
-
-        for (id, frontier) in since_updates.iter() {
-            // HACK: Avoid the "failed to compact persisted tables" error log at
-            // restart, by not trying to allow compaction on the minimum
-            // timestamp.
-            if !frontier
-                .elements()
-                .iter()
-                .any(|x| *x > Timestamp::minimum())
-            {
-                continue;
-            }
-
-            if let Some(persist) = self.persister.table_details.get(id) {
-                persistence_since_updates.push((persist.stream_id, frontier.clone()));
-            }
-        }
-
-        if !persistence_since_updates.is_empty() {
-            let persist_multi = match &mut self.persister.table_writer {
-                Some(multi) => multi,
-                None => {
-                    error!("internal error: persist_multi_details invariant violated");
-                    return;
-                }
-            };
-
-            let compaction_fut = persist_multi.allow_compaction(&persistence_since_updates);
-            let _ = task::spawn(
-                // TODO(guswynn): Add more relevant info here
-                || "compaction",
-                async move {
-                    if let Err(err) = compaction_fut.await {
-                        // TODO: Do something smarter here
-                        error!("failed to compact persisted tables: {}", err);
-                    }
-                },
-            );
         }
     }
 
@@ -2196,9 +2059,6 @@ impl Coordinator {
             defaults: table.defaults,
             conn_id,
             depends_on: table.depends_on,
-            persist_name: self
-                .persister
-                .new_table_persist_name(table_id, &name.to_string()),
         };
         let table_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
@@ -2210,15 +2070,7 @@ impl Coordinator {
         match self.catalog_transact(ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                self.persister
-                    .add_table(table_id, &table)
-                    .map_err(CoordError::Persistence)?;
-                let since_ts = self
-                    .persister
-                    .table_details
-                    .get(&table_id)
-                    .map(|td| td.since_ts)
-                    .unwrap_or_else(|| self.get_local_write_ts());
+                let since_ts = self.get_local_write_ts();
 
                 // Announce the creation of the table source.
                 let source_description = self
@@ -2257,15 +2109,9 @@ impl Coordinator {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id()?;
         let source_oid = self.catalog.allocate_oid()?;
-        let persist_details = self.persister.new_serialized_source_persist_details(
-            source_id,
-            &plan.source.connector,
-            &plan.name.to_string(),
-        );
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
             connector: plan.source.connector,
-            persist_details,
             desc: plan.source.desc,
             depends_on: plan.source.depends_on,
         };
@@ -2329,15 +2175,6 @@ impl Coordinator {
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
 
-                // Ask persistence if it has a since timestamps for any
-                // of the new sources.
-                let since_ts = self
-                    .persister
-                    .load_source_persist_desc(&source)
-                    .map_err(CoordError::Persistence)?
-                    .map(|p| p.since_ts)
-                    .unwrap_or_else(Timestamp::minimum);
-
                 let source_description = self
                     .catalog
                     .state()
@@ -2348,7 +2185,10 @@ impl Coordinator {
                     .storage_mut()
                     .create_sources(vec![(
                         source_id,
-                        (source_description, Antichain::from_elem(since_ts)),
+                        (
+                            source_description,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        ),
                     )])
                     .await
                     .unwrap();
@@ -2914,7 +2754,6 @@ impl Coordinator {
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
 
-        let mut write_fut = None;
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
@@ -2924,12 +2763,6 @@ impl Coordinator {
                         // not have to relate to the write time.
                         let timestamp = self.get_local_write_ts();
 
-                        // Separate out which updates were to tables we are
-                        // persisting. In practice, we don't enable/disable this
-                        // with table-level granularity so it will be all of
-                        // them or none of them, which is checked below.
-                        let mut persist_updates = Vec::new();
-                        let mut had_volatile_updates = false;
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
                             let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
@@ -2939,75 +2772,22 @@ impl Coordinator {
                             if rows.is_empty() {
                                 continue;
                             }
-                            if let Some(persist) = self.persister.table_details.get(&id) {
-                                let updates = rows
-                                    .into_iter()
-                                    .map(|(row, diff)| ((row, ()), timestamp, diff));
-                                persist_updates.push((&persist.write_handle, updates));
-                            } else {
-                                let updates = rows
-                                    .into_iter()
-                                    .map(|(row, diff)| Update {
-                                        row,
-                                        diff,
-                                        timestamp,
-                                    })
-                                    .collect::<Vec<_>>();
-                                had_volatile_updates = true;
-                                self.volatile_updates.entry(id).or_default().extend(updates);
-                            }
-                        }
-
-                        // Write all updates, both persistent and volatile.
-                        // Persistence takes care of introducing anything it
-                        // writes to the dataflow, so we only need a
-                        // Command::Insert for the volatile updates.
-                        if !persist_updates.is_empty() {
-                            if had_volatile_updates {
-                                coord_bail!("transaction had mixed persistent and volatile writes");
-                            }
-                            let persist_multi =
-                                self.persister.table_writer.as_mut().ok_or_else(|| {
-                                    anyhow!(
-                                        "internal error: persist_multi_details invariant violated"
-                                    )
-                                })?;
-                            // NB: Keep this method call outside any
-                            // tokio::spawns. We're guaranteed by persist that
-                            // writes and seals happen in order, but only if we
-                            // synchronously wait for the (fast) registration of
-                            // that work to return.
-                            write_fut = Some(
-                                persist_multi
-                                    .write_atomic(|builder| {
-                                        for (handle, updates) in persist_updates {
-                                            builder.add_write(handle, updates)?;
-                                        }
-                                        Ok(())
-                                    })
-                                    .map(|res| match res {
-                                        Ok(_) => Ok(()),
-                                        Err(err) => {
-                                            Err(CoordError::Unstructured(anyhow!("{}", err)))
-                                        }
-                                    }),
-                            );
+                            let updates = rows
+                                .into_iter()
+                                .map(|(row, diff)| Update {
+                                    row,
+                                    diff,
+                                    timestamp,
+                                })
+                                .collect::<Vec<_>>();
+                            self.volatile_updates.entry(id).or_default().extend(updates);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        Ok(async move {
-            if let Some(fut) = write_fut {
-                // Because we return an async block here, this await is not executed until
-                // the containing async block is executed, so this await doesn't block the
-                // coordinator task.
-                fut.await
-            } else {
-                Ok(())
-            }
-        })
+        Ok(async move { Ok(()) })
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -4470,7 +4250,6 @@ impl Coordinator {
         let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
             f(CatalogTxn {
                 dataflow_client: &self.dataflow_client,
-                persister: &self.persister,
                 catalog,
             })
         })?;
@@ -4491,11 +4270,7 @@ impl Coordinator {
                     .unwrap();
             }
             if !tables_to_drop.is_empty() {
-                // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
-                // in `self.sources` to make sure that it is taken into account when rendering
-                // dataflows that use it. We must make sure to remove that here.
                 for id in &tables_to_drop {
-                    self.persister.remove_table(*id);
                     self.read_capability.remove(id);
                     self.volatile_updates.remove(id);
                 }
@@ -4542,9 +4317,7 @@ impl Coordinator {
 
     async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
         // NB: This makes sure to send all records for the same id in the same
-        // message so we can persist a record and its future retraction
-        // atomically. Otherwise, we may end up with permanent orphans if a
-        // restart/crash happens at the wrong time.
+        // message.
         let timestamp_base = self.get_local_write_ts();
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
@@ -4561,26 +4334,7 @@ impl Coordinator {
             // TODO: It'd be nice to unify this with the similar logic in
             // sequence_end_transaction, but it's not initially clear how to do
             // that.
-            let persist = self.persister.table_details.get(&id);
-            if let Some(persist) = persist {
-                let updates: Vec<((Row, ()), Timestamp, Diff)> = updates
-                    .into_iter()
-                    .map(|u| ((u.row, ()), u.timestamp, u.diff))
-                    .collect();
-                // Persistence of system table inserts is best effort, so throw
-                // away the response and ignore any errors. We do, however,
-                // respect the note below so we don't end up with unexpected
-                // write and seal reorderings.
-                //
-                // NB: Keep this method call outside the tokio::spawn. We're
-                // guaranteed by persist that writes and seals happen in order,
-                // but only if we synchronously wait for the (fast) registration
-                // of that work to return.
-                let write_fut = persist.write_handle.write(&updates);
-                let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
-            } else {
-                self.volatile_updates.entry(id).or_default().extend(updates);
-            }
+            self.volatile_updates.entry(id).or_default().extend(updates);
         }
     }
 
@@ -4923,7 +4677,6 @@ pub async fn serve(
         build_info,
         aws_external_id,
         metrics_registry,
-        persister,
         now,
         secrets_controller,
     }: Config,
@@ -4942,7 +4695,6 @@ pub async fn serve(
         skip_migrations: false,
         metrics_registry: &metrics_registry,
         disable_user_indexes,
-        persister: &persister,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -4974,7 +4726,6 @@ pub async fn serve(
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                persister,
                 volatile_updates: HashMap::new(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),

@@ -31,12 +31,11 @@ use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::{CoordError, PersisterWithConfig};
+use crate::CoordError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
     pub catalog: &'a CatalogState,
-    pub persister: &'a PersisterWithConfig,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
@@ -66,7 +65,6 @@ impl Coordinator {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
-            persister: &self.persister,
             compute,
         }
     }
@@ -81,7 +79,6 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
-            persister: &self.persister,
             compute,
         }
     }
@@ -137,8 +134,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
-                        let persist_details = None;
-                        dataflow.import_source(*id, source_description, persist_details);
+                        dataflow.import_source(*id, source_description, None);
                     }
                     CatalogItem::Source(source) => {
                         if source.requires_single_materialization() {
@@ -167,12 +163,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
-                        let persist_desc = self
-                            .persister
-                            .load_source_persist_desc(&source)
-                            .map_err(CoordError::Persistence)?;
-
-                        dataflow.import_source(*id, source_description, persist_desc);
+                        dataflow.import_source(*id, source_description, None);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
