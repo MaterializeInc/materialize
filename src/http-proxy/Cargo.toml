@@ -23,7 +23,7 @@ rustdoc-args = ["--cfg", "nightly_doc_features"]
 [dependencies]
 http = "0.2.6"
 hyper-proxy = { version = "0.9.1", optional = true }
-ipnet = "2.4.0"
+ipnet = "2.5.0"
 lazy_static = "1.1.1"
 reqwest = { version = "0.11.10", optional = true }
 tracing = "0.1.33"
