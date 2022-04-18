@@ -115,10 +115,12 @@ materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-name
-----
-d
-materialize
+                          List of databases
+    Name     | Owner | Encoding | Collate | Ctype | Access privileges
+-------------+-------+----------+---------+-------+-------------------
+ d           |       | UTF8     | C       | C     |
+ materialize |       | UTF8     | C       | C     |
+
 
 > SELECT id, name FROM mz_databases
 id          name
