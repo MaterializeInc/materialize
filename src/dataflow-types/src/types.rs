@@ -651,22 +651,6 @@ pub mod sources {
         }
     }
 
-    pub mod persistence {
-        use serde::{Deserialize, Serialize};
-
-        use mz_expr::PartitionId;
-
-        /// Structure wrapping a timestamp update from a source
-        /// If RT, contains a partition count
-        /// which informs workers that messages with Offset on PartitionId will be timestamped
-        /// with Timestamp.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
-        pub enum TimestampSourceUpdate {
-            /// Update for an RT source: contains a new partition to add to this source.
-            RealTime(PartitionId),
-        }
-    }
-
     /// Universal language for describing message positions in Materialize, in a source independent
     /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
     /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
