@@ -58,7 +58,7 @@ mz-expr = { path = ".", features = ["test-utils"] }
 proc-macro2 = "1.0.37"
 
 [build-dependencies]
-prost-build = "0.10.1"
+prost-build = { version = "0.10.1", features = ["vendored"] }
 
 [features]
 test-utils = ["mz-repr/test-utils", "proptest", "proptest-derive"]

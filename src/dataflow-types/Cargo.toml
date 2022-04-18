@@ -54,4 +54,4 @@ url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-prost-build = "0.10.1"
+prost-build = { version = "0.10.1", features = ["vendored"] }

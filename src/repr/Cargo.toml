@@ -50,7 +50,7 @@ rand = "0.8.5"
 proptest-derive = { git = "https://github.com/materializeInc/proptest.git" }
 
 [build-dependencies]
-prost-build = "0.10.1"
+prost-build = { version = "0.10.1", features = ["vendored"] }
 
 [features]
 test-utils = ["proptest", "proptest-derive"]
