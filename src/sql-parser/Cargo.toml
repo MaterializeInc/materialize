@@ -13,7 +13,7 @@ itertools = "0.10.3"
 lazy_static = "1.4.0"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.1", features = ["uncased"] }
-tracing = "0.1.33"
+tracing = "0.1.34"
 uncased = "0.9.6"
 
 [dev-dependencies]

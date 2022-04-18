@@ -38,7 +38,7 @@ sha2 = "0.10.2"
 smallvec = "1.8.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["fs"] }
-tracing = "0.1.33"
+tracing = "0.1.34"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 
