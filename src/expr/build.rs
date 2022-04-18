@@ -9,13 +9,17 @@
 
 fn main() {
     prost_build::Config::new()
-        .extern_path(".adt.array", "::mz_repr::proto::adt::array")
-        .extern_path(".adt.numeric", "::mz_repr::proto::adt::numeric")
-        .extern_path(".global_id", "::mz_repr::proto::global_id")
-        .extern_path(".strconv", "::mz_repr::proto::strconv")
+        .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
+        .extern_path(".mz_repr.adt.numeric", "::mz_repr::adt::numeric")
+        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .compile_protos(
-            &["id.proto", "scalar.proto", "scalar/func.proto"],
-            &["src/proto", "../repr/src/proto"],
+            &[
+                "expr/src/id.proto",
+                "expr/src/scalar.proto",
+                "expr/src/scalar/func.proto",
+            ],
+            &[".."],
         )
         .unwrap();
 }

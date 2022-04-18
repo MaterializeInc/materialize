@@ -38,6 +38,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::display::DisplayExt;
 use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
+use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
@@ -52,12 +53,9 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::proto::{ProtoRepr, TryFromProtoError};
 
-// The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
-// See https://github.com/MaterializeInc/materialize/pull/11717.
-#[cfg(feature = "test-utils")]
-use proptest_derive::Arbitrary;
+include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
 macro_rules! bail {
     ($($arg:tt)*) => { return Err(format!($($arg)*)) };
@@ -1412,8 +1410,9 @@ where
 }
 
 /// An error while parsing an input as a type.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ParseError {
     pub(crate) kind: ParseErrorKind,
     pub(crate) type_name: String,
@@ -1422,9 +1421,19 @@ pub struct ParseError {
 }
 
 #[derive(
-    Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -1497,8 +1506,48 @@ impl fmt::Display for ParseError {
 
 impl Error for ParseError {}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
+impl From<&ParseError> for ProtoParseError {
+    fn from(error: &ParseError) -> Self {
+        use proto_parse_error::*;
+        use Kind::*;
+        let kind = match error.kind {
+            ParseErrorKind::OutOfRange => OutOfRange(()),
+            ParseErrorKind::InvalidInputSyntax => InvalidInputSyntax(()),
+        };
+        ProtoParseError {
+            kind: Some(kind),
+            type_name: error.type_name.clone(),
+            input: error.input.clone(),
+            details: error.details.clone(),
+        }
+    }
+}
+
+impl TryFrom<ProtoParseError> for ParseError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoParseError) -> Result<Self, Self::Error> {
+        use proto_parse_error::Kind::*;
+
+        if let Some(kind) = error.kind {
+            Ok(ParseError {
+                kind: match kind {
+                    OutOfRange(()) => ParseErrorKind::OutOfRange,
+                    InvalidInputSyntax(()) => ParseErrorKind::InvalidInputSyntax,
+                },
+                type_name: error.type_name,
+                input: error.input,
+                details: error.details,
+            })
+        } else {
+            Err(TryFromProtoError::missing_field("`ProtoParseError::kind`"))
+        }
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
@@ -1513,6 +1562,60 @@ impl fmt::Display for ParseHexError {
             ParseHexError::OddLength => {
                 f.write_str("invalid hexadecimal data: odd number of digits")
             }
+        }
+    }
+}
+
+impl From<&ParseHexError> for ProtoParseHexError {
+    fn from(error: &ParseHexError) -> Self {
+        use proto_parse_hex_error::*;
+        use Kind::*;
+        let kind = match error {
+            ParseHexError::InvalidHexDigit(v) => InvalidHexDigit(v.into_proto()),
+            ParseHexError::OddLength => OddLength(()),
+        };
+        ProtoParseHexError { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<ProtoParseHexError> for ParseHexError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoParseHexError) -> Result<Self, Self::Error> {
+        use proto_parse_hex_error::Kind::*;
+        match error.kind {
+            Some(kind) => match kind {
+                InvalidHexDigit(v) => Ok(ParseHexError::InvalidHexDigit(char::from_proto(v)?)),
+                OddLength(()) => Ok(ParseHexError::OddLength),
+            },
+            None => Err(TryFromProtoError::missing_field(
+                "`ProtoParseHexError::kind`",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn parse_error_protobuf_roundtrip(expect in any::<ParseError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoParseError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn parse_hex_error_protobuf_roundtrip(expect in any::<ParseHexError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

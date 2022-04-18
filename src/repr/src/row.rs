@@ -36,6 +36,8 @@ use crate::Datum;
 
 mod encoding;
 
+include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
+
 /// A packed representation for `Datum`s.
 ///
 /// `Datum` is easy to work with but very space inefficient. A `Datum::Int32(42)`

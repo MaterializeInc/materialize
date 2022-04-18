@@ -12,10 +12,10 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "adt/array.proto";
-import "strconv.proto";
+import "repr/src/adt/array.proto";
+import "repr/src/strconv.proto";
 
-package scalar;
+package mz_expr.scalar;
 
 message ProtoDomainLimit {
     oneof kind {
@@ -87,7 +87,7 @@ message ProtoEvalError {
         google.protobuf.Empty invalid_timezone_interval = 22;
         google.protobuf.Empty invalid_timezone_conversion = 23;
         ProtoInvalidLayer invalid_layer = 24;
-        adt.array.ProtoInvalidArrayError invalid_array = 25;
+        mz_repr.adt.array.ProtoInvalidArrayError invalid_array = 25;
         string invalid_encoding_name = 26;
         string invalid_hash_algorithm = 27;
         ProtoInvalidByteSequence invalid_byte_sequence = 28;
@@ -100,8 +100,8 @@ message ProtoEvalError {
         string unknown_units = 35;
         ProtoUnsupportedUnits unsupported_units = 36;
         google.protobuf.Empty unterminated_like_escape_sequence = 37;
-        strconv.ProtoParseError parse = 38;
-        strconv.ProtoParseHexError parse_hex = 39;
+        mz_repr.strconv.ProtoParseError parse = 38;
+        mz_repr.strconv.ProtoParseHexError parse_hex = 39;
         string internal = 40;
         string infinity_out_of_domain = 41;
         string negative_out_of_domain = 42;

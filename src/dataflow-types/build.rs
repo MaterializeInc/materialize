@@ -9,8 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
-        .include_file("mod.rs")
         .type_attribute(".", "#[derive(Eq, serde::Serialize, serde::Deserialize)]")
-        .compile_protos(&["postgres_source.proto"], &["src"])
+        .compile_protos(&["dataflow-types/src/postgres_source.proto"], &[".."])
         .unwrap();
 }

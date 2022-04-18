@@ -9,10 +9,10 @@
 
 syntax = "proto3";
 
-import "adt/numeric.proto";
+import "repr/src/adt/numeric.proto";
 import "google/protobuf/empty.proto";
 
-package scalar.func;
+package mz_expr.scalar.func;
 
 message ProtoUnmaterializableFunc {
     oneof kind {
@@ -85,10 +85,10 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_reg_type_to_oid = 49;
         google.protobuf.Empty cast_int64_to_int16 = 50;
         google.protobuf.Empty cast_int64_to_int32 = 51;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_int16_to_numeric = 52;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_int32_to_numeric = 53;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int16_to_numeric = 52;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int32_to_numeric = 53;
         google.protobuf.Empty cast_int64_to_bool = 54;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_int64_to_numeric = 55;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int64_to_numeric = 55;
         google.protobuf.Empty cast_int64_to_float32 = 56;
         google.protobuf.Empty cast_int64_to_float64 = 57;
         google.protobuf.Empty cast_int64_to_oid = 58;
@@ -98,8 +98,8 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_float32_to_int64 = 62;
         google.protobuf.Empty cast_float32_to_float64 = 63;
         google.protobuf.Empty cast_float32_to_string = 64;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_float32_to_numeric = 65;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_float64_to_numeric = 66;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_float32_to_numeric = 65;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_float64_to_numeric = 66;
         google.protobuf.Empty cast_float64_to_int16 = 67;
         google.protobuf.Empty cast_float64_to_int32 = 68;
         google.protobuf.Empty cast_float64_to_int64 = 69;
@@ -132,7 +132,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_string_to_timestamp = 93;
         google.protobuf.Empty cast_string_to_timestamp_tz = 94;
         google.protobuf.Empty cast_string_to_interval = 95;
-        adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
         google.protobuf.Empty cast_string_to_uuid = 97;
         // unsupported: CastStringToChar
         google.protobuf.Empty cast_string_to_char = 98;

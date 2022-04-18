@@ -11,7 +11,9 @@
 
 #![allow(missing_docs)]
 
-include!(concat!(env!("OUT_DIR"), "/mod.rs"));
+pub mod persist {
+    include!(concat!(env!("OUT_DIR"), "/mz_persist.gen.persist.rs"));
+}
 
 use std::io::Read;
 

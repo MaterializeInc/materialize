@@ -7,10 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
-
-package adt.char;
-
-message ProtoCharLength {
-    uint32 value = 1;
-}
+// Types defined in relation and scalar are both defined in
+// relation_and_scalar.proto. Thus we include them here, such that relation.rs
+// and scalar.rs can selectively pub export from this private module.
+include!(concat!(env!("OUT_DIR"), "/mz_repr.relation_and_scalar.rs"));
