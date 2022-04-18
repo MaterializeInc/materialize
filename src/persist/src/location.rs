@@ -325,6 +325,30 @@ pub trait Consensus: std::fmt::Debug {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError>;
+
+    /// Return all versions of data stored for this `key` at sequence numbers
+    /// >= `from`, in ascending order of sequence number.
+    ///
+    /// Returns an error if `from` is greater than the current sequence number
+    /// or if there is no data at this key.
+    async fn scan(
+        &self,
+        deadline: Instant,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError>;
+
+    /// Deletes all historical versions of the data stored at `key` that are < `seqno`,
+    /// iff `seqno` <= the current sequence number.
+    ///
+    /// Returns an error if `seqno` is greater than the current sequence number,
+    /// or if there is no data at this key.
+    async fn truncate(
+        &self,
+        deadline: Instant,
+        key: &str,
+        seqno: SeqNo,
+    ) -> Result<(), ExternalError>;
 }
 
 /// The partially structured information stored in an exclusive-writer lock.
@@ -907,6 +931,12 @@ pub mod tests {
         // Starting value of consensus data is None.
         assert_eq!(consensus.head(deadline, key).await, Ok(None));
 
+        // Cannot scan a key that has no data.
+        assert!(consensus.scan(deadline, key, SeqNo(0)).await.is_err());
+
+        // Cannot truncate data from a key that doesn't have any data
+        assert!(consensus.truncate(deadline, key, SeqNo(0)).await.is_err(),);
+
         let state = VersionedData {
             seqno: SeqNo(5),
             data: "abc".as_bytes().to_vec(),
@@ -930,6 +960,29 @@ pub mod tests {
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(deadline, key).await, Ok(Some(state.clone())));
+
+        // Can scan a key that has data with a lower bound sequence number < head.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(0)).await,
+            Ok(vec![state.clone()])
+        );
+
+        // Can scan a key that has data with a lower bound sequence number == head.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(5)).await,
+            Ok(vec![state.clone()])
+        );
+
+        // Cannot scan a key that has data with a lower bound sequence number > head.
+        assert!(consensus.scan(deadline, key, SeqNo(6)).await.is_err());
+
+        // Can truncate data with an upper bound <= head, even if there is no data in the
+        // range [0, upper).
+        assert_eq!(consensus.truncate(deadline, key, SeqNo(0)).await, Ok(()));
+        assert_eq!(consensus.truncate(deadline, key, SeqNo(5)).await, Ok(()));
+
+        // Cannot truncate data with an upper bound > head.
+        assert!(consensus.truncate(deadline, key, SeqNo(6)).await.is_err(),);
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -993,6 +1046,42 @@ pub mod tests {
             consensus.head(deadline, key).await,
             Ok(Some(new_state.clone()))
         );
+
+        // We can observe both states in the correct order with scan if pass
+        // in a suitable lower bound.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(5)).await,
+            Ok(vec![state.clone(), new_state.clone()])
+        );
+
+        // We can observe only the most recent state if the lower bound is higher
+        // than the previous insertion's sequence number.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(6)).await,
+            Ok(vec![new_state.clone()])
+        );
+
+        // We can still observe the most recent insert as long as the provided
+        // lower bound == most recent 's sequence number.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(10)).await,
+            Ok(vec![new_state.clone()])
+        );
+
+        // We cannot scan if the provided lower bound > head's sequence number.
+        assert!(consensus.scan(deadline, key, SeqNo(11)).await.is_err());
+
+        // Can remove the previous write with the appropriate truncation.
+        assert_eq!(consensus.truncate(deadline, key, SeqNo(6)).await, Ok(()));
+
+        // Verify that the old write is indeed deleted.
+        assert_eq!(
+            consensus.scan(deadline, key, SeqNo(0)).await,
+            Ok(vec![new_state.clone()])
+        );
+
+        // Truncate is idempotent and can be repeated.
+        assert_eq!(consensus.truncate(deadline, key, SeqNo(6)).await, Ok(()));
 
         // Make sure entries under different keys don't clash.
         let other_key = "heyo_two!";

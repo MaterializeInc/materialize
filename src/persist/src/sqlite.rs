@@ -19,7 +19,6 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::{named_params, params, Connection, Error as SqliteError, OptionalExtension};
 use tokio::sync::Mutex;
 
-use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const APPLICATION_ID: i32 = 0x0678_ef32; // chosen randomly
@@ -87,22 +86,6 @@ impl SqliteConsensus {
         Ok(SqliteConsensus {
             conn: Arc::new(Mutex::new(conn)),
         })
-    }
-
-    /// Remove all versions of data inserted at sequence numbers < `sequence_number`.
-    ///
-    /// TODO: We probably are going to move this function directly into the [Consensus]
-    /// trait itself.
-    async fn truncate(&self, key: &str, sequence_number: SeqNo) -> Result<(), Error> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare(
-            "DELETE FROM consensus
-             WHERE shard = $shard AND sequence_number < $sequence_number",
-        )?;
-
-        stmt.execute(named_params! {"$shard": key, "$sequence_number": sequence_number})?;
-
-        Ok(())
     }
 }
 
@@ -187,15 +170,6 @@ impl Consensus for SqliteConsensus {
         };
 
         if result == 1 {
-            // Truncate everything strictly less than the row we just inserted.
-            // We're doing this as a best-effort measure to avoid unbounded
-            // memory growth while using this API, so don't take the result into
-            // account.
-            //
-            // TODO: remove this call once truncate becomes a full featured member
-            // of [Consensus] or, restructure this implementation to not keep historical
-            // data around if we don't need it.
-            let _ = self.truncate(key, new.seqno).await;
             Ok(Ok(()))
         } else {
             // It's safe to call head in a subsequent transaction rather than doing
@@ -207,6 +181,79 @@ impl Consensus for SqliteConsensus {
             let current = self.head(deadline, key).await?;
             Ok(Err(current))
         }
+    }
+
+    async fn scan(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare_cached(
+            "SELECT sequence_number, data FROM consensus
+                 WHERE shard = $shard AND sequence_number >= $from
+                 ORDER BY sequence_number",
+        )?;
+        let rows = stmt.query_map(named_params! {"$shard": key, "$from": from}, |row| {
+            let seqno = row.get("sequence_number")?;
+            let data: Vec<_> = row.get("data")?;
+            Ok(VersionedData { seqno, data })
+        })?;
+
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+
+        if rows.is_empty() {
+            Err(ExternalError::from(anyhow!(
+                "sequence number lower bound too high for scan: {:?}",
+                from
+            )))
+        } else {
+            Ok(rows)
+        }
+    }
+
+    async fn truncate(
+        &self,
+        deadline: Instant,
+        key: &str,
+        seqno: SeqNo,
+    ) -> Result<(), ExternalError> {
+        let result = {
+            let conn = self.conn.lock().await;
+            let mut stmt = conn.prepare_cached(
+            "DELETE FROM consensus
+             WHERE shard = $shard AND sequence_number < $sequence_number AND
+             EXISTS(
+                 SELECT * FROM consensus WHERE shard = $shard AND sequence_number >= $sequence_number
+             )"
+        )?;
+
+            stmt.execute(named_params! {"$shard": key, "$sequence_number": seqno})?
+        };
+
+        if result == 0 {
+            // We weren't able to successfully truncate any rows. Inspect head to
+            // determine whether the request was valid and there were no records in
+            // the provided range, or the request was invalid because it would have
+            // also deleted head.
+
+            // It's safe to call head in a subsequent transaction rather than doing
+            // so directly in the same transaction because, once a given (seqno, data)
+            // pair exists for our shard, we enforce the invariants that
+            // 1. Our shard will always have _some_ data mapped to it.
+            // 2. All operations that modify the (seqno, data) can only increase
+            //    the sequence number.
+            let current = self.head(deadline, key).await?;
+            if current.map_or(true, |data| data.seqno < seqno) {
+                return Err(ExternalError::from(anyhow!(
+                    "upper bound too high for truncate: {:?}",
+                    seqno
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 

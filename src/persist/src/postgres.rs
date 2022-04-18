@@ -12,6 +12,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -142,18 +143,6 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
-
-    /// Remove all versions of data inserted at sequence numbers < `sequence_number`.
-    ///
-    /// TODO: We probably are going to move this function directly into the [Consensus]
-    /// trait itself.
-    async fn truncate(&self, key: &str, sequence_number: SeqNo) -> Result<(), ExternalError> {
-        let q = "DELETE FROM consensus WHERE shard = $1 AND sequence_number < $2";
-        let client = self.client.lock().await;
-        client.execute(&*q, &[&key, &sequence_number]).await?;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -233,15 +222,6 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
-            // Truncate everything strictly less than the row we just inserted.
-            // We're doing this as a best-effort measure to avoid unbounded
-            // memory growth while using this API, so don't take the result into
-            // account.
-            //
-            // TODO: remove this call once truncate becomes a full featured member
-            // of [Consensus] or, restructure this implementation to not keep historical
-            // data around if we don't need it.
-            let _ = self.truncate(key, new.seqno).await;
             Ok(Ok(()))
         } else {
             // It's safe to call head in a subsequent transaction rather than doing
@@ -253,6 +233,77 @@ impl Consensus for PostgresConsensus {
             let current = self.head(deadline, key).await?;
             Ok(Err(current))
         }
+    }
+
+    async fn scan(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        // TODO: properly use the deadline argument.
+
+        let q = "SELECT sequence_number, data FROM consensus
+             WHERE shard = $1 AND sequence_number >= $2
+             ORDER BY sequence_number";
+        let client = self.client.lock().await;
+        let rows = client.query(&*q, &[&key, &from]).await?;
+        let mut results = vec![];
+
+        for row in rows {
+            let seqno: SeqNo = row.try_get("sequence_number")?;
+            let data: Vec<u8> = row.try_get("data")?;
+            results.push(VersionedData { seqno, data });
+        }
+
+        if results.is_empty() {
+            Err(ExternalError::from(anyhow!(
+                "sequence number lower bound too high for scan: {:?}",
+                from
+            )))
+        } else {
+            Ok(results)
+        }
+    }
+
+    async fn truncate(
+        &self,
+        deadline: Instant,
+        key: &str,
+        seqno: SeqNo,
+    ) -> Result<(), ExternalError> {
+        let q = "DELETE FROM consensus
+                WHERE shard = $1 AND sequence_number < $2 AND
+                EXISTS(
+                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
+                )";
+
+        let result = {
+            let client = self.client.lock().await;
+            client.execute(&*q, &[&key, &seqno]).await?
+        };
+        if result == 0 {
+            // We weren't able to successfully truncate any rows inspect head to
+            // determine whether the request was valid and there were no records in
+            // the provided range, or the request was invalid because it would have
+            // also deleted head.
+
+            // It's safe to call head in a subsequent transaction rather than doing
+            // so directly in the same transaction because, once a given (seqno, data)
+            // pair exists for our shard, we enforce the invariants that
+            // 1. Our shard will always have _some_ data mapped to it.
+            // 2. All operations that modify the (seqno, data) can only increase
+            //    the sequence number.
+            let current = self.head(deadline, key).await?;
+            if current.map_or(true, |data| data.seqno < seqno) {
+                return Err(ExternalError::from(anyhow!(
+                    "upper bound too high for truncate: {:?}",
+                    seqno
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 
