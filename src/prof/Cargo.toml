@@ -26,4 +26,3 @@ tokio = { version = "1.17.0", features = ["time"] }
 [features]
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl"]
-
