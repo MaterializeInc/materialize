@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! The HTTP console, for profiling (and in the future, possibly other) functionality.
+
 use std::net::SocketAddr;
 
 use axum::routing::{get, post};
 use axum::Router;
 use mz_build_info::BuildInfo;
 
+/// Kick off the HTTP server.
 pub async fn serve(listen_addr: SocketAddr, build_info: &'static BuildInfo) -> hyper::Result<()> {
     let app = Router::new()
         .route(

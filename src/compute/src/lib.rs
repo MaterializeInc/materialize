@@ -13,6 +13,7 @@
 
 pub(crate) mod arrangement;
 pub mod compute_state;
+pub mod http;
 pub(crate) mod logging;
 pub(crate) mod render;
 pub mod server;

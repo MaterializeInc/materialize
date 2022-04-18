@@ -17,7 +17,6 @@ use compile_time_run::run_command_str;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use mz_build_info::{make_build_info, BuildInfo};
-use mz_dataflow::DummyBoundary;
 use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -234,9 +233,25 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
+    let (storage_client, _thread) =
+        mz_storage::tcp_boundary::client::connect(args.storage_addr, config.workers).await?;
+    let boundary = (0..config.workers)
+        .into_iter()
+        .map(|_| Some(storage_client.clone()))
+        .collect::<Vec<_>>();
+    let boundary = Arc::new(Mutex::new(boundary));
+    let workers = config.workers;
+    let (server, client) = mz_compute::server::serve_boundary(config, move |index| {
+        boundary.lock().unwrap()[index % workers].take().unwrap()
+    })?;
+    let mut client: Box<dyn ComputeClient> = Box::new(client);
+    if args.reconcile {
+        client = Box::new(ComputeCommandReconcile::new(client))
+    }
+
     if let Some(addr) = args.http_console_addr {
         let addr: SocketAddr = addr.parse()?;
-        mz_dataflowd::http::serve(addr, &BUILD_INFO).await?;
+        mz_compute::http::serve(addr, &BUILD_INFO).await?;
     }
 
     serve(serve_config, server, client).await
