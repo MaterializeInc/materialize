@@ -17,11 +17,9 @@ use askama::Template;
 use axum::response::IntoResponse;
 use cfg_if::cfg_if;
 use http::StatusCode;
+use mz_build_info::BuildInfo;
 
-use mz_prof::{ProfStartTime, StackProfile};
-
-use crate::http::util;
-use crate::BUILD_INFO;
+use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(target_os = "macos")] {
@@ -55,13 +53,13 @@ struct FlamegraphTemplate<'a> {
 }
 
 #[allow(clippy::drop_copy)]
-async fn time_prof<'a>(merge_threads: bool) -> impl IntoResponse {
+async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
         if #[cfg(target_os = "macos")] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = crate::jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Some(borrow)
@@ -72,12 +70,18 @@ async fn time_prof<'a>(merge_threads: bool) -> impl IntoResponse {
     }
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
-    let stacks = unsafe { mz_prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }
+    let stacks = unsafe { crate::time::prof_time(Duration::from_secs(10), 99, merge_threads) }
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
-    Ok::<_, (StatusCode, String)>(flamegraph(stacks, "CPU Time Flamegraph", false, &[]))
+    Ok::<_, (StatusCode, String)>(flamegraph(
+        stacks,
+        "CPU Time Flamegraph",
+        false,
+        &[],
+        &build_info,
+    ))
 }
 
 fn flamegraph(
@@ -85,8 +89,9 @@ fn flamegraph(
     title: &str,
     display_bytes: bool,
     extras: &[&str],
+    build_info: &BuildInfo,
 ) -> impl IntoResponse {
-    let collated = mz_prof::collate_stacks(stacks);
+    let collated = crate::collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
         |node| {
@@ -106,8 +111,8 @@ fn flamegraph(
         },
     );
     let data_json = &*data_json.borrow();
-    util::template_response(FlamegraphTemplate {
-        version: BUILD_INFO.version,
+    mz_http_util::template_response(FlamegraphTemplate {
+        version: build_info.version,
         title,
         data_json,
         display_bytes,
@@ -123,12 +128,10 @@ mod disabled {
     use serde::Deserialize;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
-    use crate::http::util;
-    use crate::BUILD_INFO;
 
-    pub async fn handle_get() -> impl IntoResponse {
-        util::template_response(ProfTemplate {
-            version: BUILD_INFO.version,
+    pub async fn handle_get(build_info: BuildInfo) -> impl IntoResponse {
+        mz_http_util::template_response(ProfTemplate {
+            version: build_info.version,
             mem_prof: MemProfilingStatus::Disabled,
         })
     }
@@ -141,6 +144,7 @@ mod disabled {
 
     pub async fn handle_post(
         Form(ProfForm { action, threads }): Form<ProfForm>,
+        _: BuildInfo,
     ) -> impl IntoResponse {
         let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
@@ -169,12 +173,11 @@ mod enabled {
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
-    use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
-    use mz_prof::symbolicate;
+    use crate::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
+    use crate::symbolicate;
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
-    use crate::http::util;
-    use crate::BUILD_INFO;
+    use mz_build_info::BuildInfo;
 
     struct HumanFormattedBytes(usize);
     impl std::fmt::Display for HumanFormattedBytes {
@@ -200,6 +203,7 @@ mod enabled {
 
     pub async fn handle_post(
         Form(ProfForm { action, threads }): Form<ProfForm>,
+        build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let prof_ctl = PROF_CTL.as_ref().unwrap();
         let merge_threads = threads.as_deref() == Some("merge");
@@ -211,7 +215,7 @@ mod enabled {
                         .activate()
                         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 };
-                Ok(render_template(prof_ctl).await.into_response())
+                Ok(render_template(prof_ctl, build_info).await.into_response())
             }
             "deactivate" => {
                 {
@@ -220,7 +224,7 @@ mod enabled {
                         .deactivate()
                         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 };
-                Ok(render_template(prof_ctl).await.into_response())
+                Ok(render_template(prof_ctl, build_info).await.into_response())
             }
             "dump_file" => {
                 let mut borrow = prof_ctl.lock().await;
@@ -308,9 +312,12 @@ mod enabled {
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                Ok(flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered).into_response())
+                Ok(
+                    flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered, build_info)
+                        .into_response(),
+                )
             }
-            "time_fg" => Ok(time_prof(merge_threads).await.into_response()),
+            "time_fg" => Ok(time_prof(merge_threads, build_info).await.into_response()),
             x => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),
@@ -326,6 +333,7 @@ mod enabled {
     pub async fn handle_get(
         Query(query): Query<ProfQuery>,
         headers: HeaderMap,
+        build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let prof_ctl = PROF_CTL.as_ref().unwrap();
         match query.action.as_deref() {
@@ -347,14 +355,17 @@ mod enabled {
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized query: {}", x),
             )),
-            None => Ok(render_template(prof_ctl).await.into_response()),
+            None => Ok(render_template(prof_ctl, build_info).await.into_response()),
         }
     }
 
-    async fn render_template(prof_ctl: &Arc<Mutex<JemallocProfCtl>>) -> impl IntoResponse {
+    async fn render_template(
+        prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
+        build_info: &'static BuildInfo,
+    ) -> impl IntoResponse {
         let prof_md = prof_ctl.lock().await.get_md();
-        util::template_response(ProfTemplate {
-            version: BUILD_INFO.version,
+        mz_http_util::template_response(ProfTemplate {
+            version: build_info.version,
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
         })
     }

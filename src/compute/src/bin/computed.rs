@@ -8,12 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::process;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
+use compile_time_run::run_command_str;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use mz_build_info::{make_build_info, BuildInfo};
+use mz_dataflow::DummyBoundary;
 use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -40,6 +44,30 @@ use mz_compute::server::Server;
 #[cfg(not(target_os = "macos"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+pub const BUILD_INFO: BuildInfo = make_build_info(
+    env!("CARGO_PKG_VERSION"),
+    run_command_str!(
+        "sh",
+        "-c",
+        r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
+            echo "$MZ_DEV_BUILD_SHA"
+        else
+            # Unfortunately we need to suppress error messages from `git`, as
+            # run_command_str will display no error message at all if we print
+            # more than one line of output to stderr.
+            git rev-parse --verify HEAD 2>/dev/null || {
+                printf "error: unable to determine Git SHA; " >&2
+                printf "either build from working Git clone " >&2
+                printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
+                printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
+                exit 1
+            }
+        fi"#
+    ),
+    compile_time_run::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+    env!("TARGET_TRIPLE"),
+);
 
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
@@ -101,6 +129,9 @@ struct Args {
     /// Enable command reconciliation.
     #[clap(long, requires = "linger")]
     reconcile: bool,
+    /// The address of the HTTP profiling UI.
+    #[clap(long, value_name = "HOST:PORT")]
+    http_console_addr: Option<String>,
 }
 
 #[tokio::main]
@@ -203,21 +234,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
-    let (storage_client, _thread) =
-        mz_storage::tcp_boundary::client::connect(args.storage_addr, config.workers).await?;
-    let boundary = (0..config.workers)
-        .into_iter()
-        .map(|_| Some(storage_client.clone()))
-        .collect::<Vec<_>>();
-    let boundary = Arc::new(Mutex::new(boundary));
-    let workers = config.workers;
-    let (server, client) = mz_compute::server::serve_boundary(config, move |index| {
-        boundary.lock().unwrap()[index % workers].take().unwrap()
-    })?;
-    let mut client: Box<dyn ComputeClient> = Box::new(client);
-    if args.reconcile {
-        client = Box::new(ComputeCommandReconcile::new(client))
+    if let Some(addr) = args.http_console_addr {
+        let addr: SocketAddr = addr.parse()?;
+        mz_dataflowd::http::serve(addr, &BUILD_INFO).await?;
     }
+
     serve(serve_config, server, client).await
 }
 

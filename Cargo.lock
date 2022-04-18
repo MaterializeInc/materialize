@@ -2877,6 +2877,7 @@ dependencies = [
  "mz-dataflow-types",
  "mz-frontegg-auth",
  "mz-http-proxy",
+ "mz-http-util",
  "mz-kafka-util",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -3500,6 +3501,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-http-util"
+version = "0.0.0"
+dependencies = [
+ "askama",
+ "axum",
+]
+
+[[package]]
 name = "mz-interchange"
 version = "0.0.0"
 dependencies = [
@@ -3903,8 +3912,15 @@ name = "mz-prof"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "askama",
+ "axum",
  "backtrace",
+ "cfg-if",
+ "headers",
+ "http",
  "lazy_static",
+ "mz-build-info",
+ "mz-http-util",
  "pprof",
  "serde",
  "tempfile",

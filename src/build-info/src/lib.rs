@@ -58,3 +58,17 @@ impl BuildInfo {
             .expect("build version is not valid semver")
     }
 }
+
+pub const fn make_build_info(
+    version: &'static str,
+    sha: &'static str,
+    time: &'static str,
+    target_triple: &'static str,
+) -> BuildInfo {
+    BuildInfo {
+        version,
+        sha,
+        time,
+        target_triple,
+    }
+}

@@ -14,17 +14,17 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::HashMap;
-use std::env;
-use std::fs;
 use std::fs::Permissions;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
 
 use anyhow::{anyhow, Context};
 use compile_time_run::run_command_str;
 use futures::StreamExt;
+use mz_build_info::{make_build_info, BuildInfo};
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -37,7 +37,6 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
-use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -53,9 +52,9 @@ use crate::mux::Mux;
 pub mod http;
 pub mod mux;
 
-pub const BUILD_INFO: BuildInfo = BuildInfo {
-    version: env!("CARGO_PKG_VERSION"),
-    sha: run_command_str!(
+pub const BUILD_INFO: BuildInfo = make_build_info(
+    env!("CARGO_PKG_VERSION"),
+    run_command_str!(
         "sh",
         "-c",
         r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
@@ -73,9 +72,9 @@ pub const BUILD_INFO: BuildInfo = BuildInfo {
             }
         fi"#
     ),
-    time: run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
-    target_triple: env!("TARGET_TRIPLE"),
-};
+    compile_time_run::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+    env!("TARGET_TRIPLE"),
+);
 
 /// Configuration for a `materialized` server.
 #[derive(Debug, Clone)]
