@@ -144,7 +144,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 anyhow = "1.0.56"
 askama_shared = { version = "0.12.2", features = ["json"] }
 cc = "1.0.73"
-flate2 = "1.0.22"
+flate2 = "1.0.23"
 hex = "0.4.3"
 hex-literal = "0.3.4"
 reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"] }
