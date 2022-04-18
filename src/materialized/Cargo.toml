@@ -57,7 +57,7 @@ include_dir = "0.7.2"
 itertools = "0.10.3"
 jsonwebtoken = "8.0.1"
 lazy_static = "1.4.0"
-libc = "0.2.122"
+libc = "0.2.123"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
