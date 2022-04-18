@@ -10,6 +10,7 @@
 use std::fmt;
 use std::process;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::bail;
 use futures::sink::SinkExt;
@@ -21,6 +22,7 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 use mz_dataflow_types::client::{GenericClient, StorageClient};
 use mz_ore::metrics::MetricsRegistry;
@@ -82,6 +84,13 @@ struct Args {
     /// Enable command reconciliation.
     #[clap(long, requires = "linger")]
     reconcile: bool,
+
+    /// Where the persist library should store its blob data.
+    #[clap(long, env = "STORAGED_PERSIST_BLOB_URL")]
+    persist_blob_url: Url,
+    /// Where the persist library should perform consensus.
+    #[clap(long, env = "STORAGED_PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Url,
 }
 
 #[tokio::main]
@@ -129,6 +138,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         listener.local_addr()?
     );
 
+    info!("starting persist client...");
+    let persist_client = {
+        let location = mz_persist_client::Location {
+            blob_uri: args.persist_blob_url.to_string(),
+            consensus_uri: args.persist_consensus_url.to_string(),
+        };
+        let (blob, consensus) = location.open(Duration::from_secs(30)).await?;
+        mz_persist_client::Client::new(Duration::from_secs(30), blob, consensus).await?
+    };
+
     let config = mz_storage::Config {
         workers: args.workers,
         timely_config,
@@ -139,6 +158,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
+        persist_client,
     };
 
     let serve_config = ServeConfig {

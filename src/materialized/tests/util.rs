@@ -144,6 +144,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
+        persist_location: mz_persist_client::Location {
+            blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+            consensus_uri: format!("sqlite://{}/persist/consensus", data_directory.display()),
+        },
         data_directory,
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
