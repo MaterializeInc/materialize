@@ -42,8 +42,8 @@ fn bench_compare_and_set<C: Consensus>(consensus: &mut C, data: Vec<u8>, b: &mut
     // Set an initial value in case that has different performance characteristics
     // for some Consensus implementations.
     futures_executor::block_on(consensus.compare_and_set(
-        &key,
         deadline,
+        &key,
         None,
         VersionedData {
             seqno: current,
@@ -56,8 +56,8 @@ fn bench_compare_and_set<C: Consensus>(consensus: &mut C, data: Vec<u8>, b: &mut
     b.iter(|| {
         let next = current.next();
         futures_executor::block_on(consensus.compare_and_set(
-            &key,
             deadline,
+            &key,
             Some(current),
             VersionedData {
                 seqno: next,
