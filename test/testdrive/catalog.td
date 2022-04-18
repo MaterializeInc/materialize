@@ -113,6 +113,13 @@ name
 d
 materialize
 
+# ...and also in `\l`
+$ psql-execute command="\l"
+name
+----
+d
+materialize
+
 > SELECT id, name FROM mz_databases
 id          name
 -----------------------
