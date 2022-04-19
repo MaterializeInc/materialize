@@ -122,8 +122,9 @@ fn flamegraph(
 
 #[cfg(target_os = "macos")]
 mod disabled {
-    use axum::extract::Form;
+    use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
+    use http::header::HeaderMap;
     use http::StatusCode;
     use serde::Deserialize;
 
