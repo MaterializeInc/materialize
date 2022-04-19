@@ -532,7 +532,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty least = 3;
         google.protobuf.Empty concat = 4;
         google.protobuf.Empty make_timestamp = 5;
-        google.protobuf.Empty pad_leading = 6;
+        google.protobuf.Empty pad_leading = 16;
         google.protobuf.Empty substr = 7;
         google.protobuf.Empty replace = 8;
         google.protobuf.Empty jsonb_build_array = 9;
@@ -542,7 +542,7 @@ message ProtoVariadicFunc {
         uint64 array_index = 13;
         mz_repr.relation_and_scalar.ProtoScalarType list_create = 14;
         ProtoRecordCreate record_create = 15;
-        google.protobuf.Empty list_index = 16;
+        google.protobuf.Empty list_index = 6;
         google.protobuf.Empty list_slice_linear = 17;
         google.protobuf.Empty split_part = 18;
         google.protobuf.Empty regexp_match = 19;
