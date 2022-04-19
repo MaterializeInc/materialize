@@ -29,11 +29,12 @@ use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
 use serde::Deserialize;
-use timely::progress::frontier::{Antichain, AntichainRef};
-use timely::progress::Timestamp;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::{ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_ore::now::EpochMillis;
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -104,6 +105,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
     replica_sizes: ClusterReplicaSizeMap,
+    command_frontier: MutableAntichain<EpochMillis>,
 }
 
 impl<T> Controller<T>
@@ -299,6 +301,15 @@ where
                                 .await?;
                             return Ok(Some(ControllerResponse::TailResponse(global_id, response)));
                         }
+                        ComputeResponse::CommandFrontier(mut changes) => {
+                            // Surface the `changes` in relation to the local command frontier
+                            let changes = self.command_frontier.update_iter(changes.drain());
+                            let mut change_batch = ChangeBatch::new();
+                            change_batch.extend(changes);
+                            if !change_batch.is_empty() {
+                                return Ok(Some(ControllerResponse::CommandFrontier(instance, change_batch)));
+                            }
+                        }
                     }
                 }
                 response = self.storage_controller.recv(), if storage_alive => {
@@ -327,7 +338,7 @@ where
     }
 }
 
-impl<T> Controller<T> {
+impl<T: Timestamp> Controller<T> {
     /// Create a new controller from a client it should wrap.
     pub fn new<S: StorageController<Timestamp = T> + 'static>(
         orchestrator: OrchestratorConfig,
@@ -339,6 +350,7 @@ impl<T> Controller<T> {
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
             replica_sizes,
+            command_frontier: MutableAntichain::new(),
         }
     }
 }

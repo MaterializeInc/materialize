@@ -33,11 +33,13 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
+use crate::client::sequence::Sequenced;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
 use mz_expr::RowSetFinishing;
+use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
@@ -45,7 +47,7 @@ use super::ReadPolicy;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
-    pub(super) client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
+    pub(super) client: Sequenced<ActiveReplication<Box<dyn ComputeClient<T>>, T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
@@ -161,7 +163,8 @@ where
                 );
             }
         }
-        let mut client = crate::client::replicated::ActiveReplication::default();
+        let client = crate::client::replicated::ActiveReplication::default();
+        let mut client = Sequenced::new(client, SYSTEM_TIME.clone());
         client
             .send(ComputeCommand::CreateInstance(logging.clone()))
             .await?;
@@ -217,11 +220,15 @@ where
 
     /// Adds a new instance replica, by name.
     pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
-        self.compute.client.add_replica(id, client).await;
+        self.compute
+            .client
+            .immer_mut()
+            .add_replica(id, client)
+            .await;
     }
     /// Removes an existing instance replica, by name.
     pub fn remove_replica(&mut self, id: &str) {
-        self.compute.client.remove_replica(id);
+        self.compute.client.immer_mut().remove_replica(id);
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.
@@ -462,6 +469,17 @@ where
                 .await?;
         }
         Ok(())
+    }
+
+    pub async fn advance_command_frontier(
+        &mut self,
+        changes: ChangeBatch<EpochMillis>,
+    ) -> Result<(), ComputeError> {
+        self.compute
+            .client
+            .send(ComputeCommand::CommandFrontier(changes))
+            .await
+            .map_err(ComputeError::from)
     }
 }
 

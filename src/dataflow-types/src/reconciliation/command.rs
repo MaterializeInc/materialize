@@ -157,6 +157,13 @@ where
                 self.responses
                     .push_back(ComputeResponse::TailResponse(id, response));
             }
+            ComputeResponse::CommandFrontier(changes) => {
+                // Reconcile with local state
+                // let changes = self.command_frontier.update_iter(changes.drain())
+                // TODO(mh): implement reconciliation.
+                self.responses
+                    .push_back(ComputeResponse::CommandFrontier(changes));
+            }
         }
     }
 
@@ -177,6 +184,7 @@ where
                     self.client.send(CreateInstance(config)).await?;
                     self.created = true;
                 }
+                // TODO: else: reconcile command frontier
                 Ok(())
             }
             cmd @ DropInstance => {
@@ -230,6 +238,10 @@ where
                     self.peeks.remove(uuid);
                 }
                 self.client.send(CancelPeeks { uuids }).await
+            }
+            CommandFrontier(frontier) => {
+                // TODO: maintain local frontier to reconcile.
+                self.client.send(CommandFrontier(frontier)).await
             }
         }
     }

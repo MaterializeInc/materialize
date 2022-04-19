@@ -16,13 +16,15 @@ use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_storage::boundary::ComputeReplay;
 
 use crate::compute_state::ActiveComputeState;
@@ -201,6 +203,7 @@ where
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
+                            command_frontier: MutableAntichain::new_bottom(EpochMillis::minimum()),
                         });
                     }
                     ComputeCommand::DropInstance => {

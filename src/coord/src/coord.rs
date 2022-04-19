@@ -783,6 +783,10 @@ impl Coordinator {
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
+            ControllerResponse::CommandFrontier(_instance, _changes) => {
+                // TODO(mh): make `changes` accessible to the coordinator.
+                println!("command frontier instance {_instance} -> {_changes:?}")
+            }
         }
     }
 

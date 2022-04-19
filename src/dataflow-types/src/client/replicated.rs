@@ -24,7 +24,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use timely::progress::{frontier::MutableAntichain, Antichain};
+use mz_ore::now::EpochMillis;
+use timely::progress::{frontier::MutableAntichain, Antichain, ChangeBatch, Timestamp};
 
 use crate::client::Peek;
 use mz_repr::GlobalId;
@@ -47,6 +48,10 @@ pub struct ActiveReplication<C, T> {
     history: crate::client::ComputeCommandHistory<T>,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
     last_command_count: usize,
+    /// Response command frontier.
+    command_frontier: MutableAntichain<EpochMillis>,
+    /// Response command frontier per replica.
+    command_frontiers: HashMap<String, MutableAntichain<EpochMillis>>,
 }
 
 impl<C, T> Default for ActiveReplication<C, T> {
@@ -57,6 +62,8 @@ impl<C, T> Default for ActiveReplication<C, T> {
             tails: Default::default(),
             uppers: Default::default(),
             history: Default::default(),
+            command_frontier: Default::default(),
+            command_frontiers: Default::default(),
             last_command_count: 0,
         }
     }
@@ -78,12 +85,23 @@ where
             });
         }
         self.replicas.insert(identifier.clone(), client);
+        self.command_frontier
+            .update_dirty(EpochMillis::minimum(), 1);
+        self.command_frontiers.insert(
+            identifier.clone(),
+            MutableAntichain::new_bottom(EpochMillis::minimum()),
+        );
+
         self.hydrate_replica(&identifier).await;
     }
 
     /// Remove a replica by its identifier.
     pub fn remove_replica(&mut self, id: &str) {
         self.replicas.remove(id);
+        if let Some(frontier) = self.command_frontiers.remove(id) {
+            self.command_frontier
+                .update_iter(frontier.frontier().iter().map(|t| (t.clone(), -1)));
+        }
         for (_frontier, frontiers) in self.uppers.iter_mut() {
             frontiers.1.remove(id);
         }
@@ -283,6 +301,19 @@ where
                                         TailResponse::DroppedAt(frontier),
                                     )));
                                 }
+                            }
+                        }
+                        Ok(ComputeResponse::CommandFrontier(mut changes)) => {
+                            // Absorb changes into local changes, report progress
+                            let changes = self
+                                .command_frontiers
+                                .get_mut(&replica_id)
+                                .expect("replica state missing")
+                                .update_iter(changes.drain());
+                            let mut change_batch = ChangeBatch::new();
+                            change_batch.extend(self.command_frontier.update_iter(changes));
+                            if !change_batch.is_empty() {
+                                return Ok(Some(ComputeResponse::CommandFrontier(change_batch)));
                             }
                         }
                         Err(_error) => {

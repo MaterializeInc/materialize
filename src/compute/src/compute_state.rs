@@ -18,7 +18,7 @@ use differential_dataflow::Collection;
 use timely::communication::Allocate;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
+use mz_ore::now::EpochMillis;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::boundary::ComputeReplay;
 use mz_timely_util::activator::RcActivator;
@@ -63,6 +64,8 @@ pub struct ComputeState {
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub materialized_logger: Option<logging::materialized::Logger>,
+    /// The current command frontier.
+    pub command_frontier: MutableAntichain<EpochMillis>,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -203,6 +206,15 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                         self.compute_state.pending_peeks.push(peek);
                     }
                 }
+            }
+            ComputeCommand::CommandFrontier(mut changes) => {
+                let mut response = ChangeBatch::with_capacity(2);
+                response.extend(
+                    self.compute_state
+                        .command_frontier
+                        .update_iter(changes.drain()),
+                );
+                self.send_compute_response(ComputeResponse::CommandFrontier(response))
             }
         }
     }

@@ -32,6 +32,7 @@ use crate::{
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
 use mz_expr::{PartitionId, RowSetFinishing};
+use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Row};
 
 pub mod controller;
@@ -39,6 +40,7 @@ pub use controller::Controller;
 
 pub mod partitioned;
 pub mod replicated;
+pub mod sequence;
 
 /// An abstraction allowing us to name difference compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
@@ -127,6 +129,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// The identifiers of the peek requests to cancel.
         uuids: BTreeSet<Uuid>,
     },
+    /// Report the current command frontier
+    CommandFrontier(ChangeBatch<EpochMillis>),
 }
 
 /// A command creating a single source
@@ -246,6 +250,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         let mut live_peeks = Vec::new();
         let mut live_cancels = std::collections::BTreeSet::new();
 
+        let mut live_command_frontier = ChangeBatch::new();
+
         let mut create_command = None;
         let mut drop_command = None;
 
@@ -276,6 +282,10 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 ComputeCommand::CancelPeeks { mut uuids } => {
                     uuids.retain(|uuid| peeks.contains(uuid));
                     live_cancels.extend(uuids);
+                }
+                ComputeCommand::CommandFrontier(mut frontier) => {
+                    live_command_frontier.extend(frontier.drain());
+                    live_command_frontier.compact();
                 }
             }
         }
@@ -311,7 +321,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         live_peeks.retain(|peek| peeks.contains(&peek.uuid));
 
         // Record the volume of post-compaction commands.
-        let mut command_count = 1;
+        let mut command_count = 2;
         command_count += live_dataflows.len();
         command_count += final_frontiers.len();
         command_count += live_peeks.len();
@@ -343,6 +353,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
         }
+
+        self.commands
+            .push(ComputeCommand::CommandFrontier(live_command_frontier));
 
         command_count
     }
@@ -398,6 +411,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// of a specific "linearized" read request.
     // TODO(benesch,gus): update language to avoid the term "linearizability".
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+    /// Mirror compute command progress to the coordinator
+    CommandFrontier(ComputeInstanceId, ChangeBatch<EpochMillis>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
@@ -409,6 +424,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
+    /// Mirror compute command progress to the coordinator
+    CommandFrontier(ChangeBatch<EpochMillis>),
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.

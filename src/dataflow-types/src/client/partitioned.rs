@@ -18,11 +18,13 @@ use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::{ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
 use tracing::debug;
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use mz_ore::now::EpochMillis;
 use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
@@ -266,6 +268,8 @@ pub struct PartitionedComputeState<T> {
     /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
     /// back until their timestamps are complete.
     pending_tails: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
+
+    command_frontier: MutableAntichain<EpochMillis>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -276,11 +280,14 @@ where
     type PartitionedState = PartitionedComputeState<T>;
 
     fn new(parts: usize) -> PartitionedComputeState<T> {
+        let mut command_frontier = MutableAntichain::new();
+        command_frontier.update_dirty(EpochMillis::minimum(), parts as i64);
         PartitionedComputeState {
             parts,
             uppers: HashMap::new(),
             peek_responses: HashMap::new(),
             pending_tails: HashMap::new(),
+            command_frontier,
         }
     }
 }
@@ -291,14 +298,17 @@ where
 {
     fn reset(&mut self) {
         let PartitionedComputeState {
-            parts: _,
+            parts,
             uppers,
             peek_responses,
             pending_tails,
+            command_frontier,
         } = self;
         uppers.clear();
         peek_responses.clear();
         pending_tails.clear();
+        command_frontier.clear();
+        command_frontier.update_iter(std::iter::once((EpochMillis::minimum(), *parts as i64)));
     }
 
     /// Observes commands that move past, and prepares state for responses.
@@ -507,6 +517,17 @@ where
                             TailResponse::DroppedAt(frontier),
                         )))
                     }
+                }
+            }
+            ComputeResponse::CommandFrontier(mut changes) => {
+                // Absorb `changes` into the common `self.command_frontier`, and report the
+                // effective changes.
+                let mut effective_changes = ChangeBatch::new();
+                effective_changes.extend(self.command_frontier.update_iter(changes.drain()));
+                if !effective_changes.is_empty() {
+                    Some(Ok(ComputeResponse::CommandFrontier(effective_changes)))
+                } else {
+                    None
                 }
             }
         }
