@@ -1421,7 +1421,7 @@ CREATE CONNECTOR conn1 FOR KAFKA BROKER 'kafka:1234' WITH (security_protocol = '
 ----
 CREATE CONNECTOR conn1 FOR KAFKA BROKER 'kafka:1234' WITH (security_protocol = 'SASL_SSL', sasl_mechanisms = 'PLAIN')
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: Kafka { broker: "kafka:1234", with_options: [Value { name: Ident("security_protocol"), value: String("SASL_SSL") }, Value { name: Ident("sasl_mechanisms"), value: String("PLAIN") }] }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: Kafka { broker: "kafka:1234", with_options: [WithOption { key: Ident("security_protocol"), value: Some(Value(String("SASL_SSL"))) }, WithOption { key: Ident("sasl_mechanisms"), value: Some(Value(String("PLAIN"))) }] }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTOR conn1
