@@ -1038,14 +1038,6 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
-fn rescale_numeric<'a>(a: Datum<'a>, scale: NumericMaxScale) -> Result<Datum<'a>, EvalError> {
-    let mut d = a.unwrap_numeric();
-    if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
-        return Err(EvalError::NumericFieldOverflow);
-    };
-    Ok(Datum::Numeric(d))
-}
-
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2112,7 +2104,8 @@ impl BinaryFunc {
                         tz,
                         b.unwrap_time(),
                         wall_time
-                    ).into())
+                    )
+                    .into())
                 )
             }
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
@@ -3484,7 +3477,7 @@ pub enum UnaryFunc {
     Exp(Exp),
     ExpNumeric(ExpNumeric),
     Sleep(Sleep),
-    RescaleNumeric(NumericMaxScale),
+    RescaleNumeric(RescaleNumeric),
     PgColumnSize(PgColumnSize),
     MzRowSize(MzRowSize),
     MzTypeName(MzTypeName),
@@ -3755,7 +3748,8 @@ derive_unary!(
     ExtractDate,
     ExtractTime,
     DatePartTime,
-    TimezoneTime
+    TimezoneTime,
+    RescaleNumeric
 );
 
 impl UnaryFunc {
@@ -3974,6 +3968,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | DatePartTime(_)
             | TimezoneTime(_)
+            | RescaleNumeric(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -3989,7 +3984,6 @@ impl UnaryFunc {
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
-            RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
     }
 
@@ -4205,6 +4199,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | DatePartTime(_)
             | TimezoneTime(_)
+            | RescaleNumeric(_)
             | Chr(_) => unreachable!(),
 
             CastRecordToString { .. }
@@ -4229,11 +4224,6 @@ impl UnaryFunc {
             },
 
             ListLength | MapLength => ScalarType::Int32.nullable(nullable),
-
-            RescaleNumeric(scale) => (ScalarType::Numeric {
-                max_scale: Some(*scale),
-            })
-            .nullable(nullable),
         }
     }
 
@@ -4452,6 +4442,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | DatePartTime(_)
             | TimezoneTime(_)
+            | RescaleNumeric(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
@@ -4463,7 +4454,6 @@ impl UnaryFunc {
             | CastInt2VectorToString => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
             ListLength | MapLength => false,
-            RescaleNumeric(_) => false,
         }
     }
 
@@ -4578,6 +4568,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | DatePartTime(_)
             | TimezoneTime(_)
+            | RescaleNumeric(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4788,6 +4779,7 @@ impl UnaryFunc {
             | ExtractTime(_)
             | DatePartTime(_)
             | TimezoneTime(_)
+            | RescaleNumeric(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4799,7 +4791,6 @@ impl UnaryFunc {
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
-            RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }
 }

@@ -548,7 +548,7 @@ lazy_static! {
                 let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
-                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
+                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(func::RescaleNumeric(scale))),
                 })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
