@@ -1412,8 +1412,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
-FROM mz_catalog.mz_databases d
-WHERE (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM mz_catalog.mz_databases d",
 };
 
 pub const PG_INDEX: BuiltinView = BuiltinView {
