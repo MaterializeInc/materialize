@@ -75,7 +75,6 @@ class Materialized(Service):
             f"--listen-addr 0.0.0.0:{guest_port}",
             "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
-            "--process-listen-host=0.0.0.0",
         ]
 
         if options:

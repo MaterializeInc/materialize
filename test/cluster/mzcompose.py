@@ -44,7 +44,10 @@ SERVICES = [
         options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
         ports=[2100, 2102],
     ),
-    Materialized(extra_ports=[2101]),
+    Materialized(
+        extra_ports=[2101],
+        options="--process-listen-host=0.0.0.0"
+    ),
     Testdrive(
         volumes=[
             "mzdata:/share/mzdata",
