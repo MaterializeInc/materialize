@@ -59,6 +59,7 @@ metadata:
 spec:
   serviceName: materialized
   replicas: 1
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: materialized
@@ -77,6 +78,7 @@ spec:
             - --orchestrator=kubernetes
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
+            - --kubernetes-image-pull-policy=never
             - --experimental
         ports:
         - containerPort: 6875
