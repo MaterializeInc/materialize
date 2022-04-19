@@ -148,7 +148,8 @@ impl RedundantJoin {
                         // Update the column offsets in the binding expressions to catch
                         // up with the removal of `remove_input_idx`.
                         for expr in bindings.iter_mut() {
-                            expr.visit_mut_post(&mut |e| {
+                            #[allow(deprecated)]
+                            expr.visit_mut_post_nolimit(&mut |e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     let (_local_col, input_relation) =
                                         old_input_mapper.map_column_to_local(*c);
@@ -164,7 +165,8 @@ impl RedundantJoin {
                         // from inputs after `remove_input_idx`.
                         for equivalence in equivalences.iter_mut() {
                             for expr in equivalence.iter_mut() {
-                                expr.visit_mut_post(&mut |e| {
+                                #[allow(deprecated)]
+                                expr.visit_mut_post_nolimit(&mut |e| {
                                     if let MirScalarExpr::Column(c) = e {
                                         let (local_col, input_relation) =
                                             old_input_mapper.map_column_to_local(*c);

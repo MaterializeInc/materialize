@@ -125,10 +125,11 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
+            #[allow(deprecated)]
             dataflow.objects_to_build[other]
                 .plan
                 .as_inner_mut()
-                .visit_mut_post(&mut |expr| {
+                .visit_mut_post_nolimit(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
                         if id == &Id::Global(global_id) {
                             *id = Id::Local(new_local);
