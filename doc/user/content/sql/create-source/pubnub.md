@@ -4,6 +4,7 @@ description: "Connecting Materialize to a PubNub channel"
 menu:
   main:
     parent: 'create-source'
+    name: PubNub
 aliases:
     - /sql/create-source/text-pubnub
     - /sql/create-source/json-pubnub
