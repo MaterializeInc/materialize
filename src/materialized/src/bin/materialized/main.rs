@@ -153,6 +153,9 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("computed"))
     )]
     computed_image: Option<String>,
+    /// The host on which processes spawned by the process orchestrator listen for connections.
+    #[structopt(long, hide = true)]
+    process_listen_host: Option<String>,
 
     // === Secrets controller options. ===
     /// The secrets controller implementation to use
@@ -566,6 +569,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     // necessary.
                     port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
                     suppress_output: false,
+                    process_listen_host: args.process_listen_host,
                 })
             }
         },

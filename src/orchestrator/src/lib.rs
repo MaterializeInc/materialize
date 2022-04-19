@@ -28,6 +28,8 @@ use derivative::Derivative;
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
+    // Default host used to bind to.
+    fn listen_host(&self) -> &str;
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }

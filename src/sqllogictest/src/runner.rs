@@ -568,6 +568,7 @@ impl Runner {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                     port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
                     suppress_output: false,
+                    process_listen_host: None,
                 }),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),

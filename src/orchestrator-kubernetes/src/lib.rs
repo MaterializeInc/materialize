@@ -83,6 +83,9 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
+    fn listen_host(&self) -> &str {
+        "0.0.0.0"
+    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
