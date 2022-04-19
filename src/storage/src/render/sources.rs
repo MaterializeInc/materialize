@@ -311,6 +311,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            storage_metadata.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -322,6 +323,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            storage_metadata.clone(),
                         );
                         ((SourceType::Delimited(ok), err), cap)
                     }
@@ -330,6 +332,7 @@ where
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),
+                            storage_metadata.clone(),
                         );
                         ((SourceType::ByteStream(ok), err), cap)
                     }

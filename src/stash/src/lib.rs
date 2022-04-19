@@ -635,6 +635,41 @@ where
         stash.peek_key_one(collection, key).await
     }
 
+    /// Sets the given k,v pair if not already set
+    pub async fn insert_without_overwrite<S>(
+        &self,
+        stash: &mut S,
+        key: &K,
+        value: V,
+    ) -> Result<V, StashError>
+    where
+        S: Append,
+    {
+        let collection = self.get(stash).await?;
+        let mut batch = collection.make_batch(stash).await?;
+        let prev = match stash.peek_key_one(collection, key).await {
+            Ok(prev) => prev,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    stash.append(once(batch)).await?;
+                    batch = collection.make_batch(stash).await?;
+                    stash.peek_key_one(collection, key).await?
+                }
+                _ => return Err(err),
+            },
+        };
+        match prev {
+            Some(prev) => Ok(prev),
+            None => {
+                collection.append_to_batch(&mut batch, &key, &value, 1);
+                stash.append(once(batch)).await?;
+                Ok(value)
+            }
+        }
+    }
+
     /// Sets the given k,v pair.
     pub async fn upsert_key<S>(&self, stash: &mut S, key: &K, value: &V) -> Result<(), StashError>
     where

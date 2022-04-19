@@ -124,7 +124,7 @@ where
             // need.
             let mut current_ts = 0;
 
-            move |cap, cap_set, output| {
+            move |cap, output| {
                 let waker = futures_util::task::waker_ref(&activator);
                 let mut context = Context::from_waker(&waker);
 
@@ -143,10 +143,9 @@ where
                                     current_ts = *first_element;
                                     cap.downgrade(first_element);
                                 }
-                                cap_set.downgrade(upper);
                             }
                             ListenEvent::Updates(updates) => {
-                                let cap = cap_set.delayed(&current_ts);
+                                let cap = cap.delayed(&current_ts);
                                 let mut session = output.session(&cap);
                                 for update in updates {
                                     session.give(Ok(update));
@@ -154,7 +153,7 @@ where
                             }
                         },
                         Some(Err::<_, anyhow::Error>(e)) => {
-                            let cap = cap_set.delayed(&current_ts);
+                            let cap = cap.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give(Err((format!("{}", e), current_ts, 1)));
                         }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
@@ -55,7 +55,6 @@ where
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut Capability<Timestamp>,
-            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
         ) -> SourceStatus
         + 'static,
@@ -69,10 +68,7 @@ where
     builder.set_notify(false);
 
     builder.build(|mut capabilities| {
-        let data_capability = capabilities.pop().unwrap();
-        let durability_capability = CapabilitySet::from_elem(data_capability.clone());
-
-        let mut capabilities = Some((data_capability, durability_capability));
+        let mut capabilities = Some(capabilities.pop().unwrap());
 
         let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
         let drop_activator_weak = Arc::downgrade(&drop_activator);
@@ -89,12 +85,10 @@ where
             if drop_activator_weak.upgrade().is_none() {
                 capabilities = None;
             }
-            if let Some((data_cap, durability_capability)) = &mut capabilities {
+            if let Some(data_cap) = &mut capabilities {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done =
-                    tick(data_cap, durability_capability, &mut data_output.activate())
-                {
+                if let SourceStatus::Done = tick(data_cap, &mut data_output.activate()) {
                     // The inner source is finished. Drop our capability.
                     capabilities = None;
                 }

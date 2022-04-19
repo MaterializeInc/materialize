@@ -28,7 +28,6 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_repr::proto::TryFromProtoError;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
@@ -38,12 +37,11 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_persist_client::{read::ReadHandle, PersistLocation};
+use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
-use mz_repr::Diff;
-use mz_repr::GlobalId;
-use mz_repr::Row;
-use mz_stash::{self, Stash, StashError};
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_stash::{self, Stash, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
@@ -148,6 +146,7 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
+    pub timestamp_shard_id: ShardId,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -303,8 +302,10 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+        let timestamp_shard_id = self.collection(id)?.timestamp_shard_id;
         Ok(CollectionMetadata {
+            timestamp_shard_id,
             persist_location: self.persist_location.clone(),
         })
     }
@@ -377,8 +378,17 @@ where
                     as Box<dyn CollectionReadHandle<T>>
             });
 
-            let collection_state =
-                CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
+            let timestamp_shard_id = TypedCollection::new("timestamp-shard-id")
+                .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
+                .await?;
+
+            let collection_state = CollectionState::new(
+                desc.clone(),
+                since.clone(),
+                read_handle,
+                last_bindings,
+                timestamp_shard_id,
+            );
             self.state.collections.insert(id, collection_state);
 
             let storage_metadata = self.collection_metadata(id)?;
@@ -759,6 +769,9 @@ pub struct CollectionState<T> {
     // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
     // being optional
     pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+
+    /// Stable shard ID that identifies where timestamp bindings are stored
+    pub timestamp_shard_id: ShardId,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -768,6 +781,7 @@ impl<T: Timestamp> CollectionState<T> {
         since: Antichain<T>,
         read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
+        timestamp_shard_id: ShardId,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
@@ -779,6 +793,7 @@ impl<T: Timestamp> CollectionState<T> {
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             last_reported_ts_bindings,
             read_handle,
+            timestamp_shard_id,
         }
     }
 }
