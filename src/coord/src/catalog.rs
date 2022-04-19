@@ -48,9 +48,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateConnectorPlan,
-    CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
+    StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -2727,8 +2727,6 @@ impl Catalog {
             CatalogItem::Connector(connector) => SerializedCatalogItem::V1 {
                 create_sql: connector.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };

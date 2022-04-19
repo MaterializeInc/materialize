@@ -1026,7 +1026,6 @@ lazy_static! {
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("connector_type", ScalarType::String.nullable(false)),
-        persistent: false,
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
@@ -2013,7 +2012,6 @@ lazy_static! {
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-            Builtin::Log(&MZ_KAFKA_SOURCE_STATISTICS),
             Builtin::Log(&MZ_MATERIALIZATIONS),
             Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
             Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
@@ -2023,7 +2021,6 @@ lazy_static! {
             Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
             Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
             Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-            Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
@@ -2046,9 +2043,6 @@ lazy_static! {
             Builtin::Table(&MZ_ROLES),
             Builtin::Table(&MZ_PSEUDO_TYPES),
             Builtin::Table(&MZ_FUNCTIONS),
-            Builtin::Table(&MZ_PROMETHEUS_READINGS),
-            Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
-            Builtin::Table(&MZ_PROMETHEUS_METRICS),
             Builtin::Table(&MZ_CLUSTERS),
             Builtin::Table(&MZ_SECRETS),
             Builtin::Table(&MZ_CONNECTORS),
@@ -2063,7 +2057,6 @@ lazy_static! {
             Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
             Builtin::View(&MZ_MESSAGE_COUNTS),
             Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
-            Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),

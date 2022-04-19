@@ -11,7 +11,7 @@ use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
 use mz_dataflow_types::sources::ConnectorInner;
-use mz_expr::{GlobalId, MirScalarExpr};
+use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -28,7 +28,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
-    Source, Table, Type, View, SYSTEM_CONN_ID,
+    Source, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.

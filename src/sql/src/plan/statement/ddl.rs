@@ -2831,7 +2831,7 @@ pub fn plan_create_connector(
         connector,
         if_not_exists,
     } = stmt;
-    let connector_literal = match connector {
+    let connector_inner = match connector {
         CreateConnector::Kafka {
             broker,
             with_options,
@@ -2849,7 +2849,7 @@ pub fn plan_create_connector(
         if_not_exists,
         connector: Connector {
             create_sql,
-            connector: connector_literal,
+            connector: connector_inner,
         },
     };
     Ok(Plan::CreateConnector(plan))
