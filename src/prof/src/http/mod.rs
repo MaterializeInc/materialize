@@ -131,6 +131,7 @@ mod disabled {
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
 
+    #[allow(clippy::unused_async)]
     pub async fn handle_get(build_info: &'static BuildInfo) -> impl IntoResponse {
         mz_http_util::template_response(ProfTemplate {
             version: build_info.version,
