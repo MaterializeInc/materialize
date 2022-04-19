@@ -115,7 +115,7 @@ materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-                          List of databases
+\                          List of databases
     Name     | Owner | Encoding | Collate | Ctype | Access privileges
 -------------+-------+----------+---------+-------+-------------------
  d           |       | UTF8     | C       | C     |
