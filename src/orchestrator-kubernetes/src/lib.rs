@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use clap::ArgEnum;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
@@ -39,6 +40,25 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: HashMap<String, String>,
+    /// The image pull policy to set for services created by the orchestrator.
+    pub image_pull_policy: KubernetesImagePullPolicy,
+}
+
+#[derive(ArgEnum, Debug, Clone, Copy)]
+pub enum KubernetesImagePullPolicy {
+    Always,
+    IfNotPresent,
+    Never,
+}
+
+impl fmt::Display for KubernetesImagePullPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KubernetesImagePullPolicy::Always => f.write_str("Always"),
+            KubernetesImagePullPolicy::IfNotPresent => f.write_str("IfNotPresent"),
+            KubernetesImagePullPolicy::Never => f.write_str("Never"),
+        }
+    }
 }
 
 /// An orchestrator backed by Kubernetes.
@@ -46,6 +66,7 @@ pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
     service_labels: HashMap<String, String>,
+    image_pull_policy: KubernetesImagePullPolicy,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -78,6 +99,7 @@ impl KubernetesOrchestrator {
             client,
             kubernetes_namespace,
             service_labels: config.service_labels,
+            image_pull_policy: config.image_pull_policy,
         })
     }
 }
@@ -94,6 +116,7 @@ impl Orchestrator for KubernetesOrchestrator {
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             service_labels: self.service_labels.clone(),
+            image_pull_policy: self.image_pull_policy,
         })
     }
 }
@@ -106,6 +129,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     service_labels: HashMap<String, String>,
+    image_pull_policy: KubernetesImagePullPolicy,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -114,6 +138,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("kubernetes_namespace", &self.kubernetes_namespace)
             .field("namespace", &self.namespace)
             .field("service_labels", &self.service_labels)
+            .field("image_pull_policy", &self.image_pull_policy)
             .finish()
     }
 }
@@ -209,7 +234,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     name: "default".into(),
                     image: Some(image),
                     args: Some(args(&ports)),
-                    image_pull_policy: Some("Always".into()),
+                    image_pull_policy: Some(self.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
                             .iter()

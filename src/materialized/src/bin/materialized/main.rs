@@ -50,7 +50,7 @@ use materialized::{
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
-use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
+use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::id_gen::IdAllocator;
@@ -153,9 +153,14 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("computed"))
     )]
     computed_image: Option<String>,
-    /// The host on which processes spawned by the process orchestrator listen for connections.
+    /// The host on which processes spawned by the process orchestrator listen
+    /// for connections.
     #[structopt(long, hide = true)]
     process_listen_host: Option<String>,
+    /// The image pull policy to use for services created by the Kubernetes
+    /// orchestrator.
+    #[structopt(long, default_value = "always", arg_enum)]
+    kubernetes_image_pull_policy: KubernetesImagePullPolicy,
     /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
     /// ADAPTER is lost.
     #[clap(long, possible_values = &["true", "false"])]
@@ -574,6 +579,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .into_iter()
                         .map(|l| (l.key, l.value))
                         .collect(),
+                    image_pull_policy: args.kubernetes_image_pull_policy,
                 })
             }
             Orchestrator::Process => {
