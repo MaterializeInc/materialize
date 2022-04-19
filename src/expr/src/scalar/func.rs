@@ -42,7 +42,7 @@ use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{ProtoRepr, TryFromProtoError};
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -6976,11 +6976,12 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Replace),
             Just(VariadicFunc::JsonbBuildArray),
             Just(VariadicFunc::JsonbBuildObject),
-            // todo: ArrayCreate { elem_type: ScalarType },
-            // todo: ArrayToString { elem_type: ScalarType },
-            // todo: ArrayIndex { offset: usize },
-            // todo: ListCreate { elem_type: ScalarType },
-            // todo: RecordCreate { field_names: Vec<ColumnName> },
+            ScalarType::arbitrary().prop_map(|elem_type| VariadicFunc::ArrayCreate { elem_type }),
+            ScalarType::arbitrary().prop_map(|elem_type| VariadicFunc::ArrayToString { elem_type }),
+            usize::arbitrary().prop_map(|offset| VariadicFunc::ArrayIndex { offset }),
+            ScalarType::arbitrary().prop_map(|elem_type| VariadicFunc::ListCreate { elem_type }),
+            Vec::<ColumnName>::arbitrary()
+                .prop_map(|field_names| VariadicFunc::RecordCreate { field_names }),
             Just(VariadicFunc::ListIndex),
             Just(VariadicFunc::ListSliceLinear),
             Just(VariadicFunc::SplitPart),
@@ -6995,9 +6996,9 @@ impl Arbitrary for VariadicFunc {
 }
 
 impl From<&VariadicFunc> for ProtoVariadicFunc {
-    #[allow(clippy::todo)]
     fn from(func: &VariadicFunc) -> Self {
         use proto_variadic_func::Kind::*;
+        use proto_variadic_func::ProtoRecordCreate;
         let kind = match func {
             VariadicFunc::Coalesce => Coalesce(()),
             VariadicFunc::Greatest => Greatest(()),
@@ -7009,11 +7010,13 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
             VariadicFunc::Replace => Replace(()),
             VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
             VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
-            VariadicFunc::ArrayCreate { .. } => todo!(),
-            VariadicFunc::ArrayToString { .. } => todo!(),
-            VariadicFunc::ArrayIndex { .. } => todo!(),
-            VariadicFunc::ListCreate { .. } => todo!(),
-            VariadicFunc::RecordCreate { .. } => todo!(),
+            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into()),
+            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into()),
+            VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
+            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into()),
+            VariadicFunc::RecordCreate { field_names } => RecordCreate(ProtoRecordCreate {
+                field_names: field_names.iter().map(Into::into).collect(),
+            }),
             VariadicFunc::ListIndex => ListIndex(()),
             VariadicFunc::ListSliceLinear => ListSliceLinear(()),
             VariadicFunc::SplitPart => SplitPart(()),
@@ -7031,9 +7034,9 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
 impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
     type Error = TryFromProtoError;
 
-    #[allow(clippy::todo)]
     fn try_from(func: ProtoVariadicFunc) -> Result<Self, Self::Error> {
         use proto_variadic_func::Kind::*;
+        use proto_variadic_func::ProtoRecordCreate;
         if let Some(kind) = func.kind {
             match kind {
                 Coalesce(()) => Ok(VariadicFunc::Coalesce),
@@ -7046,11 +7049,24 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
                 Replace(()) => Ok(VariadicFunc::Replace),
                 JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
                 JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
-                ArrayCreate(()) => todo!(),
-                ArrayToString(()) => todo!(),
-                ArrayIndex(()) => todo!(),
-                ListCreate(()) => todo!(),
-                RecordCreate(()) => todo!(),
+                ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {
+                    elem_type: elem_type.try_into()?,
+                }),
+                ArrayToString(elem_type) => Ok(VariadicFunc::ArrayToString {
+                    elem_type: elem_type.try_into()?,
+                }),
+                ArrayIndex(offset) => Ok(VariadicFunc::ArrayIndex {
+                    offset: usize::from_proto(offset)?,
+                }),
+                ListCreate(elem_type) => Ok(VariadicFunc::ListCreate {
+                    elem_type: elem_type.try_into()?,
+                }),
+                RecordCreate(ProtoRecordCreate { field_names }) => Ok(VariadicFunc::RecordCreate {
+                    field_names: field_names
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, TryFromProtoError>>()?,
+                }),
                 ListIndex(()) => Ok(VariadicFunc::ListIndex),
                 ListSliceLinear(()) => Ok(VariadicFunc::ListSliceLinear),
                 SplitPart(()) => Ok(VariadicFunc::SplitPart),
