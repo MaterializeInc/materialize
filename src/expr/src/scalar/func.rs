@@ -7144,6 +7144,41 @@ impl fmt::Display for VariadicFunc {
     }
 }
 
+impl Arbitrary for VariadicFunc {
+    type Parameters = ();
+
+    type Strategy = Union<BoxedStrategy<Self>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            Just(VariadicFunc::Coalesce),
+            Just(VariadicFunc::Greatest),
+            Just(VariadicFunc::Least),
+            Just(VariadicFunc::Concat),
+            Just(VariadicFunc::MakeTimestamp),
+            Just(VariadicFunc::PadLeading),
+            Just(VariadicFunc::Substr),
+            Just(VariadicFunc::Replace),
+            Just(VariadicFunc::JsonbBuildArray),
+            Just(VariadicFunc::JsonbBuildObject),
+            // todo: ArrayCreate { elem_type: ScalarType },
+            // todo: ArrayToString { elem_type: ScalarType },
+            // todo: ArrayIndex { offset: usize },
+            // todo: ListCreate { elem_type: ScalarType },
+            // todo: RecordCreate { field_names: Vec<ColumnName> },
+            Just(VariadicFunc::ListIndex),
+            Just(VariadicFunc::ListSliceLinear),
+            Just(VariadicFunc::SplitPart),
+            Just(VariadicFunc::RegexpMatch),
+            Just(VariadicFunc::HmacString),
+            Just(VariadicFunc::HmacBytes),
+            Just(VariadicFunc::ErrorIfNull),
+            Just(VariadicFunc::DateBinTimestamp),
+            Just(VariadicFunc::DateBinTimestampTz),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod test {
     use chrono::prelude::*;
