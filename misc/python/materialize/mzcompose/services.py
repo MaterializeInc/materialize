@@ -121,7 +121,7 @@ class Computed(Service):
         image: Optional[str] = None,
         ports: List[int] = [2100, 2102],
         memory: Optional[str] = None,
-        options: str = "",
+        options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         storage_addr: Optional[str] = "materialized:2101",
@@ -149,7 +149,12 @@ class Computed(Service):
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
-        command_list = [f"{options}"]
+        command_list = []
+        if options:
+            if isinstance(options, str):
+                command_list.append(options)
+            else:
+                command_list.extend(options)
 
         if storage_addr:
             command_list.append(f"--storage-addr {storage_addr}")
