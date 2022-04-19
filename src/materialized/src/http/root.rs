@@ -20,7 +20,6 @@ use http::StatusCode;
 #[cfg(feature = "dev-web")]
 use tracing::debug;
 
-use crate::http::util;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
@@ -32,7 +31,7 @@ struct HomeTemplate<'a> {
 }
 
 pub async fn handle_home() -> impl IntoResponse {
-    util::template_response(HomeTemplate {
+    mz_http_util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
         build_time: BUILD_INFO.time,
         build_sha: BUILD_INFO.sha,

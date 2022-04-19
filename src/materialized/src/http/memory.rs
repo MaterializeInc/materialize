@@ -10,7 +10,6 @@
 use askama::Template;
 use axum::response::IntoResponse;
 
-use crate::http::util;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
@@ -20,7 +19,7 @@ struct MemoryTemplate<'a> {
 }
 
 pub async fn handle_memory() -> impl IntoResponse {
-    util::template_response(MemoryTemplate {
+    mz_http_util::template_response(MemoryTemplate {
         version: BUILD_INFO.version,
     })
 }
@@ -32,7 +31,7 @@ struct HierarchicalMemoryTemplate<'a> {
 }
 
 pub async fn handle_hierarchical_memory() -> impl IntoResponse {
-    util::template_response(HierarchicalMemoryTemplate {
+    mz_http_util::template_response(HierarchicalMemoryTemplate {
         version: BUILD_INFO.version,
     })
 }

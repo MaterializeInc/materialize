@@ -48,13 +48,13 @@ use mz_coord::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::netio::SniffedStream;
 
+use crate::BUILD_INFO;
+
 mod catalog;
 mod memory;
 mod metrics;
-mod prof;
 mod root;
 mod sql;
-mod util;
 
 const SYSTEM_USER: &str = "mz_system";
 
@@ -120,8 +120,16 @@ impl Server {
                 "/hierarchical-memory",
                 routing::get(memory::handle_hierarchical_memory),
             )
-            .route("/prof", routing::get(prof::handle_get))
-            .route("/prof", routing::post(prof::handle_post))
+            .route(
+                "/prof",
+                routing::get(|query, headers| {
+                    mz_prof::http::handle_get(query, headers, &BUILD_INFO)
+                }),
+            )
+            .route(
+                "/prof",
+                routing::post(|form| mz_prof::http::handle_post(form, &BUILD_INFO)),
+            )
             .route("/static/*path", routing::get(root::handle_static))
             .layer(Extension(coord_client))
             .layer(middleware::from_fn(move |req, next| {

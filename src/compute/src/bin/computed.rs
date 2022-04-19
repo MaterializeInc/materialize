@@ -8,12 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::process;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
+use compile_time_run::run_command_str;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -40,6 +43,8 @@ use mz_compute::server::Server;
 #[cfg(not(target_os = "macos"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
@@ -101,6 +106,9 @@ struct Args {
     /// Enable command reconciliation.
     #[clap(long, requires = "linger")]
     reconcile: bool,
+    /// The address of the HTTP profiling UI.
+    #[clap(long, value_name = "HOST:PORT")]
+    http_console_addr: Option<String>,
 }
 
 #[tokio::main]
@@ -218,6 +226,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
+
+    if let Some(addr) = args.http_console_addr {
+        let addr: SocketAddr = addr.parse()?;
+        mz_compute::http::serve(addr, &BUILD_INFO).await?;
+    }
+
     serve(serve_config, server, client).await
 }
 

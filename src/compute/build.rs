@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+use std::env;
 
-//! Driver for timely/differential dataflow.
-
-pub(crate) mod arrangement;
-pub mod compute_state;
-pub mod http;
-pub(crate) mod logging;
-pub(crate) mod render;
-pub mod server;
-pub(crate) mod sink;
-
-pub use arrangement::manager::{TraceManager, TraceMetrics};
-pub use sink::SinkBaseMetrics;
+fn main() {
+    println!(
+        "cargo:rustc-env=TARGET_TRIPLE={}",
+        env::var("TARGET").unwrap()
+    );
+}

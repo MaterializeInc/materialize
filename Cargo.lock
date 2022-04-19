@@ -2877,6 +2877,7 @@ dependencies = [
  "mz-dataflow-types",
  "mz-frontegg-auth",
  "mz-http-proxy",
+ "mz-http-util",
  "mz-kafka-util",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -3220,11 +3221,13 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
+ "axum",
  "bincode",
  "byteorder",
  "bytes",
  "chrono",
  "clap",
+ "compile-time-run",
  "crossbeam-channel",
  "csv-core",
  "dec",
@@ -3234,12 +3237,14 @@ dependencies = [
  "flate2",
  "futures",
  "globset",
+ "hyper",
  "inotify",
  "itertools",
  "lazy_static",
  "log",
  "mz-avro",
  "mz-aws-util",
+ "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
@@ -3248,6 +3253,7 @@ dependencies = [
  "mz-ore",
  "mz-pgcopy",
  "mz-postgres-util",
+ "mz-prof",
  "mz-repr",
  "mz-storage",
  "mz-timely-util",
@@ -3497,6 +3503,14 @@ dependencies = [
  "lazy_static",
  "reqwest",
  "tracing",
+]
+
+[[package]]
+name = "mz-http-util"
+version = "0.0.0"
+dependencies = [
+ "askama",
+ "axum",
 ]
 
 [[package]]
@@ -3903,8 +3917,15 @@ name = "mz-prof"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "askama",
+ "axum",
  "backtrace",
+ "cfg-if",
+ "headers",
+ "http",
  "lazy_static",
+ "mz-build-info",
+ "mz-http-util",
  "pprof",
  "serde",
  "tempfile",

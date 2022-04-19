@@ -5,7 +5,7 @@
 {% block content %}
 <h2>Memory Profiling</h2>
 {% match mem_prof %}
-{% when crate::http::prof::MemProfilingStatus::Enabled with (start_time) %}
+{% when crate::http::MemProfilingStatus::Enabled with (start_time) %}
   {% match start_time %}
   {% when Some with (time) %}
     {% match time %}
@@ -27,7 +27,7 @@
       </form>
   {% endmatch %}
   <a href="prof?action=dump_stats">Download stats</a>
-{% when crate::http::prof::MemProfilingStatus::Disabled %}
+{% when crate::http::MemProfilingStatus::Disabled %}
     <p>Jemalloc profiling is not available.</p>
     {% if std::env::consts::OS == "macos" %}
     <p>
@@ -50,13 +50,13 @@
   <div>
     <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
 {% match mem_prof %}
-{% when crate::http::prof::MemProfilingStatus::Enabled with (start_time) %}
+{% when crate::http::MemProfilingStatus::Enabled with (start_time) %}
   {% match start_time %}
   {% when Some with (_) %}
     <strong>Note.</strong> Will deactivate memory profiling.
   {% when None %}
   {% endmatch %}
-{% when crate::http::prof::MemProfilingStatus::Disabled %}
+{% when crate::http::MemProfilingStatus::Disabled %}
 {% endmatch %}
   </div>
 </form>
