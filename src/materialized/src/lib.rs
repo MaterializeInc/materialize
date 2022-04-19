@@ -89,6 +89,8 @@ pub struct Config {
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
+    /// Where the persist library should store its data.
+    pub persist_location: mz_persist_client::Location,
 
     // === Platform options. ===
     /// Configuration of service orchestration.
@@ -266,6 +268,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                         format!("--workers=1"),
                         format!("--storage-addr=0.0.0.0:{}", ports["compute"]),
                         format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
+                        format!("--persist-blob-url={}", config.persist_location.blob_uri),
+                        format!(
+                            "--persist-consensus-url={}",
+                            config.persist_location.consensus_uri
+                        ),
                     ]
                 },
                 ports: vec![

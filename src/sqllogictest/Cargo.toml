@@ -22,6 +22,7 @@ mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }

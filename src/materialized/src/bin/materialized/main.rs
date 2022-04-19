@@ -43,6 +43,7 @@ use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, Origin};
+use url::Url;
 use uuid::Uuid;
 
 use materialized::{
@@ -334,6 +335,17 @@ pub struct Args {
         default_value = "mzdata"
     )]
     data_directory: PathBuf,
+    /// Where the persist library should store its blob data.
+    ///
+    /// Defaults to the `persist/blob` in the data directory.
+    #[clap(long, env = "MZ_PERSIST_BLOB_URL")]
+    persist_blob_url: Option<Url>,
+    /// Where the persist library should perform consensus.
+    ///
+    /// Defaults to the `persist/consensus` SQLite database in the data
+    /// directory.
+    #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Option<Url>,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -609,6 +621,27 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
+    let cwd = env::current_dir().context("retrieving current working directory")?;
+    let persist_location = mz_persist_client::Location {
+        blob_uri: match args.persist_blob_url {
+            // TODO: need to handle non-UTF-8 paths here.
+            None => format!(
+                "file://{}/{}/persist/blob",
+                cwd.display(),
+                data_directory.display()
+            ),
+            Some(blob_url) => blob_url.to_string(),
+        },
+        consensus_uri: match args.persist_consensus_url {
+            // TODO: need to handle non-UTF-8 paths here.
+            None => format!(
+                "sqlite://{}/{}/persist/consensus",
+                cwd.display(),
+                data_directory.display()
+            ),
+            Some(consensus_url) => consensus_url.to_string(),
+        },
+    };
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -689,6 +722,7 @@ max log level: {max_log_level}",
         frontegg,
         cors_allowed_origin,
         data_directory,
+        persist_location,
         orchestrator,
         secrets_controller,
         experimental_mode: args.experimental,

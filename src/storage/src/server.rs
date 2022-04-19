@@ -46,6 +46,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// A client to the persist library.
+    pub persist_client: mz_persist_client::Client,
 }
 
 /// A handle to a running dataflow server.

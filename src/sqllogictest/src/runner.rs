@@ -559,6 +559,10 @@ impl Runner {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
             data_directory: temp_dir.path().to_path_buf(),
+            persist_location: mz_persist_client::Location {
+                blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                consensus_uri: format!("sqlite://{}/persist/consensus", temp_dir.path().display()),
+            },
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
