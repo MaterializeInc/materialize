@@ -24,9 +24,9 @@ bootstrap_steps=
 for arch in x86_64 aarch64; do
     for toolchain in stable nightly; do
         if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
-            queue=builder
+            queue=builder-linux-x86_64
             if [[ $arch = aarch64 ]]; then
-                queue=builder-aarch64
+                queue=builder-linux-aarch64
             fi
             bootstrap_steps+="
   - label: bootstrap $toolchain $arch
@@ -44,4 +44,5 @@ steps:
   - wait
   - label: mkpipeline
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline
+    priority: 2
 EOF
