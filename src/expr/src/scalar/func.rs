@@ -3111,6 +3111,156 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
+impl Arbitrary for BinaryFunc {
+    type Parameters = ();
+
+    type Strategy = Union<BoxedStrategy<Self>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            Just(BinaryFunc::And),
+            Just(BinaryFunc::Or),
+            Just(BinaryFunc::AddInt16),
+            Just(BinaryFunc::AddInt32),
+            Just(BinaryFunc::AddInt64),
+            Just(BinaryFunc::AddFloat32),
+            Just(BinaryFunc::AddFloat64),
+            Just(BinaryFunc::AddInterval),
+            Just(BinaryFunc::AddTimestampInterval),
+            Just(BinaryFunc::AddTimestampTzInterval),
+            Just(BinaryFunc::AddDateInterval),
+            Just(BinaryFunc::AddDateTime),
+            Just(BinaryFunc::AddTimeInterval),
+            Just(BinaryFunc::AddNumeric),
+            Just(BinaryFunc::BitAndInt16),
+            Just(BinaryFunc::BitAndInt32),
+            Just(BinaryFunc::BitAndInt64),
+            Just(BinaryFunc::BitOrInt16),
+            Just(BinaryFunc::BitOrInt32),
+            Just(BinaryFunc::BitOrInt64),
+            Just(BinaryFunc::BitXorInt16),
+            Just(BinaryFunc::BitXorInt32),
+            Just(BinaryFunc::BitXorInt64),
+            Just(BinaryFunc::BitShiftLeftInt16),
+            Just(BinaryFunc::BitShiftLeftInt32),
+            Just(BinaryFunc::BitShiftLeftInt64),
+            Just(BinaryFunc::BitShiftRightInt16),
+            Just(BinaryFunc::BitShiftRightInt32),
+            Just(BinaryFunc::BitShiftRightInt64),
+            Just(BinaryFunc::SubInt16),
+            Just(BinaryFunc::SubInt32),
+            Just(BinaryFunc::SubInt64),
+            Just(BinaryFunc::SubFloat32),
+            Just(BinaryFunc::SubFloat64),
+            Just(BinaryFunc::SubInterval),
+            Just(BinaryFunc::SubTimestamp),
+            Just(BinaryFunc::SubTimestampTz),
+            Just(BinaryFunc::SubTimestampInterval),
+            Just(BinaryFunc::SubTimestampTzInterval),
+            Just(BinaryFunc::SubDate),
+            Just(BinaryFunc::SubDateInterval),
+            Just(BinaryFunc::SubTime),
+            Just(BinaryFunc::SubTimeInterval),
+            Just(BinaryFunc::SubNumeric),
+            Just(BinaryFunc::MulInt16),
+            Just(BinaryFunc::MulInt32),
+            Just(BinaryFunc::MulInt64),
+            Just(BinaryFunc::MulFloat32),
+            Just(BinaryFunc::MulFloat64),
+            Just(BinaryFunc::MulNumeric),
+            Just(BinaryFunc::MulInterval),
+            Just(BinaryFunc::DivInt16),
+            Just(BinaryFunc::DivInt32),
+            Just(BinaryFunc::DivInt64),
+            Just(BinaryFunc::DivFloat32),
+            Just(BinaryFunc::DivFloat64),
+            Just(BinaryFunc::DivNumeric),
+            Just(BinaryFunc::DivInterval),
+            Just(BinaryFunc::ModInt16),
+            Just(BinaryFunc::ModInt32),
+            Just(BinaryFunc::ModInt64),
+            Just(BinaryFunc::ModFloat32),
+            Just(BinaryFunc::ModFloat64),
+            Just(BinaryFunc::ModNumeric),
+            Just(BinaryFunc::RoundNumeric),
+            Just(BinaryFunc::Eq),
+            Just(BinaryFunc::NotEq),
+            Just(BinaryFunc::Lt),
+            Just(BinaryFunc::Lte),
+            Just(BinaryFunc::Gt),
+            Just(BinaryFunc::Gte),
+            Just(BinaryFunc::LikeEscape),
+            // todo: IsLikeMatch { case_insensitive: bool },
+            // todo: IsRegexpMatch { case_insensitive: bool },
+            Just(BinaryFunc::ToCharTimestamp),
+            Just(BinaryFunc::ToCharTimestampTz),
+            Just(BinaryFunc::DateBinTimestamp),
+            Just(BinaryFunc::DateBinTimestampTz),
+            Just(BinaryFunc::ExtractInterval),
+            Just(BinaryFunc::ExtractTime),
+            Just(BinaryFunc::ExtractTimestamp),
+            Just(BinaryFunc::ExtractTimestampTz),
+            Just(BinaryFunc::ExtractDate),
+            Just(BinaryFunc::DatePartInterval),
+            Just(BinaryFunc::DatePartTime),
+            Just(BinaryFunc::DatePartTimestamp),
+            Just(BinaryFunc::DatePartTimestampTz),
+            Just(BinaryFunc::DateTruncTimestamp),
+            Just(BinaryFunc::DateTruncTimestampTz),
+            Just(BinaryFunc::DateTruncInterval),
+            Just(BinaryFunc::TimezoneTimestamp),
+            Just(BinaryFunc::TimezoneTimestampTz),
+            // todo: TimezoneTime { wall_time: NaiveDateTime },
+            Just(BinaryFunc::TimezoneIntervalTimestamp),
+            Just(BinaryFunc::TimezoneIntervalTimestampTz),
+            Just(BinaryFunc::TimezoneIntervalTime),
+            Just(BinaryFunc::TextConcat),
+            // todo: JsonbGetInt64 { stringify: bool },
+            // todo: JsonbGetString { stringify: bool },
+            // todo: JsonbGetPath { stringify: bool },
+            Just(BinaryFunc::JsonbContainsString),
+            Just(BinaryFunc::JsonbConcat),
+            Just(BinaryFunc::JsonbContainsJsonb),
+            Just(BinaryFunc::JsonbDeleteInt64),
+            Just(BinaryFunc::JsonbDeleteString),
+            Just(BinaryFunc::MapContainsKey),
+            Just(BinaryFunc::MapGetValue),
+            Just(BinaryFunc::MapGetValues),
+            Just(BinaryFunc::MapContainsAllKeys),
+            Just(BinaryFunc::MapContainsAnyKeys),
+            Just(BinaryFunc::MapContainsMap),
+            Just(BinaryFunc::ConvertFrom),
+            Just(BinaryFunc::Left),
+            Just(BinaryFunc::Position),
+            Just(BinaryFunc::Right),
+            Just(BinaryFunc::RepeatString),
+            Just(BinaryFunc::Trim),
+            Just(BinaryFunc::TrimLeading),
+            Just(BinaryFunc::TrimTrailing),
+            Just(BinaryFunc::EncodedBytesCharLength),
+            // todo: ListLengthMax { max_layer: usize },
+            Just(BinaryFunc::ArrayContains),
+            Just(BinaryFunc::ArrayLength),
+            Just(BinaryFunc::ArrayLower),
+            Just(BinaryFunc::ArrayRemove),
+            Just(BinaryFunc::ArrayUpper),
+            Just(BinaryFunc::ArrayArrayConcat),
+            Just(BinaryFunc::ListListConcat),
+            Just(BinaryFunc::ListElementConcat),
+            Just(BinaryFunc::ElementListConcat),
+            Just(BinaryFunc::ListRemove),
+            Just(BinaryFunc::DigestString),
+            Just(BinaryFunc::DigestBytes),
+            Just(BinaryFunc::MzRenderTypmod),
+            Just(BinaryFunc::Encode),
+            Just(BinaryFunc::Decode),
+            Just(BinaryFunc::LogNumeric),
+            Just(BinaryFunc::Power),
+            Just(BinaryFunc::PowerNumeric),
+        ]
+    }
+}
+
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventualy be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
 trait LazyUnaryFunc {
@@ -3438,7 +3588,7 @@ use proptest::{prelude::*, strategy::*};
 impl Arbitrary for UnaryFunc {
     type Parameters = ();
 
-    type Strategy = Union<BoxedStrategy<UnaryFunc>>;
+    type Strategy = Union<BoxedStrategy<Self>>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
@@ -6783,15 +6933,15 @@ mod test {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
         #[test]
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
-    }
 
-    proptest! {
         #[test]
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
