@@ -110,8 +110,8 @@ impl SqliteConsensus {
 impl Consensus for SqliteConsensus {
     async fn head(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
@@ -129,8 +129,8 @@ impl Consensus for SqliteConsensus {
 
     async fn compare_and_set(
         &self,
-        key: &str,
         deadline: Instant,
+        key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
@@ -204,7 +204,7 @@ impl Consensus for SqliteConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(key, deadline).await?;
+            let current = self.head(deadline, key).await?;
             Ok(Err(current))
         }
     }
