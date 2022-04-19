@@ -24,7 +24,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
-use self::func::{AggregateFunc, TableFunc};
+use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
 use crate::{
@@ -1511,7 +1511,7 @@ impl AggregateExpr {
 
     /// Extracts unique input from aggregate type
     pub fn on_unique(&self, input_type: &RelationType) -> MirScalarExpr {
-        match self.func {
+        match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self
                 .expr
@@ -1659,8 +1659,8 @@ impl AggregateExpr {
                 }
             }
 
-            // The input type for Lag is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
-            AggregateFunc::Lag { .. } => {
+            // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead, .. } => {
                 let tuple = self
                     .expr
                     .clone()
@@ -1672,12 +1672,17 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let lag_type = return_type.unwrap_record_element_type()[0].clone();
+                let lag_lead_return_type = return_type.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                let column_name = match lag_lead {
+                    LagLeadType::Lag => "?lag?",
+                    LagLeadType::Lead => "?lead?",
+                };
 
                 // Extract the encoded args
                 let encoded_args =
@@ -1702,7 +1707,7 @@ impl AggregateExpr {
                     .if_then_else(expr, default_value);
                 let null_offset_check = offset
                     .call_unary(crate::UnaryFunc::IsNull(crate::func::IsNull))
-                    .if_then_else(MirScalarExpr::literal_null(lag_type), value);
+                    .if_then_else(MirScalarExpr::literal_null(lag_lead_return_type), value);
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
@@ -1711,7 +1716,7 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?lag?"),
+                                ColumnName::from(column_name),
                                 ColumnName::from("?record?"),
                             ],
                         },

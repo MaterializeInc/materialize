@@ -1473,7 +1473,7 @@ pub mod monoids {
             | AggregateFunc::StringAgg { .. }
             | AggregateFunc::RowNumber { .. }
             | AggregateFunc::DenseRank { .. }
-            | AggregateFunc::Lag { .. } => None,
+            | AggregateFunc::LagLead { .. } => None,
         }
     }
 }
