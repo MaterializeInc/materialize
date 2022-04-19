@@ -44,4 +44,5 @@ steps:
   - wait
   - label: mkpipeline
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline
+    priority: 2
 EOF

@@ -24,6 +24,7 @@ steps:
     inputs:
       - "*"
     timeout_in_minutes: 60
+    priority: 1
     agents:
       queue: builder
 
@@ -33,6 +34,7 @@ steps:
     inputs:
       - "*"
     timeout_in_minutes: 60
+    priority: 1
     agents:
       queue: builder-aarch64
 
@@ -121,6 +123,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2]
+    agents:
+      queue: linux
 
   - id: cluster-smoke
     label: Cluster smoke test
@@ -130,6 +134,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
+    agents:
+      queue: linux
 
   - id: kafka-ssl
     label: Kafka SSL smoke test
@@ -139,6 +145,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-ssl
+    agents:
+      queue: linux
 
   - id: kafka-sasl-plain
     label: Kafka SASL PLAIN smoke test
@@ -149,6 +157,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-sasl-plain
           run: testdrive
+    agents:
+      queue: linux
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests
@@ -159,6 +169,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
+    agents:
+      queue: linux
 
   - id: billing-demo
     label: Billing demo smoke test
@@ -169,6 +181,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: billing
           args: [--message-count=100, --partitions=10, --check-sink]
+    agents:
+      queue: linux
 
   - id: perf-kinesis
     label: Kinesis performance smoke test
@@ -179,6 +193,8 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: perf-kinesis
+    agents:
+      queue: linux
 
   - id: chbench-demo
     label: chbench smoke test
@@ -189,6 +205,8 @@ steps:
           composition: chbench
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
+    agents:
+      queue: linux
 
   - id: restarts
     label: Restart test
@@ -198,6 +216,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
+    agents:
+      queue: linux
 
   - id: upgrade
     label: Upgrade tests
@@ -208,6 +228,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: upgrade
           args: [--most-recent, "0"]
+    agents:
+      queue: linux
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -218,6 +240,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: metabase
           run: smoketest
+    agents:
+      queue: linux
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -227,6 +251,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
+    agents:
+      queue: linux
 
   - id: debezium-postgres
     label: Debezium Postgres tests
@@ -238,6 +264,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: debezium
           run: postgres
+    agents:
+      queue: linux
 
   - id: debezium-sql-server
     label: Debezium SQL Server tests
@@ -249,6 +277,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: debezium
           run: sql-server
+    agents:
+      queue: linux
 
   - id: debezium-mysql
     label: Debezium MySQL tests
@@ -260,6 +290,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: debezium
           run: mysql
+    agents:
+      queue: linux
 
   - id: pg-cdc
     label: Postgres CDC tests
@@ -270,6 +302,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc
+    agents:
+      queue: linux
 
   - id: pg-cdc-resumption
     label: Postgres CDC resumption tests
@@ -280,6 +314,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc-resumption
+    agents:
+      queue: linux
 
   - id: s3-resumption
     label: S3 resumption tests
@@ -290,6 +326,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: s3-resumption
+    agents:
+      queue: linux
 
   - id: kafka-resumption
     label: Kafka resumption tests
@@ -299,6 +337,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-resumption
+    agents:
+      queue: linux
 
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
@@ -308,6 +348,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
+    agents:
+      queue: linux
 
   - id: lang-csharp
     label: ":csharp: tests"
@@ -319,6 +361,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: csharp
           run: csharp
+    agents:
+      queue: linux
 
   - id: lang-js
     label: ":js: tests"
@@ -330,6 +374,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: js
           run: js
+    agents:
+      queue: linux
 
   - id: lang-java
     label: ":java: tests"
@@ -341,6 +387,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: java
           run: java-smoketest
+    agents:
+      queue: linux
 
   - id: lang-python
     label: ":python: tests"
@@ -352,6 +400,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: python
           run: python
+    agents:
+      queue: linux
 
   - wait: ~
     continue_on_failure: true
@@ -363,6 +413,9 @@ steps:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"
           job-uuid-file-pattern: _([^_]*).xml
+    priority: 1
+    agents:
+      queue: linux
 
   - wait: ~
 
