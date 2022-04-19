@@ -16,7 +16,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--check-sink", action="store_true")
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(services=["zookeeper", "redpanda"])
     c.run(
         "billing-demo",
         "--materialized-host=materialized",
