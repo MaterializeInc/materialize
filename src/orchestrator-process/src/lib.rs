@@ -35,6 +35,8 @@ pub struct ProcessOrchestratorConfig {
     pub port_allocator: Arc<IdAllocator<i32>>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
+    /// The host spawned subprocesses bind to.
+    pub process_listen_host: Option<String>,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -48,15 +50,18 @@ pub struct ProcessOrchestrator {
     port_allocator: Arc<IdAllocator<i32>>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
+    process_listen_host: String,
 }
 
 impl ProcessOrchestrator {
+    const DEFAULT_LISTEN_HOST: &'static str = "127.0.0.1";
     /// Creates a new process orchestrator from the provided configuration.
     pub async fn new(
         ProcessOrchestratorConfig {
             image_dir,
             port_allocator,
             suppress_output,
+            process_listen_host,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         Ok(ProcessOrchestrator {
@@ -64,13 +69,15 @@ impl ProcessOrchestrator {
             port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
+            process_listen_host: process_listen_host
+                .unwrap_or_else(|| ProcessOrchestrator::DEFAULT_LISTEN_HOST.to_string()),
         })
     }
 }
 
 impl Orchestrator for ProcessOrchestrator {
-    fn default_listen_host(&self) -> &'static str {
-        "127.0.0.1"
+    fn listen_host(&self) -> &str {
+        &self.process_listen_host
     }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");

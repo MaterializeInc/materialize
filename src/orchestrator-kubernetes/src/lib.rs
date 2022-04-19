@@ -83,7 +83,7 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
-    fn default_listen_host(&self) -> &'static str {
+    fn listen_host(&self) -> &str {
         "0.0.0.0"
     }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {

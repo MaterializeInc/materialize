@@ -29,7 +29,7 @@ use derivative::Derivative;
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
     // Default host used to bind to.
-    fn default_listen_host(&self) -> &'static str;
+    fn listen_host(&self) -> &str;
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }

@@ -99,7 +99,7 @@ where
                     computed_image,
                     storage_addr,
                 } = &self.orchestrator;
-                let default_listen_host = orchestrator.default_listen_host();
+                let default_listen_host = orchestrator.listen_host();
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(

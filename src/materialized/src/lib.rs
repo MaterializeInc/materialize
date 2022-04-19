@@ -257,7 +257,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
-    let default_listen_host = orchestrator.default_listen_host();
+    let default_listen_host = orchestrator.listen_host();
     let storage_service = orchestrator
         .namespace("storage")
         .ensure_service(
