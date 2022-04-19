@@ -323,7 +323,7 @@ impl MirScalarExpr {
                     MirScalarExpr::CallUnary { func, expr } => {
                         if expr.is_literal() {
                             *e = eval(e);
-                        } else if let UnaryFunc::RecordGet(i) = *func {
+                        } else if let UnaryFunc::RecordGet(func::RecordGet(i)) = *func {
                             if let MirScalarExpr::CallVariadic {
                                 func: VariadicFunc::RecordCreate { .. },
                                 exprs,

@@ -18,72 +18,11 @@ use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastArrayToListOneDim;
-
-impl LazyUnaryFunc for CastArrayToListOneDim {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-
-        let arr = a.unwrap_array();
-        let ndims = arr.dims().ndims();
-        if ndims > 1 {
-            return Err(EvalError::Unsupported {
-                feature: format!(
-                    "casting multi-dimensional array to list; got array with {} dimensions",
-                    ndims
-                ),
-                issue_no: None,
-            });
-        }
-
-        Ok(Datum::List(arr.elements()))
-    }
-
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::List {
-            element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
-            custom_id: None,
-        }
-        .nullable(true)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastArrayToListOneDim {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytolist")
-    }
-}
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastArrayToString {
+pub struct CastMapToString {
     pub ty: ScalarType,
 }
 
-impl LazyUnaryFunc for CastArrayToString {
+impl LazyUnaryFunc for CastMapToString {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -116,8 +55,51 @@ impl LazyUnaryFunc for CastArrayToString {
     }
 }
 
-impl fmt::Display for CastArrayToString {
+impl fmt::Display for CastMapToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytostr")
+        f.write_str("maptostr")
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct MapLength;
+
+impl LazyUnaryFunc for MapLength {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        match a.unwrap_map().iter().count().try_into() {
+            Ok(c) => Ok(Datum::Int32(c)),
+            Err(_) => Err(EvalError::Int32OutOfRange),
+        }
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Int32.nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for MapLength {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("map_length")
     }
 }
