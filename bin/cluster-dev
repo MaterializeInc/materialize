@@ -74,7 +74,6 @@ spec:
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)
             - --data-directory=/data
-            - --dev
             - --orchestrator=kubernetes
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
