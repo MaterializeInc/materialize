@@ -159,6 +159,9 @@ pub struct OrchestratorConfig {
     pub storaged_image: String,
     /// The computed image reference to use.
     pub computed_image: String,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    pub linger: bool,
 }
 
 /// The orchestrator itself.
@@ -264,7 +267,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             ServiceConfig {
                 image: config.orchestrator.storaged_image.clone(),
                 args: &|ports| {
-                    vec![
+                    let mut storage_opts = vec![
                         format!("--workers=1"),
                         format!(
                             "--storage-addr={}:{}",
@@ -279,7 +282,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                             "--persist-consensus-url={}",
                             config.persist_location.consensus_uri
                         ),
-                    ]
+                    ];
+                    if config.orchestrator.linger {
+                        storage_opts.push(format!("--linger"))
+                    }
+                    storage_opts
                 },
                 ports: vec![
                     ServicePort {
@@ -303,6 +310,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         orchestrator,
         computed_image: config.orchestrator.computed_image,
         storage_addr: storage_service.addresses("compute").into_element(),
+        linger: config.orchestrator.linger,
     };
 
     // Initialize secrets controller.
