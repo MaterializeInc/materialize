@@ -242,6 +242,11 @@ mod test {
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
 macro_rules! derive_unary {
     ($($name:ident),*) => {
+        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        pub enum UnaryFunc {
+            $($name($name),)*
+        }
+
         impl UnaryFunc {
             pub fn eval<'a>(
                 &'a self,
