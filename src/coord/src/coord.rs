@@ -4946,39 +4946,61 @@ pub mod fast_path_peek {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                mz_dataflow_types::Plan::Get {
-                    id,
-                    keys: _,
-                    mfp,
-                    key_val,
-                } => {
-                    // Convert `mfp` to an executable, non-temporal plan.
-                    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
-                    let map_filter_project = mfp
-                        .clone()
-                        .into_plan()
-                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
-                        .into_nontemporal()
-                        .map_err(|_e| {
-                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
-                                "OneShot plan has temporal constraints"
-                            ))
-                        })?;
-                    // We should only get excited if we can track down an index for `id`.
-                    // If `keys` is non-empty, that means we think one exists.
-                    for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
-                        if let Some((key, val)) = key_val {
-                            if Id::Global(desc.on_id) == *id && &desc.key == key {
-                                // Indicate an early exit with a specific index and key_val.
-                                return Ok(Plan::PeekExisting(
-                                    *index_id,
-                                    val.clone(),
-                                    map_filter_project,
-                                ));
+                mz_dataflow_types::Plan::Get { id, keys, plan } => {
+                    match plan {
+                        mz_dataflow_types::plan::GetPlan::PassArrangements => {
+                            // An arrangement may or may not exist. If not, nothing to be done.
+                            if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
+                                // Just grab any arrangement, but be sure to de-permute the results.
+                                for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                                    if Id::Global(desc.on_id) == *id && &desc.key == key {
+                                        let mut map_filter_project =
+                                            mz_expr::MapFilterProject::new(_typ.arity())
+                                                .into_plan()
+                                                .unwrap()
+                                                .into_nontemporal()
+                                                .unwrap();
+                                        map_filter_project
+                                            .permute(permute.clone(), key.len() + thinning.len());
+                                        return Ok(Plan::PeekExisting(
+                                            *index_id,
+                                            None,
+                                            map_filter_project,
+                                        ));
+                                    }
+                                }
                             }
-                        } else if Id::Global(desc.on_id) == *id {
-                            // Indicate an early exit with a specific index and no key_val.
-                            return Ok(Plan::PeekExisting(*index_id, None, map_filter_project));
+                        }
+                        mz_dataflow_types::plan::GetPlan::Arrangement(key, val, mfp) => {
+                            // Convert `mfp` to an executable, non-temporal plan.
+                            // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+                            let map_filter_project = mfp
+                                .clone()
+                                .into_plan()
+                                .map_err(|e| {
+                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(e))
+                                })?
+                                .into_nontemporal()
+                                .map_err(|_e| {
+                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                        "OneShot plan has temporal constraints"
+                                    ))
+                                })?;
+                            // We should only get excited if we can track down an index for `id`.
+                            // If `keys` is non-empty, that means we think one exists.
+                            for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                                if Id::Global(desc.on_id) == *id && &desc.key == key {
+                                    // Indicate an early exit with a specific index and key_val.
+                                    return Ok(Plan::PeekExisting(
+                                        *index_id,
+                                        val.clone(),
+                                        map_filter_project,
+                                    ));
+                                }
+                            }
+                        }
+                        mz_dataflow_types::plan::GetPlan::Collection(_) => {
+                            // No arrangement, so nothing to be done here.
                         }
                     }
                 }
