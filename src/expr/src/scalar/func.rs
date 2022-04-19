@@ -16,10 +16,7 @@ use std::str::FromStr;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use chrono::{
-    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
-    Utc,
-};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
@@ -38,7 +35,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_pgrepr::Type;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
+use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
@@ -1357,88 +1354,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-/// Common set of methods for time component.
-pub trait TimeLike: chrono::Timelike {
-    fn extract_epoch<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        T::from(self.hour() * 60 * 60 + self.minute() * 60) + self.extract_second::<T>()
-    }
-
-    fn extract_second<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second());
-        let ns = T::from(self.nanosecond()) / T::from(1e9);
-        s + ns
-    }
-
-    fn extract_millisecond<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second() * 1_000);
-        let ns = T::from(self.nanosecond()) / T::from(1e6);
-        s + ns
-    }
-
-    fn extract_microsecond<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second() * 1_000_000);
-        let ns = T::from(self.nanosecond()) / T::from(1e3);
-        s + ns
-    }
-}
-
-impl<T> TimeLike for T where T: chrono::Timelike {}
-
-/// Common set of methods for date component.
-pub trait DateLike: chrono::Datelike {
-    fn extract_epoch(&self) -> i64 {
-        let naive_date =
-            NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(0, 0, 0);
-        naive_date.timestamp()
-    }
-
-    fn millennium(&self) -> i32 {
-        (self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000
-    }
-
-    fn century(&self) -> i32 {
-        (self.year() + if self.year() > 0 { 99 } else { -100 }) / 100
-    }
-
-    fn decade(&self) -> i32 {
-        self.year().div_euclid(10)
-    }
-
-    fn quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
-    }
-
-    /// Extract the iso week of the year
-    ///
-    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-    /// 1 about half of the time
-    fn week(&self) -> u32 {
-        self.iso_week().week()
-    }
-
-    fn day_of_week(&self) -> u32 {
-        self.weekday().num_days_from_sunday()
-    }
-
-    fn iso_day_of_week(&self) -> u32 {
-        self.weekday().number_from_monday()
-    }
-}
-
-impl<T> DateLike for T where T: chrono::Datelike {}
-
 /// A timestamp with both a date and a time component, but not necessarily a
 /// timezone component.
 pub trait TimestampLike:
@@ -1730,47 +1645,8 @@ where
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_time_inner::<D>(units, b),
+        Ok(units) => Ok(date_part_time_inner::<D>(units, b.unwrap_time())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_time_inner<'a, D>(
-    units: DateTimeUnits,
-    time: Datum<'a>,
-) -> Result<Datum<'a>, EvalError>
-where
-    D: DecimalLike + Into<Datum<'a>>,
-{
-    let time = time.unwrap_time();
-    match units {
-        DateTimeUnits::Epoch => Ok(time.extract_epoch::<D>().into()),
-        DateTimeUnits::Hour => Ok(D::from(time.hour()).into()),
-        DateTimeUnits::Minute => Ok(D::from(time.minute()).into()),
-        DateTimeUnits::Second => Ok(time.extract_second::<D>().into()),
-        DateTimeUnits::Milliseconds => Ok(time.extract_millisecond::<D>().into()),
-        DateTimeUnits::Microseconds => Ok(time.extract_microsecond::<D>().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Year
-        | DateTimeUnits::Quarter
-        | DateTimeUnits::Month
-        | DateTimeUnits::Week
-        | DateTimeUnits::Day
-        | DateTimeUnits::DayOfYear
-        | DateTimeUnits::DayOfWeek
-        | DateTimeUnits::IsoDayOfYear
-        | DateTimeUnits::IsoDayOfWeek => Err(EvalError::UnsupportedUnits(
-            format!("{}", units),
-            "time".to_string(),
-        )),
-        DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
-            Err(EvalError::Unsupported {
-                feature: format!("'{}' timestamp units", units),
-                issue_no: None,
-            })
-        }
     }
 }
 
@@ -1789,41 +1665,8 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => extract_date_inner(units, b),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn extract_date_inner(units: DateTimeUnits, date: Datum) -> Result<Datum, EvalError> {
-    let date = date.unwrap_date();
-    match units {
-        DateTimeUnits::Epoch => Ok(Numeric::from(date.extract_epoch()).into()),
-        DateTimeUnits::Millennium => Ok(Numeric::from(date.millennium()).into()),
-        DateTimeUnits::Century => Ok(Numeric::from(date.century()).into()),
-        DateTimeUnits::Decade => Ok(Numeric::from(date.decade()).into()),
-        DateTimeUnits::Year => Ok(Numeric::from(date.year()).into()),
-        DateTimeUnits::Quarter => Ok(Numeric::from(date.quarter()).into()),
-        DateTimeUnits::Week => Ok(Numeric::from(date.week()).into()),
-        DateTimeUnits::Month => Ok(Numeric::from(date.month()).into()),
-        DateTimeUnits::Day => Ok(Numeric::from(date.day()).into()),
-        DateTimeUnits::DayOfWeek => Ok(Numeric::from(date.day_of_week()).into()),
-        DateTimeUnits::DayOfYear => Ok(Numeric::from(date.ordinal()).into()),
-        DateTimeUnits::IsoDayOfWeek => Ok(Numeric::from(date.iso_day_of_week()).into()),
-        DateTimeUnits::Hour
-        | DateTimeUnits::Minute
-        | DateTimeUnits::Second
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds => Err(EvalError::UnsupportedUnits(
-            format!("{}", units),
-            "date".to_string(),
-        )),
-        DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
     }
 }
 
@@ -1898,16 +1741,6 @@ fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
 pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
     tz.parse()
         .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
-}
-
-/// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
-/// For example, `EST` and `17:39:14` would return `12:39:14`.
-fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> Datum<'static> {
-    let offset = match tz {
-        Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&wall_time).fix(),
-    };
-    (t + offset).into()
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -2279,7 +2112,7 @@ impl BinaryFunc {
                         tz,
                         b.unwrap_time(),
                         wall_time
-                    ))
+                    ).into())
                 )
             }
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
@@ -3605,14 +3438,10 @@ pub enum UnaryFunc {
     DateTruncTimestampTz(DateTruncTimestampTz),
     TimezoneTimestamp(TimezoneTimestamp),
     TimezoneTimestampTz(TimezoneTimestampTz),
-
-    ExtractDate(DateTimeUnits),
-    ExtractTime(DateTimeUnits),
-    DatePartTime(DateTimeUnits),
-    TimezoneTime {
-        tz: Timezone,
-        wall_time: NaiveDateTime,
-    },
+    ExtractDate(ExtractDate),
+    ExtractTime(ExtractTime),
+    DatePartTime(DatePartTime),
+    TimezoneTime(TimezoneTime),
 
     ToTimestamp(ToTimestamp),
     JustifyDays(JustifyDays),
@@ -3922,7 +3751,11 @@ derive_unary!(
     DateTruncTimestamp,
     DateTruncTimestampTz,
     TimezoneTimestamp,
-    TimezoneTimestampTz
+    TimezoneTimestampTz,
+    ExtractDate,
+    ExtractTime,
+    DatePartTime,
+    TimezoneTime
 );
 
 impl UnaryFunc {
@@ -4137,6 +3970,10 @@ impl UnaryFunc {
             | DateTruncTimestampTz(_)
             | TimezoneTimestamp(_)
             | TimezoneTimestampTz(_)
+            | ExtractDate(_)
+            | ExtractTime(_)
+            | DatePartTime(_)
+            | TimezoneTime(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -4149,10 +3986,6 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            ExtractTime(units) => date_part_time_inner::<Numeric>(*units, a),
-            ExtractDate(units) => extract_date_inner(*units, a),
-            DatePartTime(units) => date_part_time_inner::<f64>(*units, a),
-            TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
@@ -4368,6 +4201,10 @@ impl UnaryFunc {
             | DateTruncTimestampTz(_)
             | TimezoneTimestamp(_)
             | TimezoneTimestampTz(_)
+            | ExtractDate(_)
+            | ExtractTime(_)
+            | DatePartTime(_)
+            | TimezoneTime(_)
             | Chr(_) => unreachable!(),
 
             CastRecordToString { .. }
@@ -4376,19 +4213,11 @@ impl UnaryFunc {
             | CastMapToString { .. }
             | CastInt2VectorToString => ScalarType::String.nullable(nullable),
 
-            TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
-
             CastRecord1ToRecord2 { return_ty, .. } => {
                 return_ty.without_modifiers().nullable(nullable)
             }
 
             CastList1ToList2 { return_ty, .. } => return_ty.without_modifiers().nullable(false),
-
-            ExtractTime(_) | ExtractDate(_) => {
-                ScalarType::Numeric { max_scale: None }.nullable(nullable)
-            }
-
-            DatePartTime(_) => ScalarType::Float64.nullable(nullable),
 
             RecordGet(i) => match input_type.scalar_type {
                 ScalarType::Record { mut fields, .. } => {
@@ -4619,6 +4448,10 @@ impl UnaryFunc {
             | DateTruncTimestampTz(_)
             | TimezoneTimestamp(_)
             | TimezoneTimestampTz(_)
+            | ExtractDate(_)
+            | ExtractTime(_)
+            | DatePartTime(_)
+            | TimezoneTime(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
@@ -4628,11 +4461,8 @@ impl UnaryFunc {
             | CastListToString { .. }
             | CastMapToString { .. }
             | CastInt2VectorToString => false,
-            TimezoneTime { .. } => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
             ListLength | MapLength => false,
-            ExtractTime(_) | ExtractDate(_) => false,
-            DatePartTime(_) => false,
             RescaleNumeric(_) => false,
         }
     }
@@ -4744,6 +4574,10 @@ impl UnaryFunc {
             | DateTruncTimestampTz(_)
             | TimezoneTimestamp(_)
             | TimezoneTimestampTz(_)
+            | ExtractDate(_)
+            | ExtractTime(_)
+            | DatePartTime(_)
+            | TimezoneTime(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -4950,6 +4784,10 @@ impl UnaryFunc {
             | DateTruncTimestampTz(_)
             | TimezoneTimestamp(_)
             | TimezoneTimestampTz(_)
+            | ExtractDate(_)
+            | ExtractTime(_)
+            | DatePartTime(_)
+            | TimezoneTime(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -4958,10 +4796,6 @@ impl UnaryFunc {
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
-            ExtractTime(units) => write!(f, "extract_{}_t", units),
-            ExtractDate(units) => write!(f, "extract_{}_d", units),
-            DatePartTime(units) => write!(f, "date_part_{}_t", units),
-            TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
@@ -5150,7 +4984,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::DateTruncTimestampTz(_) => todo!(),
             UnaryFunc::TimezoneTimestamp(_) => todo!(),
             UnaryFunc::TimezoneTimestampTz(_) => todo!(),
-            UnaryFunc::TimezoneTime { tz, wall_time } => todo!(),
+            UnaryFunc::TimezoneTime(_) => todo!(),
             UnaryFunc::ToTimestamp(_) => todo!(),
             UnaryFunc::JustifyDays(_) => todo!(),
             UnaryFunc::JustifyHours(_) => todo!(),
