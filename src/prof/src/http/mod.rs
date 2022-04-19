@@ -134,7 +134,7 @@ mod disabled {
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
-        action: Option<String>,
+        _action: Option<String>,
     }
 
     #[allow(clippy::unused_async)]
