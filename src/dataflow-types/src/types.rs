@@ -414,7 +414,7 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::gen::postgres_source::PostgresSourceDetails;
+    use crate::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 

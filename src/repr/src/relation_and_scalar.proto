@@ -12,13 +12,13 @@
 
 syntax = "proto3";
 
-package relation_and_scalar;
+package mz_repr.relation_and_scalar;
 
 import "google/protobuf/empty.proto";
-import "adt/char.proto";
-import "adt/numeric.proto";
-import "adt/varchar.proto";
-import "global_id.proto";
+import "repr/src/adt/char.proto";
+import "repr/src/adt/numeric.proto";
+import "repr/src/adt/varchar.proto";
+import "repr/src/global_id.proto";
 
 
 message ProtoColumnName {

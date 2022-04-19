@@ -25,7 +25,6 @@ mod relation;
 mod scalar;
 
 pub mod explain;
-pub mod proto;
 
 pub use relation::canonicalize;
 

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -17,8 +18,9 @@ use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use crate::scalar::func::LazyUnaryFunc;
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-#[cfg_attr(feature = "test-utils", derive(proptest_derive::Arbitrary))]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CastInt2VectorToArray;
 
 // This could be simplified to an EagerUnaryFunc once we have

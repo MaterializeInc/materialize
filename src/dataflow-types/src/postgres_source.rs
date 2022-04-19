@@ -8,9 +8,12 @@
 // by the Apache License, Version 2.0.
 
 //! Generated protobuf code and companion impls.
-include!(concat!(env!("OUT_DIR"), "/mod.rs"));
 
-use crate::postgres_source::{PostgresColumn, PostgresTable};
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_dataflow_types.postgres_source.rs"
+));
+
 use mz_postgres_util::{PgColumn, TableInfo};
 
 impl From<PgColumn> for PostgresColumn {

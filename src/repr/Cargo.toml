@@ -40,17 +40,12 @@ serde_json = { version = "1.0.79", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.8.0", features = ["serde", "union"] }
 uuid = "0.8.2"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", optional = true }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
-mz-repr = { path = ".", features = ["test-utils"] }
 rand = "0.8.5"
-proptest-derive = { git = "https://github.com/materializeInc/proptest.git" }
 
 [build-dependencies]
 prost-build = { version = "0.10.1", features = ["vendored"] }
-
-[features]
-test-utils = ["proptest", "proptest-derive"]

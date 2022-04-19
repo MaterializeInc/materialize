@@ -9,25 +9,27 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-import "global_id.proto";
+package mz_repr.chrono;
 
-package id;
-
-message ProtoId {
-    oneof kind {
-        .global_id.ProtoGlobalId global = 1;
-        ProtoLocalId local = 2;
-    }
+message ProtoTz {
+    string name = 1;
 }
 
-message ProtoLocalId {
-    uint64 value = 1;
+message ProtoNaiveDate {
+   int32 year = 1;
+   uint32 ordinal = 2;
 }
 
-message ProtoPartitionId {
-    oneof kind {
-        int32 kafka = 1;
-        google.protobuf.Empty none = 2;
-    }
+message ProtoNaiveTime {
+    uint32 secs = 1;
+    uint32 frac = 2;
+}
+
+message ProtoNaiveDateTime {
+    ProtoNaiveDate date = 1;
+    ProtoNaiveTime time = 2;
+}
+
+message ProtoFixedOffset {
+    int32 local_minus_utc = 1;
 }

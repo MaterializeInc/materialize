@@ -46,19 +46,15 @@ sha-1 = "0.10.0"
 sha2 = "0.10.2"
 uncased = "0.9.6"
 uuid = "0.8.2"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", optional = true }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-mz-expr = { path = ".", features = ["test-utils"] }
 proc-macro2 = "1.0.37"
 
 [build-dependencies]
 prost-build = { version = "0.10.1", features = ["vendored"] }
-
-[features]
-test-utils = ["mz-repr/test-utils", "proptest", "proptest-derive"]

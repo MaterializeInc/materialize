@@ -9,27 +9,13 @@
 
 syntax = "proto3";
 
-package chrono;
+package mz_repr.adt.numeric;
 
-message ProtoTz {
-    string name = 1;
+message ProtoNumericMaxScale {
+    uint32 value = 1;
 }
 
-message ProtoNaiveDate {
-   int32 year = 1;
-   uint32 ordinal = 2;
-}
-
-message ProtoNaiveTime {
-    uint32 secs = 1;
-    uint32 frac = 2;
-}
-
-message ProtoNaiveDateTime {
-    ProtoNaiveDate date = 1;
-    ProtoNaiveTime time = 2;
-}
-
-message ProtoFixedOffset {
-    int32 local_minus_utc = 1;
+// Helper struct for representing `Option<NumericMaxScale>`.
+message ProtoOptionalNumericMaxScale {
+    ProtoNumericMaxScale value = 1;
 }

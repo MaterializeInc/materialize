@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-package adt.datetime;
+package mz_repr.adt.datetime;
 
-import "chrono.proto";
+import "repr/src/chrono.proto";
 import "google/protobuf/empty.proto";
 
 message ProtoTimezone {

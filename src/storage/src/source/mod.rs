@@ -9,6 +9,9 @@
 
 //! Types related to the creation of dataflow sources.
 
+// https://github.com/tokio-rs/prost/issues/237
+#![allow(missing_docs)]
+
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -53,7 +56,6 @@ use crate::source::timestamp::TimestampBindingRc;
 use crate::source::util::source;
 
 mod file;
-mod gen;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -72,6 +74,8 @@ pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
+
+include!(concat!(env!("OUT_DIR"), "/mz_storage.source.rs"));
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);

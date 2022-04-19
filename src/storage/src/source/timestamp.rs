@@ -41,9 +41,7 @@ use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
 use mz_repr::Timestamp;
 
-use crate::source::gen::source::{
-    proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp,
-};
+use crate::source::{proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp};
 
 /// This struct holds state for proposed timestamps and
 /// proposed bindings from offsets to timestamps.

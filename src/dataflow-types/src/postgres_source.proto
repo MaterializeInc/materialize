@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package postgres_source;
+package mz_dataflow_types.postgres_source;
 
 message PostgresTable {
     string name = 1;
