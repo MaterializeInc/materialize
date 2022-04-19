@@ -16,7 +16,7 @@ use anyhow::bail;
 use compile_time_run::run_command_str;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use mz_build_info::{make_build_info, BuildInfo};
+use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -44,29 +44,7 @@ use mz_compute::server::Server;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-pub const BUILD_INFO: BuildInfo = make_build_info(
-    env!("CARGO_PKG_VERSION"),
-    run_command_str!(
-        "sh",
-        "-c",
-        r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
-            echo "$MZ_DEV_BUILD_SHA"
-        else
-            # Unfortunately we need to suppress error messages from `git`, as
-            # run_command_str will display no error message at all if we print
-            # more than one line of output to stderr.
-            git rev-parse --verify HEAD 2>/dev/null || {
-                printf "error: unable to determine Git SHA; " >&2
-                printf "either build from working Git clone " >&2
-                printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
-                printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
-                exit 1
-            }
-        fi"#
-    ),
-    compile_time_run::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
-    env!("TARGET_TRIPLE"),
-);
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
