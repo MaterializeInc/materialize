@@ -412,7 +412,10 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=tr
 {"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "0"}}
 
 # Verify compaction of exactly once sinks.
-$ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
+
+# TODO: we've disabled this after observing it be flaky in CI. Re-enable once we've
+# fixed the issue.
+#$ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
 $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
 $ verify-timestamp-compaction source=input_kafka_dbz max-size=3 permit-progress=true
 $ verify-timestamp-compaction source=input_kafka_cdcv2 max-size=3 permit-progress=true
