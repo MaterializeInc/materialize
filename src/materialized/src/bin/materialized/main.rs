@@ -690,8 +690,6 @@ max log level: {max_log_level}",
         Some(json) => serde_json::from_str(&json)?,
     };
 
-    println!("[btv] replica sizes: {:#?}", replica_sizes);
-
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
