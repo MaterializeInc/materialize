@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::fs::Permissions;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -297,7 +298,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 // TODO: limits?
                 cpu_limit: None,
                 memory_limit: None,
-                processes: 1,
+                processes: NonZeroUsize::new(1).unwrap(),
                 labels: HashMap::new(),
             },
         )

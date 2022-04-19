@@ -9,13 +9,15 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use derivative::Derivative;
 use serde::de::Unexpected;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 /// An orchestrator manages services.
 ///
@@ -82,11 +84,11 @@ pub struct ServiceConfig<'a> {
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
-    pub memory_limit: Option<ByteSize>,
+    pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of processes to run.
-    pub processes: usize,
+    pub processes: NonZeroUsize,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -105,6 +107,25 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: i32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct MemoryLimit(pub ByteSize);
+
+impl<'de> Deserialize<'de> for MemoryLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <String as Deserialize>::deserialize(deserializer)
+            .and_then(|s| {
+                ByteSize::from_str(&s).map_err(|_e| {
+                    use serde::de::Error;
+                    D::Error::invalid_value(serde::de::Unexpected::Str(&s), &"valid size in bytes")
+                })
+            })
+            .map(MemoryLimit)
+    }
 }
 
 /// Describes a limit on CPU resources.

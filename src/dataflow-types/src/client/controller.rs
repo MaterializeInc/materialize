@@ -23,19 +23,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
-use std::str::FromStr;
 
-use bytesize::ByteSize;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
-use mz_orchestrator::{CpuLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -60,46 +58,15 @@ pub struct OrchestratorConfig {
     pub storage_addr: String,
 }
 
-fn deserialize_memory_limit<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let maybe_string = Option::<String>::deserialize(deserializer)?;
-    match maybe_string {
-        None => Ok(None),
-        Some(string) => match ByteSize::from_str(&string) {
-            Ok(bs) => Ok(Some(bs)),
-            Err(_e) => {
-                use serde::de::Error;
-                Err(D::Error::invalid_value(
-                    serde::de::Unexpected::Str(&string),
-                    &"valid size in bytes",
-                ))
-            }
-        },
-    }
-}
-
 #[derive(Copy, Clone, Debug, Deserialize)]
 pub struct ClusterReplicaSizeConfig {
-    #[serde(deserialize_with = "deserialize_memory_limit")]
-    memory_limit: Option<ByteSize>,
+    memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     processes: NonZeroUsize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
-
-impl<'de> Deserialize<'de> for ClusterReplicaSizeMap {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let inner = HashMap::<_, _>::deserialize(deserializer)?;
-        Ok(Self(inner))
-    }
-}
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -204,7 +171,7 @@ where
                             ],
                             cpu_limit: size_config.cpu_limit,
                             memory_limit: size_config.memory_limit,
-                            processes: size_config.processes.get(),
+                            processes: size_config.processes,
                             labels: hashmap! {
                                 "cluster-id".into() => instance.to_string(),
                                 "type".into() => "cluster".into(),
