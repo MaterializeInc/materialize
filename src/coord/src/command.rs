@@ -235,7 +235,7 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
-    /// THe requested connector was dropped
+    /// The requested connector was dropped
     DroppedConnector,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,

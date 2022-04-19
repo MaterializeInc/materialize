@@ -1021,11 +1021,11 @@ lazy_static! {
         name: "mz_connectors",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("connector_type", ScalarType::String.nullable(false)),
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("connector_type", ScalarType::String.nullable(false)),
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
