@@ -2503,6 +2503,38 @@ lazy_static! {
                     Ok((e, ValueWindowFunc::Lag))
                 }) => AnyCompatible, 3108;
             },
+            "lead" => ValueWindow {
+                // All args are encoded into a single record to be handled later
+                params!(Any) => Operation::unary(|ecx, e| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => Any, 3109;
+                params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => Any, 3110;
+                params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs,
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => AnyCompatible, 3111;
+            },
 
             // Table functions.
             "generate_series" => Table {

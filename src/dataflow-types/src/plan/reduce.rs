@@ -573,6 +573,6 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::StringAgg { .. }
         | AggregateFunc::RowNumber { .. }
         | AggregateFunc::DenseRank { .. }
-        | AggregateFunc::Lag { .. } => ReductionType::Basic,
+        | AggregateFunc::LagLead { .. } => ReductionType::Basic,
     }
 }

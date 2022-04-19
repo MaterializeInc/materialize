@@ -36,7 +36,7 @@ pub use linear::{
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject,
 };
-pub use relation::func::{AggregateFunc, TableFunc};
+pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{

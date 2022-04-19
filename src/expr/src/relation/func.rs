@@ -639,7 +639,12 @@ where
 }
 
 // The expected input is in the format of [((OriginalRow, EncodedArgs), OrderByExprs...)]
-fn lag<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+fn lag_lead<'a, I>(
+    datums: I,
+    temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    lag_lead_type: &LagLeadType,
+) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -647,7 +652,7 @@ where
     let datums = order_aggregate_datums(datums, order_by);
 
     // Decode the input (OriginalRow, EncodedArgs) into separate datums
-    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag
+    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag/Lead
     let datums = datums
         .into_iter()
         .map(|d| {
@@ -674,6 +679,11 @@ where
 
         let idx = i64::try_from(idx).expect("Array index does not fit in i64");
         let offset = i64::from(offset.unwrap_int32());
+        // By default, offset is applied backwards (for `lag`): flip the sign if `lead` should run instead
+        let offset = match lag_lead_type {
+            LagLeadType::Lag => offset,
+            LagLeadType::Lead => -offset,
+        };
         let vec_offset = idx - offset;
 
         let lagged_value = if vec_offset >= 0 {
@@ -697,6 +707,14 @@ where
     temp_storage.make_datum(|packer| {
         packer.push_list(result);
     })
+}
+
+/// Identify whether the given aggregate function is Lag or Lead, since they share
+/// implementations.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub enum LagLeadType {
+    Lag,
+    Lead,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -769,8 +787,9 @@ pub enum AggregateFunc {
     DenseRank {
         order_by: Vec<ColumnOrder>,
     },
-    Lag {
+    LagLead {
         order_by: Vec<ColumnOrder>,
+        lag_lead: LagLeadType,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
@@ -825,7 +844,10 @@ impl AggregateFunc {
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
             AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
             AggregateFunc::DenseRank { order_by } => dense_rank(datums, temp_storage, order_by),
-            AggregateFunc::Lag { order_by } => lag(datums, temp_storage, order_by),
+            AggregateFunc::LagLead {
+                order_by,
+                lag_lead: lag_lead_type,
+            } => lag_lead(datums, temp_storage, order_by, lag_lead_type),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -853,7 +875,7 @@ impl AggregateFunc {
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             AggregateFunc::DenseRank { .. } => Datum::empty_list(),
-            AggregateFunc::Lag { .. } => Datum::empty_list(),
+            AggregateFunc::LagLead { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -929,7 +951,7 @@ impl AggregateFunc {
                 },
                 _ => unreachable!(),
             },
-            AggregateFunc::Lag { .. } => {
+            AggregateFunc::LagLead { lag_lead, .. } => {
                 // The input type for Lag is a ((OriginalRow, EncodedArgs), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
@@ -939,11 +961,15 @@ impl AggregateFunc {
                     .unwrap_record_element_type()[0]
                     .clone()
                     .nullable(true);
+                let column_name = match lag_lead {
+                    LagLeadType::Lag => "?lag?",
+                    LagLeadType::Lead => "?lead?",
+                };
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from("?lag?"), value_type),
+                            (ColumnName::from(column_name), value_type),
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_oid: None,
@@ -1240,7 +1266,14 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
             AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
             AggregateFunc::DenseRank { .. } => f.write_str("dense_rank"),
-            AggregateFunc::Lag { .. } => f.write_str("lag"),
+            AggregateFunc::LagLead {
+                lag_lead: LagLeadType::Lag,
+                ..
+            } => f.write_str("lag"),
+            AggregateFunc::LagLead {
+                lag_lead: LagLeadType::Lead,
+                ..
+            } => f.write_str("lead"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
