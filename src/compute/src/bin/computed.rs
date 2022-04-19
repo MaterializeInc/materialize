@@ -99,6 +99,7 @@ struct Args {
         default_value = "127.0.0.1:2101"
     )]
     storage_addr: String,
+    /// Whether or not process should die when connection with ADAPTER is lost.
     #[clap(long)]
     linger: bool,
     /// Enable command reconciliation.

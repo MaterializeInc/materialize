@@ -156,6 +156,10 @@ pub struct Args {
     /// The host on which processes spawned by the process orchestrator listen for connections.
     #[structopt(long, hide = true)]
     process_listen_host: Option<String>,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    #[clap(long, possible_values = &["true", "false"])]
+    orchestrator_linger: Option<bool>,
 
     // === Secrets controller options. ===
     /// The secrets controller implementation to use
@@ -388,6 +392,22 @@ enum Orchestrator {
     Process,
 }
 
+impl Orchestrator {
+    /// Default linger value for orchestrator type.
+    ///
+    /// Locally it is convenient for all the processes to be cleaned up when materialized dies
+    /// which is why `Process` defaults to false.
+    ///
+    /// In production we want COMPUTE and STORAGE nodes to be resilient to ADAPTER failures which
+    /// is why `Kubernetes` defaults to true.
+    pub fn default_linger_value(&self) -> bool {
+        match self {
+            Self::Kubernetes => true,
+            Self::Process => false,
+        }
+    }
+}
+
 #[derive(ArgEnum, Debug, Clone)]
 enum SecretsController {
     LocalFileSystem,
@@ -575,6 +595,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        linger: args
+            .orchestrator_linger
+            .unwrap_or_else(|| args.orchestrator.default_linger_value()),
     };
 
     // Configure secrets controller.

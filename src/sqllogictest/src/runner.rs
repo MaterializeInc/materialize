@@ -572,6 +572,7 @@ impl Runner {
                 }),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
+                linger: false,
             },
             secrets_controller: None,
             aws_external_id: AwsExternalId::NotProvided,

@@ -165,6 +165,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             }),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
+            linger: false,
         },
         secrets_controller: None,
         aws_external_id: config.aws_external_id,

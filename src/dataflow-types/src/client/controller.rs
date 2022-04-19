@@ -54,6 +54,8 @@ pub struct OrchestratorConfig {
     pub computed_image: String,
     /// The storage address that compute instances should connect to.
     pub storage_addr: String,
+    /// Whether or not process should die when connection with ADAPTER is lost.
+    pub linger: bool,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -98,6 +100,7 @@ where
                     orchestrator,
                     computed_image,
                     storage_addr,
+                    linger,
                 } = &self.orchestrator;
                 let default_listen_host = orchestrator.listen_host();
                 let service = orchestrator
@@ -107,14 +110,18 @@ where
                         ServiceConfig {
                             image: computed_image.clone(),
                             args: &|ports| {
-                                vec![
+                                let mut compute_opts = vec![
                                     format!("--storage-addr={storage_addr}"),
                                     format!(
                                         "--listen-addr={}:{}",
                                         default_listen_host, ports["controller"]
                                     ),
                                     format!("{}:{}", default_listen_host, ports["compute"]),
-                                ]
+                                ];
+                                if *linger {
+                                    compute_opts.push(format!("--linger"));
+                                }
+                                compute_opts
                             },
                             ports: vec![
                                 ServicePort {
