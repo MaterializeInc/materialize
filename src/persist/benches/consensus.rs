@@ -10,14 +10,17 @@
 //! Benchmarks for different persistent Write implementations.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
 use rand::Rng;
+use tokio::runtime::Runtime;
 
 use mz_persist::location::{Consensus, SeqNo, VersionedData};
 use mz_persist::mem::MemConsensus;
+use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::sqlite::SqliteConsensus;
 use mz_persist::workload::{self, DataGenerator};
 
@@ -86,4 +89,20 @@ pub fn bench_consensus_compare_and_set(data: &DataGenerator, g: &mut BenchmarkGr
         &blob_val,
         |b, blob_val| bench_compare_and_set(&mut sqlite_consensus, blob_val.clone(), b),
     );
+
+    // Only run Postgres benchmarks if the magic env vars are set.
+    if let Some(config) = futures_executor::block_on(PostgresConsensusConfig::new_for_test())
+        .expect("failed to load postgres config")
+    {
+        let async_runtime = Arc::new(Runtime::new().expect("failed to create async runtime"));
+        let async_guard = async_runtime.enter();
+        let mut postgres_consensus = futures_executor::block_on(PostgresConsensus::open(config))
+            .expect("failed to create PostgresConsensus");
+        g.bench_with_input(
+            BenchmarkId::new("postgres", data.goodput_pretty()),
+            &blob_val,
+            |b, blob_val| bench_compare_and_set(&mut postgres_consensus, blob_val.clone(), b),
+        );
+        drop(async_guard);
+    }
 }
