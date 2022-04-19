@@ -99,6 +99,7 @@ where
                     computed_image,
                     storage_addr,
                 } = &self.orchestrator;
+                let default_listen_host = orchestrator.default_listen_host();
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(
@@ -108,8 +109,11 @@ where
                             args: &|ports| {
                                 vec![
                                     format!("--storage-addr={storage_addr}"),
-                                    format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
-                                    format!("0.0.0.0:{}", ports["compute"]),
+                                    format!(
+                                        "--listen-addr={}:{}",
+                                        default_listen_host, ports["controller"]
+                                    ),
+                                    format!("{}:{}", default_listen_host, ports["compute"]),
                                 ]
                             },
                             ports: vec![

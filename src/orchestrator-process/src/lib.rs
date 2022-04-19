@@ -69,6 +69,9 @@ impl ProcessOrchestrator {
 }
 
 impl Orchestrator for ProcessOrchestrator {
+    fn default_listen_host(&self) -> &'static str {
+        "127.0.0.1"
+    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {

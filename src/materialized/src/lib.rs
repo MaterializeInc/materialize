@@ -257,6 +257,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
+    let default_listen_host = orchestrator.default_listen_host();
     let storage_service = orchestrator
         .namespace("storage")
         .ensure_service(
@@ -266,8 +267,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 args: &|ports| {
                     vec![
                         format!("--workers=1"),
-                        format!("--storage-addr=0.0.0.0:{}", ports["compute"]),
-                        format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
+                        format!(
+                            "--storage-addr={}:{}",
+                            default_listen_host, ports["compute"]
+                        ),
+                        format!(
+                            "--listen-addr={}:{}",
+                            default_listen_host, ports["controller"]
+                        ),
                         format!("--persist-blob-url={}", config.persist_location.blob_uri),
                         format!(
                             "--persist-consensus-url={}",
