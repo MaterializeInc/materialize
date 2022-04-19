@@ -20,7 +20,6 @@
 use std::cmp;
 use std::env;
 use std::ffi::CStr;
-use std::fmt;
 use std::fs;
 use std::net::SocketAddr;
 use std::panic;
@@ -410,40 +409,6 @@ impl FromStr for OrchestratorLabel {
             key: key.into(),
             value: value.into(),
         })
-    }
-}
-
-/// This type is a hack to allow a dynamic default for the `--workers` argument,
-/// which depends on the number of available CPUs. Ideally clap would
-/// expose a `default_fn` rather than accepting only string literals.
-#[derive(Debug)]
-struct WorkerCount(usize);
-
-impl Default for WorkerCount {
-    fn default() -> Self {
-        WorkerCount(cmp::max(
-            1,
-            // When inside a cgroup with a cpu limit,
-            // the logical cpus can be lower than the physical cpus.
-            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
-        ))
-    }
-}
-
-impl FromStr for WorkerCount {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<WorkerCount, anyhow::Error> {
-        let n = s.parse()?;
-        if n == 0 {
-            bail!("must be greater than zero");
-        }
-        Ok(WorkerCount(n))
-    }
-}
-
-impl fmt::Display for WorkerCount {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
     }
 }
 
