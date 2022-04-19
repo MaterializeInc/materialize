@@ -10,7 +10,6 @@
 //! Types related to the creation of dataflow sources.
 
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
@@ -25,9 +24,7 @@ use differential_dataflow::Hashable;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Capability, CapabilitySet, Event};
+use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
@@ -272,7 +269,7 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<RefCell<Option<(Capability<Timestamp>, CapabilitySet<Timestamp>)>>>,
+    capabilities: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
 }
 
@@ -813,12 +810,10 @@ where
         let mut metrics =
             SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
 
-        move |cap, durability_cap: &mut CapabilitySet<Timestamp>, output| {
+        move |cap, output| {
             if !active {
                 return SourceStatus::Done;
             }
-
-            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -877,9 +872,10 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
+    use std::collections::{BTreeMap, VecDeque};
+
     let SourceConfig {
         name,
-        upstream_name,
         id,
         scope,
         mut timestamp_histories,
@@ -891,8 +887,6 @@ where
         base_metrics,
         ..
     } = config;
-
-    let bytes_read_counter = base_metrics.bytes_read.clone();
 
     let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
@@ -907,14 +901,12 @@ where
                 .activators
                 .push(durability_activator);
         }
-
-        let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
-        let mut source_metrics =
-            SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
+        // Pre-existing reclocking information.
         let restored_offsets = timestamp_histories
             .as_mut()
             .map(|ts| ts.partitions())
             .unwrap_or_default();
+        // Records the *next* offset we expect to see for each part.
         let mut partition_cursors: HashMap<_, _> = restored_offsets
             .iter()
             .cloned()
@@ -944,7 +936,12 @@ where
             }
         };
 
-        move |cap, durability_cap, output| {
+        // Untransmitted messages arranged by part.
+        // Messages are retained until their associated timestamp binding is durable,
+        // at which point they (and other messages at their time) flow out.
+        let mut messages_by_part = BTreeMap::new();
+
+        move |cap, output| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
@@ -962,34 +959,25 @@ where
                 }
             };
 
-            // Maintain a capability set that tracks the durability frontier.
-            durability_cap.downgrade(timestamp_histories.durability_frontier());
-
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            // Accumulate updates to bytes_read for Prometheus metrics collection
-            let mut bytes_read = 0;
-            // Accumulate updates to offsets for system table metrics collection
-            let mut metric_updates = HashMap::new();
-
-            // Record operator has been scheduled
-            source_metrics.operator_scheduled_counter.inc();
 
             let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
             while let (_, MessageProcessing::Active) = source_state {
                 source_state = match source_reader.get_next_message() {
                     Ok(NextMessage::Ready(message)) => {
-                        partition_cursors.insert(message.partition.clone(), message.offset + 1);
-                        handle_message::<S>(
-                            message,
-                            &mut bytes_read,
-                            &cap,
-                            output,
-                            &mut metric_updates,
-                            &timer,
-                            &timestamp_histories,
-                        )
+                        messages_by_part
+                            .entry(message.partition.clone())
+                            .or_insert_with(VecDeque::new)
+                            .push_back(message);
+                        if timer.elapsed() > YIELD_INTERVAL {
+                            // We didn't drain the entire queue, so indicate that we
+                            // should run again but yield the CPU to other operators.
+                            (SourceStatus::Alive, MessageProcessing::Yielded)
+                        } else {
+                            (SourceStatus::Alive, MessageProcessing::Active)
+                        }
                     }
                     Ok(NextMessage::TransientDelay) => {
                         // There was a temporary hiccup in getting messages, check again asap.
@@ -1007,21 +995,62 @@ where
                 };
             }
 
-            bytes_read_counter.inc_by(bytes_read as u64);
-            source_metrics.record_partition_offsets(metric_updates);
-
-            // Attempt to update the timestamp and finalize the currently pending bindings
-            let cur_ts = timestamp_histories.upper();
-            timestamp_histories.update_timestamp();
-            if timestamp_histories.upper() > cur_ts {
-                for (_, partition_metrics) in source_metrics.partition_metrics.iter_mut() {
-                    partition_metrics.closed_ts.set(cur_ts);
+            // TODO: This would be a great time to attempt to commit timestamp bindings.
+            for (part, messages) in messages_by_part.iter() {
+                if let Some(message) = messages.back() {
+                    timestamp_histories.get_or_propose_binding(&part, message.offset);
                 }
             }
 
+            // Keyed by times, the messages to send at each time.
+            let mut to_send = BTreeMap::new();
+
+            // Times greater or equal to this frontier are not yet durable,
+            // and we should not transmit output at these times.
+            let durable_frontier = timestamp_histories.durability_frontier();
+            for (part, messages) in messages_by_part.iter_mut() {
+                while let Some(timestamp) = messages.front().map(|message| {
+                    timestamp_histories.get_or_propose_binding(&message.partition, message.offset)
+                }) {
+                    if !durable_frontier.less_equal(&timestamp) {
+                        let message = messages.pop_front().unwrap();
+                        // Update the limits of offsets we have transmitted, for capability downgrading.
+                        partition_cursors.insert(part.clone(), message.offset + 1);
+                        // Form and enqueue the output.
+                        let output = SourceOutput::new(
+                            message.key,
+                            message.value,
+                            message.offset.offset,
+                            message.upstream_time_millis,
+                            message.partition,
+                            message.headers,
+                        );
+                        to_send
+                            .entry(timestamp)
+                            .or_insert_with(Vec::new)
+                            .push(Ok(output));
+                    } else {
+                        // We can stop processing now, as offsets only increase,
+                        // and the offset to timestamp association increases monotonically.
+                        break;
+                    }
+                }
+            }
+            // Transmit the data for each timestamp.
+            for (timestamp, mut buffer) in to_send.into_iter() {
+                let ts_cap = cap.delayed(&timestamp);
+                output.session(&ts_cap).give_vec(&mut buffer);
+            }
+
+            // We should now downgrade our capability.
+            // We must retain the ability to send any future data, which is determined by looking at
+            // the *next* offsets for each part we manage, as this indicates data we might still receive.
+
+            // Attempt to update the timestamp and finalize the currently pending bindings
+            timestamp_histories.update_timestamp();
+
             // Downgrade capability (if possible) before exiting
             timestamp_histories.downgrade(cap, &partition_cursors);
-            source_metrics.capability.set(*cap.time());
             // Downgrade compaction frontier to track the current time.
             timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
@@ -1048,70 +1077,5 @@ where
     } else {
         // Immediately drop the capability if worker is not an active reader for source
         ((ok_stream, err_stream), None)
-    }
-}
-
-/// Take `message` and assign it the appropriate timestamps and push it into the
-/// dataflow layer, if possible.
-///
-/// TODO: This function is a bit of a mess rn but hopefully this function makes the
-/// existing mess more obvious and points towards ways to improve it.
-fn handle_message<S: SourceReader>(
-    message: SourceMessage<S::Key, S::Value>,
-    bytes_read: &mut usize,
-    cap: &Capability<Timestamp>,
-    output: &mut OutputHandle<
-        Timestamp,
-        Result<SourceOutput<S::Key, S::Value>, String>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, String>>,
-    >,
-    metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
-    timer: &std::time::Instant,
-    timestamp_bindings: &TimestampBindingRc,
-) -> (SourceStatus, MessageProcessing) {
-    let partition = message.partition.clone();
-    let offset = message.offset;
-
-    // Determine the timestamp to which we need to assign this message
-    let ts = timestamp_bindings.get_or_propose_binding(&partition, offset);
-    // Note: empty and null payload/keys are currently
-    // treated as the same thing.
-    let key = message.key;
-    let out = message.value;
-    // Entry for partition_metadata is guaranteed to exist as messages
-    // are only processed after we have updated the partition_metadata for a
-    // partition and created a partition queue for it.
-    if let Some(len) = key.len() {
-        *bytes_read += len;
-    }
-    if let Some(len) = out.len() {
-        *bytes_read += len;
-    }
-    let ts_cap = cap.delayed(&ts);
-
-    output.session(&ts_cap).give(Ok(SourceOutput::new(
-        key,
-        out,
-        offset.offset,
-        message.upstream_time_millis,
-        message.partition,
-        message.headers,
-    )));
-
-    match metric_updates.entry(partition) {
-        Entry::Occupied(mut entry) => {
-            entry.insert((offset, ts, entry.get().2 + 1));
-        }
-        Entry::Vacant(entry) => {
-            entry.insert((offset, ts, 1));
-        }
-    }
-
-    if timer.elapsed() > YIELD_INTERVAL {
-        // We didn't drain the entire queue, so indicate that we
-        // should run again but yield the CPU to other operators.
-        (SourceStatus::Alive, MessageProcessing::Yielded)
-    } else {
-        (SourceStatus::Alive, MessageProcessing::Active)
     }
 }
