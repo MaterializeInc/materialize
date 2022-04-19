@@ -2882,6 +2882,12 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
+/// An explicit [`Arbitrary`] implementation needed here because of a known
+/// `proptest` issue.
+///
+/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+///
+/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
 impl Arbitrary for BinaryFunc {
     type Parameters = ();
 
@@ -3663,6 +3669,12 @@ pub enum UnaryFunc {
 
 use proptest::{prelude::*, strategy::*};
 
+/// An explicit [`Arbitrary`] implementation needed here because of a known
+/// `proptest` issue.
+///
+/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+///
+/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
 impl Arbitrary for UnaryFunc {
     type Parameters = ();
 
@@ -6941,6 +6953,12 @@ impl fmt::Display for VariadicFunc {
     }
 }
 
+/// An explicit [`Arbitrary`] implementation needed here because of a known
+/// `proptest` issue.
+///
+/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+///
+/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
 impl Arbitrary for VariadicFunc {
     type Parameters = ();
 
