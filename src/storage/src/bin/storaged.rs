@@ -15,7 +15,6 @@ use std::time::Duration;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use mz_dataflow_types::sources::AwsExternalId;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
@@ -24,10 +23,11 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
+use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
+use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-
 use mz_storage::Server;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
@@ -41,6 +41,8 @@ use mz_storage::Server;
 #[cfg(not(target_os = "macos"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+const BUILD_INFO: BuildInfo = build_info!();
 
 /// Independent storage server for Materialize.
 #[derive(clap::Parser)]
@@ -91,6 +93,10 @@ struct Args {
     /// Where the persist library should perform consensus.
     #[clap(long, env = "STORAGED_PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Url,
+
+    /// The address of the HTTP profiling UI.
+    #[clap(long, value_name = "HOST:PORT")]
+    http_console_addr: Option<String>,
 }
 
 #[tokio::main]
@@ -137,6 +143,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "listening for coordinator connection on {}...",
         listener.local_addr()?
     );
+
+    if let Some(addr) = args.http_console_addr {
+        tracing::info!("serving storaged HTTP server on {}", addr);
+        mz_ore::task::spawn(
+            || "storaged_http_server",
+            axum::Server::bind(&addr.parse()?)
+                .serve(mz_prof::http::router(&BUILD_INFO).into_make_service()),
+        );
+    }
 
     info!("starting persist client...");
     let persist_client = {
