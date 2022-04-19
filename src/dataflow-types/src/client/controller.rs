@@ -138,7 +138,7 @@ where
                 } = &self.orchestrator;
 
                 let default_listen_host = orchestrator.listen_host();
-                
+
                 let size_config = self.replica_sizes.0.get(&size).ok_or_else(|| {
                     anyhow::anyhow!("Size {size} not specified in allowed cluster sizes map")
                 })?;
