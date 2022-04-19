@@ -24,6 +24,7 @@ use std::{env, fs};
 use anyhow::{anyhow, Context};
 use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
+use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -116,6 +117,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
     pub now: NowFn,
+    /// Map of strings to corresponding compute replica sizes.
+    pub replica_sizes: ClusterReplicaSizeMap,
 }
 
 /// Configures TLS encryption for connections.
@@ -334,8 +337,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_client,
         config.data_directory,
     );
-    let dataflow_controller =
-        mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
+    let dataflow_controller = mz_dataflow_types::client::Controller::new(
+        orchestrator,
+        storage_controller,
+        config.replica_sizes,
+    );
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {

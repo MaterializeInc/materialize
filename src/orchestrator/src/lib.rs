@@ -12,7 +12,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use derivative::Derivative;
+use serde::de::Unexpected;
+use serde::Deserialize;
 
 /// An orchestrator manages services.
 ///
@@ -79,7 +82,7 @@ pub struct ServiceConfig<'a> {
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
-    pub memory_limit: Option<MemoryLimit>,
+    pub memory_limit: Option<ByteSize>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of processes to run.
@@ -104,26 +107,8 @@ pub struct ServicePort {
     pub port_hint: i32,
 }
 
-/// Describes a limit on memory resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryLimit {
-    bytes: usize,
-}
-
-impl MemoryLimit {
-    /// Constructs a new memory limit from a number of bytes.
-    pub fn from_bytes(&self, bytes: usize) -> MemoryLimit {
-        MemoryLimit { bytes }
-    }
-
-    /// Returns the memory limit in bytes.
-    pub fn as_bytes(&self) -> usize {
-        self.bytes
-    }
-}
-
 /// Describes a limit on CPU resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CpuLimit {
     millicpus: usize,
 }
@@ -137,5 +122,27 @@ impl CpuLimit {
     /// Returns the CPU limit in millicpus.
     pub fn as_millicpus(&self) -> usize {
         self.millicpus
+    }
+}
+
+impl<'de> Deserialize<'de> for CpuLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Note -- we just round off any precision beyond 0.001 here.
+        let float = f64::deserialize(deserializer)?;
+        let millicpus = (float * 1000.).round();
+        if millicpus < 0. || millicpus > (std::usize::MAX as f64) {
+            use serde::de::Error;
+            Err(D::Error::invalid_value(
+                Unexpected::Float(float),
+                &"a float representing a plausible number of CPUs",
+            ))
+        } else {
+            Ok(Self {
+                millicpus: millicpus as usize,
+            })
+        }
     }
 }

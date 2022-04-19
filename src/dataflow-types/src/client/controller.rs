@@ -21,17 +21,21 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 
+use bytesize::ByteSize;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
+use serde::{Deserialize, Deserializer};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
-use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{CpuLimit, Orchestrator, ServiceConfig, ServicePort};
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -56,6 +60,71 @@ pub struct OrchestratorConfig {
     pub storage_addr: String,
 }
 
+fn deserialize_memory_limit<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let maybe_string = Option::<String>::deserialize(deserializer)?;
+    match maybe_string {
+        None => Ok(None),
+        Some(string) => match ByteSize::from_str(&string) {
+            Ok(bs) => Ok(Some(bs)),
+            Err(_e) => {
+                use serde::de::Error;
+                Err(D::Error::invalid_value(
+                    serde::de::Unexpected::Str(&string),
+                    &"valid size in bytes",
+                ))
+            }
+        },
+    }
+}
+
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct ClusterReplicaSizeConfig {
+    #[serde(deserialize_with = "deserialize_memory_limit")]
+    memory_limit: Option<ByteSize>,
+    cpu_limit: Option<CpuLimit>,
+    processes: NonZeroUsize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
+
+impl<'de> Deserialize<'de> for ClusterReplicaSizeMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let inner = HashMap::<_, _>::deserialize(deserializer)?;
+        Ok(Self(inner))
+    }
+}
+
+impl Default for ClusterReplicaSizeMap {
+    fn default() -> Self {
+        // {
+        //     "1": {"processes": 1},
+        //     "2": {"processes": 2},
+        //     /// ...
+        //     "16": {"processes": 16}
+        // }
+        let inner = (1..=16)
+            .map(|i| {
+                (
+                    i.to_string(),
+                    ClusterReplicaSizeConfig {
+                        memory_limit: None,
+                        cpu_limit: None,
+                        processes: NonZeroUsize::new(i).unwrap(),
+                    },
+                )
+            })
+            .collect();
+        Self(inner)
+    }
+}
+
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 ///
 /// NOTE(benesch): I find the fact that this type is called `Controller` but is
@@ -65,6 +134,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     orchestrator: OrchestratorConfig,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
+    replica_sizes: ClusterReplicaSizeMap,
 }
 
 impl<T> Controller<T>
@@ -93,13 +163,19 @@ where
                     compute_instance.add_replica(name, client).await;
                 }
             }
-            InstanceConfig::Managed { size: _ } => {
+            InstanceConfig::Managed { size } => {
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,
                     storage_addr,
                 } = &self.orchestrator;
+
                 let default_listen_host = orchestrator.listen_host();
+                
+                let size_config = self.replica_sizes.0.get(&size).ok_or_else(|| {
+                    anyhow::anyhow!("Size {size} not specified in allowed cluster sizes map")
+                })?;
+
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(
@@ -126,11 +202,9 @@ where
                                     port_hint: 2102,
                                 },
                             ],
-                            // TODO: use `size` to set these.
-                            cpu_limit: None,
-                            memory_limit: None,
-                            // TODO: support sizes large enough to warrant multiple processes.
-                            processes: 1,
+                            cpu_limit: size_config.cpu_limit,
+                            memory_limit: size_config.memory_limit,
+                            processes: size_config.processes.get(),
                             labels: hashmap! {
                                 "cluster-id".into() => instance.to_string(),
                                 "type".into() => "cluster".into(),
@@ -284,11 +358,13 @@ impl<T> Controller<T> {
     pub fn new<S: StorageController<Timestamp = T> + 'static>(
         orchestrator: OrchestratorConfig,
         storage_controller: S,
+        replica_sizes: ClusterReplicaSizeMap,
     ) -> Self {
         Self {
             orchestrator,
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
+            replica_sizes,
         }
     }
 }

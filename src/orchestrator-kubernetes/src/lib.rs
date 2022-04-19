@@ -160,10 +160,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         }
         let mut limits = BTreeMap::new();
         if let Some(memory_limit) = memory_limit {
-            limits.insert(
-                "memory".into(),
-                Quantity(memory_limit.as_bytes().to_string()),
-            );
+            limits.insert("memory".into(), Quantity(memory_limit.as_u64().to_string()));
         }
         if let Some(cpu_limit) = cpu_limit {
             limits.insert(
