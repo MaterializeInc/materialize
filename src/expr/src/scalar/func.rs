@@ -36,18 +36,14 @@ use mz_ore::cast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
-use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
-use mz_repr::adt::regex::Regex;
 use mz_repr::proto::TryFromProtoError;
-use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, RowPacker, ScalarType,
-};
+use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -444,33 +440,6 @@ fn decode<'a>(
     let format = encoding::lookup_format(format.unwrap_str())?;
     let out = format.decode(string.unwrap_str())?;
     Ok(Datum::from(temp_storage.push_bytes(out)))
-}
-
-fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len() * 8) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
-}
-
-fn byte_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
-}
-
-fn char_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i32::try_from(a.unwrap_str().chars().count()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
 }
 
 fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1388,13 +1357,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_str().chars().next() {
-        None => Datum::Int32(0),
-        Some(v) => Datum::Int32(v as i32),
-    }
-}
-
 /// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
     fn extract_epoch<T>(&self) -> T
@@ -1757,44 +1719,8 @@ where
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_interval_inner::<D>(units, b),
+        Ok(units) => Ok(date_part_interval_inner::<D>(units, b.unwrap_interval())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_interval_inner<D>(
-    units: DateTimeUnits,
-    interval: Datum,
-) -> Result<Datum<'static>, EvalError>
-where
-    D: DecimalLike + Into<Datum<'static>>,
-{
-    let interval = interval.unwrap_interval();
-    match units {
-        DateTimeUnits::Epoch => Ok(interval.as_epoch_seconds::<D>().into()),
-        DateTimeUnits::Millennium => Ok(D::from(interval.millennia()).into()),
-        DateTimeUnits::Century => Ok(D::from(interval.centuries()).into()),
-        DateTimeUnits::Decade => Ok(D::from(interval.decades()).into()),
-        DateTimeUnits::Year => Ok(D::from(interval.years()).into()),
-        DateTimeUnits::Quarter => Ok(D::from(interval.quarters()).into()),
-        DateTimeUnits::Month => Ok(D::from(interval.months()).into()),
-        DateTimeUnits::Day => Ok(D::lossy_from(interval.days()).into()),
-        DateTimeUnits::Hour => Ok(D::lossy_from(interval.hours()).into()),
-        DateTimeUnits::Minute => Ok(D::lossy_from(interval.minutes()).into()),
-        DateTimeUnits::Second => Ok(interval.seconds::<D>().into()),
-        DateTimeUnits::Milliseconds => Ok(interval.milliseconds::<D>().into()),
-        DateTimeUnits::Microseconds => Ok(interval.microseconds::<D>().into()),
-        DateTimeUnits::Week
-        | DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::DayOfWeek
-        | DateTimeUnits::DayOfYear
-        | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
     }
 }
 
@@ -1855,41 +1781,8 @@ where
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_timestamp_inner::<_, D>(units, ts),
+        Ok(units) => Ok(date_part_timestamp_inner::<_, D>(units, ts)?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_part_timestamp_inner<'a, T, D>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-    D: DecimalLike + Into<Datum<'a>>,
-{
-    match units {
-        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch::<D>(&ts).into()),
-        DateTimeUnits::Millennium => Ok(D::from(ts.millennium()).into()),
-        DateTimeUnits::Century => Ok(D::from(ts.century()).into()),
-        DateTimeUnits::Decade => Ok(D::from(ts.decade()).into()),
-        DateTimeUnits::Year => Ok(D::from(ts.year()).into()),
-        DateTimeUnits::Quarter => Ok(D::from(ts.quarter()).into()),
-        DateTimeUnits::Week => Ok(D::from(ts.week()).into()),
-        DateTimeUnits::Month => Ok(D::from(ts.month()).into()),
-        DateTimeUnits::Day => Ok(D::from(ts.day()).into()),
-        DateTimeUnits::DayOfWeek => Ok(D::from(ts.day_of_week()).into()),
-        DateTimeUnits::DayOfYear => Ok(D::from(ts.ordinal()).into()),
-        DateTimeUnits::IsoDayOfWeek => Ok(D::from(ts.iso_day_of_week()).into()),
-        DateTimeUnits::Hour => Ok(D::from(ts.hour()).into()),
-        DateTimeUnits::Minute => Ok(D::from(ts.minute()).into()),
-        DateTimeUnits::Second => Ok(ts.extract_second::<D>().into()),
-        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond::<D>().into()),
-        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond::<D>().into()),
-        DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
     }
 }
 
@@ -1983,40 +1876,8 @@ where
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_trunc_inner(units, ts),
+        Ok(units) => Ok(date_trunc_inner(units, ts)?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
-
-fn date_trunc_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-{
-    match units {
-        DateTimeUnits::Millennium => Ok(ts.truncate_millennium().into()),
-        DateTimeUnits::Century => Ok(ts.truncate_century().into()),
-        DateTimeUnits::Decade => Ok(ts.truncate_decade().into()),
-        DateTimeUnits::Year => Ok(ts.truncate_year().into()),
-        DateTimeUnits::Quarter => Ok(ts.truncate_quarter().into()),
-        DateTimeUnits::Week => Ok(ts.truncate_week()?.into()),
-        DateTimeUnits::Day => Ok(ts.truncate_day().into()),
-        DateTimeUnits::Hour => Ok(ts.truncate_hour().into()),
-        DateTimeUnits::Minute => Ok(ts.truncate_minute().into()),
-        DateTimeUnits::Second => Ok(ts.truncate_second().into()),
-        DateTimeUnits::Month => Ok(ts.truncate_month().into()),
-        DateTimeUnits::Milliseconds => Ok(ts.truncate_milliseconds().into()),
-        DateTimeUnits::Microseconds => Ok(ts.truncate_microseconds().into()),
-        DateTimeUnits::Epoch
-        | DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::DayOfWeek
-        | DateTimeUnits::DayOfYear
-        | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
     }
 }
 
@@ -2047,40 +1908,6 @@ fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> Datum
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&wall_time).fix(),
     };
     (t + offset).into()
-}
-
-/// Converts the timestamp `dt`, which is assumed to be in the time of the timezone `tz` to a timestamptz in UTC.
-/// This operation is fallible because certain timestamps at timezones that observe DST are simply impossible or
-/// ambiguous. In case of ambiguity (when a hour repeats) we will prefer the latest variant, and when an hour is
-/// impossible, we will attempt to fix it by advancing it. For example, `EST` and `2020-11-11T12:39:14` would return
-/// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
-/// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
-/// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
-fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<Datum<'static>, EvalError> {
-    let offset = match tz {
-        Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
-            Some(offset) => offset.fix(),
-            None => {
-                dt += Duration::hours(1);
-                tz.offset_from_local_datetime(&dt)
-                    .latest()
-                    .ok_or(EvalError::InvalidTimezoneConversion)?
-                    .fix()
-            }
-        },
-    };
-    Ok(DateTime::from_utc(dt - offset, Utc).into())
-}
-
-/// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
-/// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
-fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Datum<'static> {
-    let offset = match tz {
-        Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
-    };
-    (utc.naive_utc() + offset).into()
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -2120,62 +1947,6 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     } else {
         Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
     }
-}
-
-fn jsonb_array_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    Ok(match a {
-        Datum::List(list) => Datum::Int32(
-            list.iter()
-                .count()
-                .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
-        ),
-        _ => Datum::Null,
-    })
-}
-
-fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Map(_) => Datum::String("object"),
-        Datum::List(_) => Datum::String("array"),
-        Datum::String(_) => Datum::String("string"),
-        Datum::Numeric(_) => Datum::String("number"),
-        Datum::True | Datum::False => Datum::String("boolean"),
-        Datum::JsonNull => Datum::String("null"),
-        Datum::Null => Datum::Null,
-        _ => panic!("Not jsonb: {:?}", a),
-    }
-}
-
-fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    fn strip_nulls(a: Datum, row: &mut RowPacker) {
-        match a {
-            Datum::Map(dict) => row.push_dict_with(|row| {
-                for (k, v) in dict.iter() {
-                    match v {
-                        Datum::JsonNull => (),
-                        _ => {
-                            row.push(Datum::String(k));
-                            strip_nulls(v, row);
-                        }
-                    }
-                }
-            }),
-            Datum::List(list) => row.push_list_with(|row| {
-                for elem in list.iter() {
-                    strip_nulls(elem, row);
-                }
-            }),
-            _ => row.push(a),
-        }
-    }
-    temp_storage.make_datum(|row| strip_nulls(a, row))
-}
-
-fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_jsonb_pretty(&mut buf, JsonbRef::from_datum(a));
-    Datum::String(temp_storage.push_string(buf))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -2496,11 +2267,11 @@ impl BinaryFunc {
             }
             BinaryFunc::TimezoneTimestamp => {
                 eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                    .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp())))
+                    .and_then(|tz| Ok(timezone_timestamp(tz, b.unwrap_timestamp())?.into())))
             }
             BinaryFunc::TimezoneTimestampTz => {
                 eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
+                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz()).into()))
             }
             BinaryFunc::TimezoneTime { wall_time } => {
                 eager!(
@@ -3812,52 +3583,56 @@ pub enum UnaryFunc {
     FloorFloat32(FloorFloat32),
     FloorFloat64(FloorFloat64),
     FloorNumeric(FloorNumeric),
-    Ascii,
-    BitLengthBytes,
-    BitLengthString,
-    ByteLengthBytes,
-    ByteLengthString,
-    CharLength,
+    Ascii(Ascii),
+    BitLengthBytes(BitLengthBytes),
+    BitLengthString(BitLengthString),
+    ByteLengthBytes(ByteLengthBytes),
+    ByteLengthString(ByteLengthString),
+    CharLength(CharLength),
     Chr(Chr),
-    IsLikeMatch(like_pattern::Matcher),
-    IsRegexpMatch(Regex),
-    RegexpMatch(Regex),
-    ExtractInterval(DateTimeUnits),
-    ExtractTime(DateTimeUnits),
-    ExtractTimestamp(DateTimeUnits),
-    ExtractTimestampTz(DateTimeUnits),
+    IsLikeMatch(IsLikeMatch),
+    IsRegexpMatch(IsRegexpMatch),
+    RegexpMatch(RegexpMatch),
+
+    ExtractInterval(ExtractInterval),
+    DatePartInterval(DatePartInterval),
+
+    ExtractTimestamp(ExtractTimestamp),
+    ExtractTimestampTz(ExtractTimestampTz),
+    DatePartTimestamp(DatePartTimestamp),
+    DatePartTimestampTz(DatePartTimestampTz),
+    DateTruncTimestamp(DateTruncTimestamp),
+    DateTruncTimestampTz(DateTruncTimestampTz),
+    TimezoneTimestamp(TimezoneTimestamp),
+    TimezoneTimestampTz(TimezoneTimestampTz),
+
     ExtractDate(DateTimeUnits),
-    DatePartInterval(DateTimeUnits),
+    ExtractTime(DateTimeUnits),
     DatePartTime(DateTimeUnits),
-    DatePartTimestamp(DateTimeUnits),
-    DatePartTimestampTz(DateTimeUnits),
-    DateTruncTimestamp(DateTimeUnits),
-    DateTruncTimestampTz(DateTimeUnits),
-    TimezoneTimestamp(Timezone),
-    TimezoneTimestampTz(Timezone),
     TimezoneTime {
         tz: Timezone,
         wall_time: NaiveDateTime,
     },
+
     ToTimestamp(ToTimestamp),
     JustifyDays(JustifyDays),
     JustifyHours(JustifyHours),
     JustifyInterval(JustifyInterval),
-    JsonbArrayLength,
-    JsonbTypeof,
-    JsonbStripNulls,
-    JsonbPretty,
+    JsonbArrayLength(JsonbArrayLength),
+    JsonbTypeof(JsonbTypeof),
+    JsonbStripNulls(JsonbStripNulls),
+    JsonbPretty(JsonbPretty),
     RoundFloat32(RoundFloat32),
     RoundFloat64(RoundFloat64),
     RoundNumeric(RoundNumeric),
-    TrimWhitespace,
-    TrimLeadingWhitespace,
-    TrimTrailingWhitespace,
+    TrimWhitespace(TrimWhitespace),
+    TrimLeadingWhitespace(TrimLeadingWhitespace),
+    TrimTrailingWhitespace(TrimTrailingWhitespace),
     RecordGet(usize),
     ListLength,
     MapLength,
-    Upper,
-    Lower,
+    Upper(Upper),
+    Lower(Lower),
     Cos(Cos),
     Acos(Acos),
     Cosh(Cosh),
@@ -4119,7 +3894,35 @@ derive_unary!(
     CastJsonbToNumeric,
     CastJsonbToBool,
     CastVarCharToString,
-    Chr
+    Chr,
+    Ascii,
+    CharLength,
+    TrimWhitespace,
+    TrimTrailingWhitespace,
+    TrimLeadingWhitespace,
+    BitLengthString,
+    ByteLengthString,
+    BitLengthBytes,
+    ByteLengthBytes,
+    Upper,
+    Lower,
+    JsonbArrayLength,
+    JsonbTypeof,
+    JsonbStripNulls,
+    JsonbPretty,
+    IsLikeMatch,
+    IsRegexpMatch,
+    RegexpMatch,
+    ExtractInterval,
+    DatePartInterval,
+    ExtractTimestamp,
+    ExtractTimestampTz,
+    DatePartTimestamp,
+    DatePartTimestampTz,
+    DateTruncTimestamp,
+    DateTruncTimestampTz,
+    TimezoneTimestamp,
+    TimezoneTimestampTz
 );
 
 impl UnaryFunc {
@@ -4306,6 +4109,34 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
+            | ExtractInterval(_)
+            | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
+            | DateTruncTimestamp(_)
+            | DateTruncTimestampTz(_)
+            | TimezoneTimestamp(_)
+            | TimezoneTimestampTz(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { ty }
             | CastArrayToString { ty }
@@ -4318,49 +4149,13 @@ impl UnaryFunc {
             CastRecord1ToRecord2 { cast_exprs, .. } => {
                 cast_record1_to_record2(a, cast_exprs, temp_storage)
             }
-            Ascii => Ok(ascii(a)),
-            BitLengthString => bit_length(a.unwrap_str()),
-            BitLengthBytes => bit_length(a.unwrap_bytes()),
-            ByteLengthString => byte_length(a.unwrap_str()),
-            ByteLengthBytes => byte_length(a.unwrap_bytes()),
-            CharLength => char_length(a),
-            IsLikeMatch(matcher) => Ok(is_like_match_static(a, &matcher)),
-            IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
-            RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
-            ExtractInterval(units) => date_part_interval_inner::<Numeric>(*units, a),
             ExtractTime(units) => date_part_time_inner::<Numeric>(*units, a),
-            ExtractTimestamp(units) => {
-                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamp())
-            }
-            ExtractTimestampTz(units) => {
-                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamptz())
-            }
             ExtractDate(units) => extract_date_inner(*units, a),
-            DatePartInterval(units) => date_part_interval_inner::<f64>(*units, a),
             DatePartTime(units) => date_part_time_inner::<f64>(*units, a),
-            DatePartTimestamp(units) => {
-                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamp())
-            }
-            DatePartTimestampTz(units) => {
-                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamptz())
-            }
-            DateTruncTimestamp(units) => date_trunc_inner(*units, a.unwrap_timestamp()),
-            DateTruncTimestampTz(units) => date_trunc_inner(*units, a.unwrap_timestamptz()),
-            TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
-            TimezoneTimestampTz(tz) => Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz())),
             TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
-            JsonbArrayLength => jsonb_array_length(a),
-            JsonbTypeof => Ok(jsonb_typeof(a)),
-            JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
-            JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
-            TrimWhitespace => Ok(trim_whitespace(a)),
-            TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
-            TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             RecordGet(i) => Ok(record_get(a, *i)),
             ListLength => list_length(a),
             MapLength => map_length(a),
-            Upper => Ok(upper(a, temp_storage)),
-            Lower => Ok(lower(a, temp_storage)),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
     }
@@ -4545,29 +4340,43 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
+            | ExtractInterval(_)
+            | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
+            | DateTruncTimestamp(_)
+            | DateTruncTimestampTz(_)
+            | TimezoneTimestamp(_)
+            | TimezoneTimestampTz(_)
             | Chr(_) => unreachable!(),
-
-            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
-            | ByteLengthString => ScalarType::Int32.nullable(nullable),
-
-            IsLikeMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
-            | CastInt2VectorToString
-            | TrimWhitespace
-            | TrimLeadingWhitespace
-            | TrimTrailingWhitespace
-            | Upper
-            | Lower => ScalarType::String.nullable(nullable),
+            | CastInt2VectorToString => ScalarType::String.nullable(nullable),
 
             TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
-
-            TimezoneTimestampTz(_) => ScalarType::Timestamp.nullable(nullable),
-
-            TimezoneTimestamp(_) => ScalarType::TimestampTz.nullable(nullable),
 
             CastRecord1ToRecord2 { return_ty, .. } => {
                 return_ty.without_modifiers().nullable(nullable)
@@ -4575,24 +4384,11 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. } => return_ty.without_modifiers().nullable(false),
 
-            ExtractInterval(_)
-            | ExtractTime(_)
-            | ExtractTimestamp(_)
-            | ExtractTimestampTz(_)
-            | ExtractDate(_) => ScalarType::Numeric { max_scale: None }.nullable(nullable),
+            ExtractTime(_) | ExtractDate(_) => {
+                ScalarType::Numeric { max_scale: None }.nullable(nullable)
+            }
 
-            DatePartInterval(_)
-            | DatePartTime(_)
-            | DatePartTimestamp(_)
-            | DatePartTimestampTz(_) => ScalarType::Float64.nullable(nullable),
-
-            DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
-            DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
-
-            JsonbArrayLength => ScalarType::Int32.nullable(nullable),
-            JsonbTypeof => ScalarType::String.nullable(nullable),
-            JsonbStripNulls => ScalarType::Jsonb.nullable(nullable),
-            JsonbPretty => ScalarType::String.nullable(nullable),
+            DatePartTime(_) => ScalarType::Float64.nullable(nullable),
 
             RecordGet(i) => match input_type.scalar_type {
                 ScalarType::Record { mut fields, .. } => {
@@ -4604,8 +4400,6 @@ impl UnaryFunc {
             },
 
             ListLength | MapLength => ScalarType::Int32.nullable(nullable),
-
-            RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(nullable),
 
             RescaleNumeric(scale) => (ScalarType::Numeric {
                 max_scale: Some(*scale),
@@ -4797,43 +4591,48 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
+            | ExtractInterval(_)
+            | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
+            | DateTruncTimestamp(_)
+            | DateTruncTimestampTz(_)
+            | TimezoneTimestamp(_)
+            | TimezoneTimestampTz(_)
             | Chr(_) => unreachable!(),
             // Return null if the inner field is null
             RecordGet(_) => true,
-            // Always returns null
-            // Returns null if the regex did not match
-            RegexpMatch(_) => true,
-            // Returns null on non-array input
-            JsonbArrayLength => true,
 
-            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
-            | ByteLengthString => false,
-            IsLikeMatch(_) | IsRegexpMatch(_) => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
-            | CastInt2VectorToString
-            | TrimWhitespace
-            | TrimLeadingWhitespace
-            | TrimTrailingWhitespace
-            | Upper
-            | Lower => false,
+            | CastInt2VectorToString => false,
             TimezoneTime { .. } => false,
-            TimezoneTimestampTz(_) => false,
-            TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastRecord1ToRecord2 { .. } => false,
-            JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength | MapLength => false,
-            ExtractInterval(_)
-            | ExtractTime(_)
-            | ExtractTimestamp(_)
-            | ExtractTimestampTz(_)
-            | ExtractDate(_) => false,
-            DatePartInterval(_)
-            | DatePartTime(_)
-            | DatePartTimestamp(_)
-            | DatePartTimestampTz(_) => false,
-            DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
+            ListLength | MapLength => false,
+            ExtractTime(_) | ExtractDate(_) => false,
+            DatePartTime(_) => false,
             RescaleNumeric(_) => false,
         }
     }
@@ -4917,6 +4716,34 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
+            | ExtractInterval(_)
+            | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
+            | DateTruncTimestamp(_)
+            | DateTruncTimestampTz(_)
+            | TimezoneTimestamp(_)
+            | TimezoneTimestampTz(_)
             | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
@@ -5095,6 +4922,34 @@ impl UnaryFunc {
             | CastJsonbToFloat64(_)
             | CastJsonbToNumeric(_)
             | CastJsonbToBool(_)
+            | Ascii(_)
+            | CharLength(_)
+            | TrimWhitespace(_)
+            | TrimTrailingWhitespace(_)
+            | TrimLeadingWhitespace(_)
+            | BitLengthBytes(_)
+            | ByteLengthBytes(_)
+            | BitLengthString(_)
+            | ByteLengthString(_)
+            | Upper(_)
+            | Lower(_)
+            | JsonbArrayLength(_)
+            | JsonbTypeof(_)
+            | JsonbStripNulls(_)
+            | JsonbPretty(_)
+            | IsLikeMatch(_)
+            | IsRegexpMatch(_)
+            | RegexpMatch(_)
+            | ExtractInterval(_)
+            | DatePartInterval(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_)
+            | DateTruncTimestamp(_)
+            | DateTruncTimestampTz(_)
+            | TimezoneTimestamp(_)
+            | TimezoneTimestampTz(_)
             | Chr(_) => unreachable!(),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastRecord1ToRecord2 { .. } => f.write_str("record1torecord2"),
@@ -5103,41 +4958,13 @@ impl UnaryFunc {
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
-            Ascii => f.write_str("ascii"),
-            CharLength => f.write_str("char_length"),
-            BitLengthBytes => f.write_str("bit_length"),
-            BitLengthString => f.write_str("bit_length"),
-            ByteLengthBytes => f.write_str("octet_length"),
-            ByteLengthString => f.write_str("octet_length"),
-            IsLikeMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
-            IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
-            RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
-            ExtractInterval(units) => write!(f, "extract_{}_iv", units),
             ExtractTime(units) => write!(f, "extract_{}_t", units),
-            ExtractTimestamp(units) => write!(f, "extract_{}_ts", units),
-            ExtractTimestampTz(units) => write!(f, "extract_{}_tstz", units),
             ExtractDate(units) => write!(f, "extract_{}_d", units),
-            DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
             DatePartTime(units) => write!(f, "date_part_{}_t", units),
-            DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
-            DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
-            DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
-            DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
-            TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
-            TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
             TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
-            JsonbArrayLength => f.write_str("jsonb_array_length"),
-            JsonbTypeof => f.write_str("jsonb_typeof"),
-            JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
-            JsonbPretty => f.write_str("jsonb_pretty"),
-            TrimWhitespace => f.write_str("btrim"),
-            TrimLeadingWhitespace => f.write_str("ltrim"),
-            TrimTrailingWhitespace => f.write_str("rtrim"),
             RecordGet(i) => write!(f, "record_get[{}]", i),
             ListLength => f.write_str("list_length"),
             MapLength => f.write_str("map_length"),
-            Upper => f.write_str("upper"),
-            Lower => f.write_str("lower"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }
@@ -5300,12 +5127,12 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::FloorFloat32(_) => todo!(),
             UnaryFunc::FloorFloat64(_) => todo!(),
             UnaryFunc::FloorNumeric(_) => todo!(),
-            UnaryFunc::Ascii => todo!(),
-            UnaryFunc::BitLengthBytes => todo!(),
-            UnaryFunc::BitLengthString => todo!(),
-            UnaryFunc::ByteLengthBytes => todo!(),
-            UnaryFunc::ByteLengthString => todo!(),
-            UnaryFunc::CharLength => todo!(),
+            UnaryFunc::Ascii(_) => todo!(),
+            UnaryFunc::BitLengthBytes(_) => todo!(),
+            UnaryFunc::BitLengthString(_) => todo!(),
+            UnaryFunc::ByteLengthBytes(_) => todo!(),
+            UnaryFunc::ByteLengthString(_) => todo!(),
+            UnaryFunc::CharLength(_) => todo!(),
             UnaryFunc::Chr(_) => todo!(),
             UnaryFunc::IsLikeMatch(_) => todo!(),
             UnaryFunc::IsRegexpMatch(_) => todo!(),
@@ -5328,21 +5155,21 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::JustifyDays(_) => todo!(),
             UnaryFunc::JustifyHours(_) => todo!(),
             UnaryFunc::JustifyInterval(_) => todo!(),
-            UnaryFunc::JsonbArrayLength => todo!(),
-            UnaryFunc::JsonbTypeof => todo!(),
-            UnaryFunc::JsonbStripNulls => todo!(),
-            UnaryFunc::JsonbPretty => todo!(),
+            UnaryFunc::JsonbArrayLength(_) => todo!(),
+            UnaryFunc::JsonbTypeof(_) => todo!(),
+            UnaryFunc::JsonbStripNulls(_) => todo!(),
+            UnaryFunc::JsonbPretty(_) => todo!(),
             UnaryFunc::RoundFloat32(_) => todo!(),
             UnaryFunc::RoundFloat64(_) => todo!(),
             UnaryFunc::RoundNumeric(_) => todo!(),
-            UnaryFunc::TrimWhitespace => todo!(),
-            UnaryFunc::TrimLeadingWhitespace => todo!(),
-            UnaryFunc::TrimTrailingWhitespace => todo!(),
+            UnaryFunc::TrimWhitespace(_) => todo!(),
+            UnaryFunc::TrimLeadingWhitespace(_) => todo!(),
+            UnaryFunc::TrimTrailingWhitespace(_) => todo!(),
             UnaryFunc::RecordGet(_) => todo!(),
             UnaryFunc::ListLength => todo!(),
             UnaryFunc::MapLength => todo!(),
-            UnaryFunc::Upper => todo!(),
-            UnaryFunc::Lower => todo!(),
+            UnaryFunc::Upper(_) => todo!(),
+            UnaryFunc::Lower(_) => todo!(),
             UnaryFunc::Cos(_) => todo!(),
             UnaryFunc::Acos(_) => todo!(),
             UnaryFunc::Cosh(_) => todo!(),
@@ -5913,11 +5740,6 @@ fn like_escape<'a>(
     Ok(Datum::String(temp_storage.push_string(normalized)))
 }
 
-fn is_like_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
-}
-
 fn is_like_match_dynamic<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -5926,11 +5748,6 @@ fn is_like_match_dynamic<'a>(
     let haystack = a.unwrap_str();
     let needle = like_pattern::compile(b.unwrap_str(), case_insensitive)?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
-}
-
-fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
 }
 
 fn is_regexp_match_dynamic<'a>(
@@ -6435,14 +6252,6 @@ fn list_length(a: Datum) -> Result<Datum, EvalError> {
     }
 }
 
-fn upper<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_uppercase()))
-}
-
-fn lower<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_lowercase()))
-}
-
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -6476,10 +6285,6 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         None => return Datum::Null,
     };
     Datum::Timestamp(timestamp)
-}
-
-fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_matches(' '))
 }
 
 fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -6561,10 +6366,6 @@ fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
 }
 
-fn trim_leading_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_start_matches(' '))
-}
-
 fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let trim_chars = b.unwrap_str();
 
@@ -6572,10 +6373,6 @@ fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         a.unwrap_str()
             .trim_start_matches(|c| trim_chars.contains(c)),
     )
-}
-
-fn trim_trailing_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_end_matches(' '))
 }
 
 fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

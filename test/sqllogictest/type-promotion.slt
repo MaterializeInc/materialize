@@ -506,7 +506,7 @@ SELECT '1'::interval::boolean
 query error cannot cast jsonb object to type boolean
 SELECT '{}'::jsonb::boolean;
 
-query error cannot cast jsonb numeric to type boolean
+query error cannot cast jsonb number to type boolean
 SELECT '1'::jsonb::boolean;
 
 query T
