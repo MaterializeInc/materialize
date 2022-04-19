@@ -520,3 +520,37 @@ message ProtoBinaryFunc {
         google.protobuf.Empty power_numeric = 139;
     }
 }
+
+message ProtoVariadicFunc {
+    oneof kind {
+        google.protobuf.Empty coalesce = 1;
+        google.protobuf.Empty greatest = 2;
+        google.protobuf.Empty least = 3;
+        google.protobuf.Empty concat = 4;
+        google.protobuf.Empty make_timestamp = 5;
+        google.protobuf.Empty pad_leading = 6;
+        google.protobuf.Empty substr = 7;
+        google.protobuf.Empty replace = 8;
+        google.protobuf.Empty jsonb_build_array = 9;
+        google.protobuf.Empty jsonb_build_object = 10;
+        // unsupported: ArrayCreate { elem_type: ScalarType }
+        google.protobuf.Empty array_create = 11;
+        // unsupported: ArrayToString { elem_type: ScalarType }
+        google.protobuf.Empty array_to_string = 12;
+        // unsupported: ArrayIndex { offset: usize }
+        google.protobuf.Empty array_index = 13;
+        // unsupported: ListCreate { elem_type: ScalarType }
+        google.protobuf.Empty list_create = 14;
+        // unsupported: RecordCreate { field_names: Vec<ColumnName> }
+        google.protobuf.Empty record_create = 15;
+        google.protobuf.Empty list_index = 16;
+        google.protobuf.Empty list_slice_linear = 17;
+        google.protobuf.Empty split_part = 18;
+        google.protobuf.Empty regexp_match = 19;
+        google.protobuf.Empty hmac_string = 20;
+        google.protobuf.Empty hmac_bytes = 21;
+        google.protobuf.Empty error_if_null = 22;
+        google.protobuf.Empty date_bin_timestamp = 23;
+        google.protobuf.Empty date_bin_timestamp_tz = 24;
+    }
+}
