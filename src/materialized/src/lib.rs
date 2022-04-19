@@ -22,7 +22,6 @@ use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::{anyhow, Context};
-use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::RemoteClient;

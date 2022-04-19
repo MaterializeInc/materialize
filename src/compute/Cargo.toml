@@ -19,7 +19,6 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.1.9", features = ["derive", "env"] }
-compile-time-run = "0.2.12"
 crossbeam-channel = "0.5.4"
 csv-core = "0.1.10"
 dec = { version = "0.4.8", features = ["serde"] }

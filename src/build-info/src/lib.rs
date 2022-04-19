@@ -21,8 +21,6 @@ pub struct BuildInfo {
     pub sha: &'static str,
     /// The time of the build in UTC as an ISO 8601-compliant string.
     pub time: &'static str,
-    /// The target triple of the platform.
-    pub target_triple: &'static str,
 }
 
 /// Dummy build information.
@@ -33,8 +31,10 @@ pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
     time: "",
-    target_triple: "",
 };
+
+/// The target triple of the platform.
+pub const TARGET_TRIPLE: &str = env!("TARGET_TRIPLE");
 
 impl BuildInfo {
     /// Constructs a human-readable version string.
@@ -59,16 +59,18 @@ impl BuildInfo {
     }
 }
 
+/// Generates an appropriate [`BuildInfo`] instance.
+///
+/// This macro should be invoked at the leaf of the crate graph, usually in the
+/// final binary, and the resulting `BuildInfo` struct plumbed into whatever
+/// libraries require it. Invoking the macro in intermediate crates may result
+/// in a build info with stale, cached values for the build SHA and time.
 #[macro_export]
-/// Generate an appropriate `BuildInfo` instance.
-/// Use of this macro requires that the user
-/// write out a `TARGET_TRIPLE` environment variable in its build script;
-/// see `src/materialized/build/main.rs` for an example.
 macro_rules! build_info {
     () => {
-        BuildInfo {
+        $crate::BuildInfo {
             version: env!("CARGO_PKG_VERSION"),
-            sha: run_command_str!(
+            sha: $crate::private::run_command_str!(
                 "sh",
                 "-c",
                 r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
@@ -86,8 +88,12 @@ macro_rules! build_info {
                        }
                    fi"#
             ),
-            time: compile_time_run::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
-            target_triple: env!("TARGET_TRIPLE"),
+            time: $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
         }
     }
+}
+
+#[doc(hidden)]
+pub mod private {
+    pub use compile_time_run::run_command_str;
 }

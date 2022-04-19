@@ -2848,7 +2848,6 @@ dependencies = [
  "cfg-if",
  "chrono",
  "clap",
- "compile-time-run",
  "console-subscriber",
  "crossbeam-channel",
  "datadriven",
@@ -3189,6 +3188,7 @@ dependencies = [
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
+ "compile-time-run",
  "semver",
 ]
 
@@ -3228,7 +3228,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "compile-time-run",
  "crossbeam-channel",
  "csv-core",
  "dec",
@@ -4155,6 +4154,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
+ "axum",
  "bincode",
  "byteorder",
  "bytes",
@@ -4174,6 +4174,7 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
+ "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
@@ -4184,6 +4185,7 @@ dependencies = [
  "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
+ "mz-prof",
  "mz-repr",
  "mz-timely-util",
  "postgres-protocol",
