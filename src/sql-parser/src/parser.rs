@@ -1578,6 +1578,8 @@ impl<'a> Parser<'a> {
             self.parse_create_table()
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
+        } else if self.peek_keyword(CONNECTOR) {
+            self.parse_create_connector()
         } else {
             let index = self.index;
 
@@ -1857,6 +1859,31 @@ impl<'a> Parser<'a> {
             return self.expected(self.peek_pos(), "NONE or GZIP", self.peek_token());
         };
         Ok(compression)
+    }
+
+    fn parse_create_connector(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTOR)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+        self.expect_keyword(FOR)?;
+        let connector = match self.expect_one_of_keywords(&[KAFKA])? {
+            Keyword::Kafka => {
+                self.expect_keyword(BROKER)?;
+                let broker = self.parse_literal_string()?;
+                self.expect_keyword(WITH)?;
+                let with_options = self.parse_with_options(true)?;
+                CreateConnector::Kafka {
+                    broker,
+                    with_options,
+                }
+            }
+            _ => unreachable!(),
+        };
+        Ok(Statement::CreateConnector(CreateConnectorStatement {
+            name,
+            connector,
+            if_not_exists,
+        }))
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2570,6 +2597,7 @@ impl<'a> Parser<'a> {
 
         let object_type = match self.parse_one_of_keywords(&[
             DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            CONNECTOR,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2625,6 +2653,7 @@ impl<'a> Parser<'a> {
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
             Some(SECRET) => ObjectType::Secret,
+            Some(CONNECTOR) => ObjectType::Connector,
             _ => {
                 return self.expected(
                     self.peek_pos(),
@@ -3952,7 +3981,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                COLUMNS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
+                COLUMNS, CONNECTORS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
             ])?;
             self.prev_token();
         }
@@ -3964,6 +3993,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_one_of_keywords(&[
                     COLUMNS,
+                    CONNECTORS,
                     MATERIALIZED,
                     OBJECTS,
                     ROLES,
@@ -4000,6 +4030,7 @@ impl<'a> Parser<'a> {
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
             OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
+            CONNECTORS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
@@ -4011,6 +4042,7 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
                 SECRETS => ObjectType::Secret,
+                CONNECTORS => ObjectType::Connector,
                 _ => unreachable!(),
             };
 
@@ -4100,6 +4132,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, CONNECTOR]) {
+            Ok(Statement::ShowCreateConnector(
+                ShowCreateConnectorStatement {
+                    connector_name: self.parse_raw_name()?,
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 Ident::new("transaction_isolation")

@@ -107,6 +107,7 @@ pub fn describe(
     // most statements can be described with a raw statement
     let desc = match &stmt {
         // DDL statements.
+        Statement::CreateConnector(stmt) => Some(ddl::describe_create_connector(&scx, stmt)?),
         Statement::CreateDatabase(stmt) => Some(ddl::describe_create_database(&scx, stmt)?),
         Statement::CreateSchema(stmt) => Some(ddl::describe_create_schema(&scx, stmt)?),
         Statement::CreateTable(stmt) => Some(ddl::describe_create_table(&scx, stmt)?),
@@ -135,6 +136,9 @@ pub fn describe(
         Statement::ShowCreateView(stmt) => Some(show::describe_show_create_view(&scx, stmt)?),
         Statement::ShowCreateSink(stmt) => Some(show::describe_show_create_sink(&scx, stmt)?),
         Statement::ShowCreateIndex(stmt) => Some(show::describe_show_create_index(&scx, stmt)?),
+        Statement::ShowCreateConnector(stmt) => {
+            Some(show::describe_show_create_connector(&scx, stmt)?)
+        }
         Statement::ShowColumns(_) => None,
         Statement::ShowDatabases(_) => None,
         Statement::ShowSchemas(_) => None,
@@ -316,6 +320,10 @@ pub fn plan(
             let (stmt, _) = resolve_stmt!(Statement::CreateSecret, scx, stmt);
             ddl::plan_create_secret(scx, stmt)
         }
+        stmt @ Statement::CreateConnector(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::CreateConnector, scx, stmt);
+            ddl::plan_create_connector(scx, stmt)
+        }
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
@@ -392,6 +400,10 @@ pub fn plan(
         stmt @ Statement::ShowCreateIndex(_) => {
             let (stmt, _) = resolve_stmt!(Statement::ShowCreateIndex, scx, stmt);
             show::plan_show_create_index(scx, stmt)
+        }
+        stmt @ Statement::ShowCreateConnector(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::ShowCreateConnector, scx, stmt);
+            show::plan_show_create_connector(scx, stmt)
         }
         stmt @ Statement::ShowColumns(_) => {
             let (stmt, _) = resolve_stmt!(Statement::ShowColumns, scx, stmt);
@@ -497,7 +509,8 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
-            | (CatalogItemType::Secret, ObjectType::Secret) => true,
+            | (CatalogItemType::Secret, ObjectType::Secret)
+            | (CatalogItemType::Connector, ObjectType::Connector) => true,
             (_, _) => false,
         }
     }

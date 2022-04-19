@@ -131,20 +131,21 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
     AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
-    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
-    TailFrom, TailPlan, View,
+    CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
+    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
+    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, Connector,
+    SinkConnectorState,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -1262,6 +1263,7 @@ impl Coordinator {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
+                    | Statement::ShowCreateConnector(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
                     | Statement::ShowIndexes(_)
@@ -1292,6 +1294,7 @@ impl Coordinator {
                     | Statement::AlterSecret(_)
                     | Statement::AlterCluster(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::CreateConnector(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateRole(_)
@@ -1509,6 +1512,9 @@ impl Coordinator {
         plan: Plan,
     ) {
         match plan {
+            Plan::CreateConnector(plan) => {
+                tx.send(self.sequence_create_connector(plan).await, session);
+            }
             Plan::CreateDatabase(plan) => {
                 tx.send(self.sequence_create_database(plan).await, session);
             }
@@ -1769,6 +1775,31 @@ impl Coordinator {
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+    }
+
+    async fn sequence_create_connector(
+        &mut self,
+        plan: CreateConnectorPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let connector_oid = self.catalog.allocate_oid()?;
+        let connector_gid = self.catalog.allocate_user_id()?;
+        let ops = vec![catalog::Op::CreateItem {
+            id: connector_gid,
+            oid: connector_oid,
+            name: plan.name.clone(),
+            item: CatalogItem::Connector(Connector {
+                create_sql: plan.connector.create_sql,
+                connector: plan.connector.connector,
+            }),
+        }];
+        match self.catalog_transact(ops, |_| Ok(())).await {
+            Ok(_) => Ok(ExecuteResponse::CreatedConnector { existed: false }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnector { existed: true }),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_database(
@@ -2589,6 +2620,7 @@ impl Coordinator {
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Secret => ExecuteResponse::DroppedSecret,
+            ObjectType::Connector => ExecuteResponse::DroppedConnector,
             ObjectType::Role => unreachable!("DROP ROLE is handled elsewhere"),
             ObjectType::Cluster => unreachable!("DROP CLUSTER is handled elsewhere"),
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
