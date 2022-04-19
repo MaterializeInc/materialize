@@ -627,14 +627,6 @@ impl AstDisplay for CreateSourceConnector {
 }
 impl_display!(CreateSourceConnector);
 
-impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceConnectorType {
-    fn from(connector: &CreateSinkConnector<T>) -> SourceConnectorType {
-        match connector {
-            CreateSinkConnector::Kafka { .. } => SourceConnectorType::Kafka,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(CreateSinkConnectorKind)]
 pub enum CreateSinkConnector<T: AstInfo> {

@@ -121,8 +121,9 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage, FetchStatement,
-    Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, SourceConnectorType, Statement,
+    CreateIndexStatement, CreateSinkStatement, CreateSourceConnector, CreateSourceStatement,
+    ExplainStage, FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr,
+    Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
@@ -4926,26 +4927,19 @@ pub fn describe(
 }
 
 fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    let (source_or_sink, typ) = match stmt {
-        Statement::CreateSource(CreateSourceStatement { connector, .. }) => {
-            ("source", SourceConnectorType::from(connector))
-        }
-        Statement::CreateSink(CreateSinkStatement { connector, .. }) => {
-            ("sink", SourceConnectorType::from(connector))
-        }
-        _ => return Ok(()),
-    };
-    match typ {
-        // File sources and sinks are prohibited in safe mode because they allow
-        // reading from and writing to arbitrary files on disk.
-        SourceConnectorType::File => {
-            return Err(CoordError::SafeModeViolation(format!(
-                "file {}",
-                source_or_sink
-            )));
-        }
+    match stmt {
+        Statement::CreateSource(CreateSourceStatement { connector, .. }) => match connector {
+            CreateSourceConnector::File { .. } => {
+                return Err(CoordError::SafeModeViolation(format!("file source",)));
+            }
+            _ => (),
+        },
+        Statement::CreateSink(CreateSinkStatement { connector, .. }) => match connector {
+            _ => (),
+        },
         _ => (),
-    }
+    };
+
     Ok(())
 }
 
