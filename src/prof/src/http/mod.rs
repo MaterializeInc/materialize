@@ -127,9 +127,11 @@ mod disabled {
     use http::StatusCode;
     use serde::Deserialize;
 
+    use mz_build_info::BuildInfo;
+
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
 
-    pub async fn handle_get(build_info: BuildInfo) -> impl IntoResponse {
+    pub async fn handle_get(build_info: &'static BuildInfo) -> impl IntoResponse {
         mz_http_util::template_response(ProfTemplate {
             version: build_info.version,
             mem_prof: MemProfilingStatus::Disabled,
@@ -144,11 +146,11 @@ mod disabled {
 
     pub async fn handle_post(
         Form(ProfForm { action, threads }): Form<ProfForm>,
-        _: BuildInfo,
+        build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
-            "time_fg" => Ok(time_prof(merge_threads).await),
+            "time_fg" => Ok(time_prof(merge_threads, build_info).await),
             _ => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", action),
