@@ -154,7 +154,7 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("computed"))
     )]
     computed_image: Option<String>,
-    /// The host processes spawned by the Process orchestrator listen for connections.
+    /// The host on which processes spawned by the process orchestrator listen for connections.
     #[structopt(long, hide = true)]
     process_listen_host: Option<String>,
 
