@@ -1,21 +1,21 @@
 ---
 title: "Configure AWS MSK"
 description: "How to configure AWS MSK to Materialize"
-weight:
 menu:
   main:
-    parent: guides
+    parent: "integration-guides"
+    name: "AWS MSK"
 ---
 
 This guide goes through the required steps to connect Materialize to an AWS MSK cluster, including some of the more complicated bits around configuring security settings in MSK.
 
-If you already have an MSK cluster, you can skip step 1 and directly move on to _Make the cluster public and enable SASL_. You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a materialized source for.
+If you already have an MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a materialized source for.
 
 The process to connect Materialize to Amazon MSK consists of the following steps:
 1. #### Create an Amazon MSK cluster
     If you already have an Amazon MSk cluster set up, then you can skip this step.
 
-    a. Sign in to the AWS Management console and open the [Amazon MSK console](https://us-east-1.console.aws.amazon.com/msk/)
+    a. Sign in to the AWS Management console and open the [Amazon MSK console](https://console.aws.amazon.com/msk/)
 
     b. Choose **Create cluster**
 
@@ -29,7 +29,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
 2. #### Make the cluster public and enable SASL
     ##### Turn on SASL
-    a. Navigate to the [Amazon MSK console](https://us-east-1.console.aws.amazon.com/msk/)
+    a. Navigate to the [Amazon MSK console](https://console.aws.amazon.com/msk/)
 
     b. Choose the MSK cluster you just created in Step 1
 
@@ -44,7 +44,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     You can find more details about updating an MSK cluster's security configurations [here](https://docs.aws.amazon.com/msk/latest/developerguide/msk-update-security.html).
 
     ##### Create a symmetric key
-    a. Now go to the [Amazon KMS (Key Management Service) console](https://us-east-1.console.aws.amazon.com/kms)
+    a. Now go to the [Amazon KMS (Key Management Service) console](https://console.aws.amazon.com/kms)
 
     b. Click **Create Key**
 
@@ -60,10 +60,10 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     h. Review the details and click **Finish**
 
-    You can find more details about creating a symmetric cmk [here](https://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html#create-symmetric-cmk).
+    You can find more details about creating a symmetric key [here](https://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html#create-symmetric-cmk).
 
     ##### Store a new Secret
-    a. Go to the [AWS Secrets Manager console](https://us-east-1.console.aws.amazon.com/secretsmanager/)
+    a. Go to the [AWS Secrets Manager console](https://console.aws.amazon.com/secretsmanager/)
 
     b. Click **Store a new secret**
 
@@ -81,12 +81,14 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     f. On the next page, give a **Secret name** that starts with **AmazonMSK_**
 
-    g. Go forward to the next steps and finish creating the secret. Once created, record the ARN (Amazon Resource Name) value for your secret
+    g. Under **Encryption Key**, select the symmetric key you just created in the previous sub-section from the dropdown
+
+    h. Go forward to the next steps and finish creating the secret. Once created, record the ARN (Amazon Resource Name) value for your secret
 
     You can find more details about creating a secret using AWS Secrets Manager [here](https://docs.aws.amazon.com/msk/latest/developerguide/msk-password.html).
 
     ##### Associate secret with MSK cluster
-    a. Navigate back to the [Amazon MSK console](https://us-east-1.console.aws.amazon.com/msk/) and click on the cluster you created in Step 1
+    a. Navigate back to the [Amazon MSK console](https://console.aws.amazon.com/msk/) and click on the cluster you created in Step 1
 
     b. Click on the **Properties** tab
 
@@ -95,7 +97,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     d. Paste the ARN you recorded in the previous subsection and click **Associate secrets**
 
     ##### Create the cluster's configuration
-    a. Go to the [Amazon CloudShell console](https://us-east-1.console.aws.amazon.com/cloudshell/)
+    a. Go to the [Amazon CloudShell console](https://console.aws.amazon.com/cloudshell/)
 
     b. Create a file (eg. _msk-config.txt_) with the following line
       ```
@@ -104,7 +106,10 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     c. Run the following AWS CLI command, replacing `<config-file-path>` with the path to the file where you saved your configuration in the previous step
     ```
-      aws kafka create-configuration --name "ExampleConfigurationName" --description "Example configuration description." --kafka-versions "2.6.2" --server-properties fileb://<config-file-path>/msk-config.txt
+      aws kafka create-configuration --name "MakePublic" \
+      --description "Set allow.everyone.if.no.acl.found = false" \
+      --kafka-versions "2.6.2" \
+      --server-properties fileb://<config-file-path>/msk-config.txt
     ```
 
 
