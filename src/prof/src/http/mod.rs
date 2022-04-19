@@ -131,8 +131,17 @@ mod disabled {
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
 
+    #[derive(Deserialize)]
+    pub struct ProfQuery {
+        action: Option<String>,
+    }
+
     #[allow(clippy::unused_async)]
-    pub async fn handle_get(build_info: &'static BuildInfo) -> impl IntoResponse {
+    pub async fn handle_get(
+        _: Query<ProfQuery>,
+        _: HeaderMap,
+        build_info: &'static BuildInfo,
+    ) -> impl IntoResponse {
         mz_http_util::template_response(ProfTemplate {
             version: build_info.version,
             mem_prof: MemProfilingStatus::Disabled,
