@@ -687,7 +687,7 @@ max log level: {max_log_level}",
 
     let replica_sizes = match args.allow_cluster_replica_size {
         None => Default::default(),
-        Some(json) => serde_json::from_str(&json)?,
+        Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
     let server = runtime.block_on(materialized::serve(materialized::Config {
