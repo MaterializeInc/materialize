@@ -7179,6 +7179,81 @@ impl Arbitrary for VariadicFunc {
     }
 }
 
+impl From<&VariadicFunc> for ProtoVariadicFunc {
+    #[allow(clippy::todo)]
+    fn from(func: &VariadicFunc) -> Self {
+        use proto_variadic_func::Kind::*;
+        let kind = match func {
+            VariadicFunc::Coalesce => Coalesce(()),
+            VariadicFunc::Greatest => Greatest(()),
+            VariadicFunc::Least => Least(()),
+            VariadicFunc::Concat => Concat(()),
+            VariadicFunc::MakeTimestamp => MakeTimestamp(()),
+            VariadicFunc::PadLeading => PadLeading(()),
+            VariadicFunc::Substr => Substr(()),
+            VariadicFunc::Replace => Replace(()),
+            VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
+            VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
+            VariadicFunc::ArrayCreate { .. } => todo!(),
+            VariadicFunc::ArrayToString { .. } => todo!(),
+            VariadicFunc::ArrayIndex { .. } => todo!(),
+            VariadicFunc::ListCreate { .. } => todo!(),
+            VariadicFunc::RecordCreate { .. } => todo!(),
+            VariadicFunc::ListIndex => ListIndex(()),
+            VariadicFunc::ListSliceLinear => ListSliceLinear(()),
+            VariadicFunc::SplitPart => SplitPart(()),
+            VariadicFunc::RegexpMatch => RegexpMatch(()),
+            VariadicFunc::HmacString => HmacString(()),
+            VariadicFunc::HmacBytes => HmacBytes(()),
+            VariadicFunc::ErrorIfNull => ErrorIfNull(()),
+            VariadicFunc::DateBinTimestamp => DateBinTimestamp(()),
+            VariadicFunc::DateBinTimestampTz => DateBinTimestampTz(()),
+        };
+        ProtoVariadicFunc { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
+    type Error = TryFromProtoError;
+
+    #[allow(clippy::todo)]
+    fn try_from(func: ProtoVariadicFunc) -> Result<Self, Self::Error> {
+        use proto_variadic_func::Kind::*;
+        if let Some(kind) = func.kind {
+            match kind {
+                Coalesce(()) => Ok(VariadicFunc::Coalesce),
+                Greatest(()) => Ok(VariadicFunc::Greatest),
+                Least(()) => Ok(VariadicFunc::Least),
+                Concat(()) => Ok(VariadicFunc::Concat),
+                MakeTimestamp(()) => Ok(VariadicFunc::MakeTimestamp),
+                PadLeading(()) => Ok(VariadicFunc::PadLeading),
+                Substr(()) => Ok(VariadicFunc::Substr),
+                Replace(()) => Ok(VariadicFunc::Replace),
+                JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
+                JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
+                ArrayCreate(()) => todo!(),
+                ArrayToString(()) => todo!(),
+                ArrayIndex(()) => todo!(),
+                ListCreate(()) => todo!(),
+                RecordCreate(()) => todo!(),
+                ListIndex(()) => Ok(VariadicFunc::ListIndex),
+                ListSliceLinear(()) => Ok(VariadicFunc::ListSliceLinear),
+                SplitPart(()) => Ok(VariadicFunc::SplitPart),
+                RegexpMatch(()) => Ok(VariadicFunc::RegexpMatch),
+                HmacString(()) => Ok(VariadicFunc::HmacString),
+                HmacBytes(()) => Ok(VariadicFunc::HmacBytes),
+                ErrorIfNull(()) => Ok(VariadicFunc::ErrorIfNull),
+                DateBinTimestamp(()) => Ok(VariadicFunc::DateBinTimestamp),
+                DateBinTimestampTz(()) => Ok(VariadicFunc::DateBinTimestampTz),
+            }
+        } else {
+            Err(TryFromProtoError::missing_field(
+                "`ProtoVariadicFunc::kind`",
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use chrono::prelude::*;
@@ -7290,6 +7365,13 @@ mod test {
         #[test]
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
+            let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
