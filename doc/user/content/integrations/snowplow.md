@@ -7,7 +7,16 @@ menu:
     name: "Configure Snowplow"
 ---
 
-Snowplow is an open source analytics tool that will stream web analytics to data sinks.
+Snowplow is an open source data collection tool.
+
+The standard Snowplow setup involves installing a Snowplow tracker on your website that begins emitting events to a Snowplow Collector installed on AWS or GCP. This collector serializes the raw events to a Thrift record format, which are then processed by two downstream consumers:
+
+- a enriched version of the events that gets written to another stream, i.e. Kafka or Kinesis
+- a compressed version that gets written to S3
+
+Once the events are in Kafka, Kinesis, or S3, you can connect Materialize to obstain real-time views over the streams.
+
+Website -- Snowplow Tracker -- Snowplow Collector -- Kinesis/Kafka -- S3 -- Materialize.
 
 Option 1:
 
@@ -30,7 +39,7 @@ b. Run the following command to find the ARN of the kinesis stream you set up in
 aws kinesis describe-stream --stream-name good_sink
 ```
 
-c. Connect to your Materialize instance
+c. [Connect](https://materialize.com/docs/integrations/psql/) to your Materialize
 d. From psql, run the following command with the `ARN`, `access_key_id`, and `secret_access_key` values replaced.
 
 ```
@@ -46,7 +55,7 @@ Option 2:
 
 Kafka + S3
 
-1. #### Create a Kafka Cluster and topic in Upstash
+1. #### Create a Kafka cluster and topic in Upstash
     a. Create or sign in to your account on Upstash and select **Kafka** from the nav bar at the top of the page
     b. Click **Create Cluster**
     c. Click **Create Topic** and name it `good_sink`
@@ -62,16 +71,18 @@ Kafka + S3
 
 2. #### Install the Snowplow Scala Kafka Collector
 
-The Snowplow collector receives events that are sent to it from event tackers that instrument your website. There are different flavors of Snowplow collectors depending on which data sink you are using. We are using a Kafka sink. You will likely be deploying your Snowplow Collector on AWS or GCP instance.
+The Snowplow collector receives events that are sent to it from event tackers that instrument your website. There are different flavors of Snowplow collectors depending on which data sink you are using. We are using a Kafka sink. 
 
-a. Pull down the docker image for
+You will likely be deploying your Snowplow Collector on AWS or GCP instance - if so, follow these additional steps to set up Docker on AWS or GCP
+
+a. Pull down the docker image for the Kafka flavor of the stream collector
 
 ```sh
 docker pull snowplow/scala-stream-collector-kafka:2.4.5
 ```
 b. Create a `config.hocon` file in same `pwd` location that you will be running your docker commands from
 
-Copy and paste the following
+Copy and paste the following config into the file with the `upstash_endpoint`, `upstash_username`, and `upstash_password` replaced with the Upstash Kafka cluster connection details you collected above.
 
 ```hocon
  collector {
@@ -220,7 +231,7 @@ Copy and paste the following
       enabled = kafka
   
       # replace with your Upstash Kafka broker 
-      brokers = "supreme-firefly-7612-us1-kafka.upstash.io:9092"
+      brokers = "upstash_endpoint"
 
       ## Number of retries to perform before giving up on sending a record
       retries = 0
@@ -232,7 +243,7 @@ Copy and paste the following
       #"buffer.memory"     -> buffer.byteLimit
       #"linger.ms"         -> buffer.timeLimit
       producerConf {
-        "sasl.jaas.config" = "org.apache.kafka.common.security.scram.ScramLoginModule required username='c3VwcmVtZS1maXJlZmx5LTc2MTIkXD6V4W7zTVs_NWs9T79INtZBPM2vz9uUsI0' password='-SmpWoIfmKphw1D4RgxWV3HO9Ip2i34kNlQxccFY3ne_-KXIn4Klepn-flh0syUJJi8hbw==';"
+        "sasl.jaas.config" = "org.apache.kafka.common.security.scram.ScramLoginModule required username='upstash_username' password='upstash_password"
         "security.protocol" = "SASL_SSL"
         "sasl.mechanism" = "SCRAM-SHA-256"
       }
@@ -279,7 +290,7 @@ akka {
 
 }
 ```
-Now run the Snowplow collector application
+Now run the Snowplow collector application, passing in the `config.hocon` file you just created.
 
 ```
 docker run --rm \
@@ -289,6 +300,8 @@ snowplow/scala-stream-collector-kafka:2.4.5 --config /snowplow/config.hocon
 ```
 
 3. #### Start emitting events to the Snowplow Kafka Collector
+
+Snowplow provides trackers in different languages that you can embed into your website and send events to the Collector.
 
 Send a simple request using cURL from your terminal. This example is a typical page_view event, which has been taken from the docs.snowplowanalytics.com website.
 
