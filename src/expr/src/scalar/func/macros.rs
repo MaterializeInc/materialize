@@ -67,8 +67,7 @@ macro_rules! sqlfunc {
             $body:block
     ) => {
         paste::paste! {
-            #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
-            #[cfg_attr(feature = "test-utils", derive(proptest_derive::Arbitrary))]
+            #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
             pub struct [<$fn_name:camel>];
 
             impl<'a> crate::func::EagerUnaryFunc<'a> for [<$fn_name:camel>] {

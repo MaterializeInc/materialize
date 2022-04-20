@@ -20,7 +20,6 @@
 use std::cmp;
 use std::env;
 use std::ffi::CStr;
-use std::fmt;
 use std::fs;
 use std::net::SocketAddr;
 use std::panic;
@@ -51,7 +50,7 @@ use materialized::{
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
-use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
+use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::id_gen::IdAllocator;
@@ -154,6 +153,18 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("computed"))
     )]
     computed_image: Option<String>,
+    /// The host on which processes spawned by the process orchestrator listen
+    /// for connections.
+    #[structopt(long, hide = true)]
+    process_listen_host: Option<String>,
+    /// The image pull policy to use for services created by the Kubernetes
+    /// orchestrator.
+    #[structopt(long, default_value = "always", arg_enum)]
+    kubernetes_image_pull_policy: KubernetesImagePullPolicy,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    #[clap(long, possible_values = &["true", "false"])]
+    orchestrator_linger: Option<bool>,
 
     // === Secrets controller options. ===
     /// The secrets controller implementation to use
@@ -374,6 +385,9 @@ pub struct Args {
     )]
     opentelemetry_headers: Option<String>,
 
+    #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
+    cluster_replica_sizes: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -384,6 +398,22 @@ pub struct Args {
 enum Orchestrator {
     Kubernetes,
     Process,
+}
+
+impl Orchestrator {
+    /// Default linger value for orchestrator type.
+    ///
+    /// Locally it is convenient for all the processes to be cleaned up when materialized dies
+    /// which is why `Process` defaults to false.
+    ///
+    /// In production we want COMPUTE and STORAGE nodes to be resilient to ADAPTER failures which
+    /// is why `Kubernetes` defaults to true.
+    pub fn default_linger_value(&self) -> bool {
+        match self {
+            Self::Kubernetes => true,
+            Self::Process => false,
+        }
+    }
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -410,40 +440,6 @@ impl FromStr for OrchestratorLabel {
             key: key.into(),
             value: value.into(),
         })
-    }
-}
-
-/// This type is a hack to allow a dynamic default for the `--workers` argument,
-/// which depends on the number of available CPUs. Ideally clap would
-/// expose a `default_fn` rather than accepting only string literals.
-#[derive(Debug)]
-struct WorkerCount(usize);
-
-impl Default for WorkerCount {
-    fn default() -> Self {
-        WorkerCount(cmp::max(
-            1,
-            // When inside a cgroup with a cpu limit,
-            // the logical cpus can be lower than the physical cpus.
-            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
-        ))
-    }
-}
-
-impl FromStr for WorkerCount {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<WorkerCount, anyhow::Error> {
-        let n = s.parse()?;
-        if n == 0 {
-            bail!("must be greater than zero");
-        }
-        Ok(WorkerCount(n))
-    }
-}
-
-impl fmt::Display for WorkerCount {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
     }
 }
 
@@ -586,6 +582,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .into_iter()
                         .map(|l| (l.key, l.value))
                         .collect(),
+                    image_pull_policy: args.kubernetes_image_pull_policy,
                 })
             }
             Orchestrator::Process => {
@@ -601,11 +598,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     // necessary.
                     port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
                     suppress_output: false,
+                    process_listen_host: args.process_listen_host,
                 })
             }
         },
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        linger: args
+            .orchestrator_linger
+            .unwrap_or_else(|| args.orchestrator.default_linger_value()),
     };
 
     // Configure secrets controller.
@@ -713,6 +714,11 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
+    let replica_sizes = match args.cluster_replica_sizes {
+        None => Default::default(),
+        Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -734,6 +740,7 @@ max log level: {max_log_level}",
             .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
         now: SYSTEM_TIME.clone(),
+        replica_sizes,
     }))?;
 
     eprintln!(

@@ -9,15 +9,15 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
+package mz_repr.adt.array;
 
-package global_id;
-
-message ProtoGlobalId {
+message ProtoInvalidArrayError {
+    message ProtoWrongCardinality {
+        uint64 actual = 1;
+        uint64 expected = 2;
+    }
     oneof kind {
-        uint64 system = 1;
-        uint64 user = 2;
-        uint64 transient = 3;
-        google.protobuf.Empty explain = 4;
+        uint64 too_many_dimensions = 1;
+        ProtoWrongCardinality wrong_cardinality = 2;
     }
 }

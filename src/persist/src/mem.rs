@@ -692,16 +692,16 @@ impl Default for MemConsensus {
 impl Consensus for MemConsensus {
     async fn head(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         Ok(self.data.lock().await.get(key).cloned())
     }
 
     async fn compare_and_set(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {

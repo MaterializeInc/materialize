@@ -465,6 +465,24 @@ pub enum CreateConnector<T: AstInfo> {
     },
 }
 
+impl<T: AstInfo> AstDisplay for CreateConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Kafka {
+                broker,
+                with_options,
+            } => {
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("' WITH (");
+                f.write_node(&display::comma_separated(&with_options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(CreateConnector);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector {
     Inline { broker: String },

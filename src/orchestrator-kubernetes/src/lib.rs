@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use clap::ArgEnum;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
@@ -39,6 +40,25 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: HashMap<String, String>,
+    /// The image pull policy to set for services created by the orchestrator.
+    pub image_pull_policy: KubernetesImagePullPolicy,
+}
+
+#[derive(ArgEnum, Debug, Clone, Copy)]
+pub enum KubernetesImagePullPolicy {
+    Always,
+    IfNotPresent,
+    Never,
+}
+
+impl fmt::Display for KubernetesImagePullPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KubernetesImagePullPolicy::Always => f.write_str("Always"),
+            KubernetesImagePullPolicy::IfNotPresent => f.write_str("IfNotPresent"),
+            KubernetesImagePullPolicy::Never => f.write_str("Never"),
+        }
+    }
 }
 
 /// An orchestrator backed by Kubernetes.
@@ -46,6 +66,7 @@ pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
     service_labels: HashMap<String, String>,
+    image_pull_policy: KubernetesImagePullPolicy,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -78,11 +99,15 @@ impl KubernetesOrchestrator {
             client,
             kubernetes_namespace,
             service_labels: config.service_labels,
+            image_pull_policy: config.image_pull_policy,
         })
     }
 }
 
 impl Orchestrator for KubernetesOrchestrator {
+    fn listen_host(&self) -> &str {
+        "0.0.0.0"
+    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
@@ -91,6 +116,7 @@ impl Orchestrator for KubernetesOrchestrator {
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             service_labels: self.service_labels.clone(),
+            image_pull_policy: self.image_pull_policy,
         })
     }
 }
@@ -103,6 +129,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     service_labels: HashMap<String, String>,
+    image_pull_policy: KubernetesImagePullPolicy,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -111,6 +138,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("kubernetes_namespace", &self.kubernetes_namespace)
             .field("namespace", &self.namespace)
             .field("service_labels", &self.service_labels)
+            .field("image_pull_policy", &self.image_pull_policy)
             .finish()
     }
 }
@@ -159,7 +187,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         if let Some(memory_limit) = memory_limit {
             limits.insert(
                 "memory".into(),
-                Quantity(memory_limit.as_bytes().to_string()),
+                Quantity(memory_limit.0.as_u64().to_string()),
             );
         }
         if let Some(cpu_limit) = cpu_limit {
@@ -206,7 +234,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     name: "default".into(),
                     image: Some(image),
                     args: Some(args(&ports)),
-                    image_pull_policy: Some("Always".into()),
+                    image_pull_policy: Some(self.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
                             .iter()
@@ -254,7 +282,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: name.clone(),
-                replicas: Some(processes.try_into()?),
+                replicas: Some(processes.get().try_into()?),
                 template: pod_template_spec,
                 ..Default::default()
             }),
@@ -278,7 +306,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..processes {
+        for pod_id in 0..processes.get() {
             let pod_name = format!("{}-{}", &name, pod_id);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
@@ -299,7 +327,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        let hosts = (0..processes)
+        let hosts = (0..processes.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",

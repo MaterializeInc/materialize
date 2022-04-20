@@ -18,29 +18,36 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
+use proptest::prelude::*;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
+use crate::chrono::{any_fixed_offset, any_timezone};
+use crate::proto::{ProtoRepr, TryFromProtoError};
 
 use mz_lowertest::MzReflect;
 
-// The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
-// See https://github.com/MaterializeInc/materialize/pull/11717.
-#[cfg(feature = "test-utils")]
-use {
-    crate::chrono::any_fixed_offset, crate::chrono::any_timezone, proptest::prelude::*,
-    proptest_derive::Arbitrary,
-};
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.datetime.rs"));
 
 /// Units of measurements associated with dates and times.
 ///
 /// TODO(benesch): with enough thinking, this type could probably be merged with
 /// `DateTimeField`.
 #[derive(
-    Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum DateTimeUnits {
     Epoch,
     Millennium,
@@ -125,6 +132,71 @@ impl FromStr for DateTimeUnits {
             "timezone_m" | "timezone_minute" => Ok(Self::TimezoneMinute),
             _ => Err(format!("unknown units {}", s)),
         }
+    }
+}
+
+impl From<&DateTimeUnits> for ProtoDateTimeUnits {
+    fn from(value: &DateTimeUnits) -> Self {
+        use proto_date_time_units::Kind;
+        ProtoDateTimeUnits {
+            kind: Some(match value {
+                DateTimeUnits::Epoch => Kind::Epoch(()),
+                DateTimeUnits::Millennium => Kind::Millennium(()),
+                DateTimeUnits::Century => Kind::Century(()),
+                DateTimeUnits::Decade => Kind::Decade(()),
+                DateTimeUnits::Year => Kind::Year(()),
+                DateTimeUnits::Quarter => Kind::Quarter(()),
+                DateTimeUnits::Week => Kind::Week(()),
+                DateTimeUnits::Month => Kind::Month(()),
+                DateTimeUnits::Hour => Kind::Hour(()),
+                DateTimeUnits::Day => Kind::Day(()),
+                DateTimeUnits::DayOfWeek => Kind::DayOfWeek(()),
+                DateTimeUnits::DayOfYear => Kind::DayOfYear(()),
+                DateTimeUnits::IsoDayOfWeek => Kind::IsoDayOfWeek(()),
+                DateTimeUnits::IsoDayOfYear => Kind::IsoDayOfYear(()),
+                DateTimeUnits::Minute => Kind::Minute(()),
+                DateTimeUnits::Second => Kind::Second(()),
+                DateTimeUnits::Milliseconds => Kind::Milliseconds(()),
+                DateTimeUnits::Microseconds => Kind::Microseconds(()),
+                DateTimeUnits::Timezone => Kind::Timezone(()),
+                DateTimeUnits::TimezoneHour => Kind::TimezoneHour(()),
+                DateTimeUnits::TimezoneMinute => Kind::TimezoneMinute(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoDateTimeUnits> for DateTimeUnits {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: ProtoDateTimeUnits) -> Result<Self, Self::Error> {
+        use proto_date_time_units::Kind;
+        let kind = value
+            .kind
+            .ok_or_else(|| TryFromProtoError::MissingField("ProtoDateTimeUnits.kind".into()))?;
+        Ok(match kind {
+            Kind::Epoch(_) => DateTimeUnits::Epoch,
+            Kind::Millennium(_) => DateTimeUnits::Millennium,
+            Kind::Century(_) => DateTimeUnits::Century,
+            Kind::Decade(_) => DateTimeUnits::Decade,
+            Kind::Year(_) => DateTimeUnits::Year,
+            Kind::Quarter(_) => DateTimeUnits::Quarter,
+            Kind::Week(_) => DateTimeUnits::Week,
+            Kind::Month(_) => DateTimeUnits::Month,
+            Kind::Hour(_) => DateTimeUnits::Hour,
+            Kind::Day(_) => DateTimeUnits::Day,
+            Kind::DayOfWeek(_) => DateTimeUnits::DayOfWeek,
+            Kind::DayOfYear(_) => DateTimeUnits::DayOfYear,
+            Kind::IsoDayOfWeek(_) => DateTimeUnits::IsoDayOfWeek,
+            Kind::IsoDayOfYear(_) => DateTimeUnits::IsoDayOfYear,
+            Kind::Minute(_) => DateTimeUnits::Minute,
+            Kind::Second(_) => DateTimeUnits::Second,
+            Kind::Milliseconds(_) => DateTimeUnits::Milliseconds,
+            Kind::Microseconds(_) => DateTimeUnits::Microseconds,
+            Kind::Timezone(_) => DateTimeUnits::Timezone,
+            Kind::TimezoneHour(_) => DateTimeUnits::TimezoneHour,
+            Kind::TimezoneMinute(_) => DateTimeUnits::TimezoneMinute,
+        })
     }
 }
 
@@ -335,14 +407,38 @@ impl DateTimeFieldValue {
 }
 
 /// Parsed timezone.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
+#[derive(Arbitrary, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
-    FixedOffset(
-        #[cfg_attr(feature = "test-utils", proptest(strategy = "any_fixed_offset()"))] FixedOffset,
-    ),
-    Tz(#[cfg_attr(feature = "test-utils", proptest(strategy = "any_timezone()"))] Tz),
+    FixedOffset(#[proptest(strategy = "any_fixed_offset()")] FixedOffset),
+    Tz(#[proptest(strategy = "any_timezone()")] Tz),
+}
+
+impl From<&Timezone> for ProtoTimezone {
+    fn from(value: &Timezone) -> Self {
+        use proto_timezone::Kind;
+        ProtoTimezone {
+            kind: Some(match value {
+                Timezone::FixedOffset(fo) => Kind::FixedOffset(fo.into_proto()),
+                Timezone::Tz(tz) => Kind::Tz(tz.into_proto()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoTimezone> for Timezone {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: ProtoTimezone) -> Result<Self, Self::Error> {
+        use proto_timezone::Kind;
+        let kind = value
+            .kind
+            .ok_or_else(|| TryFromProtoError::MissingField("ProtoTimezone::kind".into()))?;
+        Ok(match kind {
+            Kind::FixedOffset(pof) => Timezone::FixedOffset(FixedOffset::from_proto(pof)?),
+            Kind::Tz(ptz) => Timezone::Tz(Tz::from_proto(ptz)?),
+        })
+    }
 }
 
 // We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.
@@ -2103,8 +2199,9 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    use crate::proto::protobuf_roundtrip;
 
     #[test]
     fn iterate_datetimefield() {
@@ -3774,6 +3871,15 @@ mod test {
                 Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
                 Err(e) => println!("{}", e),
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn datetimeunits_serialization_roundtrip(expect in any::<DateTimeUnits>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoDateTimeUnits>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

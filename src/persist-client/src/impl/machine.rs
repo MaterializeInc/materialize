@@ -254,8 +254,8 @@ where
             let cas_res = self
                 .consensus
                 .compare_and_set(
-                    &shard_id.to_string(),
                     deadline,
+                    &shard_id.to_string(),
                     self.seqno,
                     VersionedData {
                         seqno: new_seqno,
@@ -290,7 +290,7 @@ where
 
     async fn fetch_and_update_state(&mut self, deadline: Instant) -> Result<(), ExternalError> {
         let shard_id = self.shard_id();
-        let current = self.consensus.head(&shard_id.to_string(), deadline).await?;
+        let current = self.consensus.head(deadline, &shard_id.to_string()).await?;
         self.update_state(current).await
     }
 

@@ -10,23 +10,50 @@
 //! Profiling HTTP endpoints.
 
 use std::cell::RefCell;
+use std::env;
 use std::fmt::Write;
 use std::time::Duration;
 
 use askama::Template;
 use axum::response::IntoResponse;
+use axum::routing::{self, Router};
 use cfg_if::cfg_if;
 use http::StatusCode;
+use lazy_static::lazy_static;
 use mz_build_info::BuildInfo;
 
 use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(target_os = "macos")] {
-        pub use disabled::{handle_get, handle_post};
+        use disabled::{handle_get, handle_post};
     } else {
-        pub use enabled::{handle_get, handle_post};
+        use enabled::{handle_get, handle_post};
     }
+}
+
+lazy_static! {
+    static ref EXECUTABLE: String = {
+        env::current_exe()
+            .ok()
+            .as_ref()
+            .and_then(|exe| exe.file_name())
+            .map(|exe| exe.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<unknown executable>".into())
+    };
+}
+
+/// Creates a router that serves the profiling endpoints.
+pub fn router(build_info: &'static BuildInfo) -> Router {
+    Router::new()
+        .route(
+            "/",
+            routing::get(move |query, headers| handle_get(query, headers, build_info)),
+        )
+        .route(
+            "/",
+            routing::post(move |form| handle_post(form, build_info)),
+        )
 }
 
 #[allow(dead_code)]
@@ -39,6 +66,7 @@ enum MemProfilingStatus {
 #[template(path = "http/templates/prof.html")]
 struct ProfTemplate<'a> {
     version: &'a str,
+    executable: &'a str,
     mem_prof: MemProfilingStatus,
 }
 
@@ -145,6 +173,7 @@ mod disabled {
     ) -> impl IntoResponse {
         mz_http_util::template_response(ProfTemplate {
             version: build_info.version,
+            executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Disabled,
         })
     }
@@ -379,6 +408,7 @@ mod enabled {
         let prof_md = prof_ctl.lock().await.get_md();
         mz_http_util::template_response(ProfTemplate {
             version: build_info.version,
+            executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
         })
     }

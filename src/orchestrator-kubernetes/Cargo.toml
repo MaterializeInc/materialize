@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.56"
 async-trait = "0.1.53"
+clap = { version = "3.1.9", features = ["derive"] }
 mz-orchestrator = { path = "../orchestrator" }
 k8s-openapi = { version = "0.14.0", features = ["v1_22"] }
 kube = { version = "0.71.0", features = ["ws"] }

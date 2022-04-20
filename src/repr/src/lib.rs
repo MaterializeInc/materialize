@@ -24,6 +24,7 @@
 
 mod datum_vec;
 mod relation;
+mod relation_and_scalar;
 mod row;
 mod scalar;
 

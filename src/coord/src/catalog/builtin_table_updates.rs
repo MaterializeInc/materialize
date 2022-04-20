@@ -10,6 +10,7 @@
 use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
+use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -20,14 +21,14 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_DATABASES,
-    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_CONNECTORS,
+    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Type,
-    View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
+    Source, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -130,6 +131,9 @@ impl CatalogState {
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
+            CatalogItem::Connector(connector) => {
+                self.pack_connector_update(id, oid, schema_id, name, connector, diff)
+            }
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
@@ -201,6 +205,30 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_connector_update(
+        &self,
+        id: GlobalId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        connector: &Connector,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CONNECTORS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::Int64(schema_id.into()),
+                Datum::String(name),
+                Datum::String(match connector.connector {
+                    ConnectorInner::Kafka { .. } => "kafka",
+                }),
             ]),
             diff,
         }]

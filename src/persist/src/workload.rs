@@ -38,6 +38,10 @@ const RECORD_SIZE_BYTES_KEY: &'static str = "MZ_PERSIST_RECORD_SIZE_BYTES";
 const RECORD_COUNT_KEY: &'static str = "MZ_PERSIST_RECORD_COUNT";
 const BATCH_MAX_COUNT_KEY: &'static str = "MZ_PERSIST_BATCH_MAX_COUNT";
 
+const RECORD_SIZE_BYTES_KEY_SMALL: &'static str = "MZ_PERSIST_RECORD_SIZE_BYTES_SMALL";
+const RECORD_COUNT_KEY_SMALL: &'static str = "MZ_PERSIST_RECORD_COUNT_SMALL";
+const BATCH_MAX_COUNT_KEY_SMALL: &'static str = "MZ_PERSIST_BATCH_MAX_COUNT_SMALL";
+
 // Selected arbitrarily as representative of production record sizes.
 const DEFAULT_RECORD_SIZE_BYTES: usize = 64;
 // Selected arbitrarily to make ~8MiB batches.
@@ -46,6 +50,13 @@ const DEFAULT_BATCH_MAX_COUNT: usize = (8 * 1024 * 1024) / DEFAULT_RECORD_SIZE_B
 // throughput on the end_to_end benchmark and (2) goodput_pretty produces a
 // round-ish number.
 const DEFAULT_RECORD_COUNT: usize = 819_200;
+
+// Selected arbitrarily as representative of production record sizes.
+const DEFAULT_RECORD_SIZE_BYTES_SMALL: usize = 64;
+// Selected arbitrarily to make ~64KiB batches.
+const DEFAULT_BATCH_MAX_COUNT_SMALL: usize = (64 * 1024) / DEFAULT_RECORD_SIZE_BYTES_SMALL;
+// Selected to produce exactly one small batch with default settings.
+const DEFAULT_RECORD_COUNT_SMALL: usize = DEFAULT_BATCH_MAX_COUNT_SMALL;
 
 const TS_DIFF_GOODPUT_SIZE: usize = size_of::<u64>() + size_of::<i64>();
 
@@ -92,6 +103,30 @@ impl DataGenerator {
             key_buf: Vec::new(),
             val_buf: Vec::new(),
         }
+    }
+
+    /// Returns a new [DataGenerator] specifically for testing small data volumes.
+    pub fn small() -> Self {
+        let record_count_small = read_env_usize(RECORD_COUNT_KEY_SMALL, DEFAULT_RECORD_COUNT_SMALL);
+        let record_size_bytes_small =
+            read_env_usize(RECORD_SIZE_BYTES_KEY_SMALL, DEFAULT_RECORD_SIZE_BYTES_SMALL);
+        let batch_max_count_small =
+            read_env_usize(BATCH_MAX_COUNT_KEY_SMALL, DEFAULT_BATCH_MAX_COUNT_SMALL);
+
+        eprintln!(
+            "{}={} {}={} {}={}",
+            RECORD_COUNT_KEY_SMALL,
+            record_count_small,
+            RECORD_SIZE_BYTES_KEY_SMALL,
+            record_size_bytes_small,
+            BATCH_MAX_COUNT_KEY_SMALL,
+            batch_max_count_small,
+        );
+        DataGenerator::new(
+            record_count_small,
+            record_size_bytes_small,
+            batch_max_count_small,
+        )
     }
 
     /// Returns the number of "goodput" bytes represented by the entire dataset

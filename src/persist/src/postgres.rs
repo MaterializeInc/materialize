@@ -160,8 +160,8 @@ impl PostgresConsensus {
 impl Consensus for PostgresConsensus {
     async fn head(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
 
@@ -182,8 +182,8 @@ impl Consensus for PostgresConsensus {
 
     async fn compare_and_set(
         &self,
-        key: &str,
         deadline: Instant,
+        key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
@@ -250,7 +250,7 @@ impl Consensus for PostgresConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(key, deadline).await?;
+            let current = self.head(deadline, key).await?;
             Ok(Err(current))
         }
     }

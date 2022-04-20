@@ -16,11 +16,11 @@
 pub mod client;
 pub mod logging;
 pub mod plan;
+pub mod postgres_source;
 pub mod reconciliation;
 
 mod errors;
 mod explain;
-mod gen;
 mod types;
 
 pub use errors::*;
@@ -29,7 +29,6 @@ pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
 pub use explain::TimestampExplanation;
 pub use explain::TimestampSource;
-pub use gen::*;
 pub use plan::Plan;
 pub use types::*;
 

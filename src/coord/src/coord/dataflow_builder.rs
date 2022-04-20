@@ -443,7 +443,7 @@ fn eval_unmaterializable_func(
                 "PostgreSQL {}.{} on {} (materialized {})",
                 SERVER_MAJOR_VERSION,
                 SERVER_MINOR_VERSION,
-                build_info.target_triple,
+                mz_build_info::TARGET_TRIPLE,
                 build_info.version,
             );
             pack(Datum::from(&*version))

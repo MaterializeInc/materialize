@@ -11,18 +11,18 @@ fn main() {
     prost_build::Config::new()
         .compile_protos(
             &[
-                "chrono.proto",
-                "global_id.proto",
-                "row.proto",
-                "strconv.proto",
-                "relation_and_scalar.proto",
-                "adt/array.proto",
-                "adt/char.proto",
-                "adt/datetime.proto",
-                "adt/numeric.proto",
-                "adt/varchar.proto",
+                "repr/src/chrono.proto",
+                "repr/src/global_id.proto",
+                "repr/src/row.proto",
+                "repr/src/strconv.proto",
+                "repr/src/relation_and_scalar.proto",
+                "repr/src/adt/array.proto",
+                "repr/src/adt/char.proto",
+                "repr/src/adt/datetime.proto",
+                "repr/src/adt/numeric.proto",
+                "repr/src/adt/varchar.proto",
             ],
-            &["src/proto"],
+            &[".."],
         )
         .unwrap();
 }

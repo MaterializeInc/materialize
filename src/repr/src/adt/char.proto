@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-package adt.varchar;
+package mz_repr.adt.char;
 
-message ProtoVarCharMaxLength {
+message ProtoCharLength {
     uint32 value = 1;
 }

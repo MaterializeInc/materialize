@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-package strconv;
+package mz_repr.strconv;
 
 message ProtoParseError {
     oneof kind {

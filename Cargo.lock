@@ -855,6 +855,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytesize"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c58ec36aac5066d5ca17df51b3e70279f5670a72102f5752cb7e7c856adfc70"
+
+[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2848,7 +2854,6 @@ dependencies = [
  "cfg-if",
  "chrono",
  "clap",
- "compile-time-run",
  "console-subscriber",
  "crossbeam-channel",
  "datadriven",
@@ -3189,6 +3194,7 @@ dependencies = [
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
+ "compile-time-run",
  "semver",
 ]
 
@@ -3228,7 +3234,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "compile-time-run",
  "crossbeam-channel",
  "csv-core",
  "dec",
@@ -3363,6 +3368,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "bytes",
+ "bytesize",
  "chrono",
  "crossbeam-channel",
  "derivative",
@@ -3425,7 +3431,6 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md-5",
- "mz-expr",
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
@@ -3672,7 +3677,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytesize",
  "derivative",
+ "serde",
 ]
 
 [[package]]
@@ -3681,6 +3688,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "clap",
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
@@ -3953,7 +3961,6 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-persist-types",
- "mz-repr",
  "num-traits",
  "num_enum",
  "ordered-float",
@@ -4155,6 +4162,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
+ "axum",
  "bincode",
  "byteorder",
  "bytes",
@@ -4174,6 +4182,7 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
+ "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
@@ -4184,6 +4193,7 @@ dependencies = [
  "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
+ "mz-prof",
  "mz-repr",
  "mz-timely-util",
  "postgres-protocol",

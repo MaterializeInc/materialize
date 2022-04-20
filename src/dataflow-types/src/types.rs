@@ -414,7 +414,7 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::gen::postgres_source::PostgresSourceDetails;
+    use crate::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 
@@ -1119,6 +1119,14 @@ pub mod sources {
         };
 
         !is_avro && !is_stateless_dbz
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub enum ConnectorInner {
+        Kafka {
+            broker: KafkaAddrs,
+            config_options: BTreeMap<String, String>,
+        },
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

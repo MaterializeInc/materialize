@@ -10,6 +10,7 @@ publish = false
 anyhow = "1.0.56"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.53"
+axum = "0.5.1"
 aws-sdk-kinesis = { version = "0.10.1", default-features = false }
 aws-sdk-s3 = { version = "0.10.1", default-features = false }
 aws-sdk-sqs = { version = "0.10.1", default-features = false }
@@ -32,6 +33,7 @@ lazy_static = "1.4.0"
 log = "0.4.16"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs"] }
+mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
@@ -42,6 +44,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
+mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

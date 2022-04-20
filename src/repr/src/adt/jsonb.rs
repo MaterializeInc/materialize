@@ -129,6 +129,14 @@ impl Jsonb {
         }
     }
 
+    /// Constructs a `Jsonb` from a [`Row`] containing a single [`Datum`].
+    ///
+    /// Note that `row` is not checked for validity. Not all `Datum`s are
+    /// valid JSON.
+    pub fn from_row(row: Row) -> Jsonb {
+        Jsonb { row }
+    }
+
     /// Consumes this `Jsonb` and returns the underlying [`Row`].
     pub fn into_row(self) -> Row {
         self.row

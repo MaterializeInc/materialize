@@ -43,7 +43,7 @@ zone is available, Materialize should automatically assign the availability
 zone with the least existing replicas.
 
 The `SIZE` option will be changed from the existing `SIZE` option to validate
-the set of allowable sizes against a new `--allow-cluster-replica-size`
+the set of allowable sizes against a new `--cluster-replica-sizes`
 command line option.
 
 The `DROP CLUSTER REPLICA` statement will be added:
@@ -89,7 +89,7 @@ properties of [`ServiceConfig`](https://dev.materialize.com/api/rust/mz_orchestr
   * Processes
 
 The mapping between replica size and the above property values will be
-determined by the new `--allow-cluster-replica-size` comand line option, which
+determined by the new `--cluster-replica-sizes` comand line option, which
 accepts a JSON object that can be deserialized into `ClusterReplicaSizeMap`:
 
 ```rust

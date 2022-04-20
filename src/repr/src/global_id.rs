@@ -11,20 +11,30 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
-use serde::{Deserialize, Serialize};
-// The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
-// See https://github.com/MaterializeInc/materialize/pull/11717.
-#[cfg(feature = "test-utils")]
 use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
+use crate::proto::TryFromProtoError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
+
 /// The identifier for a global dataflow.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
 pub enum GlobalId {
     /// System namespace.
     System(u64),
@@ -77,6 +87,33 @@ impl fmt::Display for GlobalId {
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
+        }
+    }
+}
+
+impl From<&GlobalId> for ProtoGlobalId {
+    fn from(x: &GlobalId) -> Self {
+        ProtoGlobalId {
+            kind: Some(match x {
+                GlobalId::System(x) => proto_global_id::Kind::System(*x),
+                GlobalId::User(x) => proto_global_id::Kind::User(*x),
+                GlobalId::Transient(x) => proto_global_id::Kind::Transient(*x),
+                GlobalId::Explain => proto_global_id::Kind::Explain(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoGlobalId> for GlobalId {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoGlobalId) -> Result<Self, Self::Error> {
+        match x.kind {
+            Some(proto_global_id::Kind::System(x)) => Ok(GlobalId::System(x)),
+            Some(proto_global_id::Kind::User(x)) => Ok(GlobalId::User(x)),
+            Some(proto_global_id::Kind::Transient(x)) => Ok(GlobalId::Transient(x)),
+            Some(proto_global_id::Kind::Explain(_)) => Ok(GlobalId::Explain),
+            None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
     }
 }

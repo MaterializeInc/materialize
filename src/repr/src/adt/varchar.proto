@@ -9,13 +9,8 @@
 
 syntax = "proto3";
 
-package adt.numeric;
+package mz_repr.adt.varchar;
 
-message ProtoNumericMaxScale {
+message ProtoVarCharMaxLength {
     uint32 value = 1;
-}
-
-// Helper struct for representing `Option<NumericMaxScale>`.
-message ProtoOptionalNumericMaxScale {
-    ProtoNumericMaxScale value = 1;
 }

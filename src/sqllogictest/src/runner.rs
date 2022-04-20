@@ -568,9 +568,11 @@ impl Runner {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                     port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
                     suppress_output: false,
+                    process_listen_host: None,
                 }),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
+                linger: false,
             },
             secrets_controller: None,
             aws_external_id: AwsExternalId::NotProvided,
@@ -584,6 +586,7 @@ impl Runner {
             metrics_registry: MetricsRegistry::new(),
             metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
+            replica_sizes: Default::default(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

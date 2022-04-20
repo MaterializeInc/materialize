@@ -27,7 +27,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     # --persistent-kafka-sources can not be enabled due to gh#11711 , gh#11506
-    Materialized(options="--persistent-user-tables"),
+    Materialized(),
     Testdrive(validate_data_dir=False, no_reset=True, seed=1, default_timeout="300s"),
 ]
 
@@ -39,15 +39,16 @@ all_action_classes = [
     CreateTopic,
     CreateSource,
     CreateSource,
-    CreateTable,
     CreateView,
     ValidateView,
     ValidateView,
-    Insert,
-    ShiftForward,
-    ShiftBackward,
-    DeleteFromTail,
-    DeleteFromHead,
+    # Not currently viable with persistence disabled
+    #    CreateTable,
+    #    Insert,
+    #    ShiftForward,
+    #    ShiftBackward,
+    #    DeleteFromTail,
+    #    DeleteFromHead,
     KafkaInsert,
     KafkaDeleteFromHead,
     KafkaDeleteFromTail,

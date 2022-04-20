@@ -16,7 +16,7 @@ fn main() {
 
     prost_build::Config::new()
         .include_file("mod.rs")
-        .compile_protos(&["source/source.proto"], &["src"])
+        .compile_protos(&["storage/src/source.proto"], &[".."])
         .unwrap();
 
     // Work around a prost bug in which the module index expects to include a

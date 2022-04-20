@@ -16,15 +16,16 @@
 use std::collections::HashMap;
 use std::fs::Permissions;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::{anyhow, Context};
-use compile_time_run::run_command_str;
 use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
+use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -117,6 +118,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
     pub now: NowFn,
+    /// Map of strings to corresponding compute replica sizes.
+    pub replica_sizes: ClusterReplicaSizeMap,
 }
 
 /// Configures TLS encryption for connections.
@@ -160,6 +163,9 @@ pub struct OrchestratorConfig {
     pub storaged_image: String,
     /// The computed image reference to use.
     pub computed_image: String,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    pub linger: bool,
 }
 
 /// The orchestrator itself.
@@ -257,6 +263,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
+    let default_listen_host = orchestrator.listen_host();
     let storage_service = orchestrator
         .namespace("storage")
         .ensure_service(
@@ -264,16 +271,26 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             ServiceConfig {
                 image: config.orchestrator.storaged_image.clone(),
                 args: &|ports| {
-                    vec![
+                    let mut storage_opts = vec![
                         format!("--workers=1"),
-                        format!("--storage-addr=0.0.0.0:{}", ports["compute"]),
-                        format!("--listen-addr=0.0.0.0:{}", ports["controller"]),
+                        format!(
+                            "--storage-addr={}:{}",
+                            default_listen_host, ports["compute"]
+                        ),
+                        format!(
+                            "--listen-addr={}:{}",
+                            default_listen_host, ports["controller"]
+                        ),
                         format!("--persist-blob-url={}", config.persist_location.blob_uri),
                         format!(
                             "--persist-consensus-url={}",
                             config.persist_location.consensus_uri
                         ),
-                    ]
+                    ];
+                    if config.orchestrator.linger {
+                        storage_opts.push(format!("--linger"))
+                    }
+                    storage_opts
                 },
                 ports: vec![
                     ServicePort {
@@ -288,7 +305,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 // TODO: limits?
                 cpu_limit: None,
                 memory_limit: None,
-                processes: 1,
+                processes: NonZeroUsize::new(1).unwrap(),
                 labels: HashMap::new(),
             },
         )
@@ -297,6 +314,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         orchestrator,
         computed_image: config.orchestrator.computed_image,
         storage_addr: storage_service.addresses("compute").into_element(),
+        linger: config.orchestrator.linger,
     };
 
     // Initialize secrets controller.
@@ -328,8 +346,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_client,
         config.data_directory,
     );
-    let dataflow_controller =
-        mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
+    let dataflow_controller = mz_dataflow_types::client::Controller::new(
+        orchestrator,
+        storage_controller,
+        config.replica_sizes,
+    );
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
