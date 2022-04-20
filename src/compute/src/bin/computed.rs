@@ -120,6 +120,10 @@ struct Args {
         default_value = "info"
     )]
     log_filter: String,
+
+    /// Add the process name to the tracing logs
+    #[clap(long, hide = true)]
+    log_process_name: bool,
 }
 
 #[tokio::main]
@@ -216,6 +220,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: None,
             opentelemetry_headers: None,
+            prefix: args.log_process_name.then(|| "computed"),
             #[cfg(feature = "tokio-console")]
             tokio_console: false,
         },

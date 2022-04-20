@@ -3587,6 +3587,7 @@ dependencies = [
 name = "mz-ore"
 version = "0.0.0"
 dependencies = [
+ "ansi_term",
  "anyhow",
  "async-trait",
  "atty",
