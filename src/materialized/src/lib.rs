@@ -308,6 +308,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
+                        "--log-process-name".to_string(),
                     ];
                     if config.orchestrator.linger {
                         storage_opts.push(format!("--linger"))

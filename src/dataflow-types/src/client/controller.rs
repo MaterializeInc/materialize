@@ -221,6 +221,7 @@ where
                                         ),
                                         format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
+                                        "--log-process-name".to_string(),
                                     ];
                                     compute_opts.extend(hosts_ports.iter().map(|(host, ports)| {
                                         format!("{host}:{}", ports["compute"])
