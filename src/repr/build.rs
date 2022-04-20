@@ -13,6 +13,7 @@ fn main() {
             &[
                 "repr/src/chrono.proto",
                 "repr/src/global_id.proto",
+                "repr/src/proto.proto",
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",
                 "repr/src/relation_and_scalar.proto",
