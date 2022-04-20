@@ -366,6 +366,36 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
         }
         Err(ExternalError::from(anyhow!("unreliable: timeout")))
     }
+
+    async fn scan(
+        &self,
+        deadline: Instant,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        if self.should_happen().await {
+            let res = self.consensus.scan(deadline, key, from).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
+
+    async fn truncate(
+        &self,
+        deadline: Instant,
+        key: &str,
+        seqno: SeqNo,
+    ) -> Result<(), ExternalError> {
+        if self.should_happen().await {
+            let res = self.consensus.truncate(deadline, key, seqno).await;
+            if !self.should_timeout().await {
+                return res;
+            }
+        }
+        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+    }
 }
 
 #[cfg(test)]
