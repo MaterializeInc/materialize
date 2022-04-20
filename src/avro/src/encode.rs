@@ -21,8 +21,6 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::mem::transmute;
-
 use crate::schema::{Schema, SchemaNode, SchemaPiece};
 use crate::types::AvroMap;
 use crate::types::{DecimalValue, Value};
@@ -70,7 +68,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
         Value::Boolean(b) => buffer.push(if *b { 1u8 } else { 0u8 }),
         Value::Int(i) => encode_int(*i, buffer),
         Value::Long(i) => encode_long(*i, buffer),
-        Value::Float(x) => buffer.extend_from_slice(&unsafe { transmute::<f32, [u8; 4]>(*x) }),
+        Value::Float(x) => buffer.extend_from_slice(&x.to_le_bytes()),
         Value::Date(d) => {
             let span = (*d) - chrono::NaiveDate::from_ymd(1970, 1, 1);
             encode_int(
@@ -102,7 +100,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             };
             encode_long(ts, buffer)
         }
-        Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
+        Value::Double(x) => buffer.extend_from_slice(&x.to_le_bytes()),
         Value::Decimal(DecimalValue { unscaled, .. }) => match schema.name {
             None => encode_bytes(unscaled, buffer),
             Some(_) => buffer.extend(unscaled),
