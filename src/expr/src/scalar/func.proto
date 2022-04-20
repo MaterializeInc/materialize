@@ -374,21 +374,21 @@ message ProtoUnaryFunc {
 
 message ProtoBinaryFunc {
     oneof kind {
-        google.protobuf.Empty and = 1;
-        google.protobuf.Empty or = 2;
-        google.protobuf.Empty add_int16 = 3;
-        google.protobuf.Empty add_int32 = 4;
-        google.protobuf.Empty add_int64 = 5;
-        google.protobuf.Empty add_float32 = 6;
-        google.protobuf.Empty add_float64 = 7;
-        google.protobuf.Empty add_interval = 8;
-        google.protobuf.Empty add_timestamp_interval = 9;
-        google.protobuf.Empty add_timestamp_tz_interval = 10;
-        google.protobuf.Empty add_date_interval = 11;
-        google.protobuf.Empty add_date_time = 12;
-        google.protobuf.Empty add_time_interval = 13;
-        google.protobuf.Empty add_numeric = 14;
-        google.protobuf.Empty bit_and_int16 = 15;
+        google.protobuf.Empty and = 7;
+        google.protobuf.Empty or = 8;
+        google.protobuf.Empty add_int16 = 46;
+        google.protobuf.Empty add_int32 = 11;
+        google.protobuf.Empty add_int64 = 12;
+        google.protobuf.Empty add_float32 = 13;
+        google.protobuf.Empty add_float64 = 14;
+        google.protobuf.Empty add_interval = 47;
+        google.protobuf.Empty add_timestamp_interval = 15;
+        google.protobuf.Empty add_timestamp_tz_interval = 66;
+        google.protobuf.Empty add_date_interval = 67;
+        google.protobuf.Empty add_date_time = 68;
+        google.protobuf.Empty add_time_interval = 69;
+        google.protobuf.Empty add_numeric = 70;
+        google.protobuf.Empty bit_and_int16 = 71;
         google.protobuf.Empty bit_and_int32 = 16;
         google.protobuf.Empty bit_and_int64 = 17;
         google.protobuf.Empty bit_or_int16 = 18;
@@ -419,8 +419,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty sub_time_interval = 43;
         google.protobuf.Empty sub_numeric = 44;
         google.protobuf.Empty mul_int16 = 45;
-        google.protobuf.Empty mul_int32 = 46;
-        google.protobuf.Empty mul_int64 = 47;
+        google.protobuf.Empty mul_int32 = 9;
+        google.protobuf.Empty mul_int64 = 10;
         google.protobuf.Empty mul_float32 = 48;
         google.protobuf.Empty mul_float64 = 49;
         google.protobuf.Empty mul_numeric = 50;
@@ -439,12 +439,12 @@ message ProtoBinaryFunc {
         google.protobuf.Empty mod_float64 = 63;
         google.protobuf.Empty mod_numeric = 64;
         google.protobuf.Empty round_numeric = 65;
-        google.protobuf.Empty eq = 66;
-        google.protobuf.Empty not_eq = 67;
-        google.protobuf.Empty lt = 68;
-        google.protobuf.Empty lte = 69;
-        google.protobuf.Empty gt = 70;
-        google.protobuf.Empty gte = 71;
+        google.protobuf.Empty eq = 1;
+        google.protobuf.Empty not_eq = 2;
+        google.protobuf.Empty lt = 3;
+        google.protobuf.Empty lte = 4;
+        google.protobuf.Empty gt = 5;
+        google.protobuf.Empty gte = 6;
         google.protobuf.Empty like_escape = 72;
         bool is_like_match = 73;
         bool is_regexp_match = 74;
