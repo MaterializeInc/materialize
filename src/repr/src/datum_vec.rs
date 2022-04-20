@@ -35,7 +35,7 @@ impl DatumVec {
     pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
         let inner = std::mem::take(&mut self.outer);
         DatumVecBorrow {
-            outer: &mut self.outer,
+            _outer: &mut self.outer,
             inner,
         }
     }
@@ -66,14 +66,8 @@ impl DatumVec {
 /// which it was extracted.
 #[derive(Debug)]
 pub struct DatumVecBorrow<'outer> {
-    outer: &'outer mut Vec<Datum<'static>>,
+    _outer: &'outer mut Vec<Datum<'static>>,
     inner: Vec<Datum<'outer>>,
-}
-
-impl<'outer> Drop for DatumVecBorrow<'outer> {
-    fn drop(&mut self) {
-        *self.outer = mz_ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
-    }
 }
 
 impl<'outer> std::ops::Deref for DatumVecBorrow<'outer> {
