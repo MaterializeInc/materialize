@@ -10,6 +10,7 @@
 use std::fmt;
 
 use dec::{OrderedDecimal, Rounding};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -213,7 +214,9 @@ sqlfunc!(
     }
 );
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct RescaleNumeric(pub NumericMaxScale);
 
 impl<'a> EagerUnaryFunc<'a> for RescaleNumeric {

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -17,7 +18,9 @@ use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CastArrayToListOneDim;
 
 impl LazyUnaryFunc for CastArrayToListOneDim {
@@ -78,7 +81,9 @@ impl fmt::Display for CastArrayToListOneDim {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CastArrayToString {
     pub ty: ScalarType,
 }

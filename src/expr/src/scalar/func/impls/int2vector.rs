@@ -62,7 +62,9 @@ impl fmt::Display for CastInt2VectorToArray {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CastInt2VectorToString;
 
 impl LazyUnaryFunc for CastInt2VectorToString {

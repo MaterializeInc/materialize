@@ -9,7 +9,10 @@
 
 syntax = "proto3";
 
+import "repr/src/adt/char.proto";
+import "repr/src/adt/datetime.proto";
 import "repr/src/adt/numeric.proto";
+import "repr/src/adt/varchar.proto";
 import "repr/src/chrono.proto";
 import "repr/src/relation_and_scalar.proto";
 import "google/protobuf/empty.proto";
@@ -35,6 +38,21 @@ message ProtoUnmaterializableFunc {
 }
 
 message ProtoUnaryFunc {
+    message ProtoCastStringToChar {
+        mz_repr.adt.char.ProtoCharLength length = 1;
+        bool fail_on_len = 2;
+    }
+    message ProtoPadChar {
+        mz_repr.adt.char.ProtoCharLength length = 1;
+    }
+    message ProtoCastStringToVarChar {
+        mz_repr.adt.varchar.ProtoVarCharMaxLength length = 1;
+        bool fail_on_len = 2;
+    }
+    message ProtoTimezoneTime {
+        mz_repr.adt.datetime.ProtoTimezone tz = 1;
+        mz_repr.chrono.ProtoNaiveDateTime wall_time = 2;
+    }
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -124,11 +142,11 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_string_to_float32 = 86;
         google.protobuf.Empty cast_string_to_float64 = 87;
         google.protobuf.Empty cast_string_to_date = 88;
-        // unsupported: CastStringToArray
+        // todo: CastStringToArray: blocked on MirScalarExpr
         google.protobuf.Empty cast_string_to_array = 89;
-        // unsupported: CastStringToList
+        // todo: CastStringToList: blocked on MirScalarExpr
         google.protobuf.Empty cast_string_to_list = 90;
-        // unsupported: CastStringToMap
+        // todo: CastStringToMap: blocked on MirScalarExpr
         google.protobuf.Empty cast_string_to_map = 91;
         google.protobuf.Empty cast_string_to_time = 92;
         google.protobuf.Empty cast_string_to_timestamp = 93;
@@ -136,12 +154,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_string_to_interval = 95;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
         google.protobuf.Empty cast_string_to_uuid = 97;
-        // unsupported: CastStringToChar
-        google.protobuf.Empty cast_string_to_char = 98;
-        // unsupported: PadChar
-        google.protobuf.Empty pad_char = 99;
-        // unsupported: CastStringToVarChar
-        google.protobuf.Empty cast_string_to_var_char = 100;
+        ProtoCastStringToChar cast_string_to_char = 98;
+        ProtoPadChar pad_char = 99;
+        ProtoCastStringToVarChar cast_string_to_var_char = 100;
         google.protobuf.Empty cast_char_to_string = 101;
         google.protobuf.Empty cast_var_char_to_string = 102;
         google.protobuf.Empty cast_date_to_timestamp = 103;
@@ -162,212 +177,109 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_pg_legacy_char_to_string = 118;
         google.protobuf.Empty cast_pg_legacy_char_to_int32 = 119;
         google.protobuf.Empty cast_bytes_to_string = 120;
-        // unsupported: CastStringToJsonb,
         google.protobuf.Empty cast_string_to_jsonb = 121;
-        // unsupported: CastJsonbToString,
         google.protobuf.Empty cast_jsonb_to_string = 122;
-        // unsupported: CastJsonbOrNullToJsonb,
         google.protobuf.Empty cast_jsonb_or_null_to_jsonb = 123;
-        // unsupported: CastJsonbToInt16,
         google.protobuf.Empty cast_jsonb_to_int16 = 124;
-        // unsupported: CastJsonbToInt32,
         google.protobuf.Empty cast_jsonb_to_int32 = 125;
-        // unsupported: CastJsonbToInt64,
         google.protobuf.Empty cast_jsonb_to_int64 = 126;
-        // unsupported: CastJsonbToFloat32,
         google.protobuf.Empty cast_jsonb_to_float32 = 127;
-        // unsupported: CastJsonbToFloat64,
         google.protobuf.Empty cast_jsonb_to_float64 = 128;
-        // unsupported: CastJsonbToNumeric(Option<NumericMaxScale>),
-        google.protobuf.Empty cast_jsonb_to_numeric = 129;
-        // unsupported: CastJsonbToBool,
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_jsonb_to_numeric = 129;
         google.protobuf.Empty cast_jsonb_to_bool = 130;
-        // unsupported: CastUuidToString(CastUuidToString),
         google.protobuf.Empty cast_uuid_to_string = 131;
-        // unsupported: CastRecordToString {
-        // unsupported:     ty: ScalarType,
-        // unsupported: },
-        google.protobuf.Empty cast_record_to_string = 132;
-        // unsupported: CastRecord1ToRecord2 {
-        // unsupported:     return_ty: ScalarType,
-        // unsupported:     cast_exprs: Vec<MirScalarExpr>,
-        // unsupported: },
+        mz_repr.relation_and_scalar.ProtoScalarType cast_record_to_string = 132;
+        // todo: CastRecord1ToRecord2: blocked on MirScalarExpr
         google.protobuf.Empty cast_record1_to_record2 = 133;
-        // unsupported: CastArrayToString {
-        // unsupported:     ty: ScalarType,
-        // unsupported: },
-        google.protobuf.Empty cast_array_to_string = 134;
-        // unsupported: CastListToString {
-        // unsupported:     ty: ScalarType,
-        // unsupported: },
-        google.protobuf.Empty cast_list_to_string = 135;
-        // unsupported: CastList1ToList2 {
-        // unsupported:     // List2's type
-        // unsupported:     return_ty: ScalarType,
-        // unsupported:     // The expression to cast List1's elements to List2's elements' type
-        // unsupported:     cast_expr: Box<MirScalarExpr>,
-        // unsupported: },
+        mz_repr.relation_and_scalar.ProtoScalarType cast_array_to_string = 134;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_list_to_string = 135;
+        // todo: CastList1ToList2: blocked on MirScalarExpr
         google.protobuf.Empty cast_list1_to_list2 = 136;
-        // unsupported: CastArrayToListOneDim(CastArrayToListOneDim),
         google.protobuf.Empty cast_array_to_list_one_dim = 137;
-        // unsupported: CastMapToString {
-        // unsupported:     ty: ScalarType,
-        // unsupported: },
-        google.protobuf.Empty cast_map_to_string = 138;
-        // unsupported: CastInt2VectorToString,
+        mz_repr.relation_and_scalar.ProtoScalarType cast_map_to_string = 138;
         google.protobuf.Empty cast_int2_vector_to_string = 139;
-        // unsupported: CeilFloat32(CeilFloat32),
         google.protobuf.Empty ceil_float32 = 140;
-        // unsupported: CeilFloat64(CeilFloat64),
         google.protobuf.Empty ceil_float64 = 141;
-        // unsupported: CeilNumeric(CeilNumeric),
         google.protobuf.Empty ceil_numeric = 142;
-        // unsupported: FloorFloat32(FloorFloat32),
         google.protobuf.Empty floor_float32 = 143;
-        // unsupported: FloorFloat64(FloorFloat64),
         google.protobuf.Empty floor_float64 = 144;
-        // unsupported: FloorNumeric(FloorNumeric),
         google.protobuf.Empty floor_numeric = 145;
-        // unsupported: Ascii,
         google.protobuf.Empty ascii = 146;
-        // unsupported: BitLengthBytes,
         google.protobuf.Empty bit_length_bytes = 147;
-        // unsupported: BitLengthString,
         google.protobuf.Empty bit_length_string = 148;
-        // unsupported: ByteLengthBytes,
         google.protobuf.Empty byte_length_bytes = 149;
-        // unsupported: ByteLengthString,
         google.protobuf.Empty byte_length_string = 150;
-        // unsupported: CharLength,
         google.protobuf.Empty char_length = 151;
-        // unsupported: Chr(Chr),
         google.protobuf.Empty chr = 152;
-        // unsupported: IsLikeMatch(like_pattern::Matcher),
+        // todo: IsLikeMatch: blocked on like_pattern::Matcher
         google.protobuf.Empty is_like_match = 153;
-        // unsupported: IsRegexpMatch(Regex),
+        // todo: IsRegexpMatch: blocked on Regex
         google.protobuf.Empty is_regexp_match = 154;
-        // unsupported: RegexpMatch(Regex),
+        // todo: RegexpMatch: blocked on Regex
         google.protobuf.Empty regexp_match = 155;
-        // unsupported: ExtractInterval(DateTimeUnits),
-        google.protobuf.Empty extract_interval = 156;
-        // unsupported: ExtractTime(DateTimeUnits),
-        google.protobuf.Empty extract_time = 157;
-        // unsupported: ExtractTimestamp(DateTimeUnits),
-        google.protobuf.Empty extract_timestamp = 158;
-        // unsupported: ExtractTimestampTz(DateTimeUnits),
-        google.protobuf.Empty extract_timestamp_tz = 159;
-        // unsupported: ExtractDate(DateTimeUnits),
-        google.protobuf.Empty extract_date = 160;
-        // unsupported: DatePartInterval(DateTimeUnits),
-        google.protobuf.Empty date_part_interval = 161;
-        // unsupported: DatePartTime(DateTimeUnits),
-        google.protobuf.Empty date_part_time = 162;
-        // unsupported: DatePartTimestamp(DateTimeUnits),
-        google.protobuf.Empty date_part_timestamp = 163;
-        // unsupported: DatePartTimestampTz(DateTimeUnits),
-        google.protobuf.Empty date_part_timestamp_tz = 164;
-        // unsupported: DateTruncTimestamp(DateTimeUnits),
-        google.protobuf.Empty date_trunc_timestamp = 165;
-        // unsupported: DateTruncTimestampTz(DateTimeUnits),
-        google.protobuf.Empty date_trunc_timestamp_tz = 166;
-        // unsupported: TimezoneTimestamp(Timezone),
-        google.protobuf.Empty timezone_timestamp = 167;
-        // unsupported: TimezoneTimestampTz(Timezone),
-        google.protobuf.Empty timezone_timestamp_tz = 168;
-        // unsupported: TimezoneTime {
-        // unsupported:     tz: Timezone,
-        // unsupported:     wall_time: NaiveDateTime,
-        // unsupported: },
-        google.protobuf.Empty timezone_time = 169;
-        // unsupported: ToTimestamp(ToTimestamp),
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_interval = 156;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_time = 157;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_timestamp = 158;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_timestamp_tz = 159;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_date = 160;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_interval = 161;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_time = 162;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_timestamp = 163;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_timestamp_tz = 164;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp = 165;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp_tz = 166;
+        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp = 167;
+        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp_tz = 168;
+        ProtoTimezoneTime timezone_time = 169;
         google.protobuf.Empty to_timestamp = 170;
-        // unsupported: JustifyDays(JustifyDays),
         google.protobuf.Empty justify_days = 171;
-        // unsupported: JustifyHours(JustifyHours),
         google.protobuf.Empty justify_hours = 172;
-        // unsupported: JustifyInterval(JustifyInterval),
         google.protobuf.Empty justify_interval = 173;
-        // unsupported: JsonbArrayLength,
         google.protobuf.Empty jsonb_array_length = 174;
-        // unsupported: JsonbTypeof,
         google.protobuf.Empty jsonb_typeof = 175;
-        // unsupported: JsonbStripNulls,
         google.protobuf.Empty jsonb_strip_nulls = 176;
-        // unsupported: JsonbPretty,
         google.protobuf.Empty jsonb_pretty = 177;
-        // unsupported: RoundFloat32(RoundFloat32),
         google.protobuf.Empty round_float32 = 178;
-        // unsupported: RoundFloat64(RoundFloat64),
         google.protobuf.Empty round_float64 = 179;
-        // unsupported: RoundNumeric(RoundNumeric),
         google.protobuf.Empty round_numeric = 180;
-        // unsupported: TrimWhitespace,
         google.protobuf.Empty trim_whitespace = 181;
-        // unsupported: TrimLeadingWhitespace,
         google.protobuf.Empty trim_leading_whitespace = 182;
-        // unsupported: TrimTrailingWhitespace,
         google.protobuf.Empty trim_trailing_whitespace = 183;
-        // unsupported: RecordGet(usize),
-        google.protobuf.Empty record_get = 184;
-        // unsupported: ListLength,
+        uint64 record_get = 184;
         google.protobuf.Empty list_length = 185;
-        // unsupported: MapLength,
         google.protobuf.Empty map_length = 186;
-        // unsupported: Upper,
         google.protobuf.Empty upper = 187;
-        // unsupported: Lower,
         google.protobuf.Empty lower = 188;
-        // unsupported: Cos(Cos),
         google.protobuf.Empty cos = 189;
-        // unsupported: Acos(Acos),
         google.protobuf.Empty acos = 190;
-        // unsupported: Cosh(Cosh),
         google.protobuf.Empty cosh = 191;
-        // unsupported: Acosh(Acosh),
         google.protobuf.Empty acosh = 192;
-        // unsupported: Sin(Sin),
         google.protobuf.Empty sin = 193;
-        // unsupported: Asin(Asin),
         google.protobuf.Empty asin = 194;
-        // unsupported: Sinh(Sinh),
         google.protobuf.Empty sinh = 195;
-        // unsupported: Asinh(Asinh),
         google.protobuf.Empty asinh = 196;
-        // unsupported: Tan(Tan),
         google.protobuf.Empty tan = 197;
-        // unsupported: Atan(Atan),
         google.protobuf.Empty atan = 198;
-        // unsupported: Tanh(Tanh),
         google.protobuf.Empty tanh = 199;
-        // unsupported: Atanh(Atanh),
         google.protobuf.Empty atanh = 200;
-        // unsupported: Cot(Cot),
         google.protobuf.Empty cot = 201;
-        // unsupported: Degrees(Degrees),
         google.protobuf.Empty degrees = 202;
-        // unsupported: Radians(Radians),
         google.protobuf.Empty radians = 203;
-        // unsupported: Log10(Log10),
         google.protobuf.Empty log10 = 204;
-        // unsupported: Log10Numeric(Log10Numeric),
         google.protobuf.Empty log10_numeric = 205;
-        // unsupported: Ln(Ln),
         google.protobuf.Empty ln = 206;
-        // unsupported: LnNumeric(LnNumeric),
         google.protobuf.Empty ln_numeric = 207;
-        // unsupported: Exp(Exp),
         google.protobuf.Empty exp = 208;
-        // unsupported: ExpNumeric(ExpNumeric),
         google.protobuf.Empty exp_numeric = 209;
-        // unsupported: Sleep(Sleep),
+        // todo: Sleep(Sleep),
         google.protobuf.Empty sleep = 210;
-        // unsupported: RescaleNumeric(NumericMaxScale),
-        google.protobuf.Empty rescale_numeric = 211;
-        // unsupported: PgColumnSize(PgColumnSize),
+        // todo: RescaleNumeric(NumericMaxScale),
+        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 211;
+        // todo: PgColumnSize(PgColumnSize),
         google.protobuf.Empty pg_column_size = 212;
-        // unsupported: MzRowSize(MzRowSize),
+        // todo: MzRowSize(MzRowSize),
         google.protobuf.Empty mz_row_size = 213;
-        // unsupported: MzTypeName(MzTypeName),
+        // todo: MzTypeName(MzTypeName),
         google.protobuf.Empty mz_type_name = 214;
     }
 }
