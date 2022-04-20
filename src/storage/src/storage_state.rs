@@ -233,7 +233,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
-                        self.storage_state.ts_histories.remove(&id);
+                        if let Some(history) = self.storage_state.ts_histories.remove(&id) {
+                            history.set_durability_frontier(Antichain::new().borrow());
+                        }
+
                         self.storage_state.ts_source_mapping.remove(&id);
                     } else {
                         if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
