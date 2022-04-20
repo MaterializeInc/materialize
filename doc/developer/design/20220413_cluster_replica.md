@@ -37,7 +37,7 @@ be the moment at which compute resources are provisioned.
 The `SIZE` and `REMOTE` options must not be specified together.
 
 The `AVAILABILITY ZONE` option is new. The set of allowable availability zones
-will be determined by a new `--allow-availability-zone=AZ` command line option.
+will be determined by a new `--availability-zone=AZ` command line option.
 If no availability zone is specified explicitly, and at least one availability
 zone is available, Materialize should automatically assign the availability
 zone with the least existing replicas.
@@ -163,7 +163,7 @@ physical AZs in different accounts.
 The Pulumi infrastructure will need to provide nodes groups in several
 availability zones in production. The environment controller will plumb
 the list of... available... availability zones to `materialized` via the
-new `--allow-availability-zone` argument.
+new `--availability-zone` argument.
 
 ## Future work
 

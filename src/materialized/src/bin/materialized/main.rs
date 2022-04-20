@@ -388,6 +388,10 @@ pub struct Args {
     #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
 
+    /// Availability zones compute resources may be deployed in.
+    #[clap(long, env = "MZ_AVAILABILITY_ZONE", use_value_delimiter = true)]
+    availability_zone: Vec<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -719,6 +723,10 @@ max log level: {max_log_level}",
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
+    if !args.availability_zone.iter().all_unique() {
+        bail!("--availability-zone values must be unique");
+    }
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -741,6 +749,7 @@ max log level: {max_log_level}",
         metrics_registry,
         now: SYSTEM_TIME.clone(),
         replica_sizes,
+        availability_zones: args.availability_zone,
     }))?;
 
     eprintln!(

@@ -120,6 +120,8 @@ pub struct Config {
     pub now: NowFn,
     /// Map of strings to corresponding compute replica sizes.
     pub replica_sizes: ClusterReplicaSizeMap,
+    /// Availability zones compute resources may be deployed in.
+    pub availability_zones: Vec<String>,
 }
 
 /// Configures TLS encryption for connections.
@@ -366,6 +368,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
+        availability_zones: config.availability_zones.clone(),
     })
     .await?;
 

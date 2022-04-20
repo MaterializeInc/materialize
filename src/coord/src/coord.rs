@@ -242,6 +242,7 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
+    pub availability_zones: Vec<String>,
 }
 
 struct PendingPeek {
@@ -4661,6 +4662,7 @@ pub async fn serve(
         metrics_registry,
         now,
         secrets_controller,
+        availability_zones: _,
     }: Config,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
