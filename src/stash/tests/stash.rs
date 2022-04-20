@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 
-use mz_stash::{Append, Postgres, Sqlite, Stash, StashCollection, Timestamp};
+use mz_stash::{Append, Postgres, Sqlite, Stash, StashCollection, Timestamp, TypedCollection};
 
 #[test]
 fn test_stash_sqlite() -> Result<(), anyhow::Error> {
@@ -80,6 +82,43 @@ fn test_stash_postgres() -> Result<(), anyhow::Error> {
 }
 
 fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
+    const TYPED: TypedCollection<String, String> = TypedCollection::new("typed");
+
+    // Can't peek if since == upper.
+    assert_eq!(
+        TYPED.peek_one(stash).unwrap_err().to_string(),
+        "stash error: collection since {-9223372036854775808} is not less than upper {-9223372036854775808}",
+    );
+    TYPED.upsert_key(stash, &"k1".to_string(), &"v1".to_string())?;
+    assert_eq!(
+        TYPED.peek_one(stash).unwrap(),
+        BTreeMap::from([("k1".to_string(), "v1".to_string())])
+    );
+    TYPED.upsert_key(stash, &"k1".to_string(), &"v2".to_string())?;
+    assert_eq!(
+        TYPED.peek_one(stash).unwrap(),
+        BTreeMap::from([("k1".to_string(), "v2".to_string())])
+    );
+    assert_eq!(
+        TYPED.peek_key_one(stash, &"k1".to_string()).unwrap(),
+        Some("v2".to_string()),
+    );
+    assert_eq!(TYPED.peek_key_one(stash, &"k2".to_string()).unwrap(), None);
+    TYPED.upsert(
+        stash,
+        vec![
+            ("k1".to_string(), "v3".to_string()),
+            ("k2".to_string(), "v4".to_string()),
+        ],
+    )?;
+    assert_eq!(
+        TYPED.peek_one(stash).unwrap(),
+        BTreeMap::from([
+            ("k1".to_string(), "v3".to_string()),
+            ("k2".to_string(), "v4".to_string())
+        ])
+    );
+
     // Test append across collections.
     let orders = stash.collection::<String, String>("orders")?;
     let other = stash.collection::<String, String>("other")?;
@@ -117,6 +156,14 @@ fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
     );
     assert_eq!(stash.iter(other)?, &[(("k2".into(), "v2".into()), 1, 1),]);
+    assert_eq!(
+        stash.peek_one(orders)?,
+        BTreeMap::from([("k1".to_string(), "v1".to_string())])
+    );
+    assert_eq!(
+        stash.peek_one(other)?,
+        BTreeMap::from([("k2".to_string(), "v2".to_string())])
+    );
 
     Ok(())
 }
@@ -181,6 +228,13 @@ fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
         ],
     )?;
     stash.seal(orders, Antichain::from_elem(3).borrow())?;
+    // Peek should not observe widgets from timestamps 3 or 4.
+    assert_eq!(stash.peek_timestamp(orders)?, 2);
+    assert_eq!(stash.peek(orders)?, vec![("widgets".into(), "1".into(), 2)]);
+    assert_eq!(
+        stash.peek_one(orders).unwrap_err().to_string(),
+        "stash error: unexpected peek multiplicity"
+    );
     stash.compact(orders, Antichain::from_elem(3).borrow())?;
     assert_eq!(
         stash.iter(orders)?,
@@ -253,6 +307,17 @@ fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
     assert_eq!(stash.iter(other)?, &[(("foo".into(), "bar".into()), 1, 1)],);
     assert_eq!(stash.since(other)?, Antichain::from_elem(Timestamp::MIN));
     assert_eq!(stash.upper(other)?, Antichain::from_elem(Timestamp::MIN));
+
+    // Test peek_one.
+    stash.seal(other, Antichain::from_elem(2).borrow())?;
+    assert_eq!(
+        stash.peek_one(other)?,
+        BTreeMap::from([("foo".to_string(), "bar".to_string())])
+    );
+    assert_eq!(
+        stash.peek_key_one(other, &"foo".to_string())?,
+        Some("bar".to_string())
+    );
 
     Ok(())
 }

@@ -9,14 +9,20 @@
 
 //! Durable metadata storage.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::iter;
+use std::iter::once;
 use std::marker::PhantomData;
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
+use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
 
 mod postgres;
@@ -91,6 +97,134 @@ pub trait Stash {
     where
         K: Codec + Ord,
         V: Codec + Ord;
+
+    /// Returns the most recent timestamp at which sealed entries can be read.
+    fn peek_timestamp<K, V>(
+        &mut self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Timestamp, StashError>
+    where
+        K: Codec + Ord,
+        V: Codec + Ord,
+    {
+        let since = self.since(collection)?;
+        let upper = self.upper(collection)?;
+        if PartialOrder::less_equal(&upper, &since) {
+            return Err(StashError {
+                inner: InternalStashError::PeekSinceUpper(format!(
+                    "collection since {} is not less than upper {}",
+                    AntichainFormatter(&since),
+                    AntichainFormatter(&upper)
+                )),
+            });
+        }
+        match upper.as_option() {
+            Some(ts) => match ts.checked_sub(1) {
+                Some(ts) => Ok(ts),
+                None => Err("could not determine peek timestamp".into()),
+            },
+            None => Ok(Timestamp::MAX),
+        }
+    }
+
+    /// Returns the current value of sealed entries.
+    ///
+    /// Entries are iterated in `(key, value)` order and are guaranteed to be
+    /// consolidated.
+    ///
+    /// Sealed entries are those with timestamps less than the collection's upper
+    /// frontier.
+    fn peek<K, V>(
+        &mut self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Vec<(K, V, Diff)>, StashError>
+    where
+        K: Codec + Ord,
+        V: Codec + Ord,
+    {
+        let timestamp = self.peek_timestamp(collection)?;
+        let mut rows: Vec<_> = self
+            .iter(collection)?
+            .into_iter()
+            .filter_map(|((k, v), data_ts, diff)| {
+                if data_ts.less_equal(&timestamp) {
+                    Some((k, v, diff))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut rows);
+        Ok(rows)
+    }
+
+    /// Returns the current k,v pairs of sealed entries, erroring if there is more
+    /// than one entry for a given key or the multiplicity is not 1 for each key.
+    ///
+    /// Sealed entries are those with timestamps less than the collection's upper
+    /// frontier.
+    fn peek_one<K, V>(
+        &mut self,
+        collection: StashCollection<K, V>,
+    ) -> Result<BTreeMap<K, V>, StashError>
+    where
+        K: Codec + Ord + std::hash::Hash,
+        V: Codec + Ord,
+    {
+        let rows = self.peek(collection)?;
+        let mut res = BTreeMap::new();
+        for (k, v, diff) in rows {
+            if diff != 1 {
+                return Err("unexpected peek multiplicity".into());
+            }
+            if res.insert(k, v).is_some() {
+                return Err("duplicate peek keys".into());
+            }
+        }
+        Ok(res)
+    }
+
+    /// Returns the current sealed value for the given key, erroring if there is
+    /// more than one entry for the key or its multiplicity is not 1.
+    ///
+    /// Sealed entries are those with timestamps less than the collection's upper
+    /// frontier.
+    fn peek_key_one<K, V>(
+        &mut self,
+        collection: StashCollection<K, V>,
+        key: &K,
+    ) -> Result<Option<V>, StashError>
+    where
+        K: Codec + Ord,
+        V: Codec + Ord,
+    {
+        let timestamp = self.peek_timestamp(collection)?;
+        let mut rows: Vec<_> = self
+            .iter_key(collection, key)?
+            .into_iter()
+            .filter_map(|(v, data_ts, diff)| {
+                if data_ts.less_equal(&timestamp) {
+                    Some((v, diff))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        differential_dataflow::consolidation::consolidate(&mut rows);
+        let v = match rows.len() {
+            1 => {
+                let (v, diff) = rows.into_element();
+                match diff {
+                    1 => Some(v),
+                    0 => None,
+                    _ => return Err("multiple values unexpected".into()),
+                }
+            }
+            0 => None,
+            _ => return Err("multiple values unexpected".into()),
+        };
+        Ok(v)
+    }
 
     /// Adds a single entry to the arrangement.
     ///
@@ -288,6 +422,7 @@ enum InternalStashError {
     Sqlite(rusqlite::Error),
     Postgres(::postgres::Error),
     Fence(String),
+    PeekSinceUpper(String),
     Other(String),
 }
 
@@ -295,9 +430,10 @@ impl fmt::Display for StashError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("stash error: ")?;
         match &self.inner {
-            InternalStashError::Sqlite(e) => e.fmt(f),
+            InternalStashError::Sqlite(e) => std::fmt::Display::fmt(&e, f),
             InternalStashError::Postgres(e) => std::fmt::Display::fmt(&e, f),
             InternalStashError::Fence(e) => f.write_str(&e),
+            InternalStashError::PeekSinceUpper(e) => f.write_str(&e),
             InternalStashError::Other(e) => f.write_str(&e),
         }
     }
@@ -383,5 +519,93 @@ impl<K, V> From<Id> for StashCollection<K, V> {
             id,
             _kv: PhantomData,
         }
+    }
+}
+
+/// A helper struct to prevent mistyping of a [`StashCollection`]'s name and
+/// k,v types.
+pub struct TypedCollection<K, V> {
+    name: &'static str,
+    typ: PhantomData<(K, V)>,
+}
+
+impl<K, V> TypedCollection<K, V> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            typ: PhantomData,
+        }
+    }
+}
+
+impl<K, V> TypedCollection<K, V>
+where
+    K: Codec + Ord,
+    V: Codec + Ord,
+{
+    pub fn get(&self, stash: &mut impl Stash) -> Result<StashCollection<K, V>, StashError> {
+        stash.collection(self.name)
+    }
+
+    pub fn peek_one<S>(&self, stash: &mut S) -> Result<BTreeMap<K, V>, StashError>
+    where
+        S: Stash,
+        K: Hash,
+    {
+        let collection = self.get(stash)?;
+        stash.peek_one(collection)
+    }
+
+    pub fn peek_key_one(&self, stash: &mut impl Stash, key: &K) -> Result<Option<V>, StashError> {
+        let collection = self.get(stash)?;
+        stash.peek_key_one(collection, key)
+    }
+
+    /// Sets the given k,v pair.
+    pub fn upsert_key<S>(&self, stash: &mut S, key: &K, value: &V) -> Result<(), StashError>
+    where
+        S: Append,
+    {
+        let collection = self.get(stash)?;
+        let mut batch = collection.make_batch(stash)?;
+        let prev = match stash.peek_key_one(collection, key) {
+            Ok(prev) => prev,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    stash.append(once(batch))?;
+                    batch = collection.make_batch(stash)?;
+                    stash.peek_key_one(collection, key)?
+                }
+                _ => return Err(err),
+            },
+        };
+        if let Some(prev) = &prev {
+            collection.append_to_batch(&mut batch, &key, &prev, -1);
+        }
+        collection.append_to_batch(&mut batch, &key, &value, 1);
+        stash.append(once(batch))?;
+        Ok(())
+    }
+
+    /// Sets the given key value pairs, removing existing entries match any key.
+    pub fn upsert<S, I>(&self, stash: &mut S, entries: I) -> Result<(), StashError>
+    where
+        S: Append,
+        I: IntoIterator<Item = (K, V)>,
+        K: Hash,
+    {
+        let collection = self.get(stash)?;
+        let mut batch = collection.make_batch(stash)?;
+        let prev = stash.peek_one(collection)?;
+        for (k, v) in entries {
+            if let Some(prev_v) = prev.get(&k) {
+                collection.append_to_batch(&mut batch, &k, &prev_v, -1);
+            }
+            collection.append_to_batch(&mut batch, &k, &v, 1);
+        }
+        stash.append(once(batch))?;
+        Ok(())
     }
 }
