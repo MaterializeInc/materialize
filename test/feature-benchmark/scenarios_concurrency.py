@@ -99,7 +99,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 class ParallelDataflows(Concurrency):
     """Measure the time it takes to compute multiple parallel dataflows."""
 
-    SCALE = 5
+    SCALE = 4
     VIEWS = 100
 
     def benchmark(self) -> MeasurementSource:
