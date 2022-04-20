@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime as AsyncRuntime;
-use tokio::sync::Mutex as TokioMutex;
 use tracing::warn;
 
 use crate::client::RuntimeClient;
@@ -677,13 +676,15 @@ impl BlobMulti for MemBlobMulti {
 /// An in-memory implementation of [Consensus].
 #[derive(Debug)]
 pub struct MemConsensus {
-    data: Arc<TokioMutex<HashMap<String, Vec<VersionedData>>>>,
+    // TODO: This was intended to be a tokio::sync::Mutex but that seems to
+    // regularly deadlock in the `concurrency` test.
+    data: Arc<Mutex<HashMap<String, Vec<VersionedData>>>>,
 }
 
 impl Default for MemConsensus {
     fn default() -> Self {
         Self {
-            data: Arc::new(TokioMutex::new(HashMap::new())),
+            data: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -695,7 +696,7 @@ impl Consensus for MemConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        let store = self.data.lock().await;
+        let store = self.data.lock().map_err(Error::from)?;
         let values = match store.get(key) {
             None => return Ok(None),
             Some(values) => values,
@@ -725,7 +726,7 @@ impl Consensus for MemConsensus {
                 new.seqno
             )));
         }
-        let mut store = self.data.lock().await;
+        let mut store = self.data.lock().map_err(Error::from)?;
 
         let data = match store.get(key) {
             None => None,
@@ -749,7 +750,7 @@ impl Consensus for MemConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let store = self.data.lock().await;
+        let store = self.data.lock().map_err(Error::from)?;
         let mut results = vec![];
         if let Some(values) = store.get(key) {
             // TODO: we could instead binary search to find the first valid
@@ -785,7 +786,7 @@ impl Consensus for MemConsensus {
             )));
         }
 
-        let mut store = self.data.lock().await;
+        let mut store = self.data.lock().map_err(Error::from)?;
 
         if let Some(values) = store.get_mut(key) {
             values.retain(|val| val.seqno >= seqno);

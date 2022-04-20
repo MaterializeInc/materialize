@@ -20,7 +20,7 @@ use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::error::{InvalidUsage, NoOp};
 use crate::r#impl::state::{ReadCapability, State, WriteCapability};
@@ -248,6 +248,11 @@ where
                 Ok(x) => x,
                 Err(err) => return Ok(Err(err)),
             };
+            trace!(
+                "apply_unbatched_cmd attempting {:?}\n  new_state={:?}",
+                self.seqno,
+                new_state
+            );
 
             let mut value = Vec::new();
             new_state.encode(&mut value);
@@ -262,9 +267,18 @@ where
                         data: value,
                     },
                 )
-                .await?;
+                .await
+                .map_err(|err| {
+                    debug!("apply_unbatched_cmd errored: {}", err);
+                    err
+                })?;
             match cas_res {
                 Ok(()) => {
+                    trace!(
+                        "apply_unbatched_cmd succeeded {:?}\n  new_state={:?}",
+                        new_seqno,
+                        new_state
+                    );
                     self.seqno = Some(new_seqno);
                     self.state = new_state;
                     return Ok(Ok((new_seqno, work_ret)));
