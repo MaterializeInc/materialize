@@ -9,7 +9,7 @@
 
 //! Durable metadata storage.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -18,6 +18,7 @@ use std::iter;
 use std::iter::once;
 use std::marker::PhantomData;
 
+use mz_ore::soft_assert;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -607,5 +608,210 @@ where
         }
         stash.append(once(batch))?;
         Ok(())
+    }
+}
+
+/// TableTransaction emulates some features of a typical SQL transaction over
+/// table for a [`StashCollection`].
+///
+/// It supports:
+/// - auto increment primary keys
+/// - uniqueness constraints
+/// - transactional reads and writes (including read-your-writes before commit)
+///
+/// `K` is the primary key type. Multiple entries with the same key are disallowed.
+/// `V` is the an arbitrary value type.
+/// `I` is the type of an autoincrementing number (like `i64`).
+///
+/// To finalize, add the results of [`TableTransaction::pending()`] to an
+/// [`AppendBatch`].
+pub struct TableTransaction<K, V, I> {
+    initial: BTreeMap<K, V>,
+    // The desired state of keys after commit. `None` means the value will be
+    // deleted.
+    pending: BTreeMap<K, Option<V>>,
+    next_id: Option<I>,
+    uniqueness_violation: fn(a: &V, b: &V) -> bool,
+}
+
+impl<K, V, I> TableTransaction<K, V, I>
+where
+    K: Ord + Eq + Hash + Clone,
+    V: Ord + Clone,
+    I: Copy + Ord + Default + num::Num + num::CheckedAdd,
+{
+    /// Create a new TableTransaction with initial data. `numeric_identity` is a
+    /// function to extract an ID from the initial keys (or `None` to disable auto
+    /// incrementing). `uniqueness_violation` is a function whether there is a
+    /// uniqueness violation among two values.
+    pub fn new(
+        initial: BTreeMap<K, V>,
+        numeric_identity: Option<fn(k: &K) -> I>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Self {
+        let next_id = numeric_identity.map(|f| {
+            initial
+                .keys()
+                .map(f)
+                .max()
+                .unwrap_or_default()
+                .checked_add(&I::one())
+                .expect("ids exhausted")
+        });
+        Self {
+            initial,
+            pending: BTreeMap::new(),
+            next_id,
+            uniqueness_violation,
+        }
+    }
+
+    /// Consumes and returns the pending changes and their diffs. `Diff` is
+    /// guaranteed to be 1 or -1.
+    pub fn pending(self) -> Vec<(K, V, Diff)> {
+        soft_assert!(self.verify().is_ok());
+        // Pending describes the desired final state for some keys. K,V pairs should be
+        // retracted if they already exist and were deleted or are being updated.
+        self.pending
+            .into_iter()
+            .map(|(k, v)| match self.initial.get(&k) {
+                Some(initial_v) => {
+                    let mut diffs = vec![(k.clone(), initial_v.clone(), -1)];
+                    if let Some(v) = v {
+                        diffs.push((k, v, 1));
+                    }
+                    diffs
+                }
+                None => {
+                    if let Some(v) = v {
+                        vec![(k, v, 1)]
+                    } else {
+                        vec![]
+                    }
+                }
+            })
+            .flatten()
+            .collect()
+    }
+
+    fn verify(&self) -> Result<(), StashError> {
+        // Compare each value to each other value and ensure they are unique.
+        let items = self.items();
+        for (i, vi) in items.values().enumerate() {
+            for (j, vj) in items.values().enumerate() {
+                if i != j && (self.uniqueness_violation)(vi, vj) {
+                    return Err("uniqueness violation".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Iterates over the items viewable in the current transaction in arbitrary
+    /// order.
+    pub fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
+        let mut seen = HashSet::new();
+        for (k, v) in self.pending.iter() {
+            seen.insert(k);
+            // Deleted items don't exist so shouldn't be visited, but still suppress
+            // visiting the key later.
+            if let Some(v) = v {
+                f(k, v);
+            }
+        }
+        for (k, v) in self.initial.iter() {
+            // Add on initial items that don't have updates.
+            if !seen.contains(k) {
+                f(k, v);
+            }
+        }
+    }
+
+    /// Returns the items viewable in the current transaction.
+    pub fn items(&self) -> BTreeMap<K, V> {
+        let mut items = BTreeMap::new();
+        self.for_values(|k, v| {
+            items.insert(k.clone(), v.clone());
+        });
+        items
+    }
+
+    /// Iterates over the items viewable in the current transaction, and provides a
+    /// Vec where additional pending items can be inserted, which will be appended
+    /// to current pending items. Does not verify unqiueness.
+    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Option<V>>, &K, &V)>(&mut self, mut f: F) {
+        let mut pending = BTreeMap::new();
+        self.for_values(|k, v| f(&mut pending, k, v));
+        self.pending.extend(pending);
+    }
+
+    /// Inserts a new k,v pair. `key_from_id` is a function that returns a new `K`
+    /// provided a new autoincremented `I` (`key_from_id` will be passed `None`
+    /// if auto increment was disabled above, but it must still return the new
+    /// key). The new id is guaranteed to be different from all current and pending
+    /// ids (but not all ids ever).
+    ///
+    /// Returns an error if the uniqueness check failed or the key already exists.
+    pub fn insert<F: FnOnce(Option<I>) -> K>(
+        &mut self,
+        key_from_id: F,
+        v: V,
+    ) -> Result<Option<I>, ()> {
+        let id = self.next_id;
+        let next_id = self
+            .next_id
+            .map(|id| id.checked_add(&I::one()).expect("ids exhausted"));
+        let k = key_from_id(id);
+        let mut violation = false;
+        self.for_values(|for_k, for_v| {
+            if &k == for_k || (self.uniqueness_violation)(for_v, &v) {
+                violation = true;
+            }
+        });
+        if violation {
+            return Err(());
+        }
+        self.pending.insert(k, Some(v));
+        soft_assert!(self.verify().is_ok());
+        self.next_id = next_id;
+        Ok(id)
+    }
+
+    /// Updates k, v pairs. `f` is a function that can return `Some(V)` if the
+    /// value should be updated, otherwise `None`. Returns the number of changed
+    /// entries.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    pub fn update<F: Fn(&K, &V) -> Option<V>>(&mut self, f: F) -> Result<Diff, StashError> {
+        let mut changed = 0;
+        // Keep a copy of pending in case of uniqueness violation.
+        let pending = self.pending.clone();
+        self.for_values_mut(|p, k, v| {
+            if let Some(next) = f(k, v) {
+                changed += 1;
+                p.insert(k.clone(), Some(next));
+            }
+        });
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            self.pending = pending;
+            Err(err)
+        } else {
+            Ok(changed)
+        }
+    }
+
+    /// Deletes items for which `f` returns true. Returns the number of deleted
+    /// items.
+    pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Diff {
+        let mut changed = 0;
+        self.for_values_mut(|p, k, v| {
+            if f(k, v) {
+                changed += 1;
+                p.insert(k.clone(), None);
+            }
+        });
+        soft_assert!(self.verify().is_ok());
+        changed
     }
 }

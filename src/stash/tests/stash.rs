@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 
-use mz_stash::{Append, Postgres, Sqlite, Stash, StashCollection, Timestamp, TypedCollection};
+use mz_stash::{
+    Append, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction, Timestamp,
+    TypedCollection,
+};
 
 #[test]
 fn test_stash_sqlite() -> Result<(), anyhow::Error> {
@@ -164,6 +167,8 @@ fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         stash.peek_one(other)?,
         BTreeMap::from([("k2".to_string(), "v2".to_string())])
     );
+
+    test_stash_table(stash)?;
 
     Ok(())
 }
@@ -320,4 +325,212 @@ fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
     );
 
     Ok(())
+}
+
+fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
+    const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
+    fn numeric_identity(k: &Vec<u8>) -> i64 {
+        i64::from_le_bytes(k.clone().try_into().unwrap())
+    }
+    fn uniqueness_violation(a: &String, b: &String) -> bool {
+        a == b
+    }
+    let collection = TABLE.get(stash)?;
+
+    fn commit(
+        stash: &mut impl Append,
+        collection: StashCollection<Vec<u8>, String>,
+        pending: Vec<(Vec<u8>, String, i64)>,
+    ) -> Result<(), StashError> {
+        let mut batch = collection.make_batch(stash)?;
+        for (k, v, diff) in pending {
+            collection.append_to_batch(&mut batch, &k, &v, diff);
+        }
+        stash.append(vec![batch])?;
+        Ok(())
+    }
+
+    TABLE.upsert_key(stash, &1i64.to_le_bytes().to_vec(), &"v1".to_string())?;
+    TABLE.upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])?;
+    let mut table = TableTransaction::new(
+        TABLE.peek_one(stash)?,
+        Some(numeric_identity),
+        uniqueness_violation,
+    );
+    assert_eq!(
+        table.items(),
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v1".to_string()),
+            (2i64.to_le_bytes().to_vec(), "v2".to_string())
+        ])
+    );
+    assert_eq!(table.delete(|_k, _v| false), 0);
+    assert_eq!(table.delete(|_k, v| v == "v2"), 1);
+    assert_eq!(
+        table.items(),
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
+    );
+    assert_eq!(table.update(|_k, _v| Some("v3".to_string()))?, 1);
+
+    // Uniqueness violation.
+    table
+        .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap_err();
+
+    assert_eq!(
+        table
+            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v4".to_string())
+            .unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        table.items(),
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+        ])
+    );
+    assert_eq!(
+        table
+            .update(|_k, _v| Some("v1".to_string()))
+            .unwrap_err()
+            .to_string(),
+        "stash error: uniqueness violation"
+    );
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v1".to_string(), -1),
+            (1i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+            (2i64.to_le_bytes().to_vec(), "v2".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending)?;
+    let items = TABLE.peek_one(stash)?;
+    assert_eq!(
+        items,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string())
+        ])
+    );
+
+    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    // Deleting then creating an item that has a uniqueness violation should work.
+    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()), 1);
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    // Uniqueness violation in value.
+    table
+        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap_err();
+    // Key already exists, expect error.
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap_err();
+    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()), 1);
+    // Both the inserts work now because the key and uniqueness violation are gone.
+    table
+        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap();
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v3".to_string(), -1),
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), 1),
+            (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending)?;
+    let items = TABLE.peek_one(stash)?;
+    assert_eq!(
+        items,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v5".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+            (5i64.to_le_bytes().to_vec(), "v3".to_string()),
+        ])
+    );
+
+    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    assert_eq!(table.delete(|_k, _v| true), 3);
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v1".to_string())
+        .unwrap();
+
+    commit(stash, collection, table.pending())?;
+    let items = TABLE.peek_one(stash)?;
+    assert_eq!(
+        items,
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
+    );
+
+    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    assert_eq!(table.delete(|_k, _v| true), 1);
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v2".to_string())
+        .unwrap();
+    commit(stash, collection, table.pending())?;
+    let items = TABLE.peek_one(stash)?;
+    assert_eq!(
+        items,
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v2".to_string()),])
+    );
+
+    // Verify we don't try to delete v3 or v4 during commit.
+    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    assert_eq!(table.delete(|_k, _v| true), 1);
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v4".to_string())
+        .unwrap_err();
+    assert_eq!(table.delete(|_k, _v| true), 1);
+    table
+        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap();
+    commit(stash, collection, table.pending())?;
+    let items = stash.peek(collection)?;
+    assert_eq!(
+        items,
+        vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_table() {
+    fn numeric_identity(k: &Vec<u8>) -> i64 {
+        i64::from_le_bytes(k.clone().try_into().unwrap())
+    }
+    fn uniqueness_violation(a: &String, b: &String) -> bool {
+        a == b
+    }
+    let mut table = TableTransaction::new(
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
+        Some(numeric_identity),
+        uniqueness_violation,
+    );
+    // Test the auto-increment id.
+    assert_eq!(
+        table
+            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "b".to_string())
+            .unwrap(),
+        Some(2)
+    );
+    assert_eq!(
+        table
+            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "c".to_string())
+            .unwrap(),
+        Some(3)
+    );
 }

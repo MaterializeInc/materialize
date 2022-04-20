@@ -19,6 +19,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+num = "0.4.0"
 rusqlite = { version = "0.27.0", features = ["bundled"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 

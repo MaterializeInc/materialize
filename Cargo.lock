@@ -4028,6 +4028,7 @@ dependencies = [
  "differential-dataflow",
  "mz-ore",
  "mz-persist-types",
+ "num",
  "postgres",
  "rusqlite",
  "tempfile",
