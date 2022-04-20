@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 

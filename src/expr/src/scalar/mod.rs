@@ -16,8 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
-use mz_ore::stack::maybe_grow;
-use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::separated;
 use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::array::InvalidArrayError;
@@ -29,7 +27,7 @@ use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use crate::scalar::func::parse_timezone;
-use crate::RECURSION_LIMIT;
+use crate::visit::{Visit, VisitChildren};
 
 pub mod func;
 pub mod like_pattern;
@@ -121,57 +119,6 @@ impl MirScalarExpr {
             then: Box::new(t),
             els: Box::new(f),
         }
-    }
-
-    /// Applies an infallible immutable `f` to each child of type `MirScalarExpr`.
-    ///
-    /// Delegates to `MirScalarExprVisitor::visit_children`.
-    pub fn visit_children<'a, F>(&'a self, f: F)
-    where
-        F: FnMut(&'a Self),
-    {
-        MirScalarExprVisitor::new().visit_children(self, f)
-    }
-
-    /// Applies an infallible mutable `f` to each child of type `MirScalarExpr`.
-    ///
-    /// Delegates to `MirScalarExprVisitor::visit_mut_children`.
-    pub fn visit_mut_children<'a, F>(&'a mut self, f: F)
-    where
-        F: FnMut(&'a mut Self),
-    {
-        MirScalarExprVisitor::new().visit_mut_children(self, f)
-    }
-
-    /// Post-order immutable infallible `MirScalarExpr` visitor.
-    ///
-    /// Delegates to `MirScalarExprVisitor::visit_post`.
-    pub fn visit_post<'a, F>(&'a self, f: &mut F)
-    where
-        F: FnMut(&'a Self),
-    {
-        MirScalarExprVisitor::new().visit_post(self, f)
-    }
-
-    /// Post-order mutable infallible `MirScalarExpr` visitor.
-    ///
-    /// Delegates to `MirScalarExprVisitor::visit_mut_post`.
-    pub fn visit_mut_post<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        MirScalarExprVisitor::new().visit_mut_post(self, f)
-    }
-
-    /// A generalization of `visit_mut`.
-    ///
-    /// Delegates to `MirScalarExprVisitor::visit_mut_pre_post`.
-    pub fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,
-        F2: FnMut(&mut Self),
-    {
-        MirScalarExprVisitor::new().visit_mut_pre_post(self, pre, post)
     }
 
     /// Rewrites column indices with their value in `permutation`.
@@ -1098,44 +1045,27 @@ impl fmt::Display for MirScalarExpr {
     }
 }
 
-#[derive(Debug)]
-struct MirScalarExprVisitor {
-    recursion_guard: RecursionGuard,
-}
-
-/// Contains visitor implementations.
-///
-/// [child, pre, post] x [fallible, infallible] x [immutable, mutable]
-impl MirScalarExprVisitor {
-    /// Constructs a new MirScalarExprVisitor using a [`RecursionGuard`] with [`RECURSION_LIMIT`].
-    fn new() -> MirScalarExprVisitor {
-        MirScalarExprVisitor {
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
-    }
-
-    /// Applies an infallible immutable `f` to each `expr` child of type `MirScalarExpr`.
-    fn visit_children<'a, F>(&self, expr: &'a MirScalarExpr, mut f: F)
+impl VisitChildren for MirScalarExpr {
+    fn visit_children<'a, F>(&'a self, mut f: F)
     where
-        F: FnMut(&'a MirScalarExpr),
+        F: FnMut(&'a Self),
     {
-        match expr {
-            MirScalarExpr::Column(_) => (),
-            MirScalarExpr::Literal(_, _) => (),
-            MirScalarExpr::CallUnmaterializable(_) => (),
-            MirScalarExpr::CallUnary { expr, .. } => {
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
                 f(expr);
             }
-            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+            CallBinary { expr1, expr2, .. } => {
                 f(expr1);
                 f(expr2);
             }
-            MirScalarExpr::CallVariadic { exprs, .. } => {
+            CallVariadic { exprs, .. } => {
                 for expr in exprs {
                     f(expr);
                 }
             }
-            MirScalarExpr::If { cond, then, els } => {
+            If { cond, then, els } => {
                 f(cond);
                 f(then);
                 f(els);
@@ -1143,28 +1073,26 @@ impl MirScalarExprVisitor {
         }
     }
 
-    /// Applies an infallible mutable `f` to each `expr` child of type `MirScalarExpr`.
-    fn visit_mut_children<'a, F>(&self, expr: &'a mut MirScalarExpr, mut f: F)
+    fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
     where
-        F: FnMut(&'a mut MirScalarExpr),
+        F: FnMut(&'a mut Self),
     {
-        match expr {
-            MirScalarExpr::Column(_) => (),
-            MirScalarExpr::Literal(_, _) => (),
-            MirScalarExpr::CallUnmaterializable(_) => (),
-            MirScalarExpr::CallUnary { expr, .. } => {
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
                 f(expr);
             }
-            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+            CallBinary { expr1, expr2, .. } => {
                 f(expr1);
                 f(expr2);
             }
-            MirScalarExpr::CallVariadic { exprs, .. } => {
+            CallVariadic { exprs, .. } => {
                 for expr in exprs {
                     f(expr);
                 }
             }
-            MirScalarExpr::If { cond, then, els } => {
+            If { cond, then, els } => {
                 f(cond);
                 f(then);
                 f(els);
@@ -1172,65 +1100,60 @@ impl MirScalarExprVisitor {
         }
     }
 
-    /// Post-order immutable infallible `MirScalarExpr` visitor for `expr`.
-    ///
-    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
-    #[inline]
-    fn visit_post<'a, F>(&self, expr: &'a MirScalarExpr, f: &mut F)
+    fn try_visit_children<'a, F, E>(&'a self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a MirScalarExpr),
+        F: FnMut(&'a Self) -> Result<(), E>,
     {
-        maybe_grow(|| {
-            self.visit_children(expr, |e| self.visit_post(e, f));
-            f(expr)
-        })
-    }
-
-    /// Post-order mutable infallible `MirScalarExpr` visitor for `expr`.
-    ///
-    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
-    #[inline]
-    fn visit_mut_post<F>(&self, expr: &mut MirScalarExpr, f: &mut F)
-    where
-        F: FnMut(&mut MirScalarExpr),
-    {
-        maybe_grow(|| {
-            self.visit_mut_children(expr, |e| self.visit_mut_post(e, f));
-            f(expr)
-        })
-    }
-
-    /// A generalization of `visit_mut`. The function `pre` runs on a
-    /// `MirScalarExpr` before it runs on any of the child `MirScalarExpr`s.
-    /// The function `post` runs on child `MirScalarExpr`s first before the
-    /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
-    /// any, should be visited (default is to visit all children).
-    ///
-    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
-    #[inline]
-    pub fn visit_mut_pre_post<F1, F2>(&self, expr: &mut MirScalarExpr, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&mut MirScalarExpr) -> Option<Vec<&mut MirScalarExpr>>,
-        F2: FnMut(&mut MirScalarExpr),
-    {
-        maybe_grow(|| {
-            let to_visit = pre(expr);
-            if let Some(to_visit) = to_visit {
-                for e in to_visit {
-                    self.visit_mut_pre_post(e, pre, post);
-                }
-            } else {
-                self.visit_mut_children(expr, |e| self.visit_mut_pre_post(e, pre, post));
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                f(expr)?;
             }
-            post(expr);
-        })
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1)?;
+                f(expr2)?;
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            If { cond, then, els } => {
+                f(cond)?;
+                f(then)?;
+                f(els)?;
+            }
+        }
+        Ok(())
     }
-}
 
-/// Add checked recursion support for [`MirScalarExprVisitor`].
-impl CheckedRecursion for MirScalarExprVisitor {
-    fn recursion_guard(&self) -> &RecursionGuard {
-        &self.recursion_guard
+    fn try_visit_mut_children<'a, F, E>(&'a mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut Self) -> Result<(), E>,
+    {
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                f(expr)?;
+            }
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1)?;
+                f(expr2)?;
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            If { cond, then, els } => {
+                f(cond)?;
+                f(then)?;
+                f(els)?;
+            }
+        }
+        Ok(())
     }
 }
 

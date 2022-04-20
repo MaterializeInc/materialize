@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
+use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::GlobalId;

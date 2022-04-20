@@ -18,6 +18,7 @@ use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
     UnmaterializableFunc,

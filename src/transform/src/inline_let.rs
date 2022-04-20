@@ -15,6 +15,7 @@
 //! harming planning.
 
 use crate::TransformArgs;
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
