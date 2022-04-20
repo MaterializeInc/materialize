@@ -23,6 +23,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -595,7 +596,7 @@ class Kafka(Scenario):
     pass
 
 
-class KafkaRaw(Kafka):
+class KafkaRaw(ScenarioDisabled):
     def shared(self) -> Action:
         return TdAction(
             self.schema()
