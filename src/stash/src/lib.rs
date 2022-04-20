@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter;
 use std::iter::once;
@@ -113,7 +112,8 @@ pub trait Stash {
         if PartialOrder::less_equal(&upper, &since) {
             return Err(StashError {
                 inner: InternalStashError::PeekSinceUpper(format!(
-                    "collection since {} is not less than upper {}",
+                    "collection {} since {} is not less than upper {}",
+                    collection.id,
                     AntichainFormatter(&since),
                     AntichainFormatter(&upper)
                 )),
@@ -179,7 +179,7 @@ pub trait Stash {
                 return Err("unexpected peek multiplicity".into());
             }
             if res.insert(k, v).is_some() {
-                return Err("duplicate peek keys".into());
+                return Err(format!("duplicate peek keys for collection {}", collection.id).into());
             }
         }
         Ok(res)
@@ -548,6 +548,11 @@ where
         stash.collection(self.name)
     }
 
+    pub fn upper(&self, stash: &mut impl Stash) -> Result<Antichain<Timestamp>, StashError> {
+        let collection = self.get(stash)?;
+        stash.upper(collection)
+    }
+
     pub fn peek_one<S>(&self, stash: &mut S) -> Result<BTreeMap<K, V>, StashError>
     where
         S: Stash,
@@ -599,7 +604,19 @@ where
     {
         let collection = self.get(stash)?;
         let mut batch = collection.make_batch(stash)?;
-        let prev = stash.peek_one(collection)?;
+        let prev = match stash.peek_one(collection) {
+            Ok(prev) => prev,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    stash.append(once(batch))?;
+                    batch = collection.make_batch(stash)?;
+                    stash.peek_one(collection)?
+                }
+                _ => return Err(err),
+            },
+        };
         for (k, v) in entries {
             if let Some(prev_v) = prev.get(&k) {
                 collection.append_to_batch(&mut batch, &k, &prev_v, -1);
@@ -801,17 +818,17 @@ where
         }
     }
 
-    /// Deletes items for which `f` returns true. Returns the number of deleted
-    /// items.
-    pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Diff {
-        let mut changed = 0;
+    /// Deletes items for which `f` returns true. Returns the keys of the deleted
+    /// entries.
+    pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<K> {
+        let mut deleted = Vec::new();
         self.for_values_mut(|p, k, v| {
             if f(k, v) {
-                changed += 1;
+                deleted.push(k.clone());
                 p.insert(k.clone(), None);
             }
         });
         soft_assert!(self.verify().is_ok());
-        changed
+        deleted
     }
 }

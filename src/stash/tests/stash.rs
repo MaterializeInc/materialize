@@ -90,7 +90,7 @@ fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     // Can't peek if since == upper.
     assert_eq!(
         TYPED.peek_one(stash).unwrap_err().to_string(),
-        "stash error: collection since {-9223372036854775808} is not less than upper {-9223372036854775808}",
+        "stash error: collection 1 since {-9223372036854775808} is not less than upper {-9223372036854775808}",
     );
     TYPED.upsert_key(stash, &"k1".to_string(), &"v1".to_string())?;
     assert_eq!(
@@ -364,8 +364,8 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
             (2i64.to_le_bytes().to_vec(), "v2".to_string())
         ])
     );
-    assert_eq!(table.delete(|_k, _v| false), 0);
-    assert_eq!(table.delete(|_k, v| v == "v2"), 1);
+    assert_eq!(table.delete(|_k, _v| false).len(), 0);
+    assert_eq!(table.delete(|_k, v| v == "v2").len(), 1);
     assert_eq!(
         table.items(),
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
@@ -419,7 +419,7 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
 
     let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
     // Deleting then creating an item that has a uniqueness violation should work.
-    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()), 1);
+    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
@@ -431,7 +431,7 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap_err();
-    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()), 1);
+    assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     // Both the inserts work now because the key and uniqueness violation are gone.
     table
         .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
@@ -460,7 +460,7 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     );
 
     let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
-    assert_eq!(table.delete(|_k, _v| true), 3);
+    assert_eq!(table.delete(|_k, _v| true).len(), 3);
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v1".to_string())
         .unwrap();
@@ -473,7 +473,7 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     );
 
     let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
-    assert_eq!(table.delete(|_k, _v| true), 1);
+    assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v2".to_string())
         .unwrap();
@@ -486,14 +486,14 @@ fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
 
     // Verify we don't try to delete v3 or v4 during commit.
     let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
-    assert_eq!(table.delete(|_k, _v| true), 1);
+    assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v4".to_string())
         .unwrap_err();
-    assert_eq!(table.delete(|_k, _v| true), 1);
+    assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
         .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();

@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-const CATALOG_DB_NAME: &str = "catalog";
+const STASH_DB_NAME: &str = "stash";
 const STORAGE_DB_NAME: &str = "storage";
 
 /// Creates a temporary copy of Materialize's mzdata databases
@@ -21,8 +21,8 @@ const STORAGE_DB_NAME: &str = "storage";
 pub fn mzdata_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
     let temp_dir = tempfile::tempdir()?;
     fs::copy(
-        catalog_path.join(CATALOG_DB_NAME),
-        temp_dir.path().join(CATALOG_DB_NAME),
+        catalog_path.join(STASH_DB_NAME),
+        temp_dir.path().join(STASH_DB_NAME),
     )?;
     fs::copy(
         catalog_path.join(STORAGE_DB_NAME),
@@ -38,8 +38,8 @@ pub fn mzdata_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
 pub fn catalog_copy(catalog_path: &PathBuf) -> Result<TempDir, anyhow::Error> {
     let temp_dir = tempfile::tempdir()?;
     fs::copy(
-        catalog_path.join(CATALOG_DB_NAME),
-        temp_dir.path().join(CATALOG_DB_NAME),
+        catalog_path.join(STASH_DB_NAME),
+        temp_dir.path().join(STASH_DB_NAME),
     )?;
     Ok(temp_dir)
 }
