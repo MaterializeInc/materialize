@@ -156,6 +156,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             cpu_limit,
             processes,
             labels: labels_in,
+            availability_zone,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
@@ -223,6 +224,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect();
+        let node_selector = availability_zone
+            .map(|az| BTreeMap::from([("materialize.cloud/availability-zone".to_string(), az)]));
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -251,6 +254,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     }),
                     ..Default::default()
                 }],
+                node_selector,
                 ..Default::default()
             }),
         };

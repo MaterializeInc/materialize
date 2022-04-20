@@ -309,6 +309,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 memory_limit: None,
                 processes: NonZeroUsize::new(1).unwrap(),
                 labels: HashMap::new(),
+                availability_zone: None,
             },
         )
         .await?;

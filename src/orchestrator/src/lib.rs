@@ -94,6 +94,9 @@ pub struct ServiceConfig<'a> {
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
     pub labels: HashMap<String, String>,
+    /// The availability zone the service should be run in. If no availability
+    /// zone is specified, the orchestrator is free to choose one.
+    pub availability_zone: Option<String>,
 }
 
 /// A named port associated with a service.
