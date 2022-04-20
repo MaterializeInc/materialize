@@ -19,7 +19,7 @@ set -euo pipefail
 export MZ_DEV_CI_BUILDER_DOCKER_HOST=${DOCKER_HOST:-}
 export MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY:-}
 export MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH=${DOCKER_CERT_PATH:-}
-eval "$(minikube docker-env)"
+eval "$(minikube docker-env --shell bash)"
 
 bin/mzimage acquire --dev storaged
 bin/mzimage acquire --dev computed
