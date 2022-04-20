@@ -248,98 +248,15 @@ If you want to use `TAIL` from an interactive SQL session (e.g.`psql`), wrap the
 COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
 ```
 
-#### `FETCH` with Python and psycopg2
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
-conn = psycopg2.connect(dsn)
-
-with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed)")
-    while True:
-        cur.execute("FETCH ALL c")
-        for row in cur:
-            print(row)
-```
-
-#### `Stream` with Python and psycopg3
-
-{{< warning >}}
-psycopg3 is not yet stable.
-The example here could break if their API changes.
-{{< /warning >}}
-
-Although psycopg3 can function identically as the psycopg2 example above,
-it also has a `stream` feature where rows are not buffered and we can thus use `TAIL` directly.
-
-```python
-#!/usr/bin/env python3
-
-import psycopg3
-import sys
-
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
-conn = psycopg3.connect(dsn)
-
-conn = psycopg3.connect(dsn)
-with conn.cursor() as cur:
-    for row in cur.stream("TAIL (SELECT * FROM t)"):
-        print(row)
-```
-
-#### `FETCH` with C# and Npgsql
-
-```csharp
-var txn = conn.BeginTransaction();
-new NpgsqlCommand("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed)", conn, txn).ExecuteNonQuery();
-while (true)
-{
-    using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
-    using (var reader  = cmd.ExecuteReader())
-    {
-        while (reader.Read())
-        {
-            // More columns available with reader[3], etc.
-            Console.WriteLine("ts: " + reader[0] + ", diff: " + reader[1] + ", column 1: " + reader[2]);
-        }
-    }
-}
-```
-
-#### `FETCH` with Java
-
-```java
-  import java.sql.*;
-
-  /* ... */
-
-  String url = "jdbc:postgresql://localhost:6875/materialize";
-  Connection conn = DriverManager.getConnection(url, "materialize", "materialize");
-  Statement stmt = conn.createStatement();
-
-  conn.setAutoCommit(false);
-
-  stmt.executeUpdate("DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed);");
-
-  while (true) {
-      ResultSet fetchResultSet = stmt.executeQuery("FETCH 100 c WITH (timeout='1s');");
-
-      while (fetchResultSet.next()) {
-          System.out.println(fetchResultSet.getString(3));
-      }
-  }
-```
-
 | Additional guides |
 | ---------------------- |
-| [Node.js](/guides/node-js/#stream)|
-| [PHP](/guides/php-pdo/#stream)|
-| [GO](/guides/golang/#stream) |
+| [Go](/integrations/golang/#stream)|
+| [Java](/integrations/java-jdbc/#stream)|
+| [Node.js](/integrations/node-js/#stream)|
+| [PHP](/integrations/php/#stream)|
+| [Python](/integrations/python/#stream)|
+| [Ruby](/integrations/ruby/#stream)|
+
 ### Using AS OF
 
 [`AS OF`](#as-of) requires Materialize to start with a custom [compaction window](/cli/#compaction-window) otherwise it will default to `0`.
