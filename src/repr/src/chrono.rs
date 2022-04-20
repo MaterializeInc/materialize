@@ -149,7 +149,7 @@ pub fn any_datetime() -> impl Strategy<Value = DateTime<Utc>> {
 }
 
 pub fn any_fixed_offset() -> impl Strategy<Value = FixedOffset> {
-    (-86_401..86_400).prop_map(FixedOffset::east)
+    (-86_399..86_400).prop_map(FixedOffset::east)
 }
 
 pub fn any_timezone() -> impl Strategy<Value = Tz> {

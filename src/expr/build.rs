@@ -12,6 +12,7 @@ fn main() {
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
         .extern_path(".mz_repr.adt.numeric", "::mz_repr::adt::numeric")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .compile_protos(
             &[
