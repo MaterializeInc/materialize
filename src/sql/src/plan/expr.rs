@@ -357,8 +357,14 @@ impl ValueWindowExpr {
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
         match self.func {
-            ValueWindowFunc::Lag => mz_expr::AggregateFunc::Lag {
+            // Lag and Lead are fundamentally the same function, just with opposite directions
+            ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
                 order_by: self.order_by,
+                lag_lead: mz_expr::LagLeadType::Lag,
+            },
+            ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
+                order_by: self.order_by,
+                lag_lead: mz_expr::LagLeadType::Lead,
             },
         }
     }
@@ -368,12 +374,13 @@ impl ValueWindowExpr {
 /// Value Window functions
 pub enum ValueWindowFunc {
     Lag,
+    Lead,
 }
 
 impl ValueWindowFunc {
     pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         match self {
-            ValueWindowFunc::Lag => {
+            ValueWindowFunc::Lag | ValueWindowFunc::Lead => {
                 // The input is a (value, offset, default) record, so extract the type of the first arg
                 input_type.scalar_type.unwrap_record_element_type()[0]
                     .clone()
