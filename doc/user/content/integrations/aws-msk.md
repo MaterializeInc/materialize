@@ -79,7 +79,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
         }
       ```
 
-    f. On the next page, give a **Secret name** that starts with **AmazonMSK_**
+    f. On the next page, give a **Secret name** that starts with `AmazonMSK_`
 
     g. Under **Encryption Key**, select the symmetric key you just created in the previous sub-section from the dropdown
 
@@ -133,21 +133,20 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     c. Copy the url under **Private endpoint** and against **SASL/SCRAM**. This will be your `<broker-url>` going forward
 
-    d. [Install](https://materialize.com/docs/install/) and [start](https://materialize.com/docs/get-started/) a Materialize instance locally
+    d. [Install](/install/) and [start](/get-started/) a Materialize instance locally
 
     e. From the _psql_ terminal, run the following command. Replace `<kafka-name>` with whatever you want to name your source. The broker url is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
     ```
       CREATE SOURCE <kafka-name>
       FROM KAFKA BROKER '<broker-url>' TOPIC '<topic-name>' WITH (
       security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
+      sasl_mechanisms = 'SCRAM-SHA-512',
       sasl_username = '<your-username>',
       sasl_password = '<your-password>'
       )
-      key format text
-      value format text;
+      FORMAT text;
     ```
 
     f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your MSK cluster.
 
-    **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We used the `WITH` options to provide the username and password and connect to MSK using SASL. For the key and value formats, we used text, however, Materialize supports various other options as well. For example, you can also create a source using _AVRO_ and a Confluent schema registry. You can find more details about the various different supported formats and possible configurations [here](https://materialize.com/docs/sql/create-source/kafka/).
+    **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We used the `WITH` options to provide the username and password and connect to MSK using SASL. For input formats, we used `text`, however, Materialize supports various other options as well. For example, you can ingest Kafka messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
