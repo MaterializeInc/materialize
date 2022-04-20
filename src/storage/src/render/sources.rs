@@ -341,7 +341,6 @@ where
                                     key_encoding,
                                     value_encoding,
                                     dataflow_debug_name,
-                                    &envelope,
                                     metadata_columns,
                                     &mut linear_operators,
                                     storage_state.decode_metrics.clone(),

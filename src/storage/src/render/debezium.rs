@@ -179,8 +179,8 @@ where
 
     let data_dist = move |result: &DecodeResult| {
         // If we can't pull out the transaction_id, it doesn't matter which worker we end up on.  Use
-        // partition as that's how we distribute decoding dbz messages.
-        let default_hash = result.partition.hashed();
+        // value as that's how we distribute decoding dbz messages.
+        let default_hash = result.value.hashed();
 
         // The logic below mirrors inline decoding of the data.  The shape of the value is validated
         // when constructing the source.
