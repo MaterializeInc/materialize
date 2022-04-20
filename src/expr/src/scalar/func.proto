@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "repr/src/adt/numeric.proto";
+import "repr/src/chrono.proto";
 import "repr/src/relation_and_scalar.proto";
 import "google/protobuf/empty.proto";
 
@@ -445,10 +446,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty gt = 70;
         google.protobuf.Empty gte = 71;
         google.protobuf.Empty like_escape = 72;
-        // unsupported: IsLikeMatch { case_insensitive: bool }
-        google.protobuf.Empty is_like_match = 73;
-        // unsupported: IsRegexpMatch { case_insensitive: bool }
-        google.protobuf.Empty is_regexp_match = 74;
+        bool is_like_match = 73;
+        bool is_regexp_match = 74;
         google.protobuf.Empty to_char_timestamp = 75;
         google.protobuf.Empty to_char_timestamp_tz = 76;
         google.protobuf.Empty date_bin_timestamp = 77;
@@ -467,18 +466,14 @@ message ProtoBinaryFunc {
         google.protobuf.Empty date_trunc_interval = 90;
         google.protobuf.Empty timezone_timestamp = 91;
         google.protobuf.Empty timezone_timestamp_tz = 92;
-        // unsupported: TimezoneTime { wall_time: NaiveDateTime }
-        google.protobuf.Empty timezone_time = 93;
+        mz_repr.chrono.ProtoNaiveDateTime timezone_time = 93;
         google.protobuf.Empty timezone_interval_timestamp = 94;
         google.protobuf.Empty timezone_interval_timestamp_tz = 95;
         google.protobuf.Empty timezone_interval_time = 96;
         google.protobuf.Empty text_concat = 97;
-        // unsupported: JsonbGetInt64 { stringify: bool }
-        google.protobuf.Empty jsonb_get_int64 = 98;
-        // unsupported: JsonbGetString { stringify: bool }
-        google.protobuf.Empty jsonb_get_string = 99;
-        // unsupported: JsonbGetPath { stringify: bool }
-        google.protobuf.Empty jsonb_get_path = 100;
+        bool jsonb_get_int64 = 98;
+        bool jsonb_get_string = 99;
+        bool jsonb_get_path = 100;
         google.protobuf.Empty jsonb_contains_string = 101;
         google.protobuf.Empty jsonb_concat = 102;
         google.protobuf.Empty jsonb_contains_jsonb = 103;
@@ -499,8 +494,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty trim_leading = 118;
         google.protobuf.Empty trim_trailing = 119;
         google.protobuf.Empty encoded_bytes_char_length = 120;
-        // unsupported: ListLengthMax { max_layer: usize }
-        google.protobuf.Empty list_length_max = 121;
+        uint64 list_length_max = 121;
         google.protobuf.Empty array_contains = 122;
         google.protobuf.Empty array_length = 123;
         google.protobuf.Empty array_lower = 124;
