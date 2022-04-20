@@ -23,7 +23,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, trace};
 
 use crate::error::{InvalidUsage, NoOp};
-use crate::r#impl::state::{ReadCapability, State, WriteCapability};
+use crate::r#impl::state::{ReadCapability, State, StateCollections, WriteCapability};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::ShardId;
@@ -233,7 +233,7 @@ where
     async fn apply_unbatched_cmd<
         R,
         E,
-        WorkFn: FnMut(SeqNo, &mut State<K, V, T, D>) -> Result<R, E>,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
     >(
         &mut self,
         deadline: Instant,
@@ -241,10 +241,8 @@ where
     ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
         loop {
             let shard_id = self.state.shard_id();
-
             let new_seqno = self.seqno.unwrap_or_default().next();
-            let mut new_state = self.state.clone();
-            let work_ret = match work_fn(new_seqno, &mut new_state) {
+            let (work_ret, new_state) = match self.state.clone_apply(new_seqno, &mut work_fn) {
                 Ok(x) => x,
                 Err(err) => return Ok(Err(err)),
             };

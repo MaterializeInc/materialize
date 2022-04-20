@@ -36,55 +36,19 @@ pub struct WriteCapability<T> {
 }
 
 // TODO: Document invariants.
-#[derive(Debug)]
-pub struct State<K, V, T, D> {
-    shard_id: ShardId,
-
+#[derive(Debug, Clone)]
+pub struct StateCollections<T> {
     writers: HashMap<WriterId, WriteCapability<T>>,
     readers: HashMap<ReaderId, ReadCapability<T>>,
 
     since: Antichain<T>,
     trace: Vec<(Vec<String>, Description<T>)>,
-
-    _phantom: PhantomData<(K, V, D)>,
 }
 
-// Impl Clone regardless of the type params.
-impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            shard_id: self.shard_id.clone(),
-            writers: self.writers.clone(),
-            readers: self.readers.clone(),
-            since: self.since.clone(),
-            trace: self.trace.clone(),
-            _phantom: self._phantom.clone(),
-        }
-    }
-}
-
-impl<K, V, T, D> State<K, V, T, D>
+impl<T> StateCollections<T>
 where
-    K: Codec,
-    V: Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Codec64,
 {
-    pub fn new(shard_id: ShardId) -> Self {
-        State {
-            shard_id,
-            writers: HashMap::new(),
-            readers: HashMap::new(),
-            since: Antichain::from_elem(T::minimum()),
-            trace: Vec::new(),
-            _phantom: PhantomData,
-        }
-    }
-
-    pub fn shard_id(&self) -> ShardId {
-        self.shard_id
-    }
-
     pub fn register(
         &mut self,
         seqno: SeqNo,
@@ -205,44 +169,6 @@ where
         Ok(())
     }
 
-    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<String>, InvalidUsage> {
-        if PartialOrder::less_than(as_of, &self.since) {
-            return Err(InvalidUsage(anyhow!(
-                "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
-                as_of,
-                self.since
-            )));
-        }
-        let batches = self
-            .trace
-            .iter()
-            .flat_map(|(keys, desc)| {
-                if !PartialOrder::less_than(as_of, desc.lower()) {
-                    keys.clone()
-                } else {
-                    vec![]
-                }
-            })
-            .collect();
-        Ok(batches)
-    }
-
-    pub fn next_listen_batch(
-        &self,
-        frontier: &Antichain<T>,
-    ) -> Option<(&[String], &Description<T>)> {
-        // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
-        // batch and this iterates through all batches to find the next one.
-        for (keys, desc) in self.trace.iter() {
-            if PartialOrder::less_equal(desc.lower(), frontier)
-                && PartialOrder::less_than(frontier, desc.upper())
-            {
-                return Some((keys.as_slice(), desc));
-            }
-        }
-        return None;
-    }
-
     fn upper(&self) -> Antichain<T> {
         self.trace.last().map_or_else(
             || Antichain::from_elem(T::minimum()),
@@ -281,69 +207,116 @@ where
     }
 }
 
-impl<K, V, T, D> Codec for State<K, V, T, D>
+// TODO: Document invariants.
+#[derive(Debug)]
+pub struct State<K, V, T, D> {
+    shard_id: ShardId,
+
+    collections: StateCollections<T>,
+
+    _phantom: PhantomData<(K, V, D)>,
+}
+
+// Impl Clone regardless of the type params.
+impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self {
+            shard_id: self.shard_id.clone(),
+            collections: self.collections.clone(),
+            _phantom: self._phantom.clone(),
+        }
+    }
+}
+
+impl<K, V, T, D> State<K, V, T, D>
 where
     K: Codec,
     V: Codec,
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    fn codec_name() -> String {
-        "StateRollupMeta".into()
+    pub fn new(shard_id: ShardId) -> Self {
+        State {
+            shard_id,
+            collections: StateCollections {
+                writers: HashMap::new(),
+                readers: HashMap::new(),
+                since: Antichain::from_elem(T::minimum()),
+                trace: Vec::new(),
+            },
+            _phantom: PhantomData,
+        }
     }
 
-    fn encode<B>(&self, buf: &mut B)
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
+
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        seqno: SeqNo,
+        work_fn: &mut WorkFn,
+    ) -> Result<(R, Self), E>
     where
-        B: bytes::BufMut,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
     {
-        let bytes = bincode::serialize(&StateRollupMeta::from(self))
-            .expect("unable to serialize BlobState");
-        buf.put_slice(&bytes);
+        let mut new_state = State {
+            shard_id: self.shard_id,
+            collections: self.collections.clone(),
+            _phantom: PhantomData,
+        };
+        let work_ret = work_fn(seqno, &mut new_state.collections)?;
+        Ok((work_ret, new_state))
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let state: StateRollupMeta =
-            bincode::deserialize(buf).map_err(|err| format!("unable to decode state: {}", err))?;
-        State::try_from(&state)
+    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<String>, InvalidUsage> {
+        if PartialOrder::less_than(as_of, &self.collections.since) {
+            return Err(InvalidUsage(anyhow!(
+                "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
+                as_of,
+                self.collections.since
+            )));
+        }
+        let batches = self
+            .collections
+            .trace
+            .iter()
+            .flat_map(|(keys, desc)| {
+                if !PartialOrder::less_than(as_of, desc.lower()) {
+                    keys.clone()
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
+        Ok(batches)
+    }
+
+    pub fn next_listen_batch(
+        &self,
+        frontier: &Antichain<T>,
+    ) -> Option<(&[String], &Description<T>)> {
+        // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
+        // batch and this iterates through all batches to find the next one.
+        for (keys, desc) in self.collections.trace.iter() {
+            if PartialOrder::less_equal(desc.lower(), frontier)
+                && PartialOrder::less_than(frontier, desc.upper())
+            {
+                return Some((keys.as_slice(), desc));
+            }
+        }
+        return None;
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AntichainMeta(Vec<[u8; 8]>);
 
-impl<T: Codec64> From<&Antichain<T>> for AntichainMeta {
-    fn from(x: &Antichain<T>) -> Self {
-        AntichainMeta(x.elements().iter().map(|x| T::encode(x)).collect())
-    }
-}
-
-impl<T: Timestamp + Codec64> From<&AntichainMeta> for Antichain<T> {
-    fn from(x: &AntichainMeta) -> Self {
-        Antichain::from(x.0.iter().map(|x| T::decode(*x)).collect::<Vec<_>>())
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct DescriptionMeta {
     lower: AntichainMeta,
     upper: AntichainMeta,
     since: AntichainMeta,
-}
-
-impl<T: Codec64> From<&Description<T>> for DescriptionMeta {
-    fn from(x: &Description<T>) -> Self {
-        DescriptionMeta {
-            lower: x.lower().into(),
-            upper: x.upper().into(),
-            since: x.since().into(),
-        }
-    }
-}
-
-impl<T: Timestamp + Codec64> From<&DescriptionMeta> for Description<T> {
-    fn from(x: &DescriptionMeta) -> Self {
-        Description::new((&x.lower).into(), (&x.upper).into(), (&x.since).into())
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -360,81 +333,122 @@ struct StateRollupMeta {
     trace: Vec<(Vec<String>, DescriptionMeta)>,
 }
 
-impl<K, V, T, D> From<&State<K, V, T, D>> for StateRollupMeta
-where
-    K: Codec,
-    V: Codec,
-    T: Codec64,
-    D: Codec64,
-{
-    fn from(x: &State<K, V, T, D>) -> Self {
-        StateRollupMeta {
-            shard_id: x.shard_id,
-            key_codec: K::codec_name(),
-            val_codec: V::codec_name(),
-            ts_codec: T::codec_name(),
-            diff_codec: D::codec_name(),
-            writers: x
-                .writers
-                .iter()
-                .map(|(id, cap)| (id.clone(), (&cap.upper).into()))
-                .collect(),
-            readers: x
-                .readers
-                .iter()
-                .map(|(id, cap)| (id.clone(), (&cap.since).into(), cap.seqno))
-                .collect(),
-            since: (&x.since).into(),
-            trace: x
-                .trace
-                .iter()
-                .map(|(key, desc)| (key.clone(), desc.into()))
-                .collect(),
+mod codec_impls {
+    use std::marker::PhantomData;
+
+    use differential_dataflow::lattice::Lattice;
+    use differential_dataflow::trace::Description;
+    use mz_persist_types::{Codec, Codec64};
+    use timely::progress::{Antichain, Timestamp};
+
+    use crate::r#impl::state::{
+        AntichainMeta, DescriptionMeta, ReadCapability, State, StateCollections, StateRollupMeta,
+        WriteCapability,
+    };
+
+    impl<K, V, T, D> Codec for State<K, V, T, D>
+    where
+        K: Codec,
+        V: Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Codec64,
+    {
+        fn codec_name() -> String {
+            "StateRollupMeta".into()
+        }
+
+        fn encode<B>(&self, buf: &mut B)
+        where
+            B: bytes::BufMut,
+        {
+            let bytes = bincode::serialize(&StateRollupMeta::from(self))
+                .expect("unable to serialize BlobState");
+            buf.put_slice(&bytes);
+        }
+
+        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+            let state: StateRollupMeta = bincode::deserialize(buf)
+                .map_err(|err| format!("unable to decode state: {}", err))?;
+            State::try_from(&state)
         }
     }
-}
 
-impl<K, V, T, D> TryFrom<&StateRollupMeta> for State<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Codec64,
-    D: Codec64,
-{
-    type Error = String;
+    impl<K, V, T, D> From<&State<K, V, T, D>> for StateRollupMeta
+    where
+        K: Codec,
+        V: Codec,
+        T: Codec64,
+        D: Codec64,
+    {
+        fn from(x: &State<K, V, T, D>) -> Self {
+            StateRollupMeta {
+                shard_id: x.shard_id,
+                key_codec: K::codec_name(),
+                val_codec: V::codec_name(),
+                ts_codec: T::codec_name(),
+                diff_codec: D::codec_name(),
+                writers: x
+                    .collections
+                    .writers
+                    .iter()
+                    .map(|(id, cap)| (id.clone(), (&cap.upper).into()))
+                    .collect(),
+                readers: x
+                    .collections
+                    .readers
+                    .iter()
+                    .map(|(id, cap)| (id.clone(), (&cap.since).into(), cap.seqno))
+                    .collect(),
+                since: (&x.collections.since).into(),
+                trace: x
+                    .collections
+                    .trace
+                    .iter()
+                    .map(|(key, desc)| (key.clone(), desc.into()))
+                    .collect(),
+            }
+        }
+    }
 
-    fn try_from(x: &StateRollupMeta) -> Result<Self, String> {
-        if K::codec_name() != x.key_codec {
-            return Err(format!(
-                "key_codec {} doesn't match original: {}",
-                K::codec_name(),
-                x.key_codec
-            ));
-        }
-        if V::codec_name() != x.val_codec {
-            return Err(format!(
-                "val_codec {} doesn't match original: {}",
-                V::codec_name(),
-                x.val_codec
-            ));
-        }
-        if T::codec_name() != x.ts_codec {
-            return Err(format!(
-                "ts_codec {} doesn't match original: {}",
-                T::codec_name(),
-                x.ts_codec
-            ));
-        }
-        if D::codec_name() != x.diff_codec {
-            return Err(format!(
-                "diff_codec {} doesn't match original: {}",
-                D::codec_name(),
-                x.diff_codec
-            ));
-        }
-        Ok(State {
-            shard_id: x.shard_id,
-            writers: x
+    impl<K, V, T, D> TryFrom<&StateRollupMeta> for State<K, V, T, D>
+    where
+        K: Codec,
+        V: Codec,
+        T: Timestamp + Codec64,
+        D: Codec64,
+    {
+        type Error = String;
+
+        fn try_from(x: &StateRollupMeta) -> Result<Self, String> {
+            if K::codec_name() != x.key_codec {
+                return Err(format!(
+                    "key_codec {} doesn't match original: {}",
+                    K::codec_name(),
+                    x.key_codec
+                ));
+            }
+            if V::codec_name() != x.val_codec {
+                return Err(format!(
+                    "val_codec {} doesn't match original: {}",
+                    V::codec_name(),
+                    x.val_codec
+                ));
+            }
+            if T::codec_name() != x.ts_codec {
+                return Err(format!(
+                    "ts_codec {} doesn't match original: {}",
+                    T::codec_name(),
+                    x.ts_codec
+                ));
+            }
+            if D::codec_name() != x.diff_codec {
+                return Err(format!(
+                    "diff_codec {} doesn't match original: {}",
+                    D::codec_name(),
+                    x.diff_codec
+                ));
+            }
+            let writers = x
                 .writers
                 .iter()
                 .map(|(id, upper)| {
@@ -443,8 +457,8 @@ where
                     };
                     (id.clone(), cap)
                 })
-                .collect(),
-            readers: x
+                .collect();
+            let readers = x
                 .readers
                 .iter()
                 .map(|(id, since, seqno)| {
@@ -454,14 +468,52 @@ where
                     };
                     (id.clone(), cap)
                 })
-                .collect(),
-            since: (&x.since).into(),
-            trace: x
+                .collect();
+            let since = (&x.since).into();
+            let trace = x
                 .trace
                 .iter()
                 .map(|(key, desc)| (key.clone(), desc.into()))
-                .collect(),
-            _phantom: PhantomData,
-        })
+                .collect();
+            let collections = StateCollections {
+                writers,
+                readers,
+                since,
+                trace,
+            };
+            Ok(State {
+                shard_id: x.shard_id,
+                collections,
+                _phantom: PhantomData,
+            })
+        }
+    }
+
+    impl<T: Codec64> From<&Description<T>> for DescriptionMeta {
+        fn from(x: &Description<T>) -> Self {
+            DescriptionMeta {
+                lower: x.lower().into(),
+                upper: x.upper().into(),
+                since: x.since().into(),
+            }
+        }
+    }
+
+    impl<T: Timestamp + Codec64> From<&DescriptionMeta> for Description<T> {
+        fn from(x: &DescriptionMeta) -> Self {
+            Description::new((&x.lower).into(), (&x.upper).into(), (&x.since).into())
+        }
+    }
+
+    impl<T: Codec64> From<&Antichain<T>> for AntichainMeta {
+        fn from(x: &Antichain<T>) -> Self {
+            AntichainMeta(x.elements().iter().map(|x| T::encode(x)).collect())
+        }
+    }
+
+    impl<T: Timestamp + Codec64> From<&AntichainMeta> for Antichain<T> {
+        fn from(x: &AntichainMeta) -> Self {
+            Antichain::from(x.0.iter().map(|x| T::decode(*x)).collect::<Vec<_>>())
+        }
     }
 }
