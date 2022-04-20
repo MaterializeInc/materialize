@@ -14,12 +14,6 @@ Because [Redpanda](https://vectorized.io/) is Kafka API-compatible, Materialize 
 
 The Redpanda integration has [beta-level](/integrations/#beta) support.
 
-## What's missing?
-
-You can use most of the Kafka source options for Redpanda as a Kafka broker, with an exception:
-
-- [Setting start offsets](/sql/create-source/kafka/#setting-start-offsets) based on Kafka timestamps (`kafka_time_offset`) isn't supported yet ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
-
 ## Configuration
 
 Two configuration parameters that are enabled by default in Kafka need to be enabled explicitly in Redpanda:
