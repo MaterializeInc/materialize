@@ -15,8 +15,10 @@
 //! in which the views will be executed.
 
 use mz_dataflow_types::{DataflowDesc, LinearOperator};
-use mz_expr::{CollectionPlan, GlobalId, Id, LocalId, MirRelationExpr};
+use mz_expr::visit::Visit;
+use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
+use mz_repr::GlobalId;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
@@ -81,7 +83,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
                 occurs_in_export = true;
             }
         }
-        for (_, index_desc, _) in dataflow.index_exports.iter() {
+        for (_, (index_desc, _)) in dataflow.index_exports.iter() {
             if index_desc.on_id == global_id {
                 occurs_in_export = true;
             }
@@ -199,7 +201,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     }
 
     // Demand all columns of inputs to exported indexes.
-    for (_id, desc, _typ) in dataflow.index_exports.iter() {
+    for (_id, (desc, _typ)) in dataflow.index_exports.iter() {
         let input_id = desc.on_id;
         demand
             .entry(Id::Global(input_id))

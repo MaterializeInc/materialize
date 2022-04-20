@@ -16,7 +16,9 @@ from typing import List, Type
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
-from scenarios import *
+from scenarios import *  # noqa: F401 F403
+from scenarios import Scenario
+from scenarios_concurrency import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
@@ -50,7 +52,7 @@ from materialize.mzcompose.services import (
 
 def make_filter(args: argparse.Namespace) -> Filter:
     # Discard the first run unless a small --max-runs limit is explicitly set
-    if args.max_runs <= 5:
+    if args.max_measurements <= 5:
         return NoFilter()
     else:
         return FilterFirst()
@@ -60,7 +62,7 @@ def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCon
     return [
         NormalDistributionOverlap(threshold=0.99),
         ProbForMin(threshold=0.95),
-        RunAtMost(threshold=args.max_runs),
+        RunAtMost(threshold=args.max_measurements),
     ]
 
 
@@ -83,7 +85,7 @@ SERVICES = [
     # we will actually be benchmarking it.
     Materialized(image="materialize/materialized:latest"),
     Testdrive(
-        validate_catalog=False,
+        validate_data_dir=False,
         default_timeout=default_timeout,
     ),
     KgenService(),
@@ -122,6 +124,8 @@ def run_one_scenario(
             c.start_and_wait_for_tcp(services=["materialized"])
             c.wait_for_materialized()
 
+            c.up("testdrive", persistent=True)
+
             executor = Docker(
                 composition=c,
                 seed=common_seed,
@@ -140,8 +144,8 @@ def run_one_scenario(
             outcome, iterations = benchmark.run()
             comparator.append(outcome)
 
-            c.kill("materialized")
-            c.rm("materialized", "testdrive-svc")
+            c.kill("materialized", "testdrive")
+            c.rm("materialized", "testdrive")
             c.rm_volumes("mzdata")
 
     return comparator
@@ -202,11 +206,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--max-runs",
+        "--max-measurements",
         metavar="N",
         type=int,
         default=99,
-        help="Limit the number of executions to N.",
+        help="Limit the number of measurements to N.",
+    )
+
+    parser.add_argument(
+        "--max-retries",
+        metavar="N",
+        type=int,
+        default=3,
+        help="Retry any potential performance regressions up to N times.",
     )
 
     args = parser.parse_args()
@@ -224,40 +236,48 @@ root_scenario: {args.root_scenario}"""
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    scenarios = []
+    initial_scenarios = {}
 
     if root_scenario.__subclasses__():
         for scenario in root_scenario.__subclasses__():
             has_children = False
             for s in scenario.__subclasses__():
                 has_children = True
-                scenarios.append(s)
+                initial_scenarios[s] = 1
 
             if not has_children:
-                scenarios.append(scenario)
+                initial_scenarios[scenario] = 1
     else:
-        scenarios.append(root_scenario)
-
-    print(f"scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}")
+        initial_scenarios[root_scenario] = 1
 
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "postgres"]
     )
 
-    report = Report()
-    has_regressions = False
+    scenarios = initial_scenarios.copy()
 
-    for scenario in scenarios:
-        comparison = run_one_scenario(c, scenario, args)
-        report.append(comparison)
+    for cycle in range(0, args.max_retries):
+        print(
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+        )
 
-        if comparison.is_regression():
-            has_regressions = True
-        report.dump()
+        report = Report()
 
-    print("+++ Benchmark Report")
-    report.dump()
+        for scenario in list(scenarios.keys()):
+            comparison = run_one_scenario(c, scenario, args)
+            report.append(comparison)
 
-    if has_regressions:
-        print("ERROR: benchmarks have regressions")
+            if not comparison.is_regression():
+                del scenarios[scenario]
+
+            print(f"+++ Benchmark Report for cycle {cycle+1}:")
+            report.dump()
+
+        if len(scenarios.keys()) == 0:
+            break
+
+    if len(scenarios.keys()) > 0:
+        print(
+            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+        )
         sys.exit(1)

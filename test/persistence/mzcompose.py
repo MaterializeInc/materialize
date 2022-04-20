@@ -98,7 +98,7 @@ def workflow_kafka_sources(
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
+    c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
     c.kill("materialized")
     c.up("materialized")
@@ -109,7 +109,7 @@ def workflow_kafka_sources(
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
+    c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
     c.kill("materialized")
@@ -117,7 +117,7 @@ def workflow_kafka_sources(
     c.wait_for_materialized("materialized")
 
     c.kill("materialized")
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm("materialized", "testdrive", destroy_volumes=True)
     c.rm_volumes("mzdata")
 
 
@@ -128,7 +128,7 @@ def workflow_user_tables(c: Composition) -> None:
     c.wait_for_materialized()
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         f"--seed={seed}",
         f"user-tables/table-persistence-before-{td_test}.td",
     )
@@ -137,13 +137,13 @@ def workflow_user_tables(c: Composition) -> None:
     c.up("materialized")
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         f"--seed={seed}",
         f"user-tables/table-persistence-after-{td_test}.td",
     )
 
     c.kill("materialized")
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm("materialized", "testdrive", destroy_volumes=True)
     c.rm_volumes("mzdata")
 
 
@@ -172,7 +172,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     c.wait_for_materialized()
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         f"--seed={seed}",
         f"--var=failpoint={failpoint}",
         f"--var=action={action}",
@@ -185,10 +185,10 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.run("testdrive-svc", f"--seed={seed}", "failpoints/after.td")
+    c.run("testdrive", f"--seed={seed}", "failpoints/after.td")
 
     c.kill("materialized")
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm("materialized", "testdrive", destroy_volumes=True)
     c.rm_volumes("mzdata")
 
 
@@ -201,7 +201,7 @@ def workflow_disable_user_indexes(
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.run("testdrive-svc", f"--seed={seed}", "disable-user-indexes/before.td")
+    c.run("testdrive", f"--seed={seed}", "disable-user-indexes/before.td")
 
     c.kill("materialized")
 
@@ -213,11 +213,11 @@ def workflow_disable_user_indexes(
         c.up("materialized")
         c.wait_for_materialized()
 
-        c.run("testdrive-svc", f"--seed={seed}", "disable-user-indexes/after.td")
+        c.run("testdrive", f"--seed={seed}", "disable-user-indexes/after.td")
 
         c.kill("materialized")
 
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm("materialized", "testdrive", destroy_volumes=True)
 
     c.rm_volumes("mzdata")
 
@@ -231,10 +231,10 @@ def workflow_compaction(c: Composition) -> None:
         c.up("materialized")
         c.wait_for_materialized()
 
-        c.run("testdrive-svc", "compaction/compaction.td")
+        c.run("testdrive", "compaction/compaction.td")
 
         c.kill("materialized")
 
-    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm("materialized", "testdrive", destroy_volumes=True)
 
     c.rm_volumes("mzdata")

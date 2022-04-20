@@ -28,9 +28,15 @@ Field | Use
 _map&lowbar;string_ | A well-formed map object.
 _value&lowbar;type_ | The [type](../../types) of the map's values.
 
-## Operators
+## Map functions + operators
+
+### Operators
 
 {{% map-operators %}}
+
+### Functions
+
+{{< fnlist "Map" >}}
 
 ## Details
 
@@ -235,4 +241,17 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1'] as search_for_any_
  search_for_any_keys
 ---------------------
  f
+```
+
+#### Count entries in map (`map_length`)
+
+Returns the number of entries in the map.
+
+```sql
+SELECT map_length('{a=>1, b=>2}'::map[text=>int]) as count;
+```
+```nofmt
+ count
+---------------------
+ 2
 ```

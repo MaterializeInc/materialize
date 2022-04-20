@@ -26,6 +26,7 @@
 //!       if wrong, record the error
 
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -34,6 +35,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops;
 use std::path::Path;
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -42,11 +44,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
-use mz_coord::PersistConfig;
-use mz_dataflow_types::sources::AwsExternalId;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
-use mz_ore::task;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -54,8 +51,16 @@ use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
+use tower_http::cors::Origin;
 use uuid::Uuid;
 
+use materialized::{OrchestratorBackend, OrchestratorConfig};
+use mz_dataflow_types::sources::AwsExternalId;
+use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_ore::id_gen::IdAllocator;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task;
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
@@ -548,30 +553,40 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 }
 
 impl Runner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
+    pub async fn start() -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let mz_config = materialized::Config {
-            logging: None,
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
-            workers: config.workers,
-            timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
-            storage: materialized::StorageConfig::Local,
-            orchestrator: None,
+            persist_location: mz_persist_client::Location {
+                blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                consensus_uri: format!("sqlite://{}/persist/consensus", temp_dir.path().display()),
+            },
+            orchestrator: OrchestratorConfig {
+                backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
+                    image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                    port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
+                    suppress_output: false,
+                    process_listen_host: None,
+                }),
+                storaged_image: "storaged".into(),
+                computed_image: "computed".into(),
+                linger: false,
+            },
+            secrets_controller: None,
             aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
+            cors_allowed_origin: Origin::list([]).into(),
             experimental_mode: true,
             disable_user_indexes: false,
             safe_mode: false,
-            telemetry: None,
-            introspection_frequency: Duration::from_secs(1),
             metrics_registry: MetricsRegistry::new(),
-            persist: PersistConfig::disabled(),
-            third_party_metrics_listen_addr: None,
+            metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
+            replica_sizes: Default::default(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
@@ -960,7 +975,7 @@ pub async fn run_string(
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start(config).await.unwrap();
+    let mut state = Runner::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     writeln!(config.stdout, "==> {}", source);
     for record in parser.parse_records()? {
@@ -1019,7 +1034,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start(config).await?;
+    let mut state = Runner::start().await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     writeln!(config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {

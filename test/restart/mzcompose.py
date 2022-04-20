@@ -41,7 +41,7 @@ def workflow_disable_user_indexes(c: Composition) -> None:
     # Create catalog with vanilla MZ
     c.up("materialized")
     c.wait_for_materialized("materialized")
-    c.run("testdrive-svc", "user-indexes-enabled.td")
+    c.run("testdrive", "user-indexes-enabled.td")
     c.kill("materialized")
 
     # Test semantics of disabling user indexes
@@ -54,7 +54,7 @@ def workflow_disable_user_indexes(c: Composition) -> None:
 def workflow_github_8021(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized("materialized")
-    c.run("testdrive-svc", "github-8021.td")
+    c.run("testdrive", "github-8021.td")
 
     # Ensure MZ can boot
     c.kill("materialized")

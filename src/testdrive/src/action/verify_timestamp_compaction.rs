@@ -16,13 +16,17 @@ use async_trait::async_trait;
 
 use mz_coord::catalog::Catalog;
 use mz_coord::session::Session;
+use mz_dataflow_types::sources::MzOffset;
+use mz_expr::PartitionId;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::PartialName;
+use mz_sql::names::PartialObjectName;
+use mz_stash::Stash;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
+use crate::util::mz_data::mzdata_copy;
 
 pub struct VerifyTimestampCompactionAction {
     source: String,
@@ -52,25 +56,40 @@ impl Action for VerifyTimestampCompactionAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        if let Some(path) = &state.materialized_catalog_path {
+        if let Some(path) = &state.materialized_data_path {
+            let temp_mzdata = mzdata_copy(path)?;
+            let path = temp_mzdata.path();
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
             Retry::default()
                 .initial_backoff(Duration::from_secs(1))
                 .max_duration(Duration::from_secs(30))
-                .retry_async(|retry_state| {
+                .retry_async_canceling(|retry_state| {
                     let initial_highest = Arc::clone(&initial_highest_base);
                     async move {
-                        let mut catalog = Catalog::open_debug(path, NOW_ZERO.clone())
+                        let catalog = Catalog::open_debug(&path, NOW_ZERO.clone())
                             .await?;
                         let item_id = catalog
                             .for_session(&Session::dummy())
-                            .resolve_item(&PartialName {
+                            .resolve_item(&PartialObjectName {
                                 database: None,
                                 schema: None,
                                 item: self.source.clone(),
                             })?
                             .id();
-                        let bindings = catalog.load_timestamp_bindings(item_id)?;
+
+                        let stash = mz_stash::Sqlite::open(&path.join("storage"))?;
+                        let collection = stash
+                            .collection::<PartitionId, ()>(&format!("timestamp-bindings-{item_id}"))?;
+                        let bindings: Vec<(PartitionId, u64, MzOffset)> = stash.iter(collection)?
+                            .into_iter()
+                            .map(|((pid, _), ts, offset)| {
+                                (
+                                    pid,
+                                    ts.try_into().unwrap_or_else(|_| panic!()),
+                                    MzOffset { offset },
+                                )
+                            })
+                            .collect();
 
                         // We consider progress to be eventually compacting at least up to the original highest
                         // timestamp binding.

@@ -3,7 +3,7 @@ title: "SHOW VIEWS"
 description: "`SHOW VIEWS` returns a list of views in your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW VIEWS` returns a list of views in your Materialize instances.

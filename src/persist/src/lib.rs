@@ -20,17 +20,20 @@
 
 use std::fmt;
 
+pub mod cfg;
 pub mod client;
 pub mod error;
 pub mod file;
 pub mod gen;
 pub mod indexed;
+pub mod location;
 pub mod mem;
 pub mod operators;
 pub mod pfuture;
+pub mod postgres;
 pub mod runtime;
 pub mod s3;
-pub mod storage;
+pub mod sqlite;
 pub mod unreliable;
 pub mod workload;
 

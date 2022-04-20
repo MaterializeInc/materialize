@@ -58,7 +58,7 @@ impl ValType {
     }
 }
 
-// Describes Kafka cluster configurations users can suppply using `CREATE
+// Describes Kafka cluster configurations users can supply using `CREATE
 // SOURCE...WITH (option_list)`.
 struct Config {
     name: &'static str,
@@ -219,13 +219,8 @@ pub fn extract_config(
             Config::new("enable_auto_commit", ValType::Boolean),
             Config::string("isolation_level").set_default(Some(String::from("read_committed"))),
             Config::string("security_protocol"),
-            Config::path("sasl_kerberos_keytab"),
             Config::string("sasl_username"),
             Config::string("sasl_password").include_env_var(),
-            Config::string("sasl_kerberos_kinit_cmd"),
-            Config::string("sasl_kerberos_min_time_before_relogin"),
-            Config::string("sasl_kerberos_principal"),
-            Config::string("sasl_kerberos_service_name"),
             // For historical reasons, we allow `sasl_mechanisms` to be lowercase or
             // mixed case, while librdkafka requires all uppercase (e.g., `PLAIN`,
             // not `plain`).
@@ -255,8 +250,6 @@ pub fn extract_config(
 /// # Errors
 ///
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
-///   For example, when using Kerberos auth, and the named principal does not
-///   exist.
 pub async fn create_consumer(
     broker: &str,
     topic: &str,
@@ -268,51 +261,27 @@ pub async fn create_consumer(
         config.set(k, v);
     }
 
-    match config.create_with_context(KafkaErrCheckContext::default()) {
-        Ok(consumer) => {
-            let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(consumer);
-            let context = Arc::clone(&consumer.context());
-            let owned_topic = String::from(topic);
-            // Wait for a metadata request for up to one second. This greatly
-            // increases the probability that we'll see a connection error if
-            // e.g. the hostname was mistyped. librdkafka doesn't expose a
-            // better API for asking whether a connection succeeded or failed,
-            // unfortunately.
-            task::spawn_blocking(move || format!("kafka_set_metadata:{broker}:{topic}"), {
-                let consumer = Arc::clone(&consumer);
-                move || {
-                    let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
-                }
-            })
-            .await?;
-            let error = context.error.lock().expect("lock poisoned");
-            if let Some(error) = &*error {
-                bail!("librdkafka: {}", error)
-            }
-            Ok(consumer)
+    let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
+        Arc::new(config.create_with_context(KafkaErrCheckContext::default())?);
+    let context = Arc::clone(&consumer.context());
+    let owned_topic = String::from(topic);
+    // Wait for a metadata request for up to one second. This greatly
+    // increases the probability that we'll see a connection error if
+    // e.g. the hostname was mistyped. librdkafka doesn't expose a
+    // better API for asking whether a connection succeeded or failed,
+    // unfortunately.
+    task::spawn_blocking(move || format!("kafka_set_metadata:{broker}:{topic}"), {
+        let consumer = Arc::clone(&consumer);
+        move || {
+            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
         }
-        Err(e) => {
-            match e {
-                rdkafka::error::KafkaError::ClientCreation(s) => {
-                    // Rewrite error message to provide Materialize-specific guidance.
-                    if s == "Invalid sasl.kerberos.kinit.cmd value: Property \
-            not available: \"sasl.kerberos.keytab\""
-                    {
-                        bail!(
-                            "Can't seem to find local keytab cache. With \
-                             sasl_mechanisms='GSSAPI', you must provide an \
-                             explicit sasl_kerberos_keytab or \
-                             sasl_kerberos_kinit_cmd option."
-                        )
-                    } else {
-                        // Pass existing error back up.
-                        bail!(rdkafka::error::KafkaError::ClientCreation(s))
-                    }
-                }
-                _ => bail!(e),
-            }
-        }
+    })
+    .await?;
+    let error = context.error.lock().expect("lock poisoned");
+    if let Some(error) = &*error {
+        bail!("librdkafka: {}", error)
     }
+    Ok(consumer)
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided
@@ -364,7 +333,7 @@ pub async fn lookup_start_offsets(
 
     // Lookup offsets
     // TODO(guswynn): see if we can add broker to this name
-    task::spawn_blocking(|| format!("kafka_lookup_start_offets:{topic}"), {
+    task::spawn_blocking(|| format!("kafka_lookup_start_offsets:{topic}"), {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
@@ -398,7 +367,7 @@ pub async fn lookup_start_offsets(
 
             if start_offsets.len() != num_partitions {
                 bail!(
-                    "Expected offsets for {} partitions, but recevied {}",
+                    "Expected offsets for {} partitions, but received {}",
                     num_partitions,
                     start_offsets.len(),
                 );
@@ -413,7 +382,7 @@ pub async fn lookup_start_offsets(
 // Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
 // If that ever changes, we will want to first collect all pids that have no
 // offset for a given timestamp and then do a single request (instead of doing
-// a request for each paritition individually).
+// a request for each partition individually).
 fn fetch_end_offset(
     consumer: &BaseConsumer<KafkaErrCheckContext>,
     topic: &str,
@@ -432,10 +401,9 @@ pub struct KafkaErrCheckContext {
 impl ConsumerContext for KafkaErrCheckContext {}
 
 impl ClientContext for KafkaErrCheckContext {
-    // `librdkafka` doesn't seem to propagate all Kerberos errors up the stack,
-    // but does log them, so we are currently relying on the `log` callback for
-    // error handling in situations we're aware of, e.g. cannot log into
-    // Kerberos.
+    // `librdkafka` doesn't seem to propagate all errors up the stack, but does
+    // log them, so we are currently relying on the `log` callback for error
+    // handling in some situations.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         use rdkafka::config::RDKafkaLogLevel::*;
         match level {

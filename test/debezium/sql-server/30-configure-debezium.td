@@ -42,7 +42,8 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "database.server.name": "sql-server",
         "database.history.kafka.bootstrap.servers": "kafka:9092",
         "database.history.kafka.topic": "schema-changes.history",
-        "snapshot.isolation.mode": "exclusive"
+        "snapshot.isolation.mode": "exclusive",
+        "provide.transaction.metadata": "true"
 #,
 #        "signal.data.collection": "test.dbo.debezium_signal"
     }

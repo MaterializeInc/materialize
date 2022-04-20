@@ -3,7 +3,7 @@ title: "CREATE VIEWS"
 description: "`CREATE VIEWS` creates views for the distinct components of a multiplexed stream."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< version-added v0.8.0 />}}

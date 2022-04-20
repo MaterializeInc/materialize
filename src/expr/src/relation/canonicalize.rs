@@ -10,10 +10,13 @@
 //! Utility functions to transform parts of a single `MirRelationExpr`
 //! into canonical form.
 
-use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
-use mz_repr::{Datum, RelationType, ScalarType};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+
+use mz_repr::{Datum, RelationType, ScalarType};
+
+use crate::visit::Visit;
+use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
@@ -130,7 +133,7 @@ pub fn canonicalize_equivalences(
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
-    // Fuse equivalence classes containing the same exprssion.
+    // Fuse equivalence classes containing the same expression.
     for index in 1..equivalences.len() {
         for inner in 0..index {
             if equivalences[index]

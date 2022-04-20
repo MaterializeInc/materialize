@@ -15,7 +15,7 @@ use std::{error, fmt, io, sync};
 
 use arrow2::error::ArrowError;
 
-use crate::storage::{Log, SeqNo};
+use crate::location::{Log, SeqNo};
 
 /// A persistence related error.
 #[derive(Debug, Clone)]
@@ -98,6 +98,12 @@ impl From<ArrowError> for Error {
 impl<T> From<sync::PoisonError<T>> for Error {
     fn from(e: sync::PoisonError<T>) -> Self {
         Error::String(format!("poison: {}", e))
+    }
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::String(format!("sqlite: {}", e))
     }
 }
 

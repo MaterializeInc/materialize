@@ -147,36 +147,10 @@ file that has coverage of that feature! (Grep is your friend.)
 We pass every SQLite test, with only a few modifications to the upstream test
 data.
 
-To run a sqllogictest against Materialize, you'll need to have PostgreSQL
-running on the default port, 5432, and have created a database named after
-your user. On macOS:
+You can run a sqllogictest file like so:
 
 ```shell
-$ brew install postgresql
-$ brew services start postgresql
-$ createdb $(whoami)  # Yes, this is a shell command, not a SQL command.
-```
-
-On Debian, the current user might not exist or have sufficient permissions to
-create a database. If the `createdb` command fails, try to create a local
-postgres user matching the current user, with the `createdb` permission:
-
-```shell
-$ sudo -u postgres createuser "$(whoami)" --createdb
-```
-
-You might reasonably wonder why PostgreSQL is necessary for running
-sqllogictests against Materialize. The answer is that we offload the hard work
-of mutating queries, like `INSERT INTO ...` and `UPDATE`, to PostgreSQL. We
-slurp up the changelog, much like we would if we were running against a
-Kafka–PostgreSQL [CDC] solution in production, and then run the `SELECT` queries
-against Materialize and verify they match the results specified by the
-sqllogictest file.
-
-Once PostgreSQL is running, you can run a sqllogictest file like so:
-
-```shell
-$ cargo run --bin sqllogictest --release -- test/sqllogictest/TESTFILE.slt
+$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt
 ```
 
 For larger test files, it is imperative that you compile in release mode, i.e.,
@@ -186,7 +160,7 @@ made up for by a much faster execution.
 To add logging for tests, append `-vv`, e.g.:
 
 ```shell
-$ cargo run --bin sqllogictest --release -- test/TESTFILE.slt -vv
+$ bin/sqllogictest [--release] -- test/TESTFILE.slt -vv
 ```
 
 There are currently three classes of sqllogictest files:
@@ -278,7 +252,7 @@ tests.
 
 As a module stabilizes and its abstraction boundaries harden, unit
 testing becomes more attractive. But be wary of introducing abstraction just
-to make unit tests easier to right.
+to make unit tests easier to get right.
 
 And, as a general rule of thumb, you don't want to add a new long-running test.
 Experience suggests that these are quite finicky (e.g., because a VM fails to

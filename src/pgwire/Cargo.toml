@@ -3,12 +3,12 @@ name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
-async-trait = "0.1.52"
+anyhow = "1.0.56"
+async-trait = "0.1.53"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
@@ -31,5 +31,5 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "
 tokio = "1.17.0"
 tokio-openssl = "0.6.3"
 tokio-stream = "0.1.8"
-tokio-util = { version = "0.6.9", features = ["codec"] }
-tracing = "0.1.32"
+tokio-util = { version = "0.7.1", features = ["codec"] }
+tracing = "0.1.34"

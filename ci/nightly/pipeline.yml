@@ -24,18 +24,27 @@ steps:
           - { value: redpanda-testdrive-aarch64 }
           - { value: upgrade }
           - { value: limits }
+          - { value: cluster-limits }
           - { value: cluster-testdrive }
           - { value: proxy }
           - { value: testdrive-workers-1 }
           - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
-          - { value: persistence-testdrive }
           - { value: feature-benchmark }
-          - { value: feature-benchmark-persistence }
           - { value: aws-config }
+          - { value: zippy }
+          - { value: secrets }
+          - { value: catalog-compat }
         multiple: true
         required: false
     if: build.source == "ui"
+
+  - id: build-x86_64
+    label: Build x86_64
+    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.nightly.trim_pipeline
     if: build.source == "ui"
@@ -48,26 +57,13 @@ steps:
   - id: feature-benchmark
     label: "Feature benchmark against latest release"
     timeout_in_minutes: 180
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
           args:
             - --other-tag
             - latest
-
-  - id: feature-benchmark-persistence
-    label: "Feature benchmark against latest release with persistence"
-    timeout_in_minutes: 180
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --other-tag
-            - latest
-            - --this-options
-            - "--persistent-user-tables --persistent-kafka-sources"
-            - --other-options
-            - "--persistent-user-tables --persistent-kafka-sources"
 
   - id: coverage
     label: Code coverage
@@ -77,18 +73,21 @@ steps:
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-multi-broker
 
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -105,19 +104,32 @@ steps:
 
   - id: upgrade
     label: "Upgrade testing"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
+          args: [--most-recent, "0"]
 
   - id: limits
-    label: "Product limits test"
+    label: "Product limits"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
     timeout_in_minutes: 50
 
+  - id: cluster-limits
+    label: "Cluster Product limits"
+    depends_on: build-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+          run: cluster
+    timeout_in_minutes: 50
+
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -126,6 +138,7 @@ steps:
 
   - id: proxy
     label: ":squid: proxy"
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -134,26 +147,31 @@ steps:
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --workers=1]
+          # TODO(benesch): set --workers=1 again.
+          args: [--aws-region=us-east-2]
 
-  - id: testdrive-workers-32
-    label: ":racing_car: testdrive with --workers 32"
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          args: [--aws-region=us-east-2, --workers=32]
-    agents:
-      queue: x86_64-large
+  # TODO(benesch): reenable.
+  # - id: testdrive-workers-32
+  #   label: ":racing_car: testdrive with --workers 32"
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   plugins:
+  #     - ./ci/plugins/scratch-aws-access: ~
+  #     - ./ci/plugins/mzcompose:
+  #         composition: testdrive
+  #         args: [--aws-region=us-east-2, --workers=32]
+  #   agents:
+  #     queue: x86_64-large
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -163,17 +181,55 @@ steps:
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-2, --persistent-user-tables]
+    skip: Persistence tests disabled
 
   - id: aws-config
     label: "AWS credentials and role assumption"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: aws-config
+
+  - id: zippy
+    label: "Zippy"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+
+  - id: secrets
+    label: "Secrets"
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets
+
+  - id: persistence-failpoints
+    label: Persistence failpoints
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: failpoints
+    skip: Persistence tests disabled
+
+  - id: catalog-compat
+    label: Catalog compatibility test
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: catalog-compat
+          run: catalog-compat

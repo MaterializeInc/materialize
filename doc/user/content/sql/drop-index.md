@@ -3,7 +3,7 @@ title: "DROP INDEX"
 description: "DROP INDEX removes an index"
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `DROP INDEX` removes an index from a materialized view. (Non-materialized views do not have any indexes.)

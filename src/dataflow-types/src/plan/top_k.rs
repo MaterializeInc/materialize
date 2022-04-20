@@ -21,7 +21,7 @@ use mz_expr::ColumnOrder;
 use serde::{Deserialize, Serialize};
 
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -58,7 +58,7 @@ impl TopKPlan {
             // For monotonic inputs, we are able to retract inputs that can no longer be produced
             // as outputs. Any inputs beyond `offset + limit` will never again be produced as
             // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-            // these removeable records are those in the input not produced in the output.
+            // these removable records are those in the input not produced in the output.
             // TODO: consider broadening this optimization to `offset > 0` by first filtering
             // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
             // of `offset` and `limit`, discarding only the records not produced in the intermediate
@@ -97,7 +97,7 @@ impl TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -106,7 +106,7 @@ pub struct MonotonicTop1Plan {
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -120,7 +120,7 @@ pub struct MonotonicTopKPlan {
 }
 
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,

@@ -62,7 +62,7 @@ pub struct ExplanationNode<'a> {
     pub typ: Option<RelationType>,
     /// The ID of the linear chain to which this node belongs.
     pub chain: u64,
-    /// Nexted explanations for any subqueries in the node.
+    /// Nested explanations for any subqueries in the node.
     pub subqueries: Vec<Explanation<'a>>,
 }
 
@@ -142,7 +142,6 @@ impl<'a> Explanation<'a> {
                 | Distinct { input }
                 | TopK { input, .. }
                 | Negate { input, .. }
-                | DeclareKeys { input, .. }
                 | Threshold { input, .. } => walk(input, explanation, id_gen),
                 // For join and union, each input needs to go in its own chain.
                 Join { left, right, .. } => walk_many(
@@ -187,7 +186,6 @@ impl<'a> Explanation<'a> {
                 | Negate { .. }
                 | Threshold { .. }
                 | Union { .. }
-                | DeclareKeys { .. }
                 | TopK { .. } => (),
                 Map { scalars: exprs, .. }
                 | Filter {
@@ -321,7 +319,6 @@ impl<'a> Explanation<'a> {
                         get_info.map_or_else(|| "?".to_owned(), |i| i.1.to_string()),
                     )?
                 }
-                Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
@@ -413,15 +410,6 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
-            DeclareKeys { input: _, keys } => write!(
-                f,
-                "| Declare primary keys {}",
-                separated(
-                    " ",
-                    keys.iter()
-                        .map(|key| bracketed("(", ")", separated(", ", key)))
-                )
-            )?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",
@@ -520,6 +508,11 @@ impl<'a> Explanation<'a> {
                 match &expr.func {
                     WindowExprType::Scalar(scalar) => {
                         write!(f, "{}()", scalar.clone().into_expr())?
+                    }
+                    WindowExprType::Value(scalar) => {
+                        write!(f, "{}(", scalar.clone().into_expr())?;
+                        self.fmt_scalar_expr(f, &scalar.expr)?;
+                        write!(f, ")")?
                     }
                 }
                 write!(f, " over (")?;

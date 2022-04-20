@@ -22,11 +22,11 @@
 //! reduce the verbosity a little bit. A typical subsystem will look like the following:
 //!
 //! ```rust
-//! # use mz_ore::metrics::{MetricsRegistry, UIntCounter};
+//! # use mz_ore::metrics::{MetricsRegistry, IntCounter};
 //! # use mz_ore::metric;
 //! #[derive(Debug, Clone)] // Note that prometheus metrics can safely be cloned
 //! struct Metrics {
-//!     pub bytes_sent: UIntCounter,
+//!     pub bytes_sent: IntCounter,
 //! }
 //!
 //! impl Metrics {
@@ -56,11 +56,9 @@ use crate::stats::HISTOGRAM_BUCKETS;
 pub use prometheus::Opts as PrometheusOpts;
 
 mod delete_on_drop;
-mod third_party_metric;
 
 pub use delete_on_drop::*;
 use std::fmt::{Debug, Formatter};
-pub use third_party_metric::*;
 
 /// Define a metric for use in materialize.
 #[macro_export]
@@ -91,7 +89,6 @@ macro_rules! metric {
 #[derive(Debug, Clone)]
 pub struct MetricsRegistry {
     inner: Registry,
-    third_party: Registry,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -161,6 +158,10 @@ impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
     }
 }
 
+/// The unsigned integer version of [`Gauge`]. Provides better performance if
+/// metric values are all unsigned integers.
+pub type UIntGauge = GenericGauge<AtomicU64>;
+
 /// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
@@ -171,17 +172,20 @@ pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
 pub type IntCounterVec = DeleteOnDropWrapper<prometheus::IntCounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntGaugeVec].
 pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
-/// Delete-on-drop shadow of Prometheus [prometheus::UIntCounterVec].
-pub type UIntCounterVec = DeleteOnDropWrapper<prometheus::UIntCounterVec>;
-/// Delete-on-drop shadow of Prometheus [prometheus::UIntGaugeVec].
-pub type UIntGaugeVec = DeleteOnDropWrapper<prometheus::UIntGaugeVec>;
+/// Delete-on-drop shadow of Prometheus [raw::UIntGaugeVec].
+pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
 
-pub use prometheus::{Counter, Histogram, IntCounter, IntGauge, UIntCounter, UIntGauge};
+pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
+
+/// Access to non-delete-on-drop vector types
 pub mod raw {
-    //! Access to non-delete-on-drop vector types
-    pub use prometheus::{
-        CounterVec, HistogramVec, IntCounterVec, IntGaugeVec, UIntCounterVec, UIntGaugeVec,
-    };
+    use prometheus::core::{AtomicU64, GenericGaugeVec};
+
+    /// The unsigned integer version of [`GaugeVec`](prometheus::GaugeVec).
+    /// Provides better performance if metric values are all unsigned integers.
+    pub type UIntGaugeVec = GenericGaugeVec<AtomicU64>;
+
+    pub use prometheus::{CounterVec, HistogramVec, IntCounterVec, IntGaugeVec};
 }
 
 impl MetricsRegistry {
@@ -189,7 +193,6 @@ impl MetricsRegistry {
     pub fn new() -> Self {
         MetricsRegistry {
             inner: Registry::new(),
-            third_party: Registry::new(),
         }
     }
 
@@ -221,26 +224,6 @@ impl MetricsRegistry {
         gauge
     }
 
-    /// Register a metric that can be scraped from both the "normal" registry, as well as the
-    /// registry that is accessible to third parties (like cloud providers and infrastructure
-    /// orchestrators).
-    ///
-    /// Take care to vet metrics that are visible to third parties: metrics containing sensitive
-    /// information as labels (e.g. source/sink names or other user-defined identifiers), or
-    /// "traffic" type labels can lead to information getting exposed that users might not be
-    /// comfortable sharing.
-    pub fn register_third_party_visible<M>(&self, opts: prometheus::Opts) -> ThirdPartyMetric<M>
-    where
-        M: MakeCollector,
-    {
-        let collector = M::make_collector(opts);
-        self.inner.register(Box::new(collector.clone())).unwrap();
-        self.third_party
-            .register(Box::new(collector.clone()))
-            .unwrap();
-        ThirdPartyMetric { inner: collector }
-    }
-
     /// Register a pre-defined prometheus collector.
     pub fn register_collector<C: 'static + prometheus::core::Collector>(&self, collector: C) {
         self.inner
@@ -253,13 +236,6 @@ impl MetricsRegistry {
     /// See also [`prometheus::Registry::gather`].
     pub fn gather(&self) -> Vec<MetricFamily> {
         self.inner.gather()
-    }
-
-    /// Gather all the metrics from the metrics registry that's visible to third parties.
-    ///
-    /// See also [`prometheus::Registry::gather`].
-    pub fn gather_third_party_visible(&self) -> Vec<MetricFamily> {
-        self.third_party.gather()
     }
 }
 

@@ -8,9 +8,10 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
-use mz_expr::{GlobalId, Id, LocalId};
-use mz_expr::{MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::visit::VisitChildren;
+use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::GlobalId;
 use std::collections::HashSet;
 
 /// A struct that holds a recursive function that determines if a
@@ -47,7 +48,6 @@ impl MonotonicFlag {
                 MirRelationExpr::Get { id, .. } => match id {
                     Id::Global(id) => sources.contains(id),
                     Id::Local(id) => locals.contains(id),
-                    _ => false,
                 },
                 MirRelationExpr::Project { input, .. } => self.apply(input, sources, locals)?,
                 MirRelationExpr::Filter { input, predicates } => {
@@ -84,10 +84,7 @@ impl MonotonicFlag {
                     }
                     monotonic
                 }
-                MirRelationExpr::ArrangeBy { input, .. }
-                | MirRelationExpr::DeclareKeys { input, .. } => {
-                    self.apply(input, sources, locals)?
-                }
+                MirRelationExpr::ArrangeBy { input, .. } => self.apply(input, sources, locals)?,
                 MirRelationExpr::FlatMap { input, func, .. } => {
                     let is_monotonic = self.apply(input, sources, locals)?;
                     is_monotonic && func.preserves_monotonicity()

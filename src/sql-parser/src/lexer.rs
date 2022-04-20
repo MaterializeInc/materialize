@@ -275,7 +275,7 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
 fn lex_to_adjacent_string(buf: &mut LexBuf) -> bool {
     // Adjacent string literals that are separated by whitespace are
     // concatenated if and only if that whitespace contains at least one newline
-    // character. This bizzare rule matches PostgreSQL and the SQL standard.
+    // character. This bizarre rule matches PostgreSQL and the SQL standard.
     let whitespace = buf.take_while(|ch| ch.is_ascii_whitespace());
     whitespace.contains(&['\n', '\r'][..]) && buf.consume('\'')
 }

@@ -19,10 +19,11 @@ set -euo pipefail
 export MZ_DEV_CI_BUILDER_DOCKER_HOST=${DOCKER_HOST:-}
 export MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY:-}
 export MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH=${DOCKER_CERT_PATH:-}
-eval "$(minikube docker-env)"
+eval "$(minikube docker-env --shell bash)"
 
+bin/mzimage acquire --dev storaged
+bin/mzimage acquire --dev computed
 bin/mzimage acquire --dev materialized
-bin/mzimage acquire --dev dataflowd
 
 kubectl apply --context=minikube  -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
@@ -58,6 +59,7 @@ metadata:
 spec:
   serviceName: materialized
   replicas: 1
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: materialized
@@ -70,10 +72,13 @@ spec:
       - name: materialized
         image: $(bin/mzimage spec --dev materialized)
         args:
-            - --dataflowd-image=$(bin/mzimage spec --dev dataflowd)
+            - --storaged-image=$(bin/mzimage spec --dev storaged)
+            - --computed-image=$(bin/mzimage spec --dev computed)
             - --data-directory=/data
-            - --dev
             - --orchestrator=kubernetes
+            - --orchestrator-service-label=materialize.cloud/example1=label1
+            - --orchestrator-service-label=materialize.cloud/example2=label2
+            - --kubernetes-image-pull-policy=never
             - --experimental
         ports:
         - containerPort: 6875

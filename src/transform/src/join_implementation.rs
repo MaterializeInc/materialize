@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -152,7 +153,7 @@ impl JoinImplementation {
                     .enumerate()
                     .map(|(i, c)| (c, i))
                     .collect::<HashMap<_, _>>();
-                // Eliminate arrangements refering to columns that have been
+                // Eliminate arrangements referring to columns that have been
                 // projected away by surrounding MFPs.
                 available_arrangements[index].retain(|key| {
                     key.iter()
@@ -205,7 +206,6 @@ impl JoinImplementation {
 
 mod index_map {
     use std::collections::HashMap;
-    use std::iter;
 
     use mz_expr::{Id, LocalId, MirScalarExpr};
 
@@ -250,7 +250,6 @@ mod index_map {
                         .flatten()
                         .map(|x| x.as_slice()),
                 ),
-                Id::LocalBareSource => Box::new(iter::empty()),
             }
         }
     }

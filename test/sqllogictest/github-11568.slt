@@ -1,0 +1,43 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/11568.
+
+mode cockroach
+
+statement ok
+create cluster c remote r1 ('1.0:1234')
+
+statement ok
+set cluster = c
+
+statement ok
+create table t1 (f1 integer, f2 integer)
+
+statement ok
+create index i1 on t1 (f2)
+
+statement ok
+set cluster = default
+
+statement ok
+begin;
+
+# The original github issue would panic here.
+query II
+select * from t1
+----
+
+# Additionally, verify that changing cluster mid transaction causes the indexes
+# to be unavailable.
+statement ok
+set cluster = c
+
+query error Transactions can only reference objects in the same timedomain.
+select * from t1

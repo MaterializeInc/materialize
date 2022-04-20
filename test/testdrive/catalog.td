@@ -113,6 +113,15 @@ name
 d
 materialize
 
+# ...and also in `\l`
+$ psql-execute command="\l"
+\                          List of databases
+    Name     | Owner | Encoding | Collate | Ctype | Access privileges
+-------------+-------+----------+---------+-------+-------------------
+ d           |       | UTF8     | C       | C     |
+ materialize |       | UTF8     | C       | C     |
+
+
 > SELECT id, name FROM mz_databases
 id          name
 -----------------------
@@ -351,7 +360,6 @@ mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operator_reachability_internal
 mz_dataflow_operators
-mz_kafka_source_statistics
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts_received_internal
@@ -361,7 +369,6 @@ mz_peek_durations
 mz_scheduling_elapsed_internal
 mz_scheduling_histogram_internal
 mz_scheduling_parks_internal
-mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
@@ -374,7 +381,6 @@ mz_dataflow_channels                          system true          volatile    l
 mz_dataflow_operator_addresses                system true          volatile    local
 mz_dataflow_operator_reachability_internal    system true          volatile    local
 mz_dataflow_operators                         system true          volatile    local
-mz_kafka_source_statistics                    system true          volatile    local
 mz_materialization_dependencies               system true          volatile    local
 mz_materializations                           system true          volatile    local
 mz_message_counts_received_internal           system true          volatile    local
@@ -384,7 +390,6 @@ mz_peek_durations                             system true          volatile    l
 mz_scheduling_elapsed_internal                system true          volatile    local
 mz_scheduling_histogram_internal              system true          volatile    local
 mz_scheduling_parks_internal                  system true          volatile    local
-mz_source_info                                system true          volatile    local
 mz_worker_materialization_frontiers           system true          volatile    local
 
 > SHOW TABLES FROM mz_catalog
@@ -393,6 +398,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -400,9 +406,6 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
-mz_metric_histograms
-mz_metrics
-mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -423,6 +426,7 @@ mz_avro_ocf_sinks     system
 mz_base_types         system
 mz_clusters           system
 mz_columns            system
+mz_connectors         system
 mz_databases          system
 mz_functions          system
 mz_index_columns      system
@@ -430,9 +434,6 @@ mz_indexes            system
 mz_kafka_sinks        system
 mz_list_types         system
 mz_map_types          system
-mz_metric_histograms  system
-mz_metrics            system
-mz_metrics_meta       system
 mz_pseudo_types       system
 mz_roles              system
 mz_schemas            system
@@ -455,6 +456,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -462,9 +464,6 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
-mz_metric_histograms
-mz_metrics
-mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -488,6 +487,7 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_clusters
 mz_columns
+mz_connectors
 mz_databases
 mz_functions
 mz_index_columns
@@ -495,9 +495,6 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
-mz_metric_histograms
-mz_metrics
-mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -513,11 +510,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-26
+24
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-19
+17
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
@@ -530,7 +527,6 @@ mz_materialization_frontiers
 mz_message_counts
 mz_objects
 mz_perf_arrangement_records
-mz_perf_dependency_frontiers
 mz_perf_peek_durations_aggregates
 mz_perf_peek_durations_bucket
 mz_perf_peek_durations_core
@@ -554,7 +550,6 @@ mz_materialization_frontiers      system false         volatile
 mz_message_counts                 system false         volatile
 mz_objects                        system false         volatile
 mz_perf_arrangement_records       system false         volatile
-mz_perf_dependency_frontiers      system false         volatile
 mz_perf_peek_durations_aggregates system false         volatile
 mz_perf_peek_durations_bucket     system false         volatile
 mz_perf_peek_durations_core       system false         volatile

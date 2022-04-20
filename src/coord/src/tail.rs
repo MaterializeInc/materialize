@@ -68,7 +68,7 @@ impl PendingTail {
                             // When sinking with PROGRESS, the output
                             // includes an additional column that
                             // indicates whether a timestamp is
-                            // complete. For regular "data" upates this
+                            // complete. For regular "data" updates this
                             // is always `false`.
                             packer.push(Datum::False);
                         }
@@ -110,7 +110,7 @@ impl PendingTail {
                 }
                 upper.is_empty()
             }
-            TailResponse::Dropped => {
+            TailResponse::DroppedAt(_frontier) => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
                 true
             }

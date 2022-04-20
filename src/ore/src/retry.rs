@@ -62,6 +62,7 @@ use std::thread;
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
+use tokio::time::error::Elapsed;
 use tokio::time::{self, Duration, Instant, Sleep};
 
 /// The state of a retry operation constructed with [`Retry`].
@@ -213,6 +214,44 @@ impl Retry {
         Err(err.expect("retry produces at least one element"))
     }
 
+    /// Like [`Retry::retry_async`] but the operation will be canceled if the
+    /// maximum duration is reached.
+    ///
+    /// Specifically, if the maximum duration is reached, the operation `f` will
+    /// be forcibly canceled by dropping it. Canceling `f` can be surprising if
+    /// the operation is not programmed to expect the possibility of not
+    /// resuming from an `await` point; if you wish to always run `f` to
+    /// completion, use [`Retry::retry_async`] instead.
+    ///
+    /// If `f` is forcibly canceled, the error returned will be the error
+    /// returned by the prior invocation of `f`. If there is no prior invocation
+    /// of `f`, then an `Elapsed` error is returned. The idea is that if `f`
+    /// fails three times in a row with a useful error message, and then the
+    /// fourth attempt is canceled because the timeout is reached, the caller
+    /// would rather see the useful error message from the third attempt, rather
+    /// than the "deadline exceeded" message from the fourth attempt.
+    pub async fn retry_async_canceling<F, U, T, E>(self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(RetryState) -> U,
+        U: Future<Output = Result<T, E>>,
+        E: From<Elapsed> + std::fmt::Debug,
+    {
+        let start = Instant::now();
+        let max_duration = self.max_duration;
+        let stream = self.into_retry_stream();
+        tokio::pin!(stream);
+        let mut err = None;
+        while let Some(state) = stream.next().await {
+            let fut = time::timeout(max_duration.saturating_sub(start.elapsed()), f(state));
+            match fut.await {
+                Ok(Ok(t)) => return Ok(t),
+                Ok(Err(e)) => err = Some(e),
+                Err(e) => return Err(err.unwrap_or_else(|| e.into())),
+            }
+        }
+        Err(err.expect("retry produces at least one element"))
+    }
+
     /// Convert into [`RetryStream`]
     pub fn into_retry_stream(self) -> RetryStream {
         RetryStream {
@@ -226,8 +265,8 @@ impl Retry {
 }
 
 impl Default for Retry {
-    /// Constructs a retry operation with defaults that are reasonable for a
-    /// fallible network operation.
+    /// Constructs a retry operation that will retry forever with backoff
+    /// defaults that are reasonable for a fallible network operation.
     fn default() -> Self {
         Retry {
             initial_backoff: Duration::from_millis(125),
@@ -336,7 +375,7 @@ where
     }
 
     /// Uses the provided `Reader` factory to construct a `RetryReader` with the passed `Retry`
-    /// settings. See the documentation of [RetryReader::new] for more detais.
+    /// settings. See the documentation of [RetryReader::new] for more details.
     pub fn with_retry(factory: F, retry: Retry) -> Self {
         Self {
             factory,
@@ -407,6 +446,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{anyhow, bail};
+
     use super::*;
 
     #[test]
@@ -687,6 +728,49 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// Test that canceling retry operations surface the last error when the
+    /// underlying future is not explicitly timed out.
+    #[tokio::test]
+    async fn test_retry_async_canceling_uncanceled_failure() {
+        let res = Retry::default()
+            .max_duration(Duration::from_millis(100))
+            .retry_async_canceling(|_| async move { Err::<(), _>(anyhow!("injected")) })
+            .await;
+        assert_eq!(res.unwrap_err().to_string(), "injected");
+    }
+
+    /// Test that canceling retry operations surface the last error when the
+    /// underlying future *is* not explicitly timed out.
+    #[tokio::test]
+    async fn test_retry_async_canceling_canceled_failure() {
+        let res = Retry::default()
+            .max_duration(Duration::from_millis(100))
+            .retry_async_canceling(|state| async move {
+                if state.i == 0 {
+                    bail!("injected")
+                } else {
+                    time::sleep(Duration::MAX).await;
+                    Ok(())
+                }
+            })
+            .await;
+        assert_eq!(res.unwrap_err().to_string(), "injected");
+    }
+
+    /// Test that the "deadline has elapsed" error is surfaced when there is
+    /// no other error to surface.
+    #[tokio::test]
+    async fn test_retry_async_canceling_canceled_first_failure() {
+        let res = Retry::default()
+            .max_duration(Duration::from_millis(100))
+            .retry_async_canceling(|_| async move {
+                time::sleep(Duration::MAX).await;
+                Ok::<_, anyhow::Error>(())
+            })
+            .await;
+        assert_eq!(res.unwrap_err().to_string(), "deadline has elapsed");
     }
 
     #[tokio::test]

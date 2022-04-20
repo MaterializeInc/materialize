@@ -2,4 +2,5 @@
 **BUCKET SCAN** *bucket_name* | Materialize will scan the bucket to find the set of objects to download. See [Listing bucket objects](#listing-bucket-objects).
 **SQS NOTIFICATIONS** *queue_name* | Materialize will subscribe to the specified queue and download new objects. See [Listening to SQS notifications](#listening-to-sqs-notifications).
 **MATCHING** *pattern* | A glob-style pattern to filter objects to ingest. See [Patterns](#patterns). Default is to ingest **all** objects.
-**COMPRESSION** _algorithm_ | The compression algorithm used to decode downloaded objects. See [Compression](#compression).
+**COMPRESSION NONE** | _(Default)_ Decoding downloaded objects does not use a compression algorithm.
+**COMPRESSION** _algorithm_ | The compression algorithm used to decode downloaded objects. Using `GZIP` compression requires the object is compressed using `gzip` or that it is a concatenation of multiple `gzip` member streams.

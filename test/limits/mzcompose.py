@@ -15,6 +15,7 @@ import tempfile
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
+    Computed,
     Kafka,
     Materialized,
     SchemaRegistry,
@@ -1023,9 +1024,17 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(
-        memory="8G", options="--persistent-user-tables --persistent-kafka-sources"
+    Computed(
+        name="computed_1",
+        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        ports=[2100, 2102],
     ),
+    Computed(
+        name="computed_2",
+        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        ports=[2100, 2102],
+    ),
+    Materialized(memory="8G", extra_ports=[2101]),
     Testdrive(),
 ]
 
@@ -1035,8 +1044,35 @@ def workflow_default(c: Composition) -> None:
         services=["zookeeper", "kafka", "schema-registry", "materialized"]
     )
 
+    c.up("testdrive", persistent=True)
+
     with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
         with contextlib.redirect_stdout(tmp):
             [cls.generate() for cls in Generator.__subclasses__()]
             sys.stdout.flush()
-            c.run("testdrive-svc", os.path.basename(tmp.name))
+            c.exec("testdrive", os.path.basename(tmp.name))
+
+
+def workflow_cluster(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+
+    c.up("computed_1")
+    c.up("computed_2")
+    c.sql(
+        "CREATE CLUSTER cluster1 REMOTE replica1 ('computed_1:2100', 'computed_2:2100');"
+    )
+
+    c.up("testdrive", persistent=True)
+
+    with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+        with contextlib.redirect_stdout(tmp):
+            [cls.generate() for cls in Generator.__subclasses__()]
+            sys.stdout.flush()
+            c.exec(
+                "testdrive",
+                "--materialized-param=cluster=cluster1",
+                os.path.basename(tmp.name),
+            )

@@ -36,9 +36,11 @@ use crate::Datum;
 
 mod encoding;
 
+include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
+
 /// A packed representation for `Datum`s.
 ///
-/// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)`
+/// `Datum` is easy to work with but very space inefficient. A `Datum::Int32(42)`
 /// is laid out in memory like this:
 ///
 ///   tag: 3
@@ -97,7 +99,7 @@ pub struct Row {
     data: SmallVec<[u8; Self::SIZE]>,
 }
 
-// Implement Clone manually to use SmallVec's more efficent from_slice.
+// Implement Clone manually to use SmallVec's more efficient from_slice.
 // TODO: Revisit once Rust supports specialization: https://github.com/rust-lang/rust/issues/31844
 impl Clone for Row {
     fn clone(&self) -> Self {
@@ -646,7 +648,7 @@ where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Using datums_size instead of a.data().len() here is safer because it will
-    // return the size of the datams if they were packed into a Row. Although
+    // return the size of the datums if they were packed into a Row. Although
     // a.data().len() happens to give the correct answer (and is faster), data()
     // is documented as for debugging only.
     let sz = datums_size(a);
@@ -921,7 +923,7 @@ impl RowPacker<'_> {
     /// The supplied closure will be invoked once with a `Row` that can be used
     /// to populate the dict.
     ///
-    /// The closure **must** alternate pushing string keys and arbitary values,
+    /// The closure **must** alternate pushing string keys and arbitrary values,
     /// otherwise reading the dict will cause a panic.
     ///
     /// The closure **must** push keys in ascending order, otherwise equality
@@ -1458,7 +1460,7 @@ mod tests {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
 
-            // When run under miri this catchs undefined bytes written to data
+            // When run under miri this catches undefined bytes written to data
             // eg by calling push_copy! on a type which contains undefined padding values
             println!("{:?}", row.data());
 
@@ -1717,7 +1719,7 @@ mod tests {
 mod test {
     #[test]
     fn row_size_is_stable() {
-        // nothin depends on this being exactly 32, we just want it to be an active decision if we
+        // nothing depends on this being exactly 32, we just want it to be an active decision if we
         // change it
         assert_eq!(std::mem::size_of::<super::Row>(), 32);
     }

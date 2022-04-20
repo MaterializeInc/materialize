@@ -236,7 +236,7 @@ impl NonNullRequirements {
                                 }
                             });
 
-                        // Compute the intersection of all pushable non contraints inferred from
+                        // Compute the intersection of all pushable non constraints inferred from
                         // the non-null constraints on aggregate columns and the nulls ignored by
                         // the remaining aggregates. Example:
                         // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements on both aggs => implies !isnull(#0)
@@ -272,14 +272,13 @@ impl NonNullRequirements {
                     // NULL, as discarding rows based on other columns can change the
                     // result set, based on how NULL is ordered.
                     columns.retain(|c| group_key.contains(c));
-                    // TODO(mcsherry): bind NULL ordering and apply the tranformation
+                    // TODO(mcsherry): bind NULL ordering and apply the transformation
                     // to all columns if the correct ASC/DESC ordering is observed
                     // (with some care about orderings on multiple columns).
                     self.action(input, columns, gets)
                 }
                 MirRelationExpr::Negate { input } => self.action(input, columns, gets),
                 MirRelationExpr::Threshold { input } => self.action(input, columns, gets),
-                MirRelationExpr::DeclareKeys { input, .. } => self.action(input, columns, gets),
                 MirRelationExpr::Union { base, inputs } => {
                     self.action(base, columns.clone(), gets)?;
                     for input in inputs {

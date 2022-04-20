@@ -297,7 +297,7 @@ pub enum GetByIdError {
     SchemaNotFound,
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
-    /// An internal server error occured.
+    /// An internal server error occurred.
     Server { code: i32, message: String },
 }
 
@@ -360,7 +360,7 @@ pub enum GetBySubjectError {
     SubjectNotFound,
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
-    /// An internal server error occured.
+    /// An internal server error occurred.
     Server { code: i32, message: String },
 }
 
@@ -427,7 +427,7 @@ pub enum PublishError {
     InvalidSchema { message: String },
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
-    /// An internal server error occured.
+    /// An internal server error occurred.
     Server { code: i32, message: String },
 }
 
@@ -478,7 +478,7 @@ impl fmt::Display for PublishError {
 pub enum ListError {
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
-    /// An internal server error occured.
+    /// An internal server error occurred.
     Server { code: i32, message: String },
 }
 
@@ -516,7 +516,7 @@ pub enum DeleteError {
     SubjectNotFound,
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
-    /// An internal server error occured.
+    /// An internal server error occurred.
     Server { code: i32, message: String },
 }
 

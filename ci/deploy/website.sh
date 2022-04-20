@@ -33,7 +33,7 @@ declare -A shortlinks=(
 )
 
 cd doc/user
-hugo --gc --baseURL /docs --destination public/docs
+hugo --gc --baseURL /docs/unstable --destination public/docs/unstable
 cp -R ../../ci/deploy/website/. public/
 hugo deploy
 

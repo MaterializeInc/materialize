@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
+use mz_sql_parser::ast::KafkaSourceConnector;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -36,8 +37,8 @@ use mz_repr::strconv;
 use crate::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, SqlOption, Value,
-    WithOption, WithOptionValue,
+    CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, Value, WithOption,
+    WithOptionValue,
 };
 use crate::kafka_util;
 use crate::normalize;
@@ -70,47 +71,59 @@ pub async fn purify_create_source(
 
     let mut file = None;
     match connector {
-        CreateSourceConnector::Kafka { broker, topic, .. } => {
-            if !broker.contains(':') {
-                *broker += ":9092";
-            }
+        CreateSourceConnector::Kafka(KafkaSourceConnector {
+            connector: broker,
+            topic,
+            ..
+        }) => {
+            match broker {
+                // Temporary until the rest of the connector plumbing is finished
+                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => {
+                    if !broker.contains(':') {
+                        *broker += ":9092";
+                    }
 
-            // Verify that the provided security options are valid and then test them.
-            config_options = kafka_util::extract_config(&mut with_options_map)?;
-            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+                    // Verify that the provided security options are valid and then test them.
+                    config_options = kafka_util::extract_config(&mut with_options_map)?;
+                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                        .await
+                        .map_err(|e| {
+                            anyhow!("Failed to create and connect Kafka consumer: {}", e)
+                        })?;
 
-            // Translate `kafka_time_offset` to `start_offset`.
-            match kafka_util::lookup_start_offsets(
-                Arc::clone(&consumer),
-                &topic,
-                &with_options_map,
-                now,
-            )
-            .await?
-            {
-                Some(start_offsets) => {
-                    // Drop `kafka_time_offset`
-                    with_options.retain(|val| match val {
-                        mz_sql_parser::ast::SqlOption::Value { name, .. } => {
-                            name.as_str() != "kafka_time_offset"
+                    // Translate `kafka_time_offset` to `start_offset`.
+                    match kafka_util::lookup_start_offsets(
+                        Arc::clone(&consumer),
+                        &topic,
+                        &with_options_map,
+                        now,
+                    )
+                    .await?
+                    {
+                        Some(start_offsets) => {
+                            // Drop `kafka_time_offset`
+                            with_options.retain(|val| match val.value {
+                                Some(WithOptionValue::Value(..)) => {
+                                    val.key.as_str() != "kafka_time_offset"
+                                }
+                                _ => true,
+                            });
+
+                            // Add `start_offset`
+                            with_options.push(WithOption {
+                                key: Ident::new("start_offset"),
+                                value: Some(WithOptionValue::Value(Value::Array(
+                                    start_offsets
+                                        .iter()
+                                        .map(|offset| Value::Number(offset.to_string()))
+                                        .collect(),
+                                ))),
+                            });
                         }
-                        _ => true,
-                    });
-
-                    // Add `start_offset`
-                    with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                        name: mz_sql_parser::ast::Ident::new("start_offset"),
-                        value: mz_sql_parser::ast::Value::Array(
-                            start_offsets
-                                .iter()
-                                .map(|offset| Value::Number(offset.to_string()))
-                                .collect(),
-                        ),
-                    });
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
@@ -122,9 +135,9 @@ pub async fn purify_create_source(
                 let r = mz_avro::Reader::new(f)?;
                 if !with_options_map.contains_key("reader_schema") {
                     let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                    with_options.push(mz_sql_parser::ast::SqlOption::Value {
-                        name: mz_sql_parser::ast::Ident::new("reader_schema"),
-                        value: mz_sql_parser::ast::Value::String(schema),
+                    with_options.push(WithOption {
+                        key: Ident::new("reader_schema"),
+                        value: Some(WithOptionValue::Value(Value::String(schema))),
                     });
                 }
                 Ok::<_, anyhow::Error>(())
@@ -196,7 +209,7 @@ async fn purify_source_format(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<SqlOption<Raw>>,
+    with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connector, CreateSourceConnector::Kafka { .. })
@@ -273,7 +286,7 @@ async fn purify_source_format_single(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<SqlOption<Raw>>,
+    with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
@@ -339,9 +352,10 @@ async fn purify_csr_connector_proto(
     connector: &mut CreateSourceConnector,
     csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Envelope,
-    with_options: &Vec<SqlOption<Raw>>,
+    with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -379,7 +393,7 @@ async fn purify_csr_connector_proto(
         }
         Some(CsrSeedCompiledOrLegacy::Compiled(..)) => (),
         Some(CsrSeedCompiledOrLegacy::Legacy(..)) => {
-            unreachable!("Should not be able to purify CsrCeedCompiledOrLegacy::Legacy")
+            unreachable!("Should not be able to purify CsrSeedCompiledOrLegacy::Legacy")
         }
     }
 
@@ -392,7 +406,8 @@ async fn purify_csr_connector_avro(
     envelope: &Envelope,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
+    {
         topic
     } else {
         bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -532,7 +547,7 @@ pub async fn purify_csv(
                 bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
             }
             CreateSourceConnector::S3 { .. } => {
-                bail!("CSV WITH HEADER for S3 sources requiers specifying the header columns")
+                bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
             }
             _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),
         },

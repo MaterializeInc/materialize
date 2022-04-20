@@ -26,7 +26,7 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -35,17 +35,19 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
+use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
-use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
     TransactionAccessMode,
 };
-use crate::catalog::CatalogType;
-use crate::names::{Aug, DatabaseSpecifier, FullName, SchemaName};
+use crate::catalog::{CatalogType, IdReference};
+use crate::names::{
+    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -70,6 +72,7 @@ pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementD
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
+    CreateConnector(CreateConnectorPlan),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
@@ -104,10 +107,12 @@ pub enum Plan {
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
     AlterNoop(AlterNoopPlan),
+    AlterComputeInstance(AlterComputeInstancePlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterSecret(AlterSecretPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -131,7 +136,7 @@ pub struct CreateDatabasePlan {
 
 #[derive(Debug)]
 pub struct CreateSchemaPlan {
-    pub database_name: DatabaseSpecifier,
+    pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_name: String,
     pub if_not_exists: bool,
 }
@@ -150,15 +155,24 @@ pub struct CreateComputeInstancePlan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeInstanceConfig {
-    Virtual,
     Remote {
-        hosts: Vec<String>,
+        /// A map from replica name to hostnames.
+        replicas: BTreeMap<String, BTreeSet<String>>,
         introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
     Managed {
         size: String,
         introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
+}
+
+impl ComputeInstanceConfig {
+    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
+        match self {
+            Self::Remote { introspection, .. } => introspection,
+            Self::Managed { introspection, .. } => introspection,
+        }
+    }
 }
 
 /// Configuration of introspection for a compute instance.
@@ -172,22 +186,30 @@ pub struct ComputeInstanceIntrospectionConfig {
 
 #[derive(Debug)]
 pub struct CreateSourcePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
 }
 
 #[derive(Debug)]
+pub struct CreateConnectorPlan {
+    pub name: QualifiedObjectName,
+    pub if_not_exists: bool,
+    pub connector: Connector,
+}
+
+#[derive(Debug)]
 pub struct CreateSecretPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub secret: Secret,
+    pub full_name: FullObjectName,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateSinkPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
@@ -195,14 +217,14 @@ pub struct CreateSinkPlan {
 
 #[derive(Debug)]
 pub struct CreateTablePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub table: Table,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateViewPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
@@ -213,14 +235,14 @@ pub struct CreateViewPlan {
 
 #[derive(Debug)]
 pub struct CreateViewsPlan {
-    pub views: Vec<(FullName, View)>,
+    pub views: Vec<(QualifiedObjectName, View)>,
     pub materialize: bool,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateIndexPlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
@@ -228,18 +250,18 @@ pub struct CreateIndexPlan {
 
 #[derive(Debug)]
 pub struct CreateTypePlan {
-    pub name: FullName,
+    pub name: QualifiedObjectName,
     pub typ: Type,
 }
 
 #[derive(Debug)]
 pub struct DropDatabasePlan {
-    pub name: String,
+    pub id: Option<DatabaseId>,
 }
 
 #[derive(Debug)]
 pub struct DropSchemaPlan {
-    pub name: SchemaName,
+    pub id: Option<(DatabaseId, SchemaId)>,
 }
 
 #[derive(Debug)]
@@ -346,6 +368,12 @@ pub struct AlterNoopPlan {
 }
 
 #[derive(Debug)]
+pub struct AlterComputeInstancePlan {
+    pub id: ComputeInstanceId,
+    pub config: ComputeInstanceConfig,
+}
+
+#[derive(Debug)]
 pub struct AlterIndexSetOptionsPlan {
     pub id: GlobalId,
     pub options: Vec<IndexOption>,
@@ -365,8 +393,15 @@ pub struct AlterIndexEnablePlan {
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
+    pub current_full_name: FullObjectName,
     pub to_name: String,
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSecretPlan {
+    pub id: GlobalId,
+    pub secret_as: MirScalarExpr,
 }
 
 #[derive(Debug)]
@@ -424,12 +459,19 @@ pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
-    pub expr: mz_expr::MirRelationExpr,
+    pub depends_on: Vec<GlobalId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Connector {
+    pub create_sql: String,
+    pub connector: ConnectorInner,
 }
 
 #[derive(Clone, Debug)]
 pub struct Secret {
     pub create_sql: String,
+    pub secret_as: MirScalarExpr,
 }
 
 #[derive(Clone, Debug)]
@@ -463,7 +505,7 @@ pub struct Index {
 #[derive(Clone, Debug)]
 pub struct Type {
     pub create_sql: String,
-    pub inner: CatalogType,
+    pub inner: CatalogType<IdReference>,
     pub depends_on: Vec<GlobalId>,
 }
 

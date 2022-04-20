@@ -168,7 +168,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     override = [
         Materialized(
-            workers=args.workers,
             timestamp_frequency="1s",
             options=options,
         )
@@ -181,7 +180,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.wait_for_materialized("materialized")
 
         c.run(
-            "testdrive-svc",
+            "testdrive",
             f"--var=envelope={envelope}",
             "setup.td",
         )
@@ -245,5 +244,5 @@ def workflow_smoke_test(c: Composition) -> None:
             arg,
         )
         c.kill("materialized")
-        c.rm("materialized", "testdrive-svc", "kafka", destroy_volumes=True)
+        c.rm("materialized", "testdrive", "kafka", destroy_volumes=True)
         c.rm_volumes("mzdata")

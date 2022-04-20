@@ -45,12 +45,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified AWS region instead of localstack",
     )
     parser.add_argument(
-        "--workers",
-        type=int,
-        metavar="N",
-        help="set the number of materialized dataflow workers",
-    )
-    parser.add_argument(
         "--kafka-default-partitions",
         type=int,
         metavar="N",
@@ -83,7 +77,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
     materialized = Materialized(
-        workers=args.workers,
         options=["--persistent-user-tables"] if args.persistent_user_tables else [],
     )
 
@@ -100,7 +93,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.wait_for_materialized("materialized")
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            c.run("testdrive-svc", f"--junit-report={junit_report}", *args.files)
+            c.run("testdrive", f"--junit-report={junit_report}", *args.files)
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
@@ -110,9 +103,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_testdrive_redpanda_ci(c: Composition) -> None:
     """Run testdrive against files known to be supported by Redpanda."""
 
-    # https://github.com/vectorizedio/redpanda/issues/2397
-    KNOWN_FAILURES = {"kafka-time-offset.td"}
-
     files = set(
         # NOTE(benesch): invoking the shell like this to filter testdrive files is
         # pretty gross. Let's not get into the habit of using this construction.
@@ -120,5 +110,4 @@ def workflow_testdrive_redpanda_ci(c: Composition) -> None:
             ["sh", "-c", "grep -lr '\$.*kafka-ingest' *.td"], cwd=Path(__file__).parent
         ).split()
     )
-    files -= KNOWN_FAILURES
     c.workflow("default", "--redpanda", *files)

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from math import ceil
+from math import ceil, floor
 from typing import List
 
 from parameterized import parameterized_class  # type: ignore
@@ -23,6 +23,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -518,6 +519,45 @@ class DifferentialJoin(Dataflow):
         )
 
 
+class FullOuterJoin(Dataflow):
+    def benchmark(self) -> BenchmarkingSequence:
+        columns_select = ", ".join(
+            [f"a{i+1}.f1 AS f{i+1}" for i in range(0, floor(self.scale()))]
+        )
+        columns_using = ", ".join([f"f{i+1}" for i in range(0, floor(self.scale()))])
+        inserts = "\n".join([f"> INSERT INTO ten VALUES ({i+1})" for i in range(0, 10)])
+
+        return [
+            Td(
+                f"""
+> DROP VIEW IF EXISTS v2 CASCADE;
+
+> DROP VIEW IF EXISTS v1 CASCADE;
+
+> DROP TABLE IF EXISTS ten;
+
+> CREATE TABLE ten (f1 INTEGER);
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT {columns_select} FROM {self.join()}
+> SELECT 1;
+  /* A */
+1
+
+> CREATE MATERIALIZED VIEW v2 AS
+  SELECT COUNT(a1.f1) AS c1, COUNT(a2.f1) AS c2
+  FROM v1 AS a1
+  FULL OUTER JOIN v1 AS a2 USING ({columns_using});
+
+{inserts}
+
+> SELECT * FROM v2;
+  /* B */
+{self.n()} {self.n()}
+"""
+            )
+        ]
+
+
 class Finish(Scenario):
     """Benchmarks around te Finish stage of query processing"""
 
@@ -556,7 +596,7 @@ class Kafka(Scenario):
     pass
 
 
-class KafkaRaw(Kafka):
+class KafkaRaw(ScenarioDisabled):
     def shared(self) -> Action:
         return TdAction(
             self.schema()
@@ -689,9 +729,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRecovery(Kafka):
-    SCALE = 7
-
+class KafkaRestart(Kafka):
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -722,25 +760,21 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 """
         )
 
-    def before(self) -> Action:
-        return LambdaAction(lambda e: e.RestartMz())
-
-    def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
-> SELECT 1;
-  /* A */
-1
-
-> SELECT COUNT(*) FROM s1;
+    def benchmark(self) -> BenchmarkingSequence:
+        return [
+            Lambda(lambda e: e.RestartMz()),
+            Td(
+                f"""
+> SELECT COUNT(*) /* {self.n()} */ FROM s1;
   /* B */
 {self.n()}
 """
-        )
+            ),
+        ]
 
 
-class KafkaRecoveryBig(ScenarioBig):
-    """Benchmark the ingestion of 100M records without constructing
+class KafkaRestartBig(ScenarioBig):
+    """Ingest 100M records without constructing
     a dataflow that would keep all of them in memory. For the purpose, we
     emit a bunch of "EOF" records after the primary ingestion is complete
     and consider that the source has caught up when all the EOF records have
@@ -796,21 +830,17 @@ true
 """
         )
 
-    def before(self) -> Action:
-        return LambdaAction(lambda e: e.RestartMz())
-
-    def benchmark(self) -> MeasurementSource:
-        return Td(
-            """
-> SELECT 1;
-  /* A */
-1
-
+    def benchmark(self) -> BenchmarkingSequence:
+        return [
+            Lambda(lambda e: e.RestartMz()),
+            Td(
+                """
 > SELECT * FROM s1_is_complete
   /* B */
 true
 """
-        )
+            ),
+        ]
 
 
 @parameterized_class(
@@ -1062,12 +1092,16 @@ class QueryLatency(Coordinator):
 
 
 class ConnectionLatency(Coordinator):
-    SCALE = 3
     """Measure the time it takes to establish connections to Mz"""
+
+    SCALE = 2  # Many connections * many measurements = TCP port exhaustion
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
+            f"""
+$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialized-addr}}
+SELECT 1;
+"""
             for i in range(0, self.n())
         )
 

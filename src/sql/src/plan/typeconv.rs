@@ -25,7 +25,7 @@ use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
-use crate::func::TypeCategory;
+use crate::catalog::TypeCategory;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
@@ -383,7 +383,7 @@ lazy_static! {
             (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
             (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
             (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
-            (String, Jsonb) => Explicit: CastStringToJsonb,
+            (String, Jsonb) => Explicit: CastStringToJsonb(func::CastStringToJsonb),
             (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
@@ -461,25 +461,33 @@ lazy_static! {
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString(func::CastRecordToString { ty })))
             }),
             (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
                     return None;
                 }
+
+                if let (l @ ScalarType::Record {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_id requires at least Assignment context
+                    if ccx == CastContext::Implicit && l != r {
+                        return None;
+                    }
+                }
+
                 let cast_exprs = from_type.unwrap_record_element_type()
                     .iter()
                     .zip_eq(to_type.unwrap_record_element_type())
                     .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
                     .collect::<Option<Vec<_>>>()?;
                 let to = to_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2{ return_ty: to, cast_exprs }))
+                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2(func::CastRecord1ToRecord2 { return_ty: to, cast_exprs })))
             }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString(func::CastArrayToString { ty })))
             }),
             (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
 
@@ -487,42 +495,50 @@ lazy_static! {
             (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
                 Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)))
             }),
-            (Int2Vector, String) => Explicit: CastInt2VectorToString,
+            (Int2Vector, String) => Explicit: CastInt2VectorToString(func::CastInt2VectorToString),
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastListToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastListToString(func::CastListToString { ty })))
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+
+                if let (l @ ScalarType::List {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                    // Changing `from`'s custom_id requires at least Assignment context
+                    if ccx == CastContext::Implicit && !l.base_eq(r) {
+                        return None;
+                    }
+                }
+
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_el_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2 {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2(func::CastList1ToList2 {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
 
             // MAP
             (Map, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastMapToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastMapToString(func::CastMapToString { ty })))
             }),
 
             // JSONB
-            (Jsonb, Bool) => Explicit: CastJsonbToBool,
-            (Jsonb, Int16) => Explicit: CastJsonbToInt16,
-            (Jsonb, Int32) => Explicit: CastJsonbToInt32,
-            (Jsonb, Int64) => Explicit: CastJsonbToInt64,
-            (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
-            (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
+            (Jsonb, Bool) => Explicit: CastJsonbToBool(func::CastJsonbToBool),
+            (Jsonb, Int16) => Explicit: CastJsonbToInt16(func::CastJsonbToInt16),
+            (Jsonb, Int32) => Explicit: CastJsonbToInt32(func::CastJsonbToInt32),
+            (Jsonb, Int64) => Explicit: CastJsonbToInt64(func::CastJsonbToInt64),
+            (Jsonb, Float32) => Explicit: CastJsonbToFloat32(func::CastJsonbToFloat32),
+            (Jsonb, Float64) => Explicit: CastJsonbToFloat64(func::CastJsonbToFloat64),
             (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(func::CastJsonbToNumeric(s))))
             }),
-            (Jsonb, String) => Assignment: CastJsonbToString,
+            (Jsonb, String) => Assignment: CastJsonbToString(func::CastJsonbToString),
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString(func::CastUuidToString),
@@ -532,7 +548,7 @@ lazy_static! {
                 let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
-                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
+                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(func::RescaleNumeric(scale))),
                 })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
@@ -557,17 +573,6 @@ fn get_cast(
 
     if from == to || (ccx == Implicit && from.base_eq(to)) {
         return Some(Box::new(|expr| expr));
-    }
-
-    if (from.is_custom_type() || to.is_custom_type()) && from.structural_eq(to) {
-        // CastInPlace allowed if going between custom and anonymous or if cast
-        // explicitly requested.
-        if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
-            let return_ty = to.clone();
-            return Some(Box::new(move |expr| {
-                expr.call_unary(UnaryFunc::CastInPlace { return_ty })
-            }));
-        }
     }
 
     let imp = VALID_CASTS.get(&(from.into(), to.into()))?;
@@ -602,7 +607,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
         Int16 | Int32 | Float32 | Float64 => plan_cast(
             ecx,
             CastContext::Explicit,
@@ -610,7 +617,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             &Numeric { max_scale: None },
         )
         .expect("cast known to exist")
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -620,7 +629,8 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 ));
                 exprs.push(to_jsonb(
                     ecx,
-                    expr.clone().call_unary(UnaryFunc::RecordGet(i)),
+                    expr.clone()
+                        .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
                 ));
             }
             HirScalarExpr::CallVariadic {
@@ -628,7 +638,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 exprs,
             }
         }
-        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
+            func::CastJsonbOrNullToJsonb,
+        )),
     }
 }
 

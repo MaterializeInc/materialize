@@ -8,14 +8,18 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::fmt;
 
 use anyhow::bail;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use std::fmt;
+use crate::proto::TryFromProtoError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
 
 // https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
 pub const MAX_MAX_LENGTH: u32 = 10_485_760;
@@ -33,9 +37,20 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 ///
 /// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
-pub struct VarCharMaxLength(u32);
+pub struct VarCharMaxLength(pub(crate) u32);
 
 impl VarCharMaxLength {
     /// Consumes the newtype wrapper, returning the inner `u32`.
@@ -54,6 +69,20 @@ impl TryFrom<i64> for VarCharMaxLength {
             }
             _ => Err(InvalidVarCharMaxLengthError),
         }
+    }
+}
+
+impl From<&VarCharMaxLength> for ProtoVarCharMaxLength {
+    fn from(value: &VarCharMaxLength) -> Self {
+        ProtoVarCharMaxLength { value: value.0 }
+    }
+}
+
+impl TryFrom<ProtoVarCharMaxLength> for VarCharMaxLength {
+    type Error = TryFromProtoError;
+
+    fn try_from(repr: ProtoVarCharMaxLength) -> Result<Self, Self::Error> {
+        Ok(VarCharMaxLength(repr.value))
     }
 }
 
@@ -98,4 +127,20 @@ pub fn format_str(
         }
         None => s.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn var_char_max_length_protobuf_roundtrip(expect in any::<VarCharMaxLength>()) {
+            let actual = protobuf_roundtrip::<_, ProtoVarCharMaxLength>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }

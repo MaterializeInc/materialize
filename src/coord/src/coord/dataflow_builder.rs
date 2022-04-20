@@ -18,25 +18,25 @@ use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_expr::visit::Visit;
 use mz_expr::{
-    CollectionPlan, GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, UnmaterializableFunc,
+    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::{CoordError, PersisterWithConfig};
+use crate::CoordError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
     pub catalog: &'a CatalogState,
-    pub persister: &'a PersisterWithConfig,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
@@ -66,7 +66,6 @@ impl Coordinator {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
-            persister: &self.persister,
             compute,
         }
     }
@@ -81,7 +80,6 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
-            persister: &self.persister,
             compute,
         }
     }
@@ -121,21 +119,23 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         on_id: *id,
                         key: idx.keys.to_vec(),
                     };
-                    let desc = self
-                        .catalog
-                        .get_by_id(id)
-                        .desc()
+                    let entry = self.catalog.get_entry(id);
+                    let desc = entry
+                        .desc(
+                            &self
+                                .catalog
+                                .resolve_full_name(entry.name(), entry.conn_id()),
+                        )
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone());
                 }
             } else {
                 drop(valid_indexes);
-                let entry = self.catalog.get_by_id(id);
+                let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
-                        let persist_details = None;
-                        dataflow.import_source(*id, source_description, persist_details);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::Source(source) => {
                         if source.requires_single_materialization() {
@@ -152,7 +152,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                             if !intersection.is_empty() {
                                 let existing_indexes = intersection
                                     .iter()
-                                    .map(|id| self.catalog.get_by_id(id).name().item.clone())
+                                    .map(|id| self.catalog.get_entry(id).name().item.clone())
                                     .collect();
                                 return Err(CoordError::InvalidRematerialization {
                                     base_source: entry.name().item.clone(),
@@ -164,12 +164,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
-                        let persist_desc = self
-                            .persister
-                            .load_source_persist_desc(&source)
-                            .map_err(CoordError::Persistence)?;
-
-                        dataflow.import_source(*id, source_description, persist_desc);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
@@ -214,7 +209,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         id: GlobalId,
     ) -> Result<Option<DataflowDesc>, CoordError> {
-        let index_entry = self.catalog.get_by_id(&id);
+        let index_entry = self.catalog.get_entry(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
@@ -222,20 +217,28 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         if !index.enabled {
             return Ok(None);
         }
-        let on_entry = self.catalog.get_by_id(&index.on);
-        let on_type = on_entry.desc().unwrap().typ().clone();
+        let on_entry = self.catalog.get_entry(&index.on);
+        let on_type = on_entry
+            .desc(
+                &self
+                    .catalog
+                    .resolve_full_name(on_entry.name(), on_entry.conn_id()),
+            )
+            .unwrap()
+            .typ()
+            .clone();
         let name = index_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
         let mut index_description = mz_dataflow_types::IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };
         for key in &mut index_description.key {
-            self.prep_scalar_expr(key, ExprPrepStyle::Index)?;
+            prep_scalar_expr(self.catalog, key, ExprPrepStyle::Index)?;
         }
         dataflow.export_index(id, index_description, on_type);
 
@@ -272,7 +275,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            self.prep_relation_expr(plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
@@ -281,175 +284,169 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
         Ok(())
     }
+}
 
-    /// Prepares a relation expression for dataflow execution by preparing all
-    /// contained scalar expressions (see `prep_scalar_expr`) in the specified
-    /// style.
-    pub fn prep_relation_expr(
-        &self,
-        expr: &mut OptimizedMirRelationExpr,
-        style: ExprPrepStyle,
-    ) -> Result<(), CoordError> {
-        match style {
-            ExprPrepStyle::Index => {
-                expr.0.try_visit_mut_post(&mut |e| {
-                    // Carefully test filter expressions, which may represent temporal filters.
-                    if let MirRelationExpr::Filter { input, predicates } = &*e {
-                        let mfp =
-                            MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
-                        match mfp.into_plan() {
-                            Err(e) => coord_bail!("{:?}", e),
-                            Ok(_) => Ok(()),
-                        }
-                    } else {
-                        e.try_visit_scalars_mut1(&mut |s| self.prep_scalar_expr(s, style))
+/// Prepares a relation expression for dataflow execution by preparing all
+/// contained scalar expressions (see `prep_scalar_expr`) in the specified
+/// style.
+pub fn prep_relation_expr(
+    catalog: &CatalogState,
+    expr: &mut OptimizedMirRelationExpr,
+    style: ExprPrepStyle,
+) -> Result<(), CoordError> {
+    match style {
+        ExprPrepStyle::Index => {
+            expr.0.try_visit_mut_post(&mut |e| {
+                // Carefully test filter expressions, which may represent temporal filters.
+                if let MirRelationExpr::Filter { input, predicates } = &*e {
+                    let mfp =
+                        MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
+                    match mfp.into_plan() {
+                        Err(e) => coord_bail!("{:?}", e),
+                        Ok(_) => Ok(()),
                     }
-                })
-            }
-            ExprPrepStyle::OneShot { .. } => expr
-                .0
-                .try_visit_scalars_mut(&mut |s| self.prep_scalar_expr(s, style)),
-        }
-    }
-
-    /// Prepares a scalar expression for execution by handling unmaterializable
-    /// functions.
-    ///
-    /// Specifically, calls to unmaterializable functions are replaced if
-    /// `style` is `OneShot`. If `style` is `Index`, then an error is produced
-    /// if a call to a unmaterializable function is encountered.
-    pub fn prep_scalar_expr(
-        &self,
-        expr: &mut MirScalarExpr,
-        style: ExprPrepStyle,
-    ) -> Result<(), CoordError> {
-        match style {
-            // Evaluate each unmaterializable function and replace the
-            // invocation with the result.
-            ExprPrepStyle::OneShot {
-                logical_time,
-                session,
-            } => {
-                let mut res = Ok(());
-                expr.visit_mut_post(&mut |e| {
-                    if let MirScalarExpr::CallUnmaterializable(f) = e {
-                        match self.eval_unmaterializable_func(f, logical_time, session) {
-                            Ok(evaled) => *e = evaled,
-                            Err(e) => res = Err(e),
-                        }
-                    }
-                });
-                res
-            }
-
-            // Reject the query if it contains any unmaterializable function calls.
-            ExprPrepStyle::Index => {
-                let mut last_observed_unmaterializable_func = None;
-                expr.visit_mut_post(&mut |e| {
-                    if let MirScalarExpr::CallUnmaterializable(f) = e {
-                        last_observed_unmaterializable_func = Some(f.clone());
-                    }
-                });
-                if let Some(f) = last_observed_unmaterializable_func {
-                    return Err(CoordError::UnmaterializableFunction(f));
+                } else {
+                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))
                 }
-                Ok(())
+            })
+        }
+        ExprPrepStyle::OneShot { .. } => expr
+            .0
+            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
+    }
+}
+
+/// Prepares a scalar expression for execution by handling unmaterializable
+/// functions.
+///
+/// Specifically, calls to unmaterializable functions are replaced if
+/// `style` is `OneShot`. If `style` is `Index`, then an error is produced
+/// if a call to a unmaterializable function is encountered.
+pub fn prep_scalar_expr(
+    state: &CatalogState,
+    expr: &mut MirScalarExpr,
+    style: ExprPrepStyle,
+) -> Result<(), CoordError> {
+    match style {
+        // Evaluate each unmaterializable function and replace the
+        // invocation with the result.
+        ExprPrepStyle::OneShot {
+            logical_time,
+            session,
+        } => {
+            let mut res = Ok(());
+            expr.visit_mut_post(&mut |e| {
+                if let MirScalarExpr::CallUnmaterializable(f) = e {
+                    match eval_unmaterializable_func(state, f, logical_time, session) {
+                        Ok(evaled) => *e = evaled,
+                        Err(e) => res = Err(e),
+                    }
+                }
+            });
+            res
+        }
+
+        // Reject the query if it contains any unmaterializable function calls.
+        ExprPrepStyle::Index => {
+            let mut last_observed_unmaterializable_func = None;
+            expr.visit_mut_post(&mut |e| {
+                if let MirScalarExpr::CallUnmaterializable(f) = e {
+                    last_observed_unmaterializable_func = Some(f.clone());
+                }
+            });
+            if let Some(f) = last_observed_unmaterializable_func {
+                return Err(CoordError::UnmaterializableFunction(f));
             }
+            Ok(())
         }
     }
+}
 
-    fn eval_unmaterializable_func(
-        &self,
-        f: &UnmaterializableFunc,
-        logical_time: Option<u64>,
-        session: &Session,
-    ) -> Result<MirScalarExpr, CoordError> {
-        let pack_1d_array = |datums: Vec<Datum>| {
-            let mut row = Row::default();
-            row.packer()
-                .push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: datums.len(),
-                    }],
-                    datums,
-                )
-                .expect("known to be a valid array");
-            Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
-        };
-        let pack = |datum| {
-            Ok(MirScalarExpr::literal_ok(
-                datum,
-                f.output_type().scalar_type,
-            ))
-        };
+fn eval_unmaterializable_func(
+    state: &CatalogState,
+    f: &UnmaterializableFunc,
+    logical_time: Option<u64>,
+    session: &Session,
+) -> Result<MirScalarExpr, CoordError> {
+    let pack_1d_array = |datums: Vec<Datum>| {
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: datums.len(),
+                }],
+                datums,
+            )
+            .expect("known to be a valid array");
+        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+    };
+    let pack = |datum| {
+        Ok(MirScalarExpr::literal_ok(
+            datum,
+            f.output_type().scalar_type,
+        ))
+    };
 
-        match f {
-            UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
-            UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
+    match f {
+        UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
+        UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
+            session
+                .vars()
+                .search_path()
+                .iter()
+                .map(|s| Datum::String(s))
+                .collect(),
+        ),
+        UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+            use crate::catalog::builtin::{
+                INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
+                PG_CATALOG_SCHEMA,
+            };
+            pack_1d_array(
                 session
                     .vars()
                     .search_path()
                     .iter()
+                    .filter(|s| {
+                        (**s != PG_CATALOG_SCHEMA)
+                            && (**s != INFORMATION_SCHEMA)
+                            && (**s != MZ_CATALOG_SCHEMA)
+                            && (**s != MZ_TEMP_SCHEMA)
+                            && (**s != MZ_INTERNAL_SCHEMA)
+                    })
                     .map(|s| Datum::String(s))
                     .collect(),
-            ),
-            UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-                use crate::catalog::builtin::{
-                    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-                    PG_CATALOG_SCHEMA,
-                };
-                pack_1d_array(
-                    session
-                        .vars()
-                        .search_path()
-                        .iter()
-                        .filter(|s| {
-                            (**s != PG_CATALOG_SCHEMA)
-                                && (**s != INFORMATION_SCHEMA)
-                                && (**s != MZ_CATALOG_SCHEMA)
-                                && (**s != MZ_TEMP_SCHEMA)
-                                && (**s != MZ_INTERNAL_SCHEMA)
-                        })
-                        .map(|s| Datum::String(s))
-                        .collect(),
-                )
-            }
-            UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
-            UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
-            UnmaterializableFunc::MzClusterId => {
-                pack(Datum::from(self.catalog.config().cluster_id))
-            }
-            UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
-                None => coord_bail!("cannot call mz_logical_timestamp in this context"),
-                Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),
-            },
-            UnmaterializableFunc::MzSessionId => {
-                pack(Datum::from(self.catalog.config().session_id))
-            }
-            UnmaterializableFunc::MzUptime => {
-                let uptime = self.catalog.config().start_instant.elapsed();
-                let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
-                pack(uptime)
-            }
-            UnmaterializableFunc::MzVersion => pack(Datum::from(
-                &*self.catalog.config().build_info.human_version(),
-            )),
-            UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
-            UnmaterializableFunc::PgPostmasterStartTime => {
-                pack(Datum::from(self.catalog.config().start_time))
-            }
-            UnmaterializableFunc::Version => {
-                let build_info = self.catalog.config().build_info;
-                let version = format!(
-                    "PostgreSQL {}.{} on {} (materialized {})",
-                    SERVER_MAJOR_VERSION,
-                    SERVER_MINOR_VERSION,
-                    build_info.target_triple,
-                    build_info.version,
-                );
-                pack(Datum::from(&*version))
-            }
+            )
+        }
+        UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
+        UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
+        UnmaterializableFunc::MzClusterId => pack(Datum::from(state.config().cluster_id)),
+        UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
+            None => coord_bail!("cannot call mz_logical_timestamp in this context"),
+            Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),
+        },
+        UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
+        UnmaterializableFunc::MzUptime => {
+            let uptime = state.config().start_instant.elapsed();
+            let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
+            pack(uptime)
+        }
+        UnmaterializableFunc::MzVersion => {
+            pack(Datum::from(&*state.config().build_info.human_version()))
+        }
+        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
+        UnmaterializableFunc::PgPostmasterStartTime => pack(Datum::from(state.config().start_time)),
+        UnmaterializableFunc::Version => {
+            let build_info = state.config().build_info;
+            let version = format!(
+                "PostgreSQL {}.{} on {} (materialized {})",
+                SERVER_MAJOR_VERSION,
+                SERVER_MINOR_VERSION,
+                mz_build_info::TARGET_TRIPLE,
+                build_info.version,
+            );
+            pack(Datum::from(&*version))
         }
     }
 }

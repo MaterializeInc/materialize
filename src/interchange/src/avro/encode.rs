@@ -156,7 +156,7 @@ impl AvroSchemaGenerator {
                                 nullable: false,
                             },
                         )],
-                        custom_oid: None,
+                        custom_id: None,
                         custom_name: Some("transaction".to_string()),
                     },
                 },

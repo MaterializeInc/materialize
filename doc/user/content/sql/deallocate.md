@@ -3,7 +3,7 @@ title: "DEALLOCATE"
 description: "`DEALLOCATE` clears a prepared statement."
 menu:
   main:
-    parent: "sql"
+    parent: "commands"
 ---
 
 {{< version-added v0.9.7 />}}

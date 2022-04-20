@@ -7,10 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroUsize;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use dyn_clonable::clonable;
+use bytesize::ByteSize;
+use derivative::Derivative;
+use serde::de::Unexpected;
+use serde::{Deserialize, Deserializer};
 
 /// An orchestrator manages services.
 ///
@@ -25,29 +32,29 @@ use dyn_clonable::clonable;
 ///
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
-#[clonable]
-pub trait Orchestrator: fmt::Debug + Clone + Send {
+pub trait Orchestrator: fmt::Debug + Send + Sync {
+    // Default host used to bind to.
+    fn listen_host(&self) -> &str;
     /// Enter a namespace in the orchestrator.
-    fn namespace(&self, namespace: &str) -> Box<dyn NamespacedOrchestrator>;
+    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }
 
 /// An orchestrator restricted to a single namespace.
-#[clonable]
 #[async_trait]
-pub trait NamespacedOrchestrator: fmt::Debug + Clone + Send {
+pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Ensures that a service with the given configuration is running.
     ///
     /// If a service with the same ID already exists, its configuration is
     /// updated to match `config`. This may or may not involve restarting the
     /// service, depending on whether the existing service matches `config`.
     async fn ensure_service(
-        &mut self,
+        &self,
         id: &str,
-        config: ServiceConfig,
+        config: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&mut self, id: &str) -> Result<(), anyhow::Error>;
+    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
@@ -55,49 +62,74 @@ pub trait NamespacedOrchestrator: fmt::Debug + Clone + Send {
 
 /// Describes a running service managed by an `Orchestrator`.
 pub trait Service: fmt::Debug {
-    /// Returns the hostnames for each of the service's processes, in order.
-    fn hosts(&self) -> Vec<String>;
+    /// Given the name of a port, returns the addresses for each of the
+    /// service's processes, in order.
+    ///
+    /// Panics if `port` does not name a valid port.
+    fn addresses(&self, port: &str) -> Vec<String>;
 }
 
 /// Describes the desired state of a service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceConfig {
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
+pub struct ServiceConfig<'a> {
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
-    /// Arguments for the process.
-    pub args: Vec<String>,
+    /// A function that generates the arguments for each process the service
+    /// given the mapping from port names to assignments.
+    #[derivative(Debug = "ignore")]
+    pub args: &'a (dyn Fn(&HashMap<String, i32>) -> Vec<String> + Send + Sync),
     /// Ports to expose.
-    pub ports: Vec<i32>,
+    pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of processes to run.
-    pub processes: usize,
+    pub processes: NonZeroUsize,
+    /// Arbitrary key–value pairs to attach to the service in the orchestrator
+    /// backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub labels: HashMap<String, String>,
 }
 
-/// Describes a limit on memory resources.
+/// A named port associated with a service.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryLimit {
-    bytes: usize,
+pub struct ServicePort {
+    /// A descriptive name for the port.
+    ///
+    /// Note that not all orchestrator backends make use of port names.
+    pub name: String,
+    /// The desired port number.
+    ///
+    /// Not all orchestrator backends will make use of the hint.
+    pub port_hint: i32,
 }
 
-impl MemoryLimit {
-    /// Constructs a new memory limit from a number of bytes.
-    pub fn from_bytes(&self, bytes: usize) -> MemoryLimit {
-        MemoryLimit { bytes }
-    }
+#[derive(Copy, Clone, Debug)]
+pub struct MemoryLimit(pub ByteSize);
 
-    /// Returns the memory limit in bytes.
-    pub fn as_bytes(&self) -> usize {
-        self.bytes
+impl<'de> Deserialize<'de> for MemoryLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <String as Deserialize>::deserialize(deserializer)
+            .and_then(|s| {
+                ByteSize::from_str(&s).map_err(|_e| {
+                    use serde::de::Error;
+                    D::Error::invalid_value(serde::de::Unexpected::Str(&s), &"valid size in bytes")
+                })
+            })
+            .map(MemoryLimit)
     }
 }
 
 /// Describes a limit on CPU resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CpuLimit {
     millicpus: usize,
 }
@@ -111,5 +143,27 @@ impl CpuLimit {
     /// Returns the CPU limit in millicpus.
     pub fn as_millicpus(&self) -> usize {
         self.millicpus
+    }
+}
+
+impl<'de> Deserialize<'de> for CpuLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Note -- we just round off any precision beyond 0.001 here.
+        let float = f64::deserialize(deserializer)?;
+        let millicpus = (float * 1000.).round();
+        if millicpus < 0. || millicpus > (std::usize::MAX as f64) {
+            use serde::de::Error;
+            Err(D::Error::invalid_value(
+                Unexpected::Float(float),
+                &"a float representing a plausible number of CPUs",
+            ))
+        } else {
+            Ok(Self {
+                millicpus: millicpus as usize,
+            })
+        }
     }
 }

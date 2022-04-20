@@ -27,7 +27,7 @@ class Materialized(Service):
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         port: Union[int, str] = 6875,
-        workers: Optional[int] = None,
+        extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         timestamp_frequency: str = "100ms",
@@ -42,7 +42,6 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "MZ_METRICS_SCRAPING_INTERVAL=1s",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -59,10 +58,6 @@ class Materialized(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        # Make sure MZ_DEV=1 is always present
-        if "MZ_DEV=1" not in environment:
-            environment.append("MZ_DEV=1")
-
         if environment_extra:
             environment.extend(environment_extra)
 
@@ -78,11 +73,8 @@ class Materialized(Service):
         command_list = [
             f"--data-directory={data_directory}",
             f"--listen-addr 0.0.0.0:{guest_port}",
-            "--disable-telemetry",
             "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
-            f"--introspection-frequency {timestamp_frequency}",
-            "--retain-prometheus-metrics 1s",
         ]
 
         if options:
@@ -90,9 +82,6 @@ class Materialized(Service):
                 command_list.append(options)
             else:
                 command_list.extend(options)
-
-        if workers:
-            command_list.append(f"--workers {workers}")
 
         config: ServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}
@@ -110,7 +99,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port],
+                "ports": [port, *extra_ports],
                 "environment": environment,
                 "volumes": volumes,
             }
@@ -119,10 +108,10 @@ class Materialized(Service):
         super().__init__(name=name, config=config)
 
 
-class Dataflowd(Service):
+class Computed(Service):
     def __init__(
         self,
-        name: str = "dataflowd",
+        name: str = "storaged",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         ports: List[int] = [6876],
@@ -135,16 +124,16 @@ class Dataflowd(Service):
 
         if environment is None:
             environment = [
-                "MZ_LOG_FILTER",
+                "STORAGED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
             ]
 
         if volumes is None:
-            # We currently give dataflowd access to /tmp so that it can load CSV files
+            # We currently give computed access to /tmp so that it can load CSV files
             # but this requirement is expected to go away in the future.
             volumes = DEFAULT_MZ_VOLUMES
 
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": "dataflowd"}
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": "computed"}
 
         if hostname:
             config["hostname"] = hostname
@@ -176,7 +165,7 @@ class Zookeeper(Service):
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
-            name="zookeeper",
+            name=name,
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
@@ -203,6 +192,7 @@ class Kafka(Service):
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
             "KAFKA_MESSAGE_MAX_BYTES=15728640",
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
+            "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
         depends_on: List[str] = ["zookeeper"],
         volumes: List[str] = [],
@@ -231,7 +221,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v21.11.8",
+        version: str = "v21.11.13",
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
@@ -476,7 +466,7 @@ class Localstack(Service):
 class Testdrive(Service):
     def __init__(
         self,
-        name: str = "testdrive-svc",
+        name: str = "testdrive",
         mzbuild: str = "testdrive",
         materialized_url: str = "postgres://materialize@materialized:6875",
         materialized_params: Dict[str, str] = {},
@@ -486,7 +476,7 @@ class Testdrive(Service):
         default_timeout: str = "30s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_catalog: bool = True,
+        validate_data_dir: bool = True,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
@@ -499,6 +489,7 @@ class Testdrive(Service):
         if environment is None:
             environment = [
                 "TMPDIR=/share/tmp",
+                "MZ_SOFT_ASSERTIONS=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -525,8 +516,8 @@ class Testdrive(Service):
                 f"--materialized-url={materialized_url}",
             ]
 
-        if validate_catalog:
-            entrypoint.append("--validate-catalog=/share/mzdata/catalog")
+        if validate_data_dir:
+            entrypoint.append("--validate-data-dir=/share/mzdata")
 
         if no_reset:
             entrypoint.append("--no-reset")
@@ -607,17 +598,6 @@ class SqlLogicTest(Service):
                 "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
-            },
-        )
-
-
-class PrometheusSQLExporter(Service):
-    def __init__(self) -> None:
-        super().__init__(
-            name="prometheus-sql-exporter",
-            config={
-                "mzbuild": "ci-mz-sql-exporter",
-                "ports": ["9400"],
             },
         )
 

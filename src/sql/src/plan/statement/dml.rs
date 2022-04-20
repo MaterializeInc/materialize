@@ -16,10 +16,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use mz_expr::{GlobalId, MirRelationExpr};
+use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::AstInfo;
 
 use crate::ast::{
@@ -207,7 +207,7 @@ pub fn plan_explain(
     let is_view = matches!(explainee, Explainee::View(_));
     let query = match explainee {
         Explainee::View(name) => {
-            let view = scx.get_item_by_name(&name)?;
+            let view = scx.get_item_by_resolved_name(&name)?;
             if view.item_type() != CatalogItemType::View {
                 bail!("Expected {} to be a view, not a {}", name, view.item_type());
             }
@@ -283,7 +283,11 @@ pub fn describe_tail(
     stmt: TailStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let relation_desc = match stmt.relation {
-        TailRelation::Name(name) => scx.get_item_by_name(&name)?.desc()?.clone(),
+        TailRelation::Name(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            item.desc(&scx.catalog.resolve_full_name(item.name()))?
+                .clone()
+        }
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
@@ -324,7 +328,7 @@ pub fn plan_tail(
 ) -> Result<Plan, anyhow::Error> {
     let from = match relation {
         TailRelation::Name(name) => {
-            let entry = scx.get_item_by_name(&name)?;
+            let entry = scx.get_item_by_resolved_name(&name)?;
             match entry.item_type() {
                 CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
                     TailFrom::Id(entry.id())
@@ -333,9 +337,10 @@ pub fn plan_tail(
                 | CatalogItemType::Index
                 | CatalogItemType::Sink
                 | CatalogItemType::Type
-                | CatalogItemType::Secret => bail!(
+                | CatalogItemType::Secret
+                | CatalogItemType::Connector => bail!(
                     "'{}' cannot be tailed because it is a {}",
-                    entry.name(),
+                    name.full_name_str(),
                     entry.item_type(),
                 ),
             }

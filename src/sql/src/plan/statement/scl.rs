@@ -32,7 +32,7 @@ use crate::plan::{
 
 pub fn describe_set_variable(
     _: &StatementContext,
-    _: SetVariableStatement,
+    _: &SetVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -58,7 +58,7 @@ pub fn plan_set_variable(
 
 pub fn describe_show_variable(
     _: &StatementContext,
-    ShowVariableStatement { variable, .. }: ShowVariableStatement,
+    ShowVariableStatement { variable, .. }: &ShowVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
@@ -86,7 +86,7 @@ pub fn plan_show_variable(
 
 pub fn describe_discard(
     _: &StatementContext,
-    _: DiscardStatement,
+    _: &DiscardStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -105,7 +105,7 @@ pub fn plan_discard(
 
 pub fn describe_declare(
     _: &StatementContext,
-    _: DeclareStatement<Raw>,
+    _: &DeclareStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -128,7 +128,7 @@ with_options! {
 
 pub fn describe_fetch(
     _: &StatementContext,
-    _: FetchStatement,
+    _: &FetchStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -139,7 +139,7 @@ pub fn plan_fetch(
         name,
         count,
         options,
-    }: FetchStatement,
+    }: FetchStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let options = FetchOptions::try_from(options)?;
     let timeout = match options.timeout {
@@ -166,7 +166,7 @@ pub fn plan_fetch(
 
 pub fn describe_close(
     _: &StatementContext,
-    _: CloseStatement,
+    _: &CloseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -182,7 +182,7 @@ pub fn plan_close(
 
 pub fn describe_prepare(
     _: &StatementContext,
-    _: PrepareStatement<Raw>,
+    _: &PrepareStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -241,7 +241,7 @@ fn plan_execute_desc<'a>(
 
 pub fn describe_deallocate(
     _: &StatementContext,
-    _: DeallocateStatement,
+    _: &DeallocateStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }

@@ -12,7 +12,7 @@ from pathlib import Path
 from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
-    Dataflowd,
+    Computed,
     Kafka,
     Materialized,
     SchemaRegistry,
@@ -24,24 +24,27 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Dataflowd(
-        name="dataflowd_compute_1",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 0 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
-        ports=[6876, 2101],
+    Computed(
+        name="computed_1",
+        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        ports=[2100, 2102],
     ),
-    Dataflowd(
-        name="dataflowd_compute_2",
-        options="--workers 2 --storage-workers 2 --processes 2 --process 1 dataflowd_compute_1:2101 dataflowd_compute_2:2101 --storage-addr dataflowd_storage:2102 --runtime compute",
-        ports=[6876, 2101],
+    Computed(
+        name="computed_2",
+        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        ports=[2100, 2102],
     ),
-    Dataflowd(
-        name="dataflowd_storage",
-        options="--workers 2 --storage-addr dataflowd_storage:2102 --runtime storage",
-        ports=[6876, 2102],
+    Computed(
+        name="computed_3",
+        options="--workers 2 --processes 2 --process 0 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
+        ports=[2100, 2102],
     ),
-    Materialized(
-        options="--storage-workers=2 --storage-compute-addr=dataflowd_storage:2102 --storage-controller-addr=dataflowd_storage:6876",
+    Computed(
+        name="computed_4",
+        options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
+        ports=[2100, 2102],
     ),
+    Materialized(extra_ports=[2101], options="--process-listen-host=0.0.0.0"),
     Testdrive(
         volumes=[
             "mzdata:/share/mzdata",
@@ -49,6 +52,7 @@ SERVICES = [
             ".:/workdir/smoke",
             "../testdrive:/workdir/testdrive",
         ],
+        materialized_params={"cluster": "cluster1"},
     ),
 ]
 
@@ -65,7 +69,7 @@ def workflow_nightly(c: Composition) -> None:
         [
             "sh",
             "-c",
-            "grep -rLE 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td",
+            "grep -rLE 'mz_catalog|mz_records_' testdrive/*.td",
         ],
         cwd=Path(__file__).parent.parent,
     ).split()
@@ -73,15 +77,46 @@ def workflow_nightly(c: Composition) -> None:
 
 
 def test_cluster(c: Composition, *glob: str) -> None:
-    c.up("dataflowd_storage")
-    c.up("dataflowd_compute_1")
-    c.up("dataflowd_compute_2")
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
-    # Dropping the `default` cluster lightly tests that `materialized` can run
-    # and restart without any virtual clusters in the virtual cluster host.
-    c.sql("DROP CLUSTER default")
+
+    # Create a remote cluster and verify that tests pass.
+    c.up("computed_1")
+    c.up("computed_2")
     c.sql(
-        "CREATE CLUSTER default REMOTE ('dataflowd_compute_1:6876', 'dataflowd_compute_2:6876');"
+        "CREATE CLUSTER cluster1 REMOTE replica1 ('computed_1:2100', 'computed_2:2100');"
     )
-    c.run("testdrive-svc", *glob)
+    c.run("testdrive", *glob)
+
+    # Add a replica to that remote cluster and verify that tests still pass.
+    c.up("computed_3")
+    c.up("computed_4")
+    c.sql(
+        """
+        ALTER CLUSTER cluster1
+            REMOTE replica1 ('computed_1:2100', 'computed_2:2100'),
+            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
+        """
+    )
+    c.run("testdrive", *glob)
+
+    # Kill one of the nodes in the first replica of the compute cluster and
+    # verify that tests still pass.
+    c.kill("computed_1")
+    c.run("testdrive", *glob)
+
+    # Kill one of the nodes in the first replica of the compute cluster and
+    # verify that tests still pass.
+    c.sql(
+        """
+        ALTER CLUSTER cluster1
+            REMOTE replica1 ('computed_1:2100', 'computed_2:2100')
+        """
+    )
+    c.sql(
+        """
+        ALTER CLUSTER cluster1
+            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
+        """
+    )
+    c.run("testdrive", "smoke/insert-select.td")

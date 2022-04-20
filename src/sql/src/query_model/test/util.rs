@@ -22,7 +22,7 @@ pub(crate) mod qgm {
 
     pub(crate) fn get(id: u64) -> Get {
         Get {
-            id: mz_expr::GlobalId::User(id),
+            id: mz_repr::GlobalId::User(id),
             unique_keys: vec![],
         }
     }

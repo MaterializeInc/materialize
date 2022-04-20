@@ -3,7 +3,7 @@ title: "SHOW SINKS"
 description: "`SHOW SINKS` returns a list of all sinks available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 aliases:
     - /sql/show-sink
 ---
@@ -33,7 +33,7 @@ cluster | name  | type | volatile
 
 Field | Meaning
 ------|--------
-**cluster** | The name of the [cluster](/overview/api-components/#clusters) containing the sink.
+**cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the sink.
 **name** | The name of the sink.
 **type** | Whether the sink was created by the `user` or the `system`.
 **volatility** | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.

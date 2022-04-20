@@ -3,11 +3,12 @@ name = "mz-build-info"
 description = "Metadata about a Materialize build."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-semver = { version = "1.0.6", optional = true }
+compile-time-run = "0.2.12"
+semver = { version = "1.0.7", optional = true }
 
 [features]
 default = ["semver"]

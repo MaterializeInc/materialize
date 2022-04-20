@@ -41,7 +41,7 @@ Write:
 * a struct with arguments as `(field1 field2 .. fieldn)`
 * a struct with no arguments as the empty string.
 * a `Vec` as `[elem1 elem2 .. elemn]`
-* a tuple as `{elem1 elem2 .. elemn}`
+* a tuple as `[elem1 elem2 .. elemn]`
 * `None` or `null` as `null`
 * `true` (resp. `false`) as `true` (resp. `false`)
 * a string as `"something with quotations"`.
@@ -58,9 +58,23 @@ details.
 As a convenience, a unit enum (resp. a struct with only one argument) can
 alternatively be written as `variant_in_snake_case` (resp. `field1`).
 
-The convenience cannot be used if you have a struct whose only argument is a
-non-unit enum (resp. a struct with multiple arguments). In this case, you
-should use two sets of parentheses, e.g.
+In the case where there are nested single-argument structs, the type resolution
+system always tries to resolve your specification as an instance of the current
+type before trying to resolve the specification as the type of the single
+argument.
+
+Suppose you had two structs:
+```
+struct InnerStruct {only_arg: Option<u32>}
+struct OuterStruct {only_arg: Option<InnerStruct>}
+```
+and you were trying to create an instance of `OuterStruct`. Specifiying:
+* `null` or `(null)` result in an `OuterStruct{only_arg: None}`.
+* `((null))` results in an `OuterStruct{only_arg: Some(InnerStruct{only_arg: None})}`.
+* `1`, `(1)`, or `((1))` result in `OuterStruct{only_arg: Some(InnerStruct{only_arg:Some(1)})}`.
+
+If you have a struct whose only argument is a non-unit enum (resp. a struct
+with multiple arguments), you should use two sets of parentheses, e.g.
 `((variant_in_snake_case field1 .. fieldn))` (resp. `((field1 .. fieldn))`) to
 make it clear that the multiple arguments belong to the inner enum (resp.
 struct) and not the outer struct.
@@ -242,7 +256,16 @@ construct the enum variant or the struct using the default syntax.
 * `Box<>`
 * `Option<>`
 * `Vec<>`
-* Combinations of the above.
+
+Generally, combinations of the above are supported. The exception are
+types with values that `serde_json` cannot distinguish from `None` because
+`serde_json` serializes them all to the same string "null".
+* Multiple `Option<>`s nested within each other, e.g. `Option<Option<u32>>`, or
+  `Option<SingleUnnamedOptionStruct>`, where the struct is defined as
+  `SingleUnnamedOptionStruct(Option<u32>)`. `serde_json` cannot distinguish
+  `Some(None)` from `None`.
+* `Option<NoArgumentStruct>`. `serde_json` cannot distinguish
+  `Some(NoArgumentStruct)` from `None`.
 
 ## Roundtrip
 

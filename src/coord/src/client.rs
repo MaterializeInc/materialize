@@ -15,10 +15,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use mz_dataflow_types::PeekResponseUnary;
-use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{Datum, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -26,7 +26,6 @@ use crate::command::{
     StartupResponse,
 };
 use crate::error::CoordError;
-use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// A handle to a running coordinator.
@@ -75,7 +74,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator>,
+    id_alloc: Arc<IdAllocator<u32>>,
 }
 
 impl Client {
@@ -89,7 +88,7 @@ impl Client {
     /// Allocates a client for an incoming connection.
     pub fn new_conn(&self) -> Result<ConnClient, CoordError> {
         Ok(ConnClient {
-            conn_id: self.id_alloc.alloc()?,
+            conn_id: self.id_alloc.alloc().ok_or(CoordError::IdExhaustionError)?,
             inner: self.clone(),
         })
     }
@@ -100,9 +99,7 @@ impl Client {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "mz_system".into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
-        let res = session_client.simple_execute(stmts).await;
-        session_client.terminate().await;
-        res
+        session_client.simple_execute(stmts).await
     }
 
     /// Like [`Client::system_execute`], but for cases when `stmt` is known to
@@ -123,7 +120,7 @@ impl Client {
 /// it is created, and frees that ID for potential reuse when it is dropped.
 ///
 /// See also [`Client`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConnClient {
     conn_id: u32,
     inner: Client,
@@ -213,9 +210,6 @@ impl Drop for ConnClient {
 }
 
 /// A coordinator client that is bound to a connection.
-///
-/// You must call [`SessionClient::terminate`] rather than dropping a session
-/// client directly. Dropping an unterminated `SessionClient` will panic.
 ///
 /// See also [`Client`].
 pub struct SessionClient {
@@ -486,29 +480,6 @@ impl SessionClient {
         Ok(SimpleExecuteResponse { results })
     }
 
-    /// Terminates this client session.
-    ///
-    /// This method cleans up any coordinator state associated with the session
-    /// before consuming the `SessionClient. Call this method instead of
-    /// dropping the object directly.
-    pub async fn terminate(mut self) {
-        let session = self.session.take().expect("session invariant violated");
-        self.inner
-            .inner
-            .cmd_tx
-            .send(Command::Terminate { session })
-            .expect("coordinator unexpectedly gone");
-    }
-
-    // Like `terminate`, but permits the session to not be present, assuming it was
-    // terminated by the coordinator.
-    pub async fn terminate_allow_no_session(self) {
-        if self.session.is_none() {
-            return;
-        }
-        self.terminate().await
-    }
-
     /// Returns a mutable reference to the session bound to this client.
     pub fn session(&mut self) -> &mut Session {
         self.session.as_mut().unwrap()
@@ -527,8 +498,15 @@ impl SessionClient {
 
 impl Drop for SessionClient {
     fn drop(&mut self) {
-        if self.session.is_some() {
-            panic!("unterminated SessionClient dropped")
+        // We may not have a session if this client was dropped while awaiting
+        // a response. In this case, it is the coordinator's responsibility to
+        // terminate the session.
+        if let Some(session) = self.session.take() {
+            self.inner
+                .inner
+                .cmd_tx
+                .send(Command::Terminate { session })
+                .expect("coordinator unexpectedly gone");
         }
     }
 }

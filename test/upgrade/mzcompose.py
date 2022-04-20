@@ -12,7 +12,7 @@ operational after an upgrade.
 """
 
 import random
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from semver import Version
 
@@ -31,8 +31,7 @@ from materialize.mzcompose.services import (
 # All released Materialize versions, in order from most to least recent.
 all_versions = util.known_materialize_versions()
 
-# The `materialized` options that are valid only at or above a certain version.
-mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
+mz_options: Dict[Version, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -57,18 +56,19 @@ SERVICES = [
         ],
         volumes_extra=["secrets:/share/secrets"],
     ),
-    # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD
-    # to load the catalog from disk but does *not* run migrations. There is no
-    # guarantee that HEAD can load an old catalog without running migrations.
+    # N.B.: we need to use `validate_data_dir=False` because testdrive uses
+    # HEAD to load the catalog from disk but does *not* run migrations. There
+    # is no guarantee that HEAD can load an old catalog without running
+    # migrations.
     #
     # When testdrive is targeting a HEAD materialized, we re-enable catalog
-    # validation below by manually passing the `--validate-catalog` flag.
+    # validation below by manually passing the `--validate-data-dir` flag.
     #
     # Disabling catalog validation is preferable to using a versioned testdrive
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        validate_catalog=False,
+        validate_data_dir=False,
         volumes_extra=["secrets:/share/secrets"],
     ),
 ]
@@ -81,7 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--min-version",
         metavar="VERSION",
         type=Version.parse,
-        default=Version.parse("0.8.0"),
+        default=Version.parse("0.27.0"),
         help="the minimum version to test from",
     )
     parser.add_argument(
@@ -137,7 +137,7 @@ def test_upgrade_from_version(
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
-    c.rm("materialized", "testdrive-svc", stop=True)
+    c.rm("materialized", "testdrive", stop=True)
     c.rm_volumes("mzdata", "tmp")
 
     if from_version != "current_source":
@@ -163,7 +163,7 @@ def test_upgrade_from_version(
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
@@ -172,18 +172,18 @@ def test_upgrade_from_version(
     )
 
     c.kill("materialized")
-    c.rm("materialized", "testdrive-svc")
+    c.rm("materialized", "testdrive")
 
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
     c.run(
-        "testdrive-svc",
+        "testdrive",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
         seed,
-        "--validate-catalog=/share/mzdata/catalog",
+        "--validate-data-dir=/share/mzdata",
         f"check-{style}from-{version_glob}-{filter}.td",
     )
 
@@ -259,7 +259,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
-        validate_catalog=False,
+        validate_data_dir=False,
     )
 
     return (kafka, schema_registry, testdrive)

@@ -8,14 +8,18 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::fmt;
 
 use anyhow::bail;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use std::fmt;
+use crate::proto::TryFromProtoError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
 
 // https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
 const MAX_LENGTH: u32 = 10_485_760;
@@ -33,9 +37,20 @@ pub struct Char<S: AsRef<str>>(pub S);
 ///
 /// [`ScalarType::Char`]: crate::ScalarType::Char
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
-pub struct CharLength(u32);
+pub struct CharLength(pub(crate) u32);
 
 impl CharLength {
     /// A length of one.
@@ -156,4 +171,34 @@ pub fn format_str_trim(
 /// appropriate to store in `Datum::String`.
 pub fn format_str_pad(s: &str, length: Option<CharLength>) -> String {
     format_char_str(s, length, false, CharWhiteSpace::Pad).unwrap()
+}
+
+impl From<&CharLength> for ProtoCharLength {
+    fn from(x: &CharLength) -> Self {
+        ProtoCharLength { value: x.0 }
+    }
+}
+
+impl TryFrom<ProtoCharLength> for CharLength {
+    type Error = TryFromProtoError;
+
+    fn try_from(repr: ProtoCharLength) -> Result<Self, Self::Error> {
+        Ok(CharLength(repr.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn char_length_protobuf_roundtrip(expect in any::<CharLength>()) {
+            let actual = protobuf_roundtrip::<_, ProtoCharLength>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }

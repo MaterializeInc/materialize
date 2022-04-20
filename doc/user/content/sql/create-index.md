@@ -2,8 +2,10 @@
 title: "CREATE INDEX"
 description: "`CREATE INDEX` creates an in-memory index on a source or view."
 menu:
+  # This should also have a "non-content entry" under Reference, which is
+  # configured in doc/user/config.toml
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 {{< warning >}} This is an advanced feature. Running `CREATE MATERIALIZED VIEW` automatically
@@ -12,8 +14,8 @@ need to manually create indexes. {{< /warning >}}
 
 `CREATE INDEX` creates an in-memory index on a source or view.
 
-- For materialized views, this creates additional indexes.
-- For non-materialized views, it converts them into materialized views.
+-   For materialized views, this creates additional indexes.
+-   For non-materialized views, it converts them into materialized views.
 
 ## Conceptual framework
 
@@ -21,15 +23,16 @@ Indexes assemble and maintain in memory a query's results, which can
 provide future queries the data they need pre-arranged in a format they can immediately use.
 In particular, this can be very helpful for the [`JOIN`](../join) operator which needs
 to build and maintain the appropriate indexes if they do not otherwise exist.
-For more information, see [API Components: Indexes](/overview/api-components#indexes).
+For more information, see [Key Concepts: Indexes](/overview/key-concepts/#indexes).
 
 ### When to create indexes
 
 You might want to create indexes when...
 
-- You want to use non-primary keys (e.g. foreign keys) as a join condition.
-  In this case, you could create an index on the columns in the join condition.
-- You want to convert a non-materialized view or source to a materialized view or source.
+-   You want to use non-primary keys (e.g. foreign keys) as a join condition.
+    In this case, you could create an index on the columns in the join condition.
+-   You want to convert a non-materialized view or source to a materialized view or source.
+-   You want to speed up searches filtering by literal values or expressions.
 
 ## Syntax
 
@@ -64,18 +67,16 @@ The following option is valid within the `WITH` clause:
 
 ### Restrictions
 
-- You can only reference the columns available in the `SELECT` list of the query
-  that defines the view. For example, if your view was defined as `SELECT a, b
-  FROM src`, you can only reference columns `a` and `b`, even if `src` contains
-  additional columns.
+-   You can only reference the columns available in the `SELECT` list of the query
+    that defines the view. For example, if your view was defined as `SELECT a, b FROM src`, you can only reference columns `a` and `b`, even if `src` contains
+    additional columns.
 
-- You cannot exclude any columns from being in the index's "value" set. For
-  example, if your view is defined as `SELECT a, b FROM ...`, all indexes will
-  contain `{a, b}` as their values.
+-   You cannot exclude any columns from being in the index's "value" set. For
+    example, if your view is defined as `SELECT a, b FROM ...`, all indexes will
+    contain `{a, b}` as their values.
 
-  If you want to create an index that only stores a subset of these columns,
-  consider creating another materialized view that uses `SELECT some_subset
-  FROM this_view...`.
+    If you want to create an index that only stores a subset of these columns,
+    consider creating another materialized view that uses `SELECT some_subset FROM this_view...`.
 
 ### Structure
 
@@ -93,13 +94,13 @@ or view.
 
 For instance, unique keys can be...
 
-- **Provided** by the schema provided for the source, e.g. through the Confluent
-  Schema Registry.
-- **Inferred** when the query...
-  - Concludes with a `GROUP BY`.
-  - Uses sources or views that have a unique key without damaging this property.
-    For example, joining a view with unique keys against a second, where the join
-    constraint uses foreign keys.
+-   **Provided** by the schema provided for the source, e.g. through the Confluent
+    Schema Registry.
+-   **Inferred** when the query...
+    -   Concludes with a `GROUP BY`.
+    -   Uses sources or views that have a unique key without damaging this property.
+        For example, joining a view with unique keys against a second, where the join
+        constraint uses foreign keys.
 
 When creating your own indexes, you can choose the indexed expressions.
 
@@ -140,15 +141,15 @@ CREATE MATERIALIZED VIEW active_customer_per_geo AS
 
 In the above example, the index `active_customers_geo_idx`...
 
-- Helps us because it contains a key that the view `active_customer_per_geo` can
-  use to look up values for the join condition (`active_customers.geo_id`).
+-   Helps us because it contains a key that the view `active_customer_per_geo` can
+    use to look up values for the join condition (`active_customers.geo_id`).
 
     Because this index is exactly what the query requires, the Materialize
     optimizer will choose to use `active_customers_geo_idx` rather than build
     and maintain a private copy of the index just for this query.
 
-- Obeys our restrictions by containing only a subset of columns in the result
-  set.
+-   Obeys our restrictions by containing only a subset of columns in the result
+    set.
 
 ### Materializing views
 
@@ -170,7 +171,36 @@ are automatically created contain an index of all columns in the result set,
 unless they contain a unique key. (Remember that indexes store a copy of a
 row's indexed columns _and_ a copy of the entire row.)
 
+### Speed up filtering with indexes
+
+You can set up an index over a column were filtering by literal values or expressions are common to improve the performance.
+
+```sql
+CREATE MATERIALIZED VIEW active_customers AS
+    SELECT guid, geo_id, last_active_on
+    FROM customer_source
+    GROUP BY geo_id;
+
+CREATE INDEX active_customers_idx ON active_customers (guid);
+
+SELECT * FROM active_customers WHERE guid = 'd868a5bf-2430-461d-a665-40418b1125e7';
+
+-- Using expressions
+CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
+
+SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
+
+-- Filter using an expression in one field and a literal in another field
+CREATE INDEX active_customers_exp_field_idx ON active_customers (upper(guid), geo_id);
+
+SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7' and geo_id = 'ID_8482';
+```
+
+Create an index with an expression to improve query performance over a frequent used expression and
+avoid building downstream views to apply the function like the one used in the example: `upper()`.
+Take into account that aggregations like `count()` are not possible to use as expressions.
+
 ## Related pages
 
-- [`SHOW INDEX`](../show-index)
-- [`DROP INDEX`](../drop-index)
+-   [`SHOW INDEX`](../show-index)
+-   [`DROP INDEX`](../drop-index)

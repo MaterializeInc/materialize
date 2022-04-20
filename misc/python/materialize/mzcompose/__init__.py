@@ -86,9 +86,7 @@ def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> 
         return
 
     for (name, service) in composition["services"].items():
-        if service.get("mzbuild") == "materialized":
-            _lint_materialized_service(path, name, service, errors)
-        elif "mzbuild" not in service and "image" in service:
+        if "mzbuild" not in service and "image" in service:
             _lint_image_name(path, service["image"], errors)
 
         if isinstance(service.get("environment"), dict):
@@ -147,31 +145,6 @@ def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     if repo == "wurstmeister" and image == "kafka":
         errors.append(
             LintError(path, f"replace {spec} with official confluentinc/cp-kafka image")
-        )
-
-
-def _lint_materialized_service(
-    path: Path, name: str, service: Any, errors: List[LintError]
-) -> None:
-    # command may be a string that is passed to the shell, or a list of
-    # arguments.
-    command = service.get("command", "")
-    if isinstance(command, str):
-        command = command.split()  # split on whitespace to extract individual arguments
-    if "--disable-telemetry" not in command:
-        errors.append(
-            LintError(
-                path,
-                "materialized service command does not include --disable-telemetry",
-            )
-        )
-    env = service.get("environment", [])
-    if "MZ_DEV=1" not in env:
-        errors.append(
-            LintError(
-                path,
-                f"materialized service '{name}' does not specify MZ_DEV=1 in its environment: {env}",
-            )
         )
 
 
@@ -335,12 +308,15 @@ class Composition:
             _lint_composition(path, composition, errs)
         return errs
 
-    def invoke(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    def invoke(
+        self, *args: str, capture: bool = False, stdin: Optional[str] = None
+    ) -> subprocess.CompletedProcess:
         """Invoke `docker-compose` on the rendered composition.
 
         Args:
             args: The arguments to pass to `docker-compose`.
             capture: Whether to capture the child's stdout stream.
+            input: A string to provide as stdin for the command.
         """
 
         if not self.silent:
@@ -365,6 +341,7 @@ class Composition:
                 close_fds=False,
                 check=True,
                 stdout=stdout,
+                input=stdin,
                 text=True,
             )
         except subprocess.CalledProcessError as e:
@@ -545,6 +522,7 @@ class Composition:
         rm: bool = False,
         env_extra: Dict[str, str] = {},
         capture: bool = False,
+        stdin: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -557,6 +535,7 @@ class Composition:
             service: The name of a service in the composition.
             args: Arguments to pass to the service's entrypoint.
             detach: Run the container in the background.
+            stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker-compose` invocation.
@@ -573,6 +552,42 @@ class Composition:
             service,
             *args,
             capture=capture,
+            stdin=stdin,
+        )
+
+    def exec(
+        self,
+        service: str,
+        *args: str,
+        detach: bool = False,
+        capture: bool = False,
+        stdin: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """Execute a one-off command in a service's running container
+
+        Delegates to `docker-compose exec`.
+
+        Args:
+            service: The service whose container will be used.
+            command: The command to run.
+            args: Arguments to pass to the command.
+            detach: Run the container in the background.
+            stdin: read STDIN from a string.
+        """
+
+        return self.invoke(
+            "exec",
+            *(["--detach"] if detach else []),
+            "-T",
+            service,
+            *(
+                self.compose["services"][service]["entrypoint"]
+                if "entrypoint" in self.compose["services"][service]
+                else []
+            ),
+            *args,
+            capture=capture,
+            stdin=stdin,
         )
 
     def pull_if_variable(self, services: List[str]) -> None:
@@ -589,7 +604,7 @@ class Composition:
             ):
                 self.invoke("pull", service)
 
-    def up(self, *services: str, detach: bool = True) -> None:
+    def up(self, *services: str, detach: bool = True, persistent: bool = False) -> None:
         """Build, (re)create, and start the named services.
 
         Delegates to `docker-compose up`. See that command's help for details.
@@ -597,8 +612,22 @@ class Composition:
         Args:
             services: The names of services in the composition.
             detach: Run containers in the background.
+            persistent: Replace the container's entrypoint and command with
+                `sleep infinity` so that additional commands can be scheduled
+                on the container with `Composition.exec`.
         """
+        if persistent:
+            old_compose = copy.deepcopy(self.compose)
+            for service in self.compose["services"].values():
+                service["entrypoint"] = ["sleep", "infinity"]
+                service["command"] = []
+            self._write_compose()
+
         self.invoke("up", *(["--detach"] if detach else []), *services)
+
+        if persistent:
+            self.compose = old_compose
+            self._write_compose()
 
     def down(self, destroy_volumes: bool = True) -> None:
         """Stop and remove resources.
@@ -683,19 +712,14 @@ class Composition:
         if isinstance(port, str):
             port = int(port.split(":")[0])
         ui.progress(f"waiting for {host}:{port}", "C")
-        for remaining in ui.timeout_loop(timeout_secs):
-            cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
-
-            try:
-                _check_tcp(cmd[:], host, port, timeout_secs)
-            except subprocess.CalledProcessError:
-                ui.progress(" {}".format(int(remaining)))
-            else:
-                ui.progress(" success!", finish=True)
-                return
-
-        ui.progress(" error!", finish=True)
-        raise UIError(f"unable to connect to {host}:{port}")
+        cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
+        try:
+            _check_tcp(cmd[:], host, port, timeout_secs)
+        except subprocess.CalledProcessError:
+            ui.progress(" error!", finish=True)
+            raise UIError(f"unable to connect to {host}:{port}")
+        else:
+            ui.progress(" success!", finish=True)
 
     # TODO(benesch): replace with Docker health checks.
     def wait_for_postgres(
@@ -761,6 +785,22 @@ class Composition:
             print_result=print_result,
             service=service,
         )
+
+    def testdrive(
+        self, input: str, service: str = "testdrive", persistent: bool = True
+    ) -> None:
+        """Run a string as a testdrive script.
+
+        Args:
+            service: Optional name of the testdrive service to use.
+            input: The string to execute.
+            persistent: Whether a persistent testdrive container will be used.
+        """
+
+        if persistent:
+            self.exec(service, stdin=input)
+        else:
+            self.run(service, stdin=input)
 
 
 class ServiceConfig(TypedDict, total=False):
@@ -885,7 +925,7 @@ def _check_tcp(
             str(timeout_secs),
             "bash",
             "-c",
-            f"cat < /dev/null > /dev/tcp/{host}/{port}",
+            f"until [ cat < /dev/null > /dev/tcp/{host}/{port} ] ; do sleep 0.1 ; done",
         ]
     )
     try:
@@ -916,7 +956,7 @@ def _wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user} password={password}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    for remaining in ui.timeout_loop(timeout_secs):
+    for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
         try:
             conn = pg8000.connect(
                 database=dbname,

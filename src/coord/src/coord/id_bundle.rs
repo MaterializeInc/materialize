@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_expr::GlobalId;
+use mz_repr::GlobalId;
 
 /// A bundle of storage and compute collection identifiers.
 #[derive(Debug, Default, Clone)]
@@ -24,12 +24,6 @@ impl CollectionIdBundle {
     /// Reports whether the bundle contains any identifiers of any type.
     pub fn is_empty(&self) -> bool {
         self.storage_ids.is_empty() && self.compute_ids.is_empty()
-    }
-
-    /// Extends the bundle with the identifiers from `other`.
-    pub fn extend(&mut self, other: &CollectionIdBundle) {
-        self.storage_ids.extend(&other.storage_ids);
-        self.compute_ids.extend(&other.compute_ids);
     }
 
     /// Returns a new bundle without the identifiers from `other`.

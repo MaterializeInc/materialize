@@ -10,19 +10,23 @@
 use crate::ast::Expr;
 use crate::catalog::{
     CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
-    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
-use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
+use crate::names::{
+    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+};
 use crate::plan::StatementDesc;
+use crate::DEFAULT_SCHEMA;
 use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
-use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -58,7 +62,7 @@ lazy_static! {
 pub enum TestCatalogItem {
     /// Represents some kind of data source. Could be a Source/Table/View.
     BaseTable {
-        name: FullName,
+        name: QualifiedObjectName,
         id: GlobalId,
         desc: RelationDesc,
     },
@@ -66,9 +70,9 @@ pub enum TestCatalogItem {
 }
 
 impl CatalogItem for TestCatalogItem {
-    fn name(&self) -> &FullName {
+    fn name(&self) -> &QualifiedObjectName {
         match &self {
-            TestCatalogItem::BaseTable { name, .. } => name,
+            TestCatalogItem::BaseTable { name, .. } => &name,
             _ => unimplemented!(),
         }
     }
@@ -84,7 +88,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn desc(&self) -> Result<&RelationDesc, CatalogError> {
+    fn desc(&self, _: &FullObjectName) -> Result<&RelationDesc, CatalogError> {
         match &self {
             TestCatalogItem::BaseTable { desc, .. } => Ok(desc),
             _ => Err(CatalogError::UnknownItem(format!(
@@ -135,7 +139,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn type_details(&self) -> Option<&CatalogTypeDetails> {
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
         unimplemented!()
     }
 }
@@ -184,8 +188,12 @@ impl SessionCatalog for TestCatalog {
         None
     }
 
-    fn active_database(&self) -> &str {
-        "dummy"
+    fn active_database(&self) -> Option<&DatabaseId> {
+        Some(&DatabaseId(0))
+    }
+
+    fn active_database_name(&self) -> Option<&str> {
+        Some("dummy")
     }
 
     fn active_compute_instance(&self) -> &str {
@@ -196,11 +204,15 @@ impl SessionCatalog for TestCatalog {
         unimplemented!();
     }
 
-    fn resolve_schema(
+    fn resolve_schema_in_database(
         &self,
-        _: Option<String>,
+        _: &ResolvedDatabaseSpecifier,
         _: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError> {
+        unimplemented!()
+    }
+
+    fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
         unimplemented!();
     }
 
@@ -208,7 +220,10 @@ impl SessionCatalog for TestCatalog {
         unimplemented!();
     }
 
-    fn resolve_item(&self, partial_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_item(
+        &self,
+        partial_name: &PartialObjectName,
+    ) -> Result<&dyn CatalogItem, CatalogError> {
         if let Some(result) = self.tables.get(&partial_name.item[..]) {
             return Ok(result);
         }
@@ -217,7 +232,7 @@ impl SessionCatalog for TestCatalog {
 
     fn resolve_function(
         &self,
-        partial_name: &PartialName,
+        partial_name: &PartialObjectName,
     ) -> Result<&dyn CatalogItem, CatalogError> {
         if let Some(result) = self.funcs.get(&partial_name.item[..]) {
             return Ok(result);
@@ -236,20 +251,36 @@ impl SessionCatalog for TestCatalog {
         ))
     }
 
-    fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
+        FullObjectName {
+            database: RawDatabaseSpecifier::Name("dummy".to_string()),
+            schema: DEFAULT_SCHEMA.to_string(),
+            item: name.item.clone(),
+        }
+    }
+
+    fn item_exists(&self, _: &QualifiedObjectName) -> bool {
+        unimplemented!()
+    }
+
+    fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
+        unimplemented!()
+    }
+
+    fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
+        unimplemented!()
+    }
+
+    fn is_system_schema(&self, _: &str) -> bool {
+        false
+    }
+
+    fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
         &self.tables[&self.id_to_name[id]]
     }
 
-    fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
+    fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
         unimplemented!();
-    }
-
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
-    fn item_exists(&self, _: &FullName) -> bool {
-        false
     }
 
     fn config(&self) -> &CatalogConfig {
@@ -258,6 +289,10 @@ impl SessionCatalog for TestCatalog {
 
     fn now(&self) -> EpochMillis {
         (self.config().now)()
+    }
+
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+        name
     }
 }
 
@@ -313,11 +348,13 @@ impl TestCatalog {
                         self.tables.insert(
                             source_name.clone(),
                             TestCatalogItem::BaseTable {
-                                name: FullName {
-                                    database: DatabaseSpecifier::from(Some(
-                                        self.active_database().to_string(),
-                                    )),
-                                    schema: self.active_user().to_string(),
+                                name: QualifiedObjectName {
+                                    qualifiers: ObjectQualifiers {
+                                        database_spec: ResolvedDatabaseSpecifier::Id(
+                                            self.active_database().unwrap().clone(),
+                                        ),
+                                        schema_spec: SchemaSpecifier::Id(SchemaId(1)),
+                                    },
                                     item: source_name,
                                 },
                                 id,

@@ -1,8 +1,18 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Discontinue support for custom index materialization.
+* Enable defining indexes when creating a materializedview, view, or source.
+
+## 1.0.4 - 2022-03-27
+
+* Upgrade to `dbt-postgres` v1.0.4.
+
 ## 1.0.3.post1 - 2022-03-16
 
-* Produce a proper error message when attempting to use an incremental materialization.
+* Produce a proper error message when attempting to use an incremental
+materialization.
 
 ## 1.0.3 - 2022-02-27
 

@@ -3,7 +3,7 @@ title: "SHOW INDEX"
 description: "SHOW INDEX provides details about a materialized view's indexes"
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 aliases:
     - /sql/show-indexes
     - /sql/show-keys
@@ -33,7 +33,7 @@ cluster | on_name | key_name | seq_in_index | column_name | expression | nullabl
 
 Field | Meaning
 ------|--------
-**cluster** | The name of the [cluster](/overview/api-components/#clusters) containing the index.
+**cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the index.
 **on_name** | The name of the table, source, or view the index belongs to.
 **key_name** | The name of the index.
 **seq_in_index** | The column's position in the index.

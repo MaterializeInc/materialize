@@ -24,13 +24,16 @@ use mz_repr::ColumnName;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, SqlOption,
-    Statement, TableFactor, TableFunction, UnresolvedObjectName, Value, ViewDefinition,
+    AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
+    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
-use crate::names::{Aug, DatabaseSpecifier, FullName, PartialName};
+use crate::names::{
+    Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+};
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
@@ -39,23 +42,49 @@ pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
+/// Normalizes a single identifier.
+pub fn ident_ref(ident: &Ident) -> &str {
+    ident.as_str()
+}
+
 /// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
 /// Normalizes an unresolved object name.
-pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
+pub fn unresolved_object_name(
+    mut name: UnresolvedObjectName,
+) -> Result<PartialObjectName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
-    let out = PartialName {
+    let out = PartialObjectName {
         item: ident(
             name.0
                 .pop()
                 .expect("name checked to have at least one component"),
         ),
         schema: name.0.pop().map(ident),
+        database: name.0.pop().map(ident),
+    };
+    assert!(name.0.is_empty());
+    Ok(out)
+}
+
+/// Normalizes an unresolved schema name.
+pub fn unresolved_schema_name(
+    mut name: UnresolvedSchemaName,
+) -> Result<PartialSchemaName, PlanError> {
+    if name.0.len() < 1 || name.0.len() > 2 {
+        return Err(PlanError::MisqualifiedName(name.to_string()));
+    }
+    let out = PartialSchemaName {
+        schema: ident(
+            name.0
+                .pop()
+                .expect("name checked to have at least one component"),
+        ),
         database: name.0.pop().map(ident),
     };
     assert!(name.0.is_empty());
@@ -79,43 +108,89 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
 }
 
 /// Normalizes a list of `WITH` options.
-pub fn options<T: AstInfo>(options: &[SqlOption<T>]) -> BTreeMap<String, Value> {
+///
+/// # Panics
+/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
+///   values during parsing.
+pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
     options
         .iter()
-        .map(|o| match o {
-            SqlOption::Value { name, value } => (ident(name.clone()), value.clone()),
-            SqlOption::ObjectName { name, object_name } => (
-                ident(name.clone()),
-                Value::String(object_name.to_ast_string()),
-            ),
-            SqlOption::DataType { name, data_type } => (
-                ident(name.clone()),
-                Value::String(data_type.to_ast_string()),
-            ),
+        .map(|o| {
+            (
+                o.key.to_string(),
+                match o
+                    .value
+                    .as_ref()
+                    // The only places that generate options that do not require
+                    // keys and values do not currently use this code path.
+                    .expect("check that all entries have values before calling `options`")
+                {
+                    WithOptionValue::Value(value) => value.clone(),
+                    WithOptionValue::ObjectName(object_name) => {
+                        Value::String(object_name.to_ast_string())
+                    }
+                    WithOptionValue::DataType(data_type) => {
+                        Value::String(data_type.to_ast_string())
+                    }
+                },
+            )
         })
         .collect()
 }
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
 /// values.
-pub fn option_objects(options: &[SqlOption<Aug>]) -> BTreeMap<String, SqlOption<Aug>> {
+///
+/// # Panics
+/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
+///   values during parsing.
+pub fn option_objects(options: &[WithOption<Aug>]) -> BTreeMap<String, WithOptionValue<Aug>> {
     options
         .iter()
-        .map(|o| (ident(o.name().clone()), o.clone()))
+        .map(|o| {
+            (
+                ident(o.key.clone()),
+                o.value
+                    .as_ref()
+                    .clone()
+                    // The only places that generate options that do not require
+                    // keys and values do not currently use this code path.
+                    .expect("check that all entries have values before calling `option_objects`")
+                    .clone(),
+            )
+        })
         .collect()
 }
 
 /// Unnormalizes an object name.
 ///
 /// This is the inverse of the [`unresolved_object_name`] function.
-pub fn unresolve(name: FullName) -> UnresolvedObjectName {
+pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
     let mut out = vec![];
-    if let DatabaseSpecifier::Name(n) = name.database {
+    if let RawDatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
     }
     out.push(Ident::new(name.schema));
     out.push(Ident::new(name.item));
     UnresolvedObjectName(out)
+}
+
+/// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
+/// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
+pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, anyhow::Error> {
+    match raw_name.0.len() {
+        3 => Ok(FullObjectName {
+            item: ident(raw_name.0.pop().unwrap()),
+            schema: ident(raw_name.0.pop().unwrap()),
+            database: RawDatabaseSpecifier::Name(ident(raw_name.0.pop().unwrap())),
+        }),
+        2 => Ok(FullObjectName {
+            item: ident(raw_name.0.pop().unwrap()),
+            schema: ident(raw_name.0.pop().unwrap()),
+            database: RawDatabaseSpecifier::Ambient,
+        }),
+        _ => bail!("unresolved name {} not fully qualified", raw_name),
+    }
 }
 
 /// Normalizes a `CREATE` statement.
@@ -131,13 +206,13 @@ pub fn create_statement(
     mut stmt: Statement<Aug>,
 ) -> Result<String, anyhow::Error> {
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(
-            scx.allocate_name(unresolved_object_name(name.clone())?),
-        ))
+        Ok(unresolve(scx.allocate_full_name(
+            unresolved_object_name(name.clone())?,
+        )?))
     };
 
     let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_temporary_name(
+        Ok(unresolve(scx.allocate_temporary_full_name(
             unresolved_object_name(name.clone())?,
         )))
     };
@@ -146,8 +221,8 @@ pub fn create_statement(
         scx: &StatementContext,
         name: &mut UnresolvedObjectName,
     ) -> Result<(), PlanError> {
-        let full_name = scx.resolve_function(name.clone())?;
-        *name = unresolve(full_name.name().clone());
+        let item = scx.resolve_function(name.clone())?;
+        *name = unresolve(scx.catalog.resolve_full_name(item.name()));
         Ok(())
     }
 
@@ -248,7 +323,7 @@ pub fn create_statement(
             name,
             col_names: _,
             connector: _,
-            with_options: _,
+            with_options,
             format: _,
             include_metadata: _,
             envelope: _,
@@ -259,6 +334,21 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
+
+            for opt in with_options.iter_mut() {
+                if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
+                    if ident_ref(&opt.key) == "tx_metadata" {
+                        // Use the catalog to resolve to a fully qualified name
+                        *object_name = unresolve(
+                            scx.catalog.resolve_full_name(
+                                scx.catalog
+                                    .resolve_item(&unresolved_object_name(object_name.clone())?)?
+                                    .name(),
+                            ),
+                        );
+                    }
+                }
+            }
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -353,8 +443,8 @@ pub fn create_statement(
                 *name = allocate_name(name)?;
                 let mut normalizer = QueryNormalizer::new(scx);
                 for option in with_options {
-                    match option {
-                        SqlOption::DataType { data_type, .. } => {
+                    match &mut option.value {
+                        Some(WithOptionValue::DataType(ref mut data_type)) => {
                             normalizer.visit_data_type_mut(data_type);
                         }
                         _ => unreachable!(),
@@ -378,6 +468,14 @@ pub fn create_statement(
             name,
             if_not_exists,
             value: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+        Statement::CreateConnector(CreateConnectorStatement {
+            name,
+            connector: _,
+            if_not_exists,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
@@ -416,6 +514,21 @@ macro_rules! with_option_type {
                 mz_repr::strconv::parse_interval(&interval.value)?
             }
             _ => ::anyhow::bail!("expected Interval"),
+        }
+    };
+    ($name:expr, OptionalInterval) => {
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
+                if value.as_str() == "off" {
+                    None
+                } else {
+                    Some(mz_repr::strconv::parse_interval(&value)?)
+                }
+            }
+            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
+                Some(mz_repr::strconv::parse_interval(&interval.value)?)
+            }
+            _ => ::anyhow::bail!("expected Interval or 'off'"),
         }
     };
 }
@@ -462,16 +575,16 @@ macro_rules! with_options {
             pub $($field_name: Option<$field_type>,)*
         }
 
-        impl ::std::convert::TryFrom<Vec<crate::ast::WithOption>> for $name {
+        impl ::std::convert::TryFrom<Vec<mz_sql_parser::ast::WithOption<Aug>>> for $name {
             type Error = anyhow::Error;
 
-            fn try_from(mut options: Vec<crate::ast::WithOption>) -> Result<Self, Self::Error> {
+            fn try_from(mut options: Vec<mz_sql_parser::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
                 let v = Self {
                     $($field_name: {
                         match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
                             None => None,
                             Some(pos) => {
-                                let value: Option<crate::ast::WithOptionValue> = options.swap_remove(pos).value;
+                                let value: Option<mz_sql_parser::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
                                 let value: $field_type = with_option_type!(value, $field_type);
                                 Some(value)
                             },
@@ -533,10 +646,10 @@ pub fn aws_config(
                     }
                 }
                 (Some(_), None, _) => {
-                    bail!("secret_acccess_key must be specified if access_key_id is specified")
+                    bail!("secret_access_key must be specified if access_key_id is specified")
                 }
                 (None, Some(_), _) => {
-                    bail!("secret_acccess_key cannot be specified without access_key_id")
+                    bail!("secret_access_key cannot be specified without access_key_id")
                 }
                 (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
             };

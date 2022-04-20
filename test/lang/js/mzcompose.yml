@@ -11,9 +11,6 @@ version: "3"
 services:
   materialized:
     mzbuild: materialized
-    command: -w1 --disable-telemetry
-    environment:
-      - MZ_DEV=1
   js:
     image: node:14.15.0
     command: /workdir/test/lang/js/test.sh

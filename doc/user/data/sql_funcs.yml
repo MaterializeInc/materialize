@@ -121,6 +121,12 @@
         any elements equal to the given value `e`. Comparisons are done using
         IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
 
+- type: Map
+  description: Map functions take [`map`](../types/map) arguments, and are [polymorphic](../types/#polymorphism).
+  functions:
+    - signature: 'map_length(m: mapany) -> int'
+      description: Return the number of elements in `m`.
+
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
     [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.
@@ -452,7 +458,7 @@
       The logical time at which a query executes. Used for temporal filters and internal debugging.
       <br><br>
       **Note**: This function generally behaves like a [non-pure] function, but
-      can be used in limited contexts in materialized views as a [temporal filter](/guides/temporal-filters).
+      can be used in limited contexts in materialized views as a [temporal filter](/sql/spellbook/temporal-filters/).
     url: now_and_mz_logical_timestamp
     unmaterializable: true
 
@@ -630,6 +636,22 @@
 - type: Window
   description: Window functions compute values across sets of rows related to the current query.
   functions:
+  - signature: 'dense_rank() -> int'
+    description: Returns the rank of the current row within its partition without gaps, counting from 1.
+  - signature: 'lag(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
+    description: >-
+      Returns `value` evaluated at the row that is `offset` rows before the current row within the partition;
+      if there is no such row, instead returns `default` (which must be of a type compatible with `value`).
+      If `offset` is `NULL`, `NULL` is returned instead.
+      Both `offset` and `default` are evaluated with respect to the current row.
+      If omitted, `offset` defaults to 1 and `default` to `NULL`.
+  - signature: 'lead(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
+    description: >-
+      Returns `value` evaluated at the row that is `offset` rows after the current row within the partition;
+      if there is no such row, instead returns `default` (which must be of a type compatible with `value`).
+      If `offset` is `NULL`, `NULL` is returned instead.
+      Both `offset` and `default` are evaluated with respect to the current row.
+      If omitted, `offset` defaults to 1 and `default` to `NULL`.
   - signature: 'row_number() -> int'
     description: Returns the number of the current row within its partition, counting from 1.
 
@@ -690,11 +712,17 @@
     description: >-
       Returns the constraint definition for the given `oid`. Currently always
       returns NULL since constraints aren't supported.
-  - signature: 'pg_get_indexdef(index: oid[, column integer, pretty: bool]) -> text'
+  - signature: 'pg_get_indexdef(index: oid[, column: integer, pretty: bool]) -> text'
     description: >-
       Reconstructs the creating command for an index. (This is a decompiled
       reconstruction, not the original text of the command.) If column is
       supplied and is not zero, only the definition of that column is reconstructed.
+  - signature: 'pg_get_viewdef(view_name: text[, pretty: bool]) -> text'
+    description: Returns the underlying SELECT command for the given view.
+  - signature: 'pg_get_viewdef(view_oid: oid[, pretty: bool]) -> text'
+    description: Returns the underlying SELECT command for the given view.
+  - signature: 'pg_get_viewdef(view_oid: oid[, wrap_column: integer]) -> text'
+    description: Returns the underlying SELECT command for the given view.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'

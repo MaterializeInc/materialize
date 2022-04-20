@@ -32,6 +32,7 @@
     {{ materialize__create_arbitrary_object(sql) }}
   {%- endcall %}
 
+  {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}

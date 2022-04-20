@@ -105,4 +105,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.override(Materialized(environment_extra=test_case.env)):
                 c.up("materialized")
                 c.wait_for_materialized("materialized")
-                c.run("testdrive-svc", aws_arg, *test_case.files)
+                c.run("testdrive", aws_arg, *test_case.files)

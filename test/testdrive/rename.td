@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=u\d+|cluster1|default replacement=<VARIABLE_OUTPUT>
+
 $ set writer-schema={
     "name": "row",
     "type": "record",
@@ -18,8 +20,6 @@ $ set writer-schema={
 
 $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 {"a": 1, "b": "dog"}
-
-$ set-regex match=u\d+ replacement=UID
 
 # Create library of objects and verify names
 > CREATE MATERIALIZED SOURCE mz_data
@@ -35,9 +35,9 @@ $ set-regex match=u\d+ replacement=UID
 > SHOW INDEXES FROM mz_view
 cluster on_name  key_name             seq_in_index  column_name  expression  nullable enabled
 ---------------------------------------------------------------------------------------------
-default mz_view  mz_view_primary_idx  1             a            <null>      false    true
-default mz_view  mz_view_primary_idx  2             b            <null>      false    true
-default mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false    true
+<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  1             a            <null>      false    true
+<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  2             b            <null>      false    true
+<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -173,9 +173,9 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 > SHOW INDEXES FROM renamed_mz_view
 cluster on_name          key_name       seq_in_index  column_name expression nullable enabled
 ---------------------------------------------------------------------------------------------
-default renamed_mz_view  renamed_index  1             a           <null>     false    true
-default renamed_mz_view  renamed_index  2             b           <null>     false    true
-default renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false    true
+<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  1             a           <null>     false    true
+<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  2             b           <null>     false    true
+<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false    true
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"
@@ -188,12 +188,10 @@ View                                "Create View"
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
-$ set-regex match=u\d+ replacement=UID
-
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER [1] FROM [UID AS \"materialize\".\"public\".\"renamed_mz_data\"] INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER [1] FROM [<VARIABLE_OUTPUT> AS \"materialize\".\"public\".\"renamed_mz_data\"] INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -236,9 +234,9 @@ contains:renaming conflict
 
 # ❌ Name used by another item in schema's catalog
 ! ALTER VIEW t1 RENAME TO a
-contains:a is already taken by item in schema
+contains:catalog item 'a' already exists
 ! ALTER VIEW t1 RENAME TO dependent_view;
-contains:dependent_view is already taken by item in schema
+contains:catalog item 'dependent_view' already exists
 
 # 🔬 Aliases
 

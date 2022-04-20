@@ -7,15 +7,6 @@ ignore = [
     # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
     # so we're just ignoring the advisory for now.
     "RUSTSEC-2020-0159",
-
-    # flatbuffers exposes pub methods that are unsafe but not marked as unsafe.
-    # These methods are not part of the "true" public API but are intended to be
-    # used only by flatbuffers generated code. This is a transitive dependency
-    # of ours and the issue has been mitigated by the arrow2 direct dependency
-    # with additional miri testing.
-    #
-    # https://github.com/jorgecarleitao/arrow2/blob/v0.8.1/.github/workflows/security.yml
-    "RUSTSEC-2021-0122",
 ]
 
 [bans]
@@ -35,7 +26,10 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
 
     # https://github.com/tokio-rs/tokio/pull/4521
-    { name = "tokio-util", version = "0.6.9" }
+    { name = "tokio-util", version = "0.6.9" },
+
+    # https://github.com/awslabs/smithy-rs/pull/1301
+    { name = "urlencoding", version = "1.3.0" },
 ]
 
 # Use `tracing` instead.
@@ -61,40 +55,6 @@ name = "strum"
 [[bans.deny]]
 name = "strum-macros"
 
-# `thiserror` requires everyone to learn a special DSL. Our current position is
-# that it is clearer to require manual implementations of the `Error` trait.
-[[bans.deny]]
-name = "thiserror"
-wrappers = [
-    # Only list third-party crates here.
-    "async-native-tls",
-    "aws-http",
-    "aws-smithy-xml",
-    "aws-sig-auth",
-    "flatbuffers",
-    "junit-report",
-    "kube-client",
-    "kube-core",
-    "mysql_async",
-    "mysql_common",
-    "opentelemetry",
-    "opentelemetry-otlp",
-    "pprof",
-    "proc-macro-crate",
-    "prometheus",
-    "protoc",
-    "protobuf-codegen",
-    "protobuf-codegen-pure",
-    "protobuf-parse",
-    "pubnub-core",
-    "pubnub-hyper",
-    "simple_asn1",
-    "sysctl",
-    "tiberius",
-    "tungstenite",
-    "zip",
-]
-
 [[bans.deny]]
 name = "log"
 wrappers = [
@@ -105,7 +65,9 @@ wrappers = [
     "mio",
     # TODO(guswynn): switch to `tracing:enabled!` when its released
     "mz-coord",
+    "mz-compute",
     "mz-dataflow",
+    "mz-storage",
     "native-tls",
     "opentls",
     "os_info",
@@ -170,16 +132,18 @@ allow-git = [
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
-    "https://github.com/MaterializeInc/rust-prometheus.git",
-
-    # Waiting on https://github.com/tokio-rs/prost/pull/576.
-    "https://github.com/MaterializeInc/prost.git",
 
     # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
     "https://github.com/MaterializeInc/criterion.rs.git",
 
     # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
     "https://github.com/MaterializeInc/parquet-format-rs.git",
+
+    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
+    "https://github.com/MaterializeInc/proptest.git",
+
+    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783.
+    "https://github.com/MaterializeInc/opentelemetry-rust.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.

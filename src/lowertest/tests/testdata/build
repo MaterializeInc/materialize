@@ -22,10 +22,10 @@ build
         ]
         "hello"
     )
-    ([true false null] [[[100 true] [200 false]][]])
+    (single_unnamed_field_3 ([([] "a") ([[1 [] 0]] "poof") null] [[[100 true] [200 false]][]]))
     (single_named_field [0 10 42]))
 ----
-Some(MultiUnnamedFields(MultiUnnamedArg([(3, [("world", 5), ("this", 2)], 4), (2, [], 0)], "hello"), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, SingleNamedField { foo: [0, 10, 42] }))
+Some(MultiUnnamedFields(MultiUnnamedArg([(3, [("world", 5), ("this", 2)], 4), (2, [], 0)], "hello"), Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(MultiUnnamedArg([], "a")), Some(MultiUnnamedArg([(1, [], 0)], "poof")), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] })), SingleNamedField { foo: [0, 10, 42] }))
 
 build
 (multi_named_fields null false)
@@ -96,14 +96,17 @@ Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum:
 #single field is a Vec
 
 build
-(multi_unnamed_fields ([], "bar") [false null true] (single_named_field [0 10 11]))
+(multi_unnamed_fields
+    ([], "bar")
+    (single_unnamed_field_3 [([[10 [["bc" 7] ["34" 34]] 20]] "aaa") null ([] "baz")])
+    (single_named_field [0 10 11]))
 ----
-Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), MultiNamedArg { fizz: [Some(false), None, Some(true)], bizz: [] }, SingleNamedField { foo: [0, 10, 11] }))
+Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(MultiUnnamedArg([(10, [("bc", 7), ("34", 34)], 20)], "aaa")), None, Some(MultiUnnamedArg([], "baz"))], bizz: [] })), SingleNamedField { foo: [0, 10, 11] }))
 
 build
-(multi_unnamed_fields ([], "bar") ([false null true]) (single_named_field [0 10 11]))
+(multi_unnamed_fields ([], "bar") (multi_unnamed_zero_arg_fields) (single_named_field [0 10 11]))
 ----
-Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), MultiNamedArg { fizz: [Some(false), None, Some(true)], bizz: [] }, SingleNamedField { foo: [0, 10, 11] }))
+Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg)), SingleNamedField { foo: [0, 10, 11] }))
 
 build
 (single_unnamed_field2 [-1 4 -2 0])
@@ -113,9 +116,9 @@ Some(SingleUnnamedField2([-1, 4, -2, 0]))
 #single field is a struct with named fields
 
 build
-(single_unnamed_field3 ([true false false null] [[[-1.25 true] [1.24 false]]]))
+(single_unnamed_field3 ([([] "boop") null] [[[-1.25 true] [1.24 false]]]))
 ----
-Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(true), Some(false), Some(false), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
+Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(MultiUnnamedArg([], "boop")), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
 
 # Arguments are assumed to be part of an outer struct/enum
 # unless enclosed in parentheses.
@@ -134,6 +137,18 @@ build
 (multi_unnamed_fields_2 true (unit "baz"))
 ----
 Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "baz" }, ""))
+
+build
+(multi_unnamed_fields_2 (false [12.2 2]) (multi_named_fields "baz"))
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (12.2, 2)), FirstArgEnum { test_enum: MultiNamedFields { bar: None, baz: false }, second_arg: "baz" }, ""))
+
+build
+(multi_unnamed_fields_2 (false [12.2 2]) ((multi_named_fields "baz")))
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (12.2, 2)), FirstArgEnum { test_enum: MultiNamedFields { bar: Some("baz"), baz: false }, second_arg: "" }, ""))
+
+# Zero arg structs are specified as the empty string
 
 build
 (single_unnamed_zero_arg_field)
@@ -156,11 +171,44 @@ multi_unnamed_zero_arg_fields
 Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
 
 build
-(multi_unnamed_fields_first_zero_arg true)
+(multi_unnamed_fields_first_zero_arg true null)
 ----
-Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0))))
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0)), None))
 
 build
-(multi_unnamed_fields_first_zero_arg (true [3.14 2]))
+(multi_unnamed_fields_first_zero_arg (true [3.14 2]) (null))
 ----
-Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2))))
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2)), Some(SingleNamedOptionArg { named_field: None })))
+
+# Ambiguity resolution test when there are multiple single
+# argument Option<Struct> around each other.
+
+build
+(option_struct_nesting null)
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: None }))
+
+build
+(option_struct_nesting (null))
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: None }))
+
+build
+(option_struct_nesting ((null)))
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: Some(SingleNamedOptionArg { named_field: None }) }))
+
+build
+(option_struct_nesting true)
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: Some(SingleNamedOptionArg { named_field: Some(true) }) }))
+
+build
+(option_struct_nesting (true))
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: Some(SingleNamedOptionArg { named_field: Some(true) }) }))
+
+build
+(option_struct_nesting ((true)))
+----
+Some(OptionStructNesting(SecondLayerOfOption { named_field: Some(SingleNamedOptionArg { named_field: Some(true) }) }))

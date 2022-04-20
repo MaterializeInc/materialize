@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
-use crate::scalar::func::LazyUnaryFunc;
+use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -51,7 +51,7 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
     fn output_type(&self, input_type: ColumnType) -> ColumnType {
         ScalarType::List {
             element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
-            custom_oid: None,
+            custom_id: None,
         }
         .nullable(true)
     }
@@ -75,5 +75,49 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
 impl fmt::Display for CastArrayToListOneDim {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytolist")
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct CastArrayToString {
+    pub ty: ScalarType,
+}
+
+impl LazyUnaryFunc for CastArrayToString {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let mut buf = String::new();
+        stringify_datum(&mut buf, a, &self.ty)?;
+        Ok(Datum::String(temp_storage.push_string(buf)))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastArrayToString {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("arraytostr")
     }
 }

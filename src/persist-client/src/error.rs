@@ -9,20 +9,7 @@
 
 //! Errors for the crate
 
-/// An error coming from an underlying durability system (e.g. s3) or from
-/// invalid data received from one.
-#[derive(Debug)]
-pub struct LocationError {
-    inner: anyhow::Error,
-}
-
-impl std::fmt::Display for LocationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "timeout: {}", self.inner)
-    }
-}
-
-impl std::error::Error for LocationError {}
+use mz_persist::location::SeqNo;
 
 /// An error resulting from invalid usage of the API.
 #[derive(Debug)]
@@ -35,3 +22,26 @@ impl std::fmt::Display for InvalidUsage {
 }
 
 impl std::error::Error for InvalidUsage {}
+
+/// An impl of PartialEq purely for convenience in tests and debug assertions.
+#[cfg(test)]
+impl PartialEq for InvalidUsage {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
+/// A sentinel indicating that a state transition was a no-op.
+#[derive(Debug)]
+pub struct NoOp {
+    /// The version of the state at which the input was evaluated to be a no-op.
+    pub seqno: SeqNo,
+}
+
+impl std::fmt::Display for NoOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no-op: {:?}", self.seqno)
+    }
+}
+
+impl std::error::Error for NoOp {}

@@ -389,7 +389,6 @@ impl FromHir {
 
                 Ok(union_id)
             }
-            // HirRelationExpr::DeclareKeys { input, keys } => todo!(),
             expr => Err(QGMError::from(UnsupportedHirRelationExpr {
                 expr,
                 explanation: None,

@@ -77,7 +77,7 @@
 //!     fn visit_query(&mut self, query: &'ast Query<Raw>) {
 //!         self.count += 1;
 //!
-//!         // Delegate to the default implentation to visit any nested
+//!         // Delegate to the default implementation to visit any nested
 //!         // subqueries. Placing this call at the end of the method results
 //!         // in a pre-order traversal. Place it at the beginning for a
 //!         // post-order traversal instead.
@@ -105,7 +105,7 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawName};
+//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawObjectName};
 //! use mz_sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
@@ -119,7 +119,7 @@
 //!     }
 //!     fn visit_object_name(&mut self, name: &'ast <Raw as AstInfo>::ObjectName) {
 //!         match name {
-//!             RawName::Name(n) | RawName::Id(_, n) => {
+//!             RawObjectName::Name(n) | RawObjectName::Id(_, n) => {
 //!                 for node in &n.0 {
 //!                     self.idents.push(node);
 //!                     visit::visit_ident(self, node);

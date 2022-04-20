@@ -18,6 +18,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
+use mz_coord::session::DEFAULT_DATABASE_NAME;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -43,6 +44,13 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     let mut client = server.connect(postgres::NoTls)?;
 
     match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => {
+            assert!(format!("{:?}", err.source()).contains("WrongType"));
+        }
+    }
+
+    match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(err.to_string().contains("no overload")),
     }
@@ -155,7 +163,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     // The default database should be `materialize`.
     assert_eq!(
         client.query_one("SHOW database", &[])?.get::<_, String>(0),
-        "materialize",
+        DEFAULT_DATABASE_NAME,
     );
 
     // Connecting to a nonexistent database should work, and creating that
@@ -392,6 +400,16 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), "{{1},{NULL},{2}}");
+        }
+        _ => panic!("unexpected simple query message"),
+    }
+
+    let message = client
+        .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")?
+        .into_first();
+    match message {
+        SimpleQueryMessage::Row(row) => {
+            assert_eq!(row.get(0).unwrap(), r#"{"(1,2)","(3,4)","(5,6)"}"#);
         }
         _ => panic!("unexpected simple query message"),
     }

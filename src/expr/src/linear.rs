@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MirRelationExpr, MirScalarExpr};
 use mz_repr::{Datum, Row};
+
+use crate::visit::Visit;
+use crate::{MirRelationExpr, MirScalarExpr};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -198,7 +200,7 @@ impl MapFilterProject {
     ///
     /// This method returns `None` on an empty `exprs`, which might be surprising, but
     /// seems to line up with its callers' expectations of that being a non-constraint.
-    /// The caller knows if `exprs` is empty, and can modify their behavior appopriately.
+    /// The caller knows if `exprs` is empty, and can modify their behavior appropriately.
     /// if they would rather have a literal empty row.
     pub fn literal_constraints(&self, exprs: &[MirScalarExpr]) -> Option<Row> {
         if exprs.is_empty() {
@@ -455,7 +457,7 @@ impl MapFilterProject {
     ///
     /// // To reconstruct `self`, we must introduce the columns that are not present,
     /// // and present them in the order intended by `self`. In this example, we must
-    /// // introduce colunm d and permute the columns so that they begin (a, b, c, d).
+    /// // introduce column d and permute the columns so that they begin (a, b, c, d).
     /// // The columns x and y must be projected away, and any columns introduced by
     /// // `begin` must be retained in their current order.
     ///
@@ -731,7 +733,7 @@ impl MapFilterProject {
     /// in its own column, and deduplicates them so that all references to
     /// the same expression reference the same column.
     ///
-    /// This tranformation is restricted to expressions we are certain will
+    /// This transformation is restricted to expressions we are certain will
     /// be evaluated, which does not include expressions in `if` statements.
     ///
     /// # Example
@@ -740,7 +742,7 @@ impl MapFilterProject {
     /// that are used multiple times, and ensures that each are extracted
     /// into columns and then referenced by column. This pass does not try
     /// to minimize the occurrences of column references, which will happen
-    /// in inliniing.
+    /// in inlining.
     ///
     /// ```rust
     /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
@@ -879,7 +881,7 @@ impl MapFilterProject {
     /// that are no longer referenced. The `remove_undemanded()` method does
     /// that, and should likely be used after this method.
     ///
-    /// Inlining replaces column references when the refered-to item is either
+    /// Inlining replaces column references when the referred-to item is either
     /// another column reference, or the only referrer of its referent. This
     /// is most common after memoization has atomized all expressions to seek
     /// out re-use: inlining re-assembles expressions that were not helpfully
@@ -1037,7 +1039,7 @@ impl MapFilterProject {
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
-    /// // Remove undemandedd expressions, streamlining the work done..
+    /// // Remove undemanded expressions, streamlining the work done..
     /// map_filter_project.remove_undemanded();
     ///
     /// assert_eq!(
@@ -1244,7 +1246,7 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
         mfp: MapFilterProject,
     }
@@ -1363,7 +1365,7 @@ pub mod plan {
         /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.
         /// The second and third returned lists contain expressions that, once evaluated, lower
         /// and upper bound the validity interval of a record, respectively. These second two
-        /// lists are populared only by binary expressions of the form
+        /// lists are populated only by binary expressions of the form
         /// ```ignore
         /// mz_logical_timestamp cmp_op expr
         /// ```
@@ -1420,7 +1422,7 @@ pub mod plan {
                         };
                     }
 
-                    // Error if MLT is referenced in an unsuppported position.
+                    // Error if MLT is referenced in an unsupported position.
                     if expr2.contains_temporal()
                         || *expr1
                             != MirScalarExpr::CallUnmaterializable(

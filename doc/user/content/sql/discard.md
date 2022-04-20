@@ -3,7 +3,7 @@ title: "DISCARD"
 description: "Discard resets state associated with the current session."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `DISCARD` resets state associated with the current session.

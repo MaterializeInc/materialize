@@ -109,3 +109,45 @@ contains:sslv3 alert certificate unknown
   )
   ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
+
+
+# test sinks with multiple things to
+> CREATE SINK snk FROM data
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_key_location = '/share/secrets/materialized-schema-registry.key',
+      ssl_certificate_location = '/share/secrets/materialized-schema-registry.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      username = "materialize",
+      password = "sekurity"
+  )
+
+$ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
+{"before": null, "after": {"row":{"a": 1}}}
+{"before": null, "after": {"row":{"a": 2}}}
+
+# and wrong cert for sink
+! CREATE SINK snk_bad FROM data
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
+contains:sslv3 alert certificate unknown

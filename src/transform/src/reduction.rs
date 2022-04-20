@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 
+use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
@@ -124,11 +125,6 @@ impl FoldConstants {
                             *diff *= -1;
                         }
                     }
-                    *relation = input.take_dangerous();
-                }
-            }
-            MirRelationExpr::DeclareKeys { input, keys: _ } => {
-                if let MirRelationExpr::Constant { rows: _, .. } = &mut **input {
                     *relation = input.take_dangerous();
                 }
             }

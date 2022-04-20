@@ -489,6 +489,9 @@ select row(4,2)::testtype8 = (row(row(4,2))::testtype6).inner;
 ----
 true
 
+query error input of anonymous composite types is not implemented
+select row(4,2)::testtype8 = '(1,2)';
+
 # TODO: we don't support aliasing into a rowtype
 # anonymous rowtypes in coldeflists (column definition lists)
 #select q.a, q.b = row(2), q.c = array[row(3)], q.d = row(row(4)) from

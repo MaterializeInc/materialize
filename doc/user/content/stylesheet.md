@@ -94,7 +94,7 @@ This is a "full_width" CTA button
 Used for prominent messages. Optionally can include a primary and secondary CTA button using `primary_url`, `primary_text`, `secondary_url`, `secondary_text` in shortcode params.
 
 **Primary Only:**
-{{< callout primary_url="https://materialize.com/docs/get-started/" primary_text="Get Started" >}}
+{{< callout primary_url="/docs/get-started/" primary_text="Get Started" >}}
   # Header
 
   Some text and the closing button is specified in the shortcode top.

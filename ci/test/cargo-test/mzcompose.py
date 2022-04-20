@@ -27,6 +27,7 @@ SERVICES = [
                 "POSTGRES_URL=postgres://postgres:postgres@postgres",
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET=mtlz-test-persist-1d-lifecycle-delete",
+                "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=postgres://postgres:postgres@postgres",
                 "AWS_DEFAULT_REGION",
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",

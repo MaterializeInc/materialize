@@ -3,14 +3,14 @@ name = "mz-metabase-smoketest"
 description = "A simple smoke test for Metabase and Materialize."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 itertools = "0.10.3"
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["task"] }
 tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.32"
+tracing = "0.1.34"

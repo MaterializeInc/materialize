@@ -3,11 +3,11 @@ name = "mz-postgres-util"
 description = "Internal postgres utility library for Materialize."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 
 mz-ore = { path = "../ore", features = ["task"] }
 openssl = { version = "0.10.38", features = ["vendored"] }

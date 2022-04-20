@@ -12,9 +12,6 @@ version: '3.7'
 services:
   materialized:
     mzbuild: materialized
-    command: --disable-telemetry
-    environment:
-      - MZ_DEV=1
     ports: [6875]
     volumes: ["wikidata:/tmp/wikidata"]
     depends_on: [stream]

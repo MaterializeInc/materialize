@@ -15,7 +15,7 @@ from materialize import scratch
 def main() -> None:
     desc = scratch.MachineDesc(
         name="chbench monthly",
-        launch_script="MZ_WORKERS=4 bin/mzcompose --preserve-ports --find chbench run load-test",
+        launch_script="bin/mzcompose --preserve-ports --find chbench run load-test",
         instance_type="r5ad.4xlarge",
         ami="ami-0b29b6e62f2343b46",
         tags={

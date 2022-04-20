@@ -154,7 +154,7 @@ through code execution to name just a few examples.
 ### Further information
 
 The rustc
-[guide](https://rust-lang.github.io/rustc-guide/debugging-support-in-rustc.html)
+[guide](https://rustc-dev-guide.rust-lang.org/debugging-support-in-rustc.html)
 has a page detailing the state of debugger support in Rust. There's plenty of
 guides for how to use GDB/LLDB online but most of them focus on C/C++ programs.
 [Beej's Quick Guide to GDB](https://beej.us/guide/bggdb/) is a good starting

@@ -15,7 +15,7 @@
 //! The compute controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
 //! use an identifier before it has been "created" with `create_dataflows()`. Once created, the controller holds
 //! a read capability for each output collection of a dataflow, which is manipulated with `allow_compaction()`.
-//! Eventually, a collecction is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+//! Eventually, a collection is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
 //!
 //! Created dataflows will prevent the compaction of their inputs, including other compute collections but also
 //! collections managed by the storage layer. Each dataflow input is prevented from compacting beyond the allowed
@@ -23,25 +23,29 @@
 //! failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
+use crate::client::controller::storage::{StorageController, StorageError};
+use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::DataflowDescription;
-use mz_expr::GlobalId;
 use mz_expr::RowSetFinishing;
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
-    pub(super) client: Box<dyn ComputeClient<T>>,
+    pub(super) client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
@@ -53,7 +57,7 @@ pub(super) struct ComputeControllerState<T> {
 pub struct ComputeController<'a, T> {
     pub(super) _instance: ComputeInstanceId, // likely to be needed soon
     pub(super) compute: &'a ComputeControllerState<T>,
-    pub(super) storage: &'a super::StorageControllerState<T>,
+    pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
 
 /// A mutable controller for a compute instance.
@@ -61,7 +65,7 @@ pub struct ComputeController<'a, T> {
 pub struct ComputeControllerMut<'a, T> {
     pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a mut ComputeControllerState<T>,
-    pub(super) storage: &'a mut super::StorageControllerState<T>,
+    pub(super) storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
 
 /// Errors arising from compute commands.
@@ -79,6 +83,55 @@ pub enum ComputeError {
     PeekSinceViolation(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
+    /// An error during an interaction with Storage
+    StorageError(StorageError),
+}
+
+impl Error for ComputeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InstanceMissing(_)
+            | Self::IdentifierMissing(_)
+            | Self::DataflowMalformed
+            | Self::DataflowSinceViolation(_)
+            | Self::PeekSinceViolation(_) => None,
+            Self::ClientError(err) => Some(err.root_cause()),
+            Self::StorageError(err) => err.source(),
+        }
+    }
+}
+
+impl fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("compute error: ")?;
+        match self {
+            Self::InstanceMissing(id) => write!(
+                f,
+                "command referenced an instance that was not present: {id}"
+            ),
+            Self::IdentifierMissing(id) => write!(
+                f,
+                "command referenced an identifier that was not present: {id}"
+            ),
+            Self::DataflowMalformed => write!(f, "dataflow was malformed"),
+            Self::DataflowSinceViolation(id) => write!(
+                f,
+                "dataflow as_of was not greater than the `since` of the identifier: {id}"
+            ),
+            Self::PeekSinceViolation(id) => write!(
+                f,
+                "peek timestamp was not greater than the `since` of the identifier: {id}"
+            ),
+            Self::ClientError(err) => write!(f, "underlying client error: {err}"),
+            Self::StorageError(err) => write!(f, "storage interaction error: {err}"),
+        }
+    }
+}
+
+impl From<StorageError> for ComputeError {
+    fn from(error: StorageError) -> Self {
+        Self::StorageError(error)
+    }
 }
 
 impl From<anyhow::Error> for ComputeError {
@@ -91,7 +144,10 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) fn new(client: Box<dyn ComputeClient<T>>, logging: &Option<LoggingConfig>) -> Self {
+    pub(super) async fn new(
+        // client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
+        logging: &Option<LoggingConfig>,
+    ) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -105,11 +161,16 @@ where
                 );
             }
         }
-        Self {
+        let mut client = crate::client::replicated::ActiveReplication::default();
+        client
+            .send(ComputeCommand::CreateInstance(logging.clone()))
+            .await?;
+
+        Ok(Self {
             client,
             collections,
             peeks: Default::default(),
-        }
+        })
     }
 }
 
@@ -120,10 +181,8 @@ where
 {
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&self) -> crate::client::controller::StorageController<T> {
-        crate::client::controller::StorageController {
-            storage: &self.storage,
-        }
+    pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
+        self.storage_controller
     }
 
     /// Acquire a handle to the collection state associated with `id`.
@@ -143,17 +202,26 @@ where
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
             _instance: self.instance,
-            storage: &self.storage,
+            storage_controller: self.storage_controller,
             compute: &self.compute,
         }
     }
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(&mut self) -> crate::client::controller::StorageControllerMut<T> {
-        crate::client::controller::StorageControllerMut {
-            storage: &mut self.storage,
-        }
+    pub fn storage_mut(
+        &mut self,
+    ) -> &mut dyn crate::client::controller::StorageController<Timestamp = T> {
+        self.storage_controller
+    }
+
+    /// Adds a new instance replica, by name.
+    pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
+        self.compute.client.add_replica(id, client).await;
+    }
+    /// Removes an existing instance replica, by name.
+    pub fn remove_replica(&mut self, id: &str) {
+        self.compute.client.remove_replica(id);
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.
@@ -180,12 +248,11 @@ where
             let mut compute_dependencies = Vec::new();
 
             // Validate sources have `since.less_equal(as_of)`.
-            for (source_id, _) in dataflow.source_imports.iter() {
+            for source_id in dataflow.source_imports.keys() {
                 let since = &self
-                    .storage
-                    .collections
-                    .get(source_id)
-                    .ok_or(ComputeError::IdentifierMissing(*source_id))?
+                    .storage_controller
+                    .collection(*source_id)
+                    .or(Err(ComputeError::IdentifierMissing(*source_id)))?
                     .read_capabilities
                     .frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
@@ -197,7 +264,7 @@ where
 
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
-            for (index_id, _) in dataflow.index_imports.iter() {
+            for index_id in dataflow.index_imports.keys() {
                 let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
                 if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
@@ -207,7 +274,7 @@ where
                 }
             }
 
-            // Canonicalize depedencies.
+            // Canonicalize dependencies.
             // Probably redundant based on key structure, but doing for sanity.
             storage_dependencies.sort();
             storage_dependencies.dedup();
@@ -225,19 +292,19 @@ where
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
-            self.storage_mut()
+            self.storage_controller
                 .update_read_capabilities(&mut storage_read_updates)
-                .await;
+                .await?;
             // Update compute read capabilities for inputs.
             let mut compute_read_updates = compute_dependencies
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
             self.update_read_capabilities(&mut compute_read_updates)
-                .await;
+                .await?;
 
             // Install collection state for each of the exports.
-            for (sink_id, _) in dataflow.sink_exports.iter() {
+            for sink_id in dataflow.sink_exports.keys() {
                 self.compute.collections.insert(
                     *sink_id,
                     CollectionState::new(
@@ -247,7 +314,7 @@ where
                     ),
                 );
             }
-            for (index_id, _, _) in dataflow.index_exports.iter() {
+            for index_id in dataflow.index_exports.keys() {
                 self.compute.collections.insert(
                     *index_id,
                     CollectionState::new(
@@ -310,25 +377,25 @@ where
         // Install a compaction hold on `id` at `timestamp`.
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
-        self.update_read_capabilities(&mut updates).await;
+        self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
         self.compute
             .client
-            .send(ComputeCommand::Peek {
+            .send(ComputeCommand::Peek(Peek {
                 id,
                 key,
                 uuid,
                 timestamp,
                 finishing,
                 map_filter_project,
-            })
+            }))
             .await
             .map_err(ComputeError::from)
     }
     /// Cancels existing peek requests.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.remove_peeks(uuids.iter().cloned()).await;
+        self.remove_peeks(uuids.iter().cloned()).await?;
         self.compute
             .client
             .send(ComputeCommand::CancelPeeks {
@@ -351,7 +418,7 @@ where
         let policies = frontiers
             .into_iter()
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await;
+        self.set_read_policy(policies.collect()).await?;
         Ok(())
     }
 
@@ -363,7 +430,10 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    pub async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
+    pub async fn set_read_policy(
+        &mut self,
+        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+    ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
@@ -389,8 +459,9 @@ where
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await;
+                .await?;
         }
+        Ok(())
     }
 }
 
@@ -424,7 +495,10 @@ where
     }
 
     /// Accept write frontier updates from the compute layer.
-    pub(super) async fn update_write_frontiers(&mut self, updates: &[(GlobalId, ChangeBatch<T>)]) {
+    pub(super) async fn update_write_frontiers(
+        &mut self,
+        updates: &[(GlobalId, ChangeBatch<T>)],
+    ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
             let collection = self
@@ -454,15 +528,16 @@ where
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await;
+                .await?;
         }
+        Ok(())
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
     pub(super) async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
-    ) {
+    ) -> Result<(), ComputeError> {
         // Locations to record consequences that we need to act on.
         let mut storage_todo = BTreeMap::default();
         let mut compute_net = Vec::default();
@@ -518,13 +593,17 @@ where
 
         // We may have storage consequences to process.
         if !storage_todo.is_empty() {
-            self.storage_mut()
+            self.storage_controller
                 .update_read_capabilities(&mut storage_todo)
-                .await;
+                .await?;
         }
+        Ok(())
     }
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    pub(super) async fn remove_peeks(&mut self, peek_ids: impl IntoIterator<Item = uuid::Uuid>) {
+    pub(super) async fn remove_peeks(
+        &mut self,
+        peek_ids: impl IntoIterator<Item = uuid::Uuid>,
+    ) -> Result<(), ComputeError> {
         let mut updates = peek_ids
             .into_iter()
             .flat_map(|uuid| {
@@ -534,7 +613,8 @@ where
                     .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
             })
             .collect();
-        self.update_read_capabilities(&mut updates).await;
+        self.update_read_capabilities(&mut updates).await?;
+        Ok(())
     }
 }
 

@@ -5,7 +5,7 @@ menu:
   # This should also have a "non-content entry" under Connect, which is
   # configured in doc/user/config.toml
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE SINK` sends data from Materialize to an external sink.
@@ -46,7 +46,7 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 **TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name. {{< version-added v0.8.4 />}}
 **AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
 _sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
-_with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Format `WITH` options](#format-with-options).
+_with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Authentication](#authentication).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
 **ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Handling upserts](/sql/create-source/kafka/#handling-upserts).
 
@@ -64,53 +64,17 @@ Field                | Value type | Description
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
 `reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false. See [Enabling topic reuse after restart](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart) for details.
 `consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
-`security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`security_protocol`  | `text`     | Use [`ssl`](#authentication) or, for [Kerberos](#authentication), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 `retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
 `retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
 `avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`. {{< version-added v0.18.0 />}}
 `avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`. {{< version-added v0.18.0 />}}
 
-#### SSL `WITH` options
+#### Authentication
 
-Use the following options to connect Materialize to an SSL-encrypted Kafka
-cluster. For more detail, see [SSL-encrypted Kafka details](/sql/create-source/kafka/#ssl).
-
-Field | Value | Description
-------|-------|------------
-`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
-`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
-`ssl_key_password` | `text` | Your SSL key's password, if any. <br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `ssl_key_password_env`.
-`ssl_key_password_env` | `text` | Use the value stored in the named environment variable as the value for `ssl_key_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
-`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-
-#### Kerberos `WITH` options
-
-Use the following options to connect Materialize using SASL.
-
-For more detail, see [Kerberized Kafka details](/sql/create-source/kafka/#saslgssapi-kerberos).
-
-Field | Value | Description
-------|-------|------------
-`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
-`sasl_username` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password` | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br /><br />This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
-`sasl_password_env` | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br /><br />This option does not store the password on-disk in Materialize's catalog, but requires
-the environment variable's presence to boot Materialize.
-`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
-
-### Format `WITH` options
-
-The following options are valid within the Kafka connector's `WITH` clause.
-
-Field                | Value type | Description
----------------------|------------|------------
-`username `          | `text`     | The Kafka username.
-`password `          | `text`     | The Kafka password.
+Kafka sinks support the same authentication scheme and options as Kafka sources (`SSL`, `SASL`).
+Check the [Kafka source documentation](/sql/create-source/kafka/#authentication) for more details and examples.
 
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
@@ -210,7 +174,7 @@ By default, Materialize creates new, distinct topics for sinks on restart. To en
 
 * **Reconstruct the history of the sink and all the objects it depends on**
 
-   For each source, timestamp/offset bindings (i.e. which timestamps were assigned to which offsets) are persisted to the on-disk [system catalog](../system-catalog). This ensures that Materialize can preserve correctness on restart and avoid publishing duplicate data to the sink.
+   For each source, timestamp/offset bindings (i.e. which timestamps were assigned to which offsets) are persisted to the on-disk [system catalog](/sql/system-catalog/). This ensures that Materialize can preserve correctness on restart and avoid publishing duplicate data to the sink.
 
     {{< note >}}
 For some deployment setups, you may need to persist the system catalog to stable storage across restarts. Without that metadata, new timestamps will be reassigned to existing offsets and data **will be republished** to the sink.
@@ -234,7 +198,7 @@ To create a sink with exactly-once processing guarantees, you need to:
 
 * Set the `reuse_topic` option to `true`;
 * Optionally name the consistency topic. This name must be unique across all sinks in the Materialize instance. If not specified, a default name will be created by appending `-consistency` to the sink topic name.
-* Specify the [format](https://materialize.com/docs/sql/create-sink/#consistency_format_spec) of the consistency topic. Only Avro is supported. If you are using a JSON-formatted sink, you must use Avro as well (at least for now!).
+* Specify the [format](/sql/create-sink/#consistency_format_spec) of the consistency topic. Only Avro is supported. If you are using a JSON-formatted sink, you must use Avro as well (at least for now!).
 
 Note that:
 

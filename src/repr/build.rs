@@ -9,6 +9,21 @@
 
 fn main() {
     prost_build::Config::new()
-        .compile_protos(&["row.proto"], &["src"])
+        .compile_protos(
+            &[
+                "repr/src/chrono.proto",
+                "repr/src/global_id.proto",
+                "repr/src/proto.proto",
+                "repr/src/row.proto",
+                "repr/src/strconv.proto",
+                "repr/src/relation_and_scalar.proto",
+                "repr/src/adt/array.proto",
+                "repr/src/adt/char.proto",
+                "repr/src/adt/datetime.proto",
+                "repr/src/adt/numeric.proto",
+                "repr/src/adt/varchar.proto",
+            ],
+            &[".."],
+        )
         .unwrap();
 }

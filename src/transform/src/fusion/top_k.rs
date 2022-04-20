@@ -10,6 +10,7 @@
 //! Fuses a sequence of `TopK` operators in to one `TopK` operator
 
 use crate::TransformArgs;
+use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
 /// Fuses a sequence of `TopK` operators in to one `TopK` operator if

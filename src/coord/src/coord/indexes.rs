@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::GlobalId;
 use mz_expr::MirScalarExpr;
+use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
@@ -70,7 +70,7 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
             if available_indexes.peek().is_some() {
                 id_bundle.compute_ids.extend(available_indexes);
             } else {
-                match self.catalog.get_by_id(&id).item() {
+                match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.
                     view @ CatalogItem::View(_) => {
                         todo.extend(view.uses());

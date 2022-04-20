@@ -3,7 +3,7 @@ title: "DROP SOURCE"
 description: "`DROP SOURCE` removes a source from your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `DROP SOURCE` removes a source from your Materialize instances.

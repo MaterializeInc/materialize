@@ -54,3 +54,8 @@ Query:
 | Project (#2)
 
 EOF
+
+query T
+SELECT abc FROM (VALUES (1, 2, (3,4), ROW(5, 6, 7))) as abc;
+----
+(1,2,"(3,4)","(5,6,7)")

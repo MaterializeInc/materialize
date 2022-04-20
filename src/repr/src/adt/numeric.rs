@@ -18,10 +18,15 @@ use std::fmt;
 use anyhow::bail;
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
+
+use crate::proto::{ProtoRepr, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
 /// The number of internal decimal units in a [`Numeric`] value.
 pub const NUMERIC_DATUM_WIDTH: u8 = 13;
@@ -78,9 +83,20 @@ lazy_static! {
 ///
 /// [`ScalarType::Numeric`]: crate::ScalarType::Numeric
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
-pub struct NumericMaxScale(u8);
+pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
     /// A max scale of zero.
@@ -110,6 +126,41 @@ impl TryFrom<usize> for NumericMaxScale {
 
     fn try_from(max_scale: usize) -> Result<Self, Self::Error> {
         Self::try_from(i64::try_from(max_scale).map_err(|_| InvalidNumericMaxScaleError)?)
+    }
+}
+
+impl From<&NumericMaxScale> for ProtoNumericMaxScale {
+    fn from(max_scale: &NumericMaxScale) -> Self {
+        ProtoNumericMaxScale {
+            value: max_scale.0.into_proto(),
+        }
+    }
+}
+
+impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
+    type Error = TryFromProtoError;
+
+    fn try_from(max_scale: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
+        Ok(NumericMaxScale(u8::from_proto(max_scale.value)?))
+    }
+}
+
+impl From<&Option<NumericMaxScale>> for ProtoOptionalNumericMaxScale {
+    fn from(max_scale: &Option<NumericMaxScale>) -> Self {
+        ProtoOptionalNumericMaxScale {
+            value: max_scale.as_ref().map(From::from),
+        }
+    }
+}
+
+impl TryFrom<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
+    type Error = TryFromProtoError;
+
+    fn try_from(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, Self::Error> {
+        match max_scale.value {
+            Some(value) => Ok(Some(value.try_into()?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -695,5 +746,28 @@ impl DecimalLike for f64 {
 impl DecimalLike for Numeric {
     fn lossy_from(i: i64) -> Self {
         Numeric::from(i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
+            let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
+            let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

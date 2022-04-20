@@ -176,7 +176,6 @@ do
 done
 
 
-
 echo $SSL_SECRET > secrets/cert_creds
 
 # Ensure files are readable for any user

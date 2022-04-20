@@ -9,26 +9,26 @@ members = [
     "src/aws-util",
     "src/build-info",
     "src/ccsr",
+    "src/compute",
     "src/coord",
     "src/dataflow-bin",
     "src/dataflow-types",
-    "src/dataflow",
-    "src/dataflowd",
     "src/expr-test-util",
     "src/expr",
     "src/frontegg-auth",
     "src/http-proxy",
+    "src/http-util",
     "src/interchange",
     "src/kafka-util",
     "src/lowertest-derive",
     "src/lowertest",
     "src/materialized",
     "src/metabase",
-    "src/process-collector",
     "src/mzcloud-cli",
     "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
+    "src/orchestrator-process",
     "src/persist-client",
     "src/persist-types",
     "src/persist",
@@ -42,10 +42,14 @@ members = [
     "src/repr-test-util",
     "src/repr",
     "src/s3-datagen",
+    "src/secrets",
+    "src/secrets-filesystem",
+    "src/secrets-kubernetes",
     "src/sql-parser",
     "src/sql",
     "src/sqllogictest",
     "src/stash",
+    "src/storage",
     "src/testdrive",
     "src/timely-util",
     "src/transform",
@@ -81,11 +85,13 @@ rustc-demangle = { opt-level = 3 }
 # production installations, but we still want useful crash reports.
 debug = 1
 
+# Use this section only to change the source of dependencies that might
+# also appear as transitive dependencies of other external dependencies in
+# the dependency graph. For everything else (e.g. rust-postgres, rdkafka,
+# differential-dataflow, proptest, timely) set the `git` sourcce
+# direclty in each dependency entry.
 [patch.crates-io]
+opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
 parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }
-# Waiting on https://github.com/tokio-rs/prost/pull/576.
-prost = { git = "https://github.com/MaterializeInc/prost.git" }
-prost-types = { git = "https://github.com/MaterializeInc/prost.git" }
-prost-build = { git = "https://github.com/MaterializeInc/prost.git" }
-prost-derive = { git = "https://github.com/MaterializeInc/prost.git" }

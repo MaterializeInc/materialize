@@ -17,7 +17,7 @@
 /// Currently, only the simplest possible case is supported:
 /// decoding an Avro record into a struct, each of whose fields
 /// is named the same as the corresponding Avro record field
-/// and which is in turn decodeable without external state.
+/// and which is in turn decodable without external state.
 ///
 /// Example:
 ///

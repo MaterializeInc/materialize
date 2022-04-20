@@ -62,7 +62,7 @@ def workflow_default(c: Composition) -> None:
         )
 
         c.run(
-            "testdrive-svc",
+            "testdrive",
             "--no-reset",
             "--max-errors=1",
             f"--seed={toxiproxy_bytes_allowed}",

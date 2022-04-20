@@ -3,7 +3,7 @@ title: "DELETE"
 description: "`DELETE` removes values stored in tables."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `DELETE` removes values stored in [user-created tables](../create-table).

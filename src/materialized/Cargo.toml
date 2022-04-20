@@ -1,11 +1,11 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.24.1-dev"
+version = "0.26.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 default-run = "materialized"
 build = "build/main.rs"
@@ -28,80 +28,85 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-async-trait = "0.1.52"
+async-trait = "0.1.53"
 atty = "0.2.14"
+axum = { version = "0.5.1", features = ["headers"] }
 backtrace = "0.3.64"
 base64 = "0.13.0"
+bytes = "1.1.0"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.1.6", features = ["wrap_help", "env", "derive"] }
-compile-time-run = "0.2.12"
-console-subscriber = { version = "0.1.3", optional = true }
-crossbeam-channel = "0.5.3"
+clap = { version = "3.1.9", features = ["wrap_help", "env", "derive"] }
+console-subscriber = { version = "0.1.4", optional = true }
+crossbeam-channel = "0.5.4"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
 headers = "0.3.7"
 hex = "0.4.3"
 http = "0.2.6"
-hyper = { version = "0.14.17", features = ["http1", "server"] }
+http-body = "0.4.4"
+hyper = { version = "0.14.18", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
+hyper-proxy = { version = "0.9.1" }
+hyper-tls = { version = "0.5.0" }
 include_dir = "0.7.2"
 itertools = "0.10.3"
-krb5-src = { version = "0.3.2", features = ["binaries"] }
+jsonwebtoken = "8.1.0"
 lazy_static = "1.4.0"
-libc = "0.2.120"
+libc = "0.2.123"
+mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
-mz-dataflow = { path = "../dataflow" }
 mz-dataflow-types = { path = "../dataflow-types" }
-mz-dataflowd = { path = "../dataflowd" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-http-util = { path = "../http-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
+mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-ore = { path = "../ore", features = ["task"] }
+mz-persist-client = { path = "../persist-client" }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
-mz-process-collector = { path = "../process-collector" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
+mz-secrets-filesystem = { path = "../secrets-filesystem" }
+mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
 mz-sql = { path = "../sql" }
+native-tls = { version = "0.2.10", features = ["alpn"] }
 nix = "0.23.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
+opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.10.0" }
 os_info = "3.2.0"
-prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+prometheus = { version = "0.13.0", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 reqwest = { version = "0.11.10", features = ["json"] }
-rlimit = "0.7.0"
-semver = "1.0.6"
+rlimit = "0.8.3"
+semver = "1.0.7"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 shell-words = "1.1.0"
 sysctl = "0.4.4"
-sysinfo = "0.23.5"
+sysinfo = "0.23.10"
 tempfile = "3.2.0"
+thiserror = "1.0.30"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["sync"] }
+tokio-native-tls = { version = "0.3.0" }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
-tracing = "0.1.32"
-tracing-subscriber = "0.3.9"
-
-# Deps for a correct opentelemetry setup!
-opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
-opentelemetry-otlp = { version = "0.10"}
+tonic = { version = "0.7.0", features = ["transport"] }
+tower-http = { version = "0.2.5", features = ["cors"] }
+tracing = "0.1.34"
 tracing-opentelemetry = "0.17"
-tonic = { version = "0.6.2", features = ["transport"] }
-tokio-native-tls = { version = "0.3.0" }
-native-tls = { version = "0.2.8", features = ["alpn"] }
-hyper-proxy = { version = "0.9.1" }
-hyper-tls = { version = "0.5.0" }
-
+tracing-subscriber = "0.3.10"
 url = "2.2.2"
 uuid = "0.8.2"
 
@@ -120,7 +125,7 @@ bytes = "1.1.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
-jsonwebtoken = "8.0.1"
+jsonwebtoken = "8.1.0"
 mz-kafka-util = { path = "../kafka-util" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
@@ -137,10 +142,10 @@ serde_json = "1.0.79"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 askama_shared = { version = "0.12.2", features = ["json"] }
 cc = "1.0.73"
-flate2 = "1.0.22"
+flate2 = "1.0.23"
 hex = "0.4.3"
 hex-literal = "0.3.4"
 reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"] }
@@ -159,6 +164,5 @@ dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
 
 [package.metadata.cargo-udeps.ignore]
-# krb5 used to build a binary
-# sysctl only used on macos
-normal = ["krb5-src", "sysctl"]
+# sysctl is only used on macOS.
+normal = ["sysctl"]

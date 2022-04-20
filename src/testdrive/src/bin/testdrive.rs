@@ -29,7 +29,6 @@ use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::path::PathExt;
 
 use mz_testdrive::Config;
@@ -58,7 +57,7 @@ struct Args {
     /// to clean up AWS state after each script.
     #[clap(long)]
     no_reset: bool,
-    /// Force the use of the specfied temporary directory.
+    /// Force the use of the specified temporary directory.
     ///
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.
@@ -67,6 +66,9 @@ struct Args {
     /// Default timeout for cancellable operations.
     #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s", value_name = "DURATION")]
     default_timeout: Duration,
+    /// The default number of times to retry a query expecting it to converge to the desired result.
+    #[clap(long, default_value = "18446744073709551615", value_name = "N")]
+    default_max_tries: usize,
     /// Initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
@@ -118,12 +120,9 @@ struct Args {
     /// materialized.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     materialized_param: Vec<(String, String)>,
-    /// Validate the on-disk state of the specified materialized catalog.
-    ///
-    /// If present, testdrive will periodically verify that the on-disk catalog
-    /// matches its expectations.
+    /// Validate the on-disk state of the specified materialized data directory.
     #[clap(long, value_name = "PATH")]
-    validate_catalog: Option<PathBuf>,
+    validate_data_dir: Option<PathBuf>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.
@@ -186,8 +185,10 @@ async fn main() {
         Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let loader = aws_config::from_env().region(Region::new(region));
-            let config = AwsConfig::from_loader(loader).await;
+            let config = aws_config::from_env()
+                .region(Region::new(region))
+                .load()
+                .await;
             let account = async {
                 let sts_client = mz_aws_util::sts::client(&config);
                 Ok::<_, Box<dyn Error>>(
@@ -212,15 +213,16 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
-            let loader = aws_config::from_env()
+            let config = aws_config::from_env()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
                     "dummy-access-key-id",
                     "dummy-secret-access-key",
                     None,
-                ));
-            let mut config = AwsConfig::from_loader(loader).await;
-            config.set_endpoint(Endpoint::immutable(endpoint));
+                ))
+                .endpoint_resolver(Endpoint::immutable(endpoint))
+                .load()
+                .await;
             let account = "000000000000".into();
             (config, account)
         }
@@ -262,13 +264,14 @@ async fn main() {
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
         default_timeout: args.default_timeout,
+        default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
 
         // === Materialize options. ===
         materialized_pgconfig: args.materialized_url,
         materialized_params: args.materialized_param,
-        materialized_catalog_path: args.validate_catalog,
+        materialized_data_path: args.validate_data_dir,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,

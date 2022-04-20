@@ -13,6 +13,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
@@ -21,14 +22,17 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
 use crate::func::Func;
-use crate::names::{Aug, FullName, PartialName, SchemaName};
+use crate::names::{
+    Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
+    ResolvedDatabaseSpecifier, SchemaSpecifier,
+};
 use crate::plan::statement::StatementDesc;
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -47,7 +51,7 @@ use crate::plan::statement::StatementDesc;
 ///     components based upon connection defaults, e.g., resolving the partial
 ///     name `view42` to the fully-specified name `materialize.public.view42`.
 ///
-///   * Lookup operations, like [`SessionCatalog::get_item_by_id`]. These retrieve
+///   * Lookup operations, like [`SessionCatalog::get_item`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
 ///     known to be valid (i.e., because the name was successfully resolved,
 ///     or was constructed based on the output of a prior lookup operation).
@@ -61,7 +65,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     fn active_user(&self) -> &str;
 
     /// Returns the database to use if one is not explicitly specified.
-    fn active_database(&self) -> &str;
+    fn active_database_name(&self) -> Option<&str> {
+        self.active_database()
+            .map(|id| self.get_database(id))
+            .map(|db| db.name())
+    }
+
+    /// Returns the database to use if one is not explicitly specified.
+    fn active_database(&self) -> Option<&DatabaseId>;
 
     /// Returns the compute instance to use if one is not explicitly specified.
     fn active_compute_instance(&self) -> &str;
@@ -72,22 +83,46 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
 
     /// Resolves the named database.
     ///
-    /// If `database_name` exists in the catalog, it returns the ID of the
+    /// If `database_name` exists in the catalog, it returns a reference to the
     /// resolved database; otherwise it returns an error.
     fn resolve_database(&self, database_name: &str) -> Result<&dyn CatalogDatabase, CatalogError>;
 
+    /// Gets a database by its ID.
+    ///
+    /// Panics if `id` does not specify a valid database.
+    fn get_database(&self, id: &DatabaseId) -> &dyn CatalogDatabase;
+
     /// Resolves a partially-specified schema name.
     ///
-    /// If `database_name` is provided, it searches the named database for a
-    /// schema named `schema_name`. If `database_name` is not provided, it
-    /// searches the active database instead. It returns the ID of the schema
-    /// if found; otherwise it returns an error if the database does not exist,
-    /// or if the database exists but the schema does not.
+    /// If the schema exists in the catalog, it returns a reference to the
+    /// resolved schema; otherwise it returns an error.
     fn resolve_schema(
         &self,
-        database_name: Option<String>,
+        database_name: Option<&str>,
         schema_name: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError>;
+
+    /// Resolves a schema name within a specified database.
+    ///
+    /// If the schema exists in the database, it returns a reference to the
+    /// resolved schema; otherwise it returns an error.
+    fn resolve_schema_in_database(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_name: &str,
+    ) -> Result<&dyn CatalogSchema, CatalogError>;
+
+    /// Gets a schema by its ID.
+    ///
+    /// Panics if `id` does not specify a valid schema.
+    fn get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+    ) -> &dyn CatalogSchema;
+
+    /// Returns true if `schema` is an internal system schema, false otherwise
+    fn is_system_schema(&self, schema: &str) -> bool;
 
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
@@ -113,40 +148,34 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialObjectName)
+        -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
-    fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_function(
+        &self,
+        item_name: &PartialObjectName,
+    ) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Gets an item by its ID.
-    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
+    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
-    fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
-
-    /// Gets an item by its OID.
-    ///
-    /// Panics if `oid` does not specify a valid item.
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn CatalogItem;
+    fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
-    fn item_exists(&self, name: &FullName) -> bool;
+    fn item_exists(&self, name: &QualifiedObjectName) -> bool;
 
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
-    fn find_available_name(&self, mut name: FullName) -> FullName {
-        let mut i = 0;
-        let orig_item_name = name.item.clone();
-        while self.item_exists(&name) {
-            i += 1;
-            name.item = format!("{}{}", orig_item_name, i);
-        }
-        name
-    }
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
+
+    /// Returns a fully qualified human readable name from fully qualified non-human readable name
+    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -196,7 +225,7 @@ pub trait CatalogDatabase {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the database.
-    fn id(&self) -> i64;
+    fn id(&self) -> DatabaseId;
 
     /// Returns whether the database contains schemas.
     fn has_schemas(&self) -> bool;
@@ -204,11 +233,14 @@ pub trait CatalogDatabase {
 
 /// A schema in a [`SessionCatalog`].
 pub trait CatalogSchema {
+    /// Returns a fully-specified id of the database
+    fn database(&self) -> &ResolvedDatabaseSpecifier;
+
     /// Returns a fully-specified name of the schema.
-    fn name(&self) -> &SchemaName;
+    fn name(&self) -> &QualifiedSchemaName;
 
     /// Returns a stable ID for the schema.
-    fn id(&self) -> i64;
+    fn id(&self) -> &SchemaSpecifier;
 
     /// Lists the `CatalogItem`s for the schema.
     fn has_items(&self) -> bool;
@@ -240,8 +272,8 @@ pub trait CatalogComputeInstance {
 /// Note that "item" has a very specific meaning in the context of a SQL
 /// catalog, and refers to the various entities that belong to a schema.
 pub trait CatalogItem {
-    /// Returns the fully-specified name of the catalog item.
-    fn name(&self) -> &FullName;
+    /// Returns the fully qualified name of the catalog item.
+    fn name(&self) -> &QualifiedObjectName;
 
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
@@ -253,7 +285,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self) -> Result<&RelationDesc, CatalogError>;
+    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -291,7 +323,7 @@ pub trait CatalogItem {
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
-    fn type_details(&self) -> Option<&CatalogTypeDetails>;
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;
 }
 
 /// The type of a [`CatalogItem`].
@@ -313,6 +345,8 @@ pub enum CatalogItemType {
     Func,
     /// A Secret.
     Secret,
+    /// A Connector.
+    Connector,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -326,17 +360,40 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
+            CatalogItemType::Connector => f.write_str("connector"),
         }
     }
 }
 
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CatalogTypeDetails {
+pub struct CatalogTypeDetails<T: TypeReference> {
     /// The ID of the type with this type as the array element, if available.
     pub array_id: Option<GlobalId>,
     /// The description of this type.
-    pub typ: CatalogType,
+    pub typ: CatalogType<T>,
+}
+
+/// Represents a reference to type in the catalog
+pub trait TypeReference {
+    /// The actual type used to reference a `CatalogType`
+    type Reference: Clone + Debug + Eq + PartialEq;
+}
+
+/// Reference to a type by it's name
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NameReference;
+
+impl TypeReference for NameReference {
+    type Reference = &'static str;
+}
+
+/// Reference to a type by it's global ID
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdReference;
+
+impl TypeReference for IdReference {
+    type Reference = GlobalId;
 }
 
 /// A type stored in the catalog.
@@ -346,9 +403,9 @@ pub struct CatalogTypeDetails {
 /// types in the catalog.
 #[allow(missing_docs)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CatalogType {
+pub enum CatalogType<T: TypeReference> {
     Array {
-        element_id: GlobalId,
+        element_reference: T::Reference,
     },
     Bool,
     Bytes,
@@ -362,18 +419,18 @@ pub enum CatalogType {
     Interval,
     Jsonb,
     List {
-        element_id: GlobalId,
+        element_reference: T::Reference,
     },
     Map {
-        key_id: GlobalId,
-        value_id: GlobalId,
+        key_reference: T::Reference,
+        value_reference: T::Reference,
     },
     Numeric,
     Oid,
     PgLegacyChar,
     Pseudo,
     Record {
-        fields: Vec<(ColumnName, GlobalId)>,
+        fields: Vec<(ColumnName, T::Reference)>,
     },
     RegClass,
     RegProc,
@@ -385,6 +442,72 @@ pub enum CatalogType {
     Uuid,
     VarChar,
     Int2Vector,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Mirrored from [PostgreSQL's `typcategory`][typcategory].
+///
+/// Note that Materialize also uses a number of pseudotypes when planning, but
+/// we have yet to need to integrate them with `TypeCategory`.
+///
+/// [typcategory]:
+/// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
+pub enum TypeCategory {
+    /// Array type.
+    Array,
+    /// Bit string type.
+    BitString,
+    /// Boolean type.
+    Boolean,
+    /// Composite type.
+    Composite,
+    /// Date/time type.
+    DateTime,
+    /// Enum type.
+    Enum,
+    /// Geometric type.
+    Geometric,
+    /// List type. Materialize specific.
+    List,
+    /// Network address type.
+    NetworkAddress,
+    /// Numeric type.
+    Numeric,
+    /// Pseudo type.
+    Pseudo,
+    /// Range type.
+    Range,
+    /// String type.
+    String,
+    /// Timestamp type.
+    Timespan,
+    /// User-defined type.
+    UserDefined,
+    /// Unknown type.
+    Unknown,
+}
+
+impl fmt::Display for TypeCategory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            TypeCategory::Array => "array",
+            TypeCategory::BitString => "bit-string",
+            TypeCategory::Boolean => "boolean",
+            TypeCategory::Composite => "composite",
+            TypeCategory::DateTime => "date-time",
+            TypeCategory::Enum => "enum",
+            TypeCategory::Geometric => "geometric",
+            TypeCategory::List => "list",
+            TypeCategory::NetworkAddress => "network-address",
+            TypeCategory::Numeric => "numeric",
+            TypeCategory::Pseudo => "pseudo",
+            TypeCategory::Range => "range",
+            TypeCategory::String => "string",
+            TypeCategory::Timespan => "timespan",
+            TypeCategory::UserDefined => "user-defined",
+            TypeCategory::Unknown => "unknown",
+        })
+    }
 }
 
 /// An error returned by the catalog.
@@ -404,6 +527,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
+    /// Unknown connector.
+    UnknownConnector(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -419,6 +544,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
+            Self::UnknownConnector(name) => write!(f, "connector \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
@@ -469,8 +595,8 @@ impl SessionCatalog for DummyCatalog {
         "dummy"
     }
 
-    fn active_database(&self) -> &str {
-        "dummy"
+    fn active_database(&self) -> Option<&DatabaseId> {
+        Some(&DatabaseId(0))
     }
 
     fn active_compute_instance(&self) -> &str {
@@ -482,26 +608,42 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
-        unimplemented!();
+        unimplemented!()
     }
 
-    fn resolve_schema(
+    fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
+        &DummyDatabase
+    }
+
+    fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
+        unimplemented!()
+    }
+
+    fn resolve_schema_in_database(
         &self,
-        _: Option<String>,
+        _: &ResolvedDatabaseSpecifier,
         _: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!();
+        unimplemented!()
+    }
+
+    fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
+        unimplemented!()
+    }
+
+    fn is_system_schema(&self, _: &str) -> bool {
+        false
     }
 
     fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
         unimplemented!();
     }
 
-    fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_item(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
         unimplemented!();
     }
 
-    fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_function(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
         unimplemented!();
     }
 
@@ -512,20 +654,20 @@ impl SessionCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
+    fn get_item(&self, _: &GlobalId) -> &dyn CatalogItem {
         unimplemented!();
     }
 
-    fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
+    fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
         unimplemented!();
     }
 
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
-    fn item_exists(&self, _: &FullName) -> bool {
+    fn item_exists(&self, _: &QualifiedObjectName) -> bool {
         false
+    }
+
+    fn resolve_full_name(&self, _: &QualifiedObjectName) -> FullObjectName {
+        unimplemented!()
     }
 
     fn config(&self) -> &CatalogConfig {
@@ -534,6 +676,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn now(&self) -> EpochMillis {
         (self.config().now)()
+    }
+
+    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+        name
     }
 }
 
@@ -544,5 +690,26 @@ impl ExprHumanizer for DummyCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
+    }
+}
+
+/// A dummy [`CatalogDatabase`] implementation.
+///
+/// This implementation is suitable for use in tests that plan queries which are
+/// not demanding of the catalog, as many methods are unimplemented.
+#[derive(Debug)]
+pub struct DummyDatabase;
+
+impl CatalogDatabase for DummyDatabase {
+    fn name(&self) -> &str {
+        "dummy"
+    }
+
+    fn id(&self) -> DatabaseId {
+        DatabaseId(0)
+    }
+
+    fn has_schemas(&self) -> bool {
+        true
     }
 }

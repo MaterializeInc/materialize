@@ -4,6 +4,8 @@ description: "Connecting Materialize to a Kafka or Redpanda broker"
 menu:
   main:
     parent: 'create-source'
+    name: Kafka
+    weight: 10
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka
@@ -17,7 +19,7 @@ This page details how to connect Materialize to a Kafka broker to read data from
 {{% /create-source/intro %}}
 
 {{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/third-party/redpanda/) broker, unless stated otherwise.
+The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
 ## Syntax
@@ -112,11 +114,11 @@ Note that:
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/third-party/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/integrations/debezium/).
 
 ### Exposing source metadata
 
-In addition to the message value, Materialize can expose the message key and other source metadata fields to SQL.
+In addition to the message value, Materialize can expose the message key, headers and other source metadata fields to SQL.
 
 #### Key
 
@@ -135,6 +137,58 @@ Note that:
 - This option requires specifying the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
 - The `UPSERT` envelope always includes keys.
+
+- The `DEBEZIUM` envelope is incompatible with this option.
+
+#### Headers
+
+Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+
+```sql
+CREATE SOURCE kafka_metadata
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  INCLUDE HEADERS
+  ENVELOPE NONE;
+```
+
+To retrieve the headers in a message, you can unpack the value:
+
+```sql
+SELECT key,
+       field1,
+       field2,
+       headers[1].value AS kafka_header
+FROM mv_kafka_metadata;
+
+  key  |  field1  |  field2  |  kafka_header
+-------+----------+----------+----------------
+  foo  |  fooval  |   1000   |     hvalue
+  bar  |  barval  |   5000   |     <null>
+```
+
+, or lookup by key:
+
+```sql
+SELECT key,
+       field1,
+       field2,
+       thekey,
+       value
+FROM (SELECT key,
+             field1,
+             field2,
+             unnest(headers).key AS thekey,
+             unnest(headers).value AS value
+      FROM mv_kafka_metadata) AS km
+WHERE thekey = 'kvalue';
+
+  key  |  field1  |  field2  |  thekey  |  value
+-------+----------+----------+----------+--------
+  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+```
+
+Note that:
 
 - The `DEBEZIUM` envelope is incompatible with this option.
 
@@ -187,20 +241,16 @@ Note that:
 
 It's also possible to set a start offset based on Kafka timestamps, using the `kafka_time_offset` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `start_offset` was provided directly.
 
-{{< note >}}
-The `kafka_time_offset` option is not supported yet for Redpanda sources ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
-{{</ note >}}
-
 It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
 
-If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/guides/temporal-filters/) instead.
+If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/spellbook/temporal-filters/) instead.
 
 #### `WITH` options
 
 Field               | Value | Description
 --------------------|-------|--------------------
 `start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `(DEBEZIUM) UPSERT`.
-`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used. **This option is not currently supported for [Redpanda](/third-party/redpanda).**
+`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
 
 
 ## Authentication
@@ -268,37 +318,15 @@ CREATE SOURCE kafka_sasl
 
 This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
 
-#### SASL/GSSAPI (Kerberos)
-
-```sql
-CREATE SOURCE kafka_kerberos
-  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'tps-reports' WITH (
-      security_protocol = 'sasl_plaintext',
-      sasl_kerberos_keytab = '/secrets/materialized.keytab',
-      sasl_kerberos_service_name = 'kafka',
-      sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
-  )
-  FORMAT AVRO USING SCHEMA FILE '/tps-reports-schema.json';
-```
-
-Note that:
-
-- Materialize does _not_ support Kerberos authentication for the Confluent Schema Registry.
-
 #### SASL `WITH` options
 
 Field                                   | Value  | Description
 ----------------------------------------|--------|----------------------------------------
 `security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `GSSAPI` (the default), `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
+`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
 `sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
 `sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
 `sasl_password_env`                     | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
-`sasl_kerberos_keytab`                  | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_kinit_cmd`               | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_principal`               | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
-`sasl_kerberos_service_name`            | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
 
 ## Examples
 
@@ -328,7 +356,7 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
     data->>'field1' AS field_1,
     data->>'field2' AS field_2,
     data->>'field3' AS field_3
-  FROM (SELECT text::jsonb AS data FROM json_source);
+  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
 ```
 
 {{< /tab >}}
@@ -368,4 +396,4 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 ## Related pages
 
 - [`CREATE SOURCE`](../)
-- [Using Debezium](/third-party/debezium/)
+- [Using Debezium](/integrations/debezium/)

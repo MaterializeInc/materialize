@@ -2,7 +2,7 @@
 title: "BEGIN"
 menu:
   main:
-    parent: "sql"
+    parent: "commands"
 ---
 
 `BEGIN` starts a transaction block.

@@ -22,9 +22,8 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::GlobalId;
 use mz_pgrepr::Format;
-use mz_repr::{Datum, Diff, Row, ScalarType};
+use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
@@ -35,7 +34,8 @@ use crate::error::CoordError;
 mod vars;
 
 pub use self::vars::{
-    ClientSeverity, Var, Vars, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+    ClientSeverity, Var, Vars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
+    SERVER_PATCH_VERSION,
 };
 
 const DUMMY_CONNECTION_ID: u32 = 0;
@@ -225,7 +225,7 @@ impl<T: CoordTimestamp> Session<T> {
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
-    /// verifying that no transaction anomolies will occur if cleared.
+    /// verifying that no transaction anomalies will occur if cleared.
     pub fn clear_transaction_ops(&mut self) {
         if let Some(txn) = self.transaction.inner_mut() {
             txn.ops = TransactionOps::None;

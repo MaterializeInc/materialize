@@ -190,22 +190,8 @@ contains:Invalid WITH option ssl_ca_location='foo': file does not exist
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Unsupported SASL mechanism: FOO
 
-! CREATE SINK invalid_sasl_kerberos_keytab FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_kerberos_keytab = foo)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Invalid WITH option sasl_kerberos_keytab='foo': file does not exist
-
 $ file-append path=invalid-keytab
 nonsense
-
-! CREATE SINK invalid_sasl_kerberos_keytab FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_kerberos_keytab = '${testdrive.temp-dir}/invalid-keytab')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:error registering kafka topic for sink
 
 ! CREATE SINK missing_required_sasl_username FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
@@ -220,21 +206,6 @@ contains:creating admin client failed: Client creation error: sasl.username and 
   WITH  (security_protocol = SASL_SSL, sasl_mechanisms = plain, sasl_username = foo)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:creating admin client failed: Client creation error: sasl.username and sasl.password must be set
-
-! CREATE SINK missing_required_sasl_kerberos_keytab FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_mechanisms = gssapi)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:creating admin client failed: Client creation error: Invalid sasl.kerberos.kinit.cmd value: Property not available: "sasl.kerberos.keytab"
-
-! CREATE SINK invalid_sasl_kerberos_kinit_cmd FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_mechanisms = gssapi, sasl_kerberos_kinit_cmd = '/bin/false')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:error registering kafka topic for sink
-
 #
 # FORMAT
 #

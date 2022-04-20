@@ -29,7 +29,7 @@ SERVICES = [
     SchemaRegistry(kafka_servers=[("kafka", f"{KAFKA_SINK_PORT}")]),
     Materialized(),
     Toxiproxy(),
-    Testdrive(kafka_url="toxiproxy:9093"),
+    Testdrive(kafka_url="toxiproxy:9093", default_timeout="120s"),
 ]
 
 #
@@ -53,7 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         c.start_and_wait_for_tcp(["toxiproxy"])
         c.run(
-            "testdrive-svc",
+            "testdrive",
             "--no-reset",
             "--max-errors=1",
             f"--seed={seed}{i}",

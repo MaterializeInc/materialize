@@ -16,10 +16,11 @@
 pub mod client;
 pub mod logging;
 pub mod plan;
+pub mod postgres_source;
+pub mod reconciliation;
 
 mod errors;
 mod explain;
-mod gen;
 mod types;
 
 pub use errors::*;
@@ -28,6 +29,18 @@ pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
 pub use explain::TimestampExplanation;
 pub use explain::TimestampSource;
-pub use gen::*;
 pub use plan::Plan;
 pub use types::*;
+
+use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+
+use mz_repr::{Diff, Row, Timestamp};
+
+pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
+pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
+
+pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
+pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
+pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
+pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;

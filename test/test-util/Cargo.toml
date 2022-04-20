@@ -3,11 +3,11 @@ name = "mz-test-util"
 description = "Utilities for testing Materialize"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["task"] }
@@ -15,4 +15,4 @@ rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.32"
+tracing = "0.1.34"

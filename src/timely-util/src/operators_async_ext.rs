@@ -90,7 +90,7 @@ impl Future for Notified<'_> {
 pub trait OperatorBuilderExt<G: Scope> {
     /// Creates an operator implementation from supplied async logic constructor.
     ///
-    /// The logic constructror is expected to return a future that will never return and that
+    /// The logic constructor is expected to return a future that will never return and that
     /// follows the following pattern:
     ///
     /// ```ignore

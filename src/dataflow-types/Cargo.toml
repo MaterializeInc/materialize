@@ -3,19 +3,20 @@ name = "mz-dataflow-types"
 description = "Types for the dataflow crate."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.59.0"
+rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.56"
 async-stream = "0.3.3"
-async-trait = "0.1.52"
-aws-config = { version = "0.8.0", default-features = false, features = ["native-tls"] }
-aws-smithy-http = "0.38.0"
-aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
+async-trait = "0.1.53"
+aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
+aws-smithy-http = "0.40.2"
+aws-types = { version = "0.10.1", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
+bytesize = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.3"
+crossbeam-channel = "0.5.4"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
@@ -24,6 +25,7 @@ futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
 http = "0.2.6"
 http-serde = "1.1.0"
+maplit = "1.0.2"
 mz-aws-util = { path = "../aws-util" }
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
@@ -35,8 +37,9 @@ mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
+mz-stash = { path = "../stash" }
 num_enum = "0.5.7"
-prost = "0.9.0"
+prost = "0.10.1"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -46,10 +49,12 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.17.0"
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-stream = " 0.1.8"
-tokio-util = { version = "0.6.9", features = ["codec"] }
-tracing = "0.1.32"
+tokio-util = { version = "0.7.1", features = ["codec"] }
+tracing = "0.1.34"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 
 [build-dependencies]
-prost-build = "0.9.0"
+prost-build = { version = "0.10.1", features = ["vendored"] }

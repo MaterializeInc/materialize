@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package row;
+package mz_repr.row;
 
 message ProtoRow {
     repeated ProtoDatum datums = 1;
@@ -65,15 +65,15 @@ enum ProtoDatumOther {
     // This enum is initially used only in a oneof, which means we can
     // distinguish unset without this sentinel. But stick one in here anyway,
     // in case this enum gets used somewhere else in the future.
-    Unknown = 0;
-    Null = 1;
-    False = 2;
-    True = 3;
-    JsonNull = 4;
-    Dummy = 5;
-    NumericPosInf = 6;
-    NumericNegInf = 7;
-    NumericNaN = 8;
+    UNKNOWN = 0;
+    NULL = 1;
+    FALSE = 2;
+    TRUE = 3;
+    JSON_NULL = 4;
+    DUMMY = 5;
+    NUMERIC_POS_INF = 6;
+    NUMERIC_NEG_INF = 7;
+    NUMERIC_NA_N = 8;
 }
 
 message ProtoDate {

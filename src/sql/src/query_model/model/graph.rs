@@ -237,7 +237,7 @@ pub(crate) enum BoxType {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Get {
-    pub id: mz_expr::GlobalId,
+    pub id: mz_repr::GlobalId,
     pub unique_keys: Vec<Vec<usize>>,
 }
 

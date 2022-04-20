@@ -3,7 +3,7 @@ title: "SHOW TABLES"
 description: "`SHOW TABLES` returns a list of all tables available to your Materialize instances."
 menu:
   main:
-    parent: 'sql'
+    parent: commands
 ---
 
 `SHOW TABLES` returns a list of all tables available to your Materialize instances.

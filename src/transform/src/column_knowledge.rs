@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
+use mz_expr::visit::Visit;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, RelationType, ScalarType};
@@ -297,9 +298,6 @@ impl ColumnKnowledge {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
                 MirRelationExpr::Threshold { input } => {
-                    self.harvest(input, knowledge, knowledge_stack)
-                }
-                MirRelationExpr::DeclareKeys { input, .. } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
                 MirRelationExpr::Union { base, inputs } => {

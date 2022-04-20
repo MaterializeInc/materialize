@@ -9,16 +9,20 @@
 
 //! A multi-dimensional array data type.
 
+use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use std::mem;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::row::DatumList;
-use std::cmp::Ordering;
-
 use mz_lowertest::MzReflect;
+
+use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::row::DatumList;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 
 /// The maximum number of dimensions permitted in an array.
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
@@ -132,10 +136,21 @@ pub struct ArrayDimension {
 
 /// An error that can occur when constructing an array.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, MzReflect,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    MzReflect,
 )]
 pub enum InvalidArrayError {
-    /// The number of dimensions in the array exceedes [`MAX_ARRAY_DIMENSIONS]`.
+    /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.
     TooManyDimensions(usize),
     /// The number of array elements does not match the cardinality derived from
     /// its dimensions.
@@ -162,5 +177,60 @@ impl fmt::Display for InvalidArrayError {
 impl Error for InvalidArrayError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
+    }
+}
+
+impl From<&InvalidArrayError> for ProtoInvalidArrayError {
+    fn from(error: &InvalidArrayError) -> Self {
+        use proto_invalid_array_error::*;
+        use Kind::*;
+        let kind = match error {
+            InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(dims.into_proto()),
+            InvalidArrayError::WrongCardinality { actual, expected } => {
+                WrongCardinality(ProtoWrongCardinality {
+                    actual: actual.into_proto(),
+                    expected: expected.into_proto(),
+                })
+            }
+        };
+        ProtoInvalidArrayError { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoInvalidArrayError) -> Result<Self, Self::Error> {
+        use proto_invalid_array_error::Kind::*;
+        match error.kind {
+            Some(kind) => match kind {
+                TooManyDimensions(dims) => Ok(InvalidArrayError::TooManyDimensions(
+                    usize::from_proto(dims)?,
+                )),
+                WrongCardinality(v) => Ok(InvalidArrayError::WrongCardinality {
+                    actual: usize::from_proto(v.actual)?,
+                    expected: usize::from_proto(v.expected)?,
+                }),
+            },
+            None => Err(TryFromProtoError::missing_field(
+                "`ProtoInvalidArrayError::kind`",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn invalid_array_error_protobuf_roundtrip(expect in any::<InvalidArrayError>()) {
+            let actual = protobuf_roundtrip::<_, ProtoInvalidArrayError>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

@@ -250,23 +250,6 @@ build apply=ProjectionPushdown
 ----
 ----
 
-# Project around a DeclareKeys
-
-build apply=ProjectionPushdown
-(project (declare_keys (get x) [[#0] [#1]]) [#1])
-----
-%0 =
-| Get x (u0)
-| Project (#1)
-| Declare primary keys (1)
-
-build apply=ProjectionPushdown
-(project (declare_keys (get x) [[#0]]) [#1])
-----
-%0 =
-| Get x (u0)
-| Project (#1)
-
 # Project around an ArrangeBy
 
 build apply=ProjectionPushdown

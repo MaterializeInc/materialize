@@ -56,19 +56,20 @@ create_sink ::=
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
-create_source_avro_file ::=
+create_source_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'AVRO OCF' path with_options?
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
+  'FROM' ('FILE' path
+  (compression)? with_options?
+  'FORMAT' format_spec | 'AVRO OCF' path with_options? )
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM'))?
 create_source_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
-    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
 create_source_kinesis ::=
@@ -77,26 +78,13 @@ create_source_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
-create_source_csv_file ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
-  'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
-  ('DELIMITED BY' char)?
-  ('ENVELOPE NONE')?
-create_source_json ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
-  'FORMAT' 'BYTES'
-  ('ENVELOPE NONE')?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
-create_source_pubnub_text ::=
+create_source_pubnub ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
@@ -119,16 +107,6 @@ create_source_s3 ::=
   with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
-create_source_text ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
-  'FORMAT' (
-    'REGEX' regex |
-    'TEXT' |
-    'BYTES'
-  )
-('ENVELOPE NONE')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
@@ -216,6 +194,11 @@ s3_format_spec ::=
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+file_format_spec ::=
+  'REGEX' regex |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'TEXT' |
+  'BYTES'
 sink_format_spec ::=
   'AVRO USING' (
         'CONFLUENT SCHEMA REGISTRY' url with_options? |
@@ -226,6 +209,7 @@ consistency_format_spec ::=
   'AVRO USING' (
         'CONFLUENT SCHEMA REGISTRY' url with_options?
         )
+compression ::= 'COMPRESSION' ('NONE' | 'GZIP')
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'

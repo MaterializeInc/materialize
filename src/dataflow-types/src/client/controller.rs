@@ -21,25 +21,30 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 
-use anyhow::bail;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
+use maplit::hashmap;
+use serde::Deserialize;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
-use mz_orchestrator::{Orchestrator, ServiceConfig};
+use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
 
+use crate::client::GenericClient;
 use crate::client::{
-    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ComputeWrapperClient,
-    InstanceConfig, RemoteClient, Response, StorageClient, StorageResponse, VirtualComputeHost,
+    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ControllerResponse,
+    InstanceConfig, RemoteClient, StorageResponse,
 };
+use crate::logging::LoggingConfig;
+use crate::{TailBatch, TailResponse};
 
-pub use storage::{StorageController, StorageControllerMut, StorageControllerState};
-mod storage;
+pub use storage::{StorageController, StorageControllerState};
+pub mod storage;
 pub use compute::{ComputeController, ComputeControllerMut};
 mod compute;
 
@@ -47,15 +52,46 @@ mod compute;
 pub struct OrchestratorConfig {
     /// The orchestrator implementation to use.
     pub orchestrator: Box<dyn Orchestrator>,
-    /// The dataflowd image to use when starting new compute instances.
-    pub dataflowd_image: String,
+    /// The computed image to use when starting new compute instances.
+    pub computed_image: String,
     /// The storage address that compute instances should connect to.
     pub storage_addr: String,
-    /// The number of storage workers in the storage instance.
-    ///
-    /// TODO(benesch,antiguru): make this something that is discovered in the
-    /// handshake between compute and storage.
-    pub storage_workers: usize,
+    /// Whether or not process should die when connection with ADAPTER is lost.
+    pub linger: bool,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct ClusterReplicaSizeConfig {
+    memory_limit: Option<MemoryLimit>,
+    cpu_limit: Option<CpuLimit>,
+    processes: NonZeroUsize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
+
+impl Default for ClusterReplicaSizeMap {
+    fn default() -> Self {
+        // {
+        //     "1": {"processes": 1},
+        //     "2": {"processes": 2},
+        //     /// ...
+        //     "16": {"processes": 16}
+        // }
+        let inner = (1..=16)
+            .map(|i| {
+                (
+                    i.to_string(),
+                    ClusterReplicaSizeConfig {
+                        memory_limit: None,
+                        cpu_limit: None,
+                        processes: NonZeroUsize::new(i).unwrap(),
+                    },
+                )
+            })
+            .collect();
+        Self(inner)
+    }
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -64,10 +100,10 @@ pub struct OrchestratorConfig {
 /// referred to as the `dataflow_client` in the coordinator to be very
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
-    orchestrator: Option<OrchestratorConfig>,
-    storage: StorageControllerState<T>,
+    orchestrator: OrchestratorConfig,
+    storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
-    virtual_compute_host: VirtualComputeHost<T>,
+    replica_sizes: ClusterReplicaSizeMap,
 }
 
 impl<T> Controller<T>
@@ -78,72 +114,87 @@ where
         &mut self,
         instance: ComputeInstanceId,
         config: InstanceConfig,
+        logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
-        let (mut client, logging) = match config {
-            InstanceConfig::Virtual { logging } => {
-                let client = self.virtual_compute_host.create_instance(instance);
-                (client, logging)
+        // Insert a new compute instance controller.
+        self.compute.insert(
+            instance,
+            compute::ComputeControllerState::new(&logging).await?,
+        );
+
+        // Add replicas backing that instance.
+        match config {
+            InstanceConfig::Remote { replicas } => {
+                let mut compute_instance = self.compute_mut(instance).unwrap();
+                for (name, hosts) in replicas {
+                    let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
+                    let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                    compute_instance.add_replica(name, client).await;
+                }
             }
-            InstanceConfig::Remote { hosts, logging } => {
-                let client = RemoteClient::new(&hosts);
-                let client = ComputeWrapperClient::new(client, instance);
-                let mut replicas = crate::client::replicated::ActiveReplication::default();
-                let _replica_id = replicas.add_replica(client).await;
-                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
-            }
-            InstanceConfig::Managed { size: _, logging } => {
+            InstanceConfig::Managed { size } => {
                 let OrchestratorConfig {
                     orchestrator,
+                    computed_image,
                     storage_addr,
-                    storage_workers,
-                    dataflowd_image,
-                } = match &mut self.orchestrator {
-                    Some(orchestrator) => orchestrator,
-                    // TODO(benesch): bailing here is too late. Something
-                    // earlier needs to recognize when we can't create managed
-                    // instances.
-                    _ => bail!("cannot create managed instances in this configuration"),
-                };
+                    linger,
+                } = &self.orchestrator;
+
+                let default_listen_host = orchestrator.listen_host();
+
+                let size_config = self.replica_sizes.0.get(&size).ok_or_else(|| {
+                    anyhow::anyhow!("Size {size} not specified in allowed cluster sizes map")
+                })?;
+
                 let service = orchestrator
                     .namespace("compute")
                     .ensure_service(
-                        &format!("instance-{instance}"),
+                        &format!("cluster-{instance}"),
                         ServiceConfig {
-                            image: dataflowd_image.clone(),
-                            args: vec![
-                                "--runtime=compute".into(),
-                                format!("--storage-workers={storage_workers}"),
-                                format!("--storage-addr={storage_addr}"),
-                                "0.0.0.0:2101".into(),
+                            image: computed_image.clone(),
+                            args: &|ports| {
+                                let mut compute_opts = vec![
+                                    format!("--storage-addr={storage_addr}"),
+                                    format!(
+                                        "--listen-addr={}:{}",
+                                        default_listen_host, ports["controller"]
+                                    ),
+                                    format!("{}:{}", default_listen_host, ports["compute"]),
+                                ];
+                                if *linger {
+                                    compute_opts.push(format!("--linger"));
+                                }
+                                compute_opts
+                            },
+                            ports: vec![
+                                ServicePort {
+                                    name: "controller".into(),
+                                    port_hint: 2100,
+                                },
+                                ServicePort {
+                                    name: "compute".into(),
+                                    port_hint: 2102,
+                                },
                             ],
-                            ports: vec![2101, 6876],
-                            // TODO: use `size` to set these.
-                            cpu_limit: None,
-                            memory_limit: None,
-                            // TODO: support sizes large enough to warrant multiple processes.
-                            processes: 1,
+                            cpu_limit: size_config.cpu_limit,
+                            memory_limit: size_config.memory_limit,
+                            processes: size_config.processes,
+                            labels: hashmap! {
+                                "cluster-id".into() => instance.to_string(),
+                                "type".into() => "cluster".into(),
+                            },
                         },
                     )
                     .await?;
-                let addrs: Vec<_> = service
-                    .hosts()
-                    .iter()
-                    .map(|h| format!("{h}:6876"))
-                    .collect();
-                let client = RemoteClient::new(&addrs);
-                let client = ComputeWrapperClient::new(client, instance);
-                let mut replicas = crate::client::replicated::ActiveReplication::default();
-                let _replica_id = replicas.add_replica(client).await;
-                (Box::new(replicas) as Box<dyn ComputeClient<T>>, logging)
+                let client = RemoteClient::new(&service.addresses("controller"));
+                let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                self.compute_mut(instance)
+                    .unwrap()
+                    .add_replica("default".into(), client)
+                    .await;
             }
-        };
-        client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
-            .await?;
-        self.compute.insert(
-            instance,
-            compute::ComputeControllerState::new(client, &logging),
-        );
+        }
+
         Ok(())
     }
     pub async fn drop_instance(
@@ -151,14 +202,12 @@ where
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
-            if let Some(OrchestratorConfig { orchestrator, .. }) = &mut self.orchestrator {
-                orchestrator
-                    .namespace("compute")
-                    .drop_service(&format!("instance-{instance}"))
-                    .await?;
-            }
+            self.orchestrator
+                .orchestrator
+                .namespace("compute")
+                .drop_service(&format!("cluster-{instance}"))
+                .await?;
             compute.client.send(ComputeCommand::DropInstance).await?;
-            self.virtual_compute_host.drop_instance(instance);
         }
         Ok(())
     }
@@ -167,29 +216,24 @@ where
 impl<T> Controller<T> {
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&self) -> StorageController<T> {
-        StorageController {
-            storage: &self.storage,
-        }
+    pub fn storage(&self) -> &dyn StorageController<Timestamp = T> {
+        &*self.storage_controller
     }
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(&mut self) -> StorageControllerMut<T> {
-        StorageControllerMut {
-            storage: &mut self.storage,
-        }
+    pub fn storage_mut(&mut self) -> &mut dyn StorageController<Timestamp = T> {
+        &mut *self.storage_controller
     }
 
     /// Acquires an immutable handle to a controller for the indicated compute instance, if it exists.
     #[inline]
     pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
         let compute = self.compute.get(&instance)?;
-        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeController {
             _instance: instance,
             compute,
-            storage: &self.storage,
+            storage_controller: self.storage(),
         })
     }
 
@@ -197,11 +241,10 @@ impl<T> Controller<T> {
     #[inline]
     pub fn compute_mut(&mut self, instance: ComputeInstanceId) -> Option<ComputeControllerMut<T>> {
         let compute = self.compute.get_mut(&instance)?;
-        // A compute instance contains `self.storage` so that it can form a `StorageController` if it needs.
         Some(ComputeControllerMut {
             instance,
             compute,
-            storage: &mut self.storage,
+            storage_controller: &mut *self.storage_controller,
         })
     }
 }
@@ -210,62 +253,92 @@ impl<T> Controller<T>
 where
     T: Timestamp + Lattice,
 {
-    pub async fn recv(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
-        let mut compute_stream: StreamMap<_, _> = self
-            .compute
-            .iter_mut()
-            .map(|(id, compute)| (*id, compute.client.as_stream()))
-            .collect();
-        let response: Option<Response<T>> = tokio::select! {
-            Some((instance, response)) = compute_stream.next() => {
-                Some(Response::Compute(response?, instance))
-            }
-            response = self.storage.client.recv() => {
-                response?.map(Response::Storage)
-            }
-            else => None,
-        };
-        drop(compute_stream);
-        if let Some(response) = response.as_ref() {
-            match response {
-                Response::Compute(ComputeResponse::FrontierUppers(updates), instance) => {
-                    self.compute_mut(*instance)
-                        // TODO: determine if this is an error, or perhaps just a late
-                        // response about a terminated instance.
-                        .expect("Reference to absent instance")
-                        .update_write_frontiers(updates)
-                        .await;
+    pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let mut storage_alive = true;
+        loop {
+            let mut compute_stream: StreamMap<_, _> = self
+                .compute
+                .iter_mut()
+                .map(|(id, compute)| (*id, compute.client.as_stream()))
+                .collect();
+            tokio::select! {
+                Some((instance, response)) = compute_stream.next() => {
+                    drop(compute_stream);
+                    match response? {
+                        ComputeResponse::FrontierUppers(updates) => {
+                            self.compute_mut(instance)
+                                // TODO: determine if this is an error, or perhaps just a late
+                                // response about a terminated instance.
+                                .expect("Reference to absent instance")
+                                .update_write_frontiers(&updates)
+                                .await?;
+                        }
+                        ComputeResponse::PeekResponse(uuid, response) => {
+                            self.compute_mut(instance)
+                                .expect("Reference to absent instance")
+                                .remove_peeks(std::iter::once(uuid))
+                                .await?;
+                            return Ok(Some(ControllerResponse::PeekResponse(uuid, response)));
+                        }
+                        ComputeResponse::TailResponse(global_id, response) => {
+                            let mut changes = timely::progress::ChangeBatch::new();
+                            match &response {
+                                TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                                    changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                                    changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                                }
+                                TailResponse::DroppedAt(frontier) => {
+                                    // The tail will not be written to again, but we should not confuse that
+                                    // with the source of the TAIL being complete through this time.
+                                    changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                                }
+                            }
+                            self.compute_mut(instance)
+                                .expect("Reference to absent instance")
+                                .update_write_frontiers(&[(global_id, changes)])
+                                .await?;
+                            return Ok(Some(ControllerResponse::TailResponse(global_id, response)));
+                        }
+                    }
                 }
-                Response::Compute(ComputeResponse::PeekResponse(uuid, _response), instance) => {
-                    self.compute_mut(*instance)
-                        .expect("Reference to absent instance")
-                        .remove_peeks(std::iter::once(*uuid))
-                        .await;
+                response = self.storage_controller.recv(), if storage_alive => {
+                    match response? {
+                        Some(StorageResponse::TimestampBindings(feedback)) => {
+                            // Order is important here. We must durably record
+                            // the timestamp bindings before we act on them, or
+                            // an ill-timed crash could cause data loss.
+                            self.storage_controller
+                                .persist_timestamp_bindings(&feedback)
+                                .await?;
+
+                            self.storage_controller
+                                .update_write_frontiers(&feedback.changes)
+                                .await?;
+                        }
+                        Some(StorageResponse::LinearizedTimestamps(res)) => {
+                            return Ok(Some(ControllerResponse::LinearizedTimestamps(res)));
+                        }
+                        None => storage_alive = false,
+                    }
                 }
-                Response::Storage(StorageResponse::TimestampBindings(feedback)) => {
-                    self.storage_mut()
-                        .update_write_frontiers(&feedback.changes)
-                        .await;
-                }
-                _ => {}
+                else => return Ok(None),
             }
         }
-        Ok(response)
     }
 }
 
 impl<T> Controller<T> {
     /// Create a new controller from a client it should wrap.
-    pub fn new(
-        orchestrator: Option<OrchestratorConfig>,
-        storage_client: Box<dyn StorageClient<T>>,
-        virtual_compute_host: VirtualComputeHost<T>,
+    pub fn new<S: StorageController<Timestamp = T> + 'static>(
+        orchestrator: OrchestratorConfig,
+        storage_controller: S,
+        replica_sizes: ClusterReplicaSizeMap,
     ) -> Self {
         Self {
             orchestrator,
-            storage: StorageControllerState::new(storage_client),
+            storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
-            virtual_compute_host,
+            replica_sizes,
         }
     }
 }

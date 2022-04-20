@@ -25,10 +25,10 @@ use std::error::Error;
 use std::fmt;
 use std::iter;
 
-use mz_expr::GlobalId;
-use mz_expr::MirRelationExpr;
-use mz_expr::MirScalarExpr;
+use mz_expr::visit::Visit;
+use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_repr::GlobalId;
 
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
@@ -76,7 +76,7 @@ pub trait Transform: std::fmt::Debug {
     ) -> Result<(), TransformError>;
     /// A string describing the transform.
     ///
-    /// This is useful mainly when iterating through many `Box<Tranform>`
+    /// This is useful mainly when iterating through many `Box<Transform>`
     /// and one wants to judge progress before some defect occurs.
     fn debug(&self) -> String {
         format!("{:?}", self)

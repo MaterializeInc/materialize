@@ -22,8 +22,8 @@ use uuid::Uuid;
 use crate::adt::array::ArrayDimension;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::gen::row::proto_datum::DatumType;
-use crate::gen::row::{
+use crate::row::proto_datum::DatumType;
+use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
     ProtoDictElement, ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
 };

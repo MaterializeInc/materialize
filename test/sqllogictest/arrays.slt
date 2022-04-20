@@ -63,7 +63,7 @@ SELECT array_to_string(NULL::text[], ','), array_to_string(NULL::text[], 'foo', 
 ----
 NULL  NULL
 
-query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function array_to_string\(unknown, unknown\): could not determine polymorphic type because input has type unknown
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
 # Handle empty arrays as an input
@@ -173,7 +173,7 @@ query T rowsort
 SELECT unnest::text FROM unnest(NULL::int[])
 ----
 
-query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function unnest\(unknown\): unable to determine which implementation to use; try providing explicit casts to match parameter types
 SELECT * FROM unnest(NULL)
 
 # array_agg
@@ -238,11 +238,15 @@ CREATE TABLE t2 (a int, b date)
 statement ok
 INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT array_agg((a, b)) FROM t2
+query T
+SELECT array_agg((a, b) ORDER BY a DESC)::text FROM t2;
+----
+{"(,2020-01-02)","(1,2020-01-01)"}
 
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT array_agg((a, b)), array_agg(a), array_agg(b) FROM t2
+query TTT
+SELECT array_agg((a, b) ORDER BY a DESC)::text, array_agg(a ORDER BY a DESC), array_agg(b ORDER BY b DESC) FROM t2;
+----
+{"(,2020-01-02)","(1,2020-01-01)"} {NULL,1} {2020-01-02,2020-01-01}
 
 query error arrays not yet supported
 SELECT array_agg(ARRAY[1])

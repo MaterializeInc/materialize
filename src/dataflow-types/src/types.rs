@@ -19,10 +19,9 @@ use std::num::NonZeroUsize;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use mz_expr::{CollectionPlan, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::{Diff, RelationType, Row};
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 
-use crate::sources::persistence::SourcePersistDesc;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 
@@ -64,8 +63,8 @@ impl PeekResponse {
 pub enum TailResponse<T = mz_repr::Timestamp> {
     /// A batch of updates over a non-empty interval of time.
     Batch(TailBatch<T>),
-    /// The TAIL dataflow was dropped before completing. Indicates the end.
-    Dropped,
+    /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
+    DroppedAt(Antichain<T>),
 }
 
 /// A batch of updates for the interval `[lower, upper)`.
@@ -97,56 +96,54 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
-/// A description of an instantation of a source.
+/// A description of an instantiation of a source.
 ///
 /// This includes a description of the source, but additionally any
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceDesc<T = mz_repr::Timestamp> {
+pub struct SourceInstanceDesc {
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
-    pub arguments: SourceInstanceArguments<T>,
+    pub arguments: SourceInstanceArguments,
 }
 
 /// Per-source construction arguments.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceArguments<T = mz_repr::Timestamp> {
+pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::LinearOperator>,
-    /// A description of how to persist the source.
-    pub persist: Option<crate::sources::persistence::SourcePersistDesc<T>>,
 }
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
-pub type SourceInstanceId = (uuid::Uuid, mz_expr::GlobalId);
+pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 
 /// A formed request for source instantiation.
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
     /// The source's own identifier.
-    pub source_id: mz_expr::GlobalId,
+    pub source_id: mz_repr::GlobalId,
     /// A dataflow identifier that should be unique across dataflows.
     pub dataflow_id: uuid::Uuid,
     /// Arguments to the source instantiation.
-    pub arguments: SourceInstanceArguments<T>,
+    pub arguments: SourceInstanceArguments,
     /// Frontier beyond which updates must be correct.
     pub as_of: Antichain<T>,
 }
 
 impl<T> SourceInstanceRequest<T> {
-    /// Source identifier uniquely identifing this instantation.
+    /// Source identifier uniquely identifying this instantiation.
     pub fn unique_id(&self) -> SourceInstanceId {
         (self.dataflow_id, self.source_id)
     }
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -155,10 +152,10 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
-    pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: Vec<(GlobalId, crate::types::sinks::SinkDesc<T>)>,
+    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -199,22 +196,14 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(
-        &mut self,
-        id: GlobalId,
-        description: SourceDesc,
-        persist: Option<SourcePersistDesc<T>>,
-    ) {
+    pub fn import_source(&mut self, id: GlobalId, description: SourceDesc) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
             id,
             SourceInstanceDesc {
                 description,
-                arguments: SourceInstanceArguments {
-                    operators: None,
-                    persist,
-                },
+                arguments: SourceInstanceArguments { operators: None },
             },
         );
     }
@@ -241,18 +230,18 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
                 keys: vec![description.key.clone()],
             }),
         );
-        self.index_exports.push((id, description, on_type));
+        self.index_exports.insert(id, (description, on_type));
     }
 
     /// Exports as `id` a sink described by `description`.
     pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<T>) {
-        self.sink_exports.push((id, description));
+        self.sink_exports.insert(id, description);
     }
 
     /// Returns true iff `id` is already imported.
     pub fn is_imported(&self, id: &GlobalId) -> bool {
         self.objects_to_build.iter().any(|bd| &bd.id == id)
-            || self.source_imports.iter().any(|(i, _)| i == id)
+            || self.source_imports.keys().any(|i| i == id)
     }
 
     /// Assigns the `as_of` frontier to the supplied argument.
@@ -289,7 +278,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
                 return source.description.desc.arity();
             }
         }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+        for (desc, typ) in self.index_imports.values() {
             if &desc.on_id == id {
                 return typ.arity();
             }
@@ -307,6 +296,14 @@ impl<P, T> DataflowDescription<P, T>
 where
     P: CollectionPlan,
 {
+    /// Identifiers of exported objects (indexes and sinks).
+    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.index_exports
+            .keys()
+            .chain(self.sink_exports.keys())
+            .cloned()
+    }
+
     /// Returns the description of the object to build with the specified
     /// identifier.
     ///
@@ -364,6 +361,42 @@ where
             self.depends_on_into(id, out)
         }
     }
+
+    /// Determine a unique id for this dataflow based on the indexes it exports.
+    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
+    pub fn global_id(&self) -> Option<GlobalId> {
+        // TODO: This could be implemented without heap allocation.
+        let mut exports = self.export_ids().collect::<Vec<_>>();
+        exports.sort_unstable();
+        exports.dedup();
+        if exports.len() == 1 {
+            return exports.pop();
+        } else {
+            None
+        }
+    }
+}
+
+impl<P: PartialEq, T: timely::PartialOrder> DataflowDescription<P, T> {
+    /// Determine if a dataflow description is compatible with this dataflow description.
+    ///
+    /// Compatible dataflows have equal exports, imports, and objects to build. The `as_of` of
+    /// the receiver has to be less equal the `other` `as_of`.
+    ///
+    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        let equality = self.index_exports == other.index_exports
+            && self.sink_exports == other.sink_exports
+            && self.objects_to_build == other.objects_to_build
+            && self.index_imports == other.index_imports
+            && self.source_imports == other.source_imports;
+        let partial = if let (Some(as_of), Some(other_as_of)) = (&self.as_of, &other.as_of) {
+            timely::PartialOrder::less_equal(as_of, other_as_of)
+        } else {
+            false
+        };
+        equality && partial
+    }
 }
 
 /// Types and traits related to the introduction of changing collections into `dataflow`.
@@ -381,9 +414,9 @@ pub mod sources {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::gen::postgres_source::PostgresSourceDetails;
+    use crate::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+    use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
@@ -535,7 +568,7 @@ pub mod sources {
                             "row_data",
                             ScalarType::List {
                                 element_type: Box::new(ScalarType::String),
-                                custom_oid: None,
+                                custom_id: None,
                             }
                             .nullable(false),
                         ),
@@ -618,88 +651,12 @@ pub mod sources {
         }
     }
 
-    pub mod persistence {
-        use serde::{Deserialize, Serialize};
-
-        use mz_expr::PartitionId;
-
-        /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-        pub struct SourcePersistDesc<T = mz_repr::Timestamp> {
-            /// The _current_ upper seal timestamp of all involved streams.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream, the seal timestamp
-            /// will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines seal timestamp
-            ///  2. seal timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub upper_seal_ts: T,
-
-            /// The _current_ compaction frontier (aka _since_) of all involved streams.
-            ///
-            /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
-            /// initially created. When a source is actively writing to this stream and allowing
-            /// compaction, this will progress beyond this timestamp.
-            ///
-            /// This is okay for now because we only want to allow one source instantiation for persistent
-            /// sources, meaning the flow is usually this:
-            ///
-            ///  1. coordinator determines since timestamp
-            ///  2. timestamps for a source are sent to dataflow when rendering a source
-            ///  3. coordinator (or anyone) never looks at this timestamp again.
-            ///
-            /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
-            /// source running already.
-            pub since_ts: T,
-
-            /// Name of the primary persisted stream of this source. This is what a consumer of the
-            /// persisted data would be interested in while the secondary stream(s) of the source are an
-            /// internal implementation detail.
-            pub primary_stream: String,
-
-            /// Persisted stream of timestamp bindings.
-            pub timestamp_bindings_stream: String,
-
-            /// Any additional details that we need to make the envelope logic stateful.
-            pub envelope_desc: EnvelopePersistDesc,
-        }
-
-        /// The persistence details we need for persisting a source envelopes data structures.
-        ///
-        /// This is a 1:1 mapping from envelope to `EnvelopePersistDesc`, as opposed to having a `None`
-        /// that covers all envelopes that don't need additional data. Mostly, to just be explicit, but
-        /// also because there is already a `NONE` envelope.
-        ///
-        /// Some envelopes will require additional streams, which should be listed in the variant.
-        #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-        pub enum EnvelopePersistDesc {
-            Upsert,
-            None,
-        }
-
-        /// Structure wrapping a timestamp update from a source
-        /// If RT, contains a partition count
-        /// which informs workers that messages with Offset on PartititionId will be timestamped
-        /// with Timestamp.
-        #[derive(Clone, Debug, Serialize, Deserialize)]
-        pub enum TimestampSourceUpdate {
-            /// Update for an RT source: contains a new partition to add to this source.
-            RealTime(PartitionId),
-        }
-    }
-
     /// Universal language for describing message positions in Materialize, in a source independent
-    /// way. Invidual sources like Kafka or File sources should explicitly implement their own offset
+    /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
     /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
-    #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Hash, Serialize, Deserialize)]
+    #[derive(
+        Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
+    )]
     pub struct MzOffset {
         pub offset: i64,
     }
@@ -755,6 +712,7 @@ pub mod sources {
         Offset,
         Timestamp,
         Topic,
+        Headers,
     }
 
     /// Whether and how to include the decoded key of a stream in dataflows
@@ -852,6 +810,18 @@ pub mod sources {
         pub mode: DebeziumMode,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct DebeziumTransactionMetadata {
+        pub tx_metadata_global_id: GlobalId,
+        pub tx_status_idx: usize,
+        pub tx_transaction_id_idx: usize,
+        pub tx_data_collections_idx: usize,
+        pub tx_data_collections_data_collection_idx: usize,
+        pub tx_data_collections_event_count_idx: usize,
+        pub tx_data_collection_name: String,
+        pub data_transaction_id_idx: usize,
+    }
+
     /// Ordered means we can trust Debezium high water marks
     ///
     /// In standard operation, Debezium should always emit messages in position order, but
@@ -896,6 +866,20 @@ pub mod sources {
         },
     }
 
+    impl DebeziumMode {
+        pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
+            match self {
+                DebeziumMode::Ordered(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::Full(DebeziumDedupProjection { tx_metadata, .. })
+                | DebeziumMode::FullInRange {
+                    projection: DebeziumDedupProjection { tx_metadata, .. },
+                    ..
+                } => tx_metadata.as_ref(),
+                DebeziumMode::None => None,
+            }
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumDedupProjection {
         /// The column index containing the debezium source metadata
@@ -908,6 +892,7 @@ pub mod sources {
         pub transaction_idx: usize,
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
+        pub tx_metadata: Option<DebeziumTransactionMetadata>,
     }
 
     /// Debezium generates records that contain metadata about the upstream database. The structure of
@@ -1032,7 +1017,7 @@ pub mod sources {
                                                 .zip(key_type.column_types.iter())
                                                 .map(|(name, ty)| (name.clone(), ty.clone()))
                                                 .collect(),
-                                            custom_oid: None,
+                                            custom_id: None,
                                             custom_name: None,
                                         },
                                     }]);
@@ -1085,13 +1070,13 @@ pub mod sources {
                                         RelationDesc::from_names_and_types(fields.clone()),
                                     ),
                                     ty => {
-                                        bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty)
+                                        bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty)
                                     }
                                 }
                             }
-                            ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                            ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                         },
-                        ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                        ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                     }
                 }
             })
@@ -1117,6 +1102,7 @@ pub mod sources {
         pub include_topic: Option<IncludedColumnPos>,
         /// If present, include the offset as an output column of the source with the given name.
         pub include_offset: Option<IncludedColumnPos>,
+        pub include_headers: Option<IncludedColumnPos>,
     }
 
     /// Legacy logic included something like an offset into almost data streams
@@ -1133,6 +1119,14 @@ pub mod sources {
         };
 
         !is_avro && !is_stateless_dbz
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub enum ConnectorInner {
+        Kafka {
+            broker: KafkaAddrs,
+            config_options: BTreeMap<String, String>,
+        },
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1163,27 +1157,8 @@ pub mod sources {
             timeline: Timeline,
         },
 
-        /// A local "source" is either fed by a local input handle, or by reading from a
-        /// `persisted_source()`. For non-persisted sources, values that are to be inserted
-        /// are sent from the coordinator and pushed into the handle on a worker.
-        ///
-        /// For persisted sources, the coordinator only writes new values to a persistent
-        /// stream. These values will then "show up" here because we read from the same
-        /// persistent stream.
-        // TODO: We could split this up into a `Local` source, that is only fed by a local handle and a
-        // `LocalPersistenceSource` which is fed from a `persisted_source()`. But moving the
-        // persist_name from `SourceDesc` to here is already a huge simplification/clarification. The
-        // persist description on a `SourceDesc` is now purely used to signal that a source actively
-        // persists, while a `LocalPersistenceSource` is a source that happens to read from persistence
-        // but doesn't persist itself.
-        //
-        // That additional split seems like a bigger undertaking, though, because it also needs changes
-        // to the coordinator. And I don't know if I want to invest too much time there when I don't
-        // yet know how Tables will work in a post-ingestd world.
-        Local {
-            timeline: Timeline,
-            persisted_name: Option<String>,
-        },
+        /// A local "source" is fed by a local input handle.
+        Local { timeline: Timeline },
     }
 
     impl SourceConnector {
@@ -1261,6 +1236,7 @@ pub mod sources {
                     include_timestamp: time,
                     include_topic: topic,
                     include_offset: offset,
+                    include_headers: headers,
                     ..
                 }) => {
                     let mut items = BTreeMap::new();
@@ -1274,6 +1250,32 @@ pub mod sources {
                         (part, ScalarType::Int32),
                         (time, ScalarType::Timestamp),
                         (topic, ScalarType::String),
+                        (
+                            headers,
+                            ScalarType::List {
+                                element_type: Box::new(ScalarType::Record {
+                                    fields: vec![
+                                        (
+                                            "key".into(),
+                                            ColumnType {
+                                                nullable: false,
+                                                scalar_type: ScalarType::String,
+                                            },
+                                        ),
+                                        (
+                                            "value".into(),
+                                            ColumnType {
+                                                nullable: false,
+                                                scalar_type: ScalarType::Bytes,
+                                            },
+                                        ),
+                                    ],
+                                    custom_id: None,
+                                    custom_name: None,
+                                }),
+                                custom_id: None,
+                            },
+                        ),
                     ] {
                         if let Some(include) = include {
                             items.insert(include.pos + 1, (&include.name, ty.nullable(false)));
@@ -1332,6 +1334,7 @@ pub mod sources {
                     include_timestamp: time,
                     include_topic: topic,
                     include_offset: offset,
+                    include_headers: headers,
                     ..
                 }) => {
                     // create a sorted list of column types based on the order they were declared in sql
@@ -1346,6 +1349,7 @@ pub mod sources {
                         (part, IncludedColumnSource::Partition),
                         (time, IncludedColumnSource::Timestamp),
                         (topic, IncludedColumnSource::Topic),
+                        (headers, IncludedColumnSource::Headers),
                     ] {
                         if let Some(include) = include {
                             items.insert(include.pos, ty);
@@ -1551,7 +1555,7 @@ pub mod sources {
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
-        pub async fn load(&self, external_id: AwsExternalId) -> mz_aws_util::config::AwsConfig {
+        pub async fn load(&self, external_id: AwsExternalId) -> aws_types::SdkConfig {
             use aws_config::default_provider::credentials::DefaultCredentialsChain;
             use aws_config::default_provider::region::DefaultRegionChain;
             use aws_config::sts::AssumeRoleProvider;
@@ -1608,14 +1612,13 @@ pub mod sources {
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }
 
-            let loader = aws_config::from_env()
+            let mut loader = aws_config::from_env()
                 .region(region)
                 .credentials_provider(cred_provider);
-            let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
             if let Some(endpoint) = &self.endpoint {
-                config.set_endpoint(Endpoint::immutable(endpoint.0.clone()));
+                loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
             }
-            config
+            loader.load().await
         }
     }
 }
@@ -1631,12 +1634,11 @@ pub mod sinks {
     use timely::progress::frontier::Antichain;
     use url::Url;
 
-    use mz_expr::GlobalId;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::RelationDesc;
+    use mz_repr::{GlobalId, RelationDesc};
 
     /// A sink for updates to a relational collection.
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SinkDesc<T = mz_repr::Timestamp> {
         pub from: GlobalId,
         pub from_desc: RelationDesc,
@@ -1657,7 +1659,7 @@ pub mod sinks {
         pub strict: bool,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
@@ -1745,7 +1747,7 @@ pub mod sinks {
         }
     }
 
-    #[derive(Default, Clone, Debug, Serialize, Deserialize)]
+    #[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct TailSinkConnector {}
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

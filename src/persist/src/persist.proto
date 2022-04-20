@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-package persist;
+package mz_persist.gen.persist;
 
 message ProtoMeta {
     // For data written by some vX.Y.Z of Materialize, we'll support reading it

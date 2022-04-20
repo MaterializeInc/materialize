@@ -3,7 +3,7 @@ title: "CREATE MATERIALIZED VIEW"
 description: "`CREATE MATERIALIZED VIEW` creates a materialized view, which Materialize will incrementally maintain as updates occur to the underlying data."
 menu:
   main:
-    parent: 'sql'
+    parent: 'commands'
 ---
 
 `CREATE MATERIALIZED VIEW` creates a materialized view, which lets you retrieve
@@ -14,7 +14,7 @@ feature.
 ## Conceptual framework
 
 `CREATE MATERIALIZED VIEW` computes and maintains the results of a `SELECT`
-query in memory. For more information, see [API Components: Materialized views](/overview/api-components#materialized-views).
+query in memory. For more information, see [Key Concepts: Materialized views](/overview/key-concepts/#materialized-views).
 
 ## Syntax
 

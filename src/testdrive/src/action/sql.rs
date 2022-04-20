@@ -28,12 +28,14 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Raw, Statement, ViewDefinition,
+    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, Raw, Statement,
+    ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
+use crate::util::mz_data::catalog_copy;
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -105,6 +107,13 @@ impl Action for SqlAction {
                 )
                 .await
             }
+            Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP SECRET IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
             _ => Ok(()),
         }
     }
@@ -135,10 +144,11 @@ impl Action for SqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }
-        .retry_async(|retry_state| async move {
+        .retry_async_canceling(|retry_state| async move {
             match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -171,7 +181,7 @@ impl Action for SqlAction {
         })
         .await?;
 
-        if let Some(path) = &state.materialized_catalog_path {
+        if let Some(path) = &state.materialized_data_path {
             match self.stmt {
                 Statement::CreateDatabase { .. }
                 | Statement::CreateIndex { .. }
@@ -181,9 +191,11 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path, NOW_ZERO.clone()).await?.dump();
+                    let temp_mzdata = catalog_copy(path)?;
+                    let path = temp_mzdata.path();
+                    let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
                     let mem_state = reqwest::get(&format!(
-                        "http://{}/internal/catalog",
+                        "http://{}/api/internal/catalog",
                         state.materialized_addr,
                     ))
                     .await?
@@ -389,7 +401,8 @@ impl Action for FailSqlAction {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
-                .max_duration(state.timeout),
+                .max_duration(state.timeout)
+                .max_tries(state.max_tries),
             false => Retry::default().max_tries(1),
         }.retry_async(|retry_state| async move {
             match self.try_redo(state, &query).await {

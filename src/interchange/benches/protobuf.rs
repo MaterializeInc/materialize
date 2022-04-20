@@ -67,7 +67,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
     let len = buf.len() as u64;
     let mut decoder = Decoder::new(
         DecodedDescriptors::from_bytes(
-            gen::FILE_DESCRIPTOR_SET_DATA,
+            &include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.pb"))[..],
             ".benchmark.Record".to_string(),
         )
         .unwrap(),

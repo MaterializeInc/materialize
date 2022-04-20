@@ -32,7 +32,6 @@ use rand::Rng;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::task;
 use mz_test_util::mz_client;
 
@@ -66,7 +65,7 @@ async fn run() -> Result<(), anyhow::Error> {
     args.materialized_host, args.materialized_port, &stream_name, args.shard_count, args.total_records, args.records_per_second, 1);
 
     // Initialize test resources in Kinesis.
-    let config = AwsConfig::load_from_env().await;
+    let config = aws_config::load_from_env().await;
     let kinesis_client = mz_aws_util::kinesis::client(&config);
 
     let stream_arn =

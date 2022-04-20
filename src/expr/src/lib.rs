@@ -17,7 +17,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{ColumnType, GlobalId, ScalarType};
 
 mod id;
 mod linear;
@@ -25,17 +25,18 @@ mod relation;
 mod scalar;
 
 pub mod explain;
+pub mod visit;
 
 pub use relation::canonicalize;
 
-pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
+pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject,
 };
-pub use relation::func::{AggregateFunc, TableFunc};
+pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{

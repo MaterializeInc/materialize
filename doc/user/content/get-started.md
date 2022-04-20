@@ -1,8 +1,13 @@
 ---
-title: "Get Started"
+title: "Get Started: Materialize a View"
 description: "Get started with Materialize"
-menu: "main"
-weight: 3
+menu:
+  main:
+    parent: 'overview'
+    weight: 20
+    name: 'Get Started'
+aliases:
+  - /katacoda/
 ---
 
 This guide walks you through getting started with Materialize, from installing it to creating your first materialized view on top of streaming data. We'll cover:
@@ -30,7 +35,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -47,8 +52,6 @@ Select an environment and follow the instructions to get the latest stable relea
     brew install MaterializeInc/materialize/materialized
     ```
 
-    **Note:** For a `curl`-based alternative, see [Install](/install#curl).
-
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
@@ -57,7 +60,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -81,8 +84,6 @@ Select an environment and follow the instructions to get the latest stable relea
     apt install materialized
     ```
 
-    **Note:** For a `curl`-based alternative, see [Install](/install#curl-1).
-
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
@@ -91,7 +92,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -109,7 +110,7 @@ Materialize allows you to work with streaming data from multiple external source
 
 We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
 
-1. Let's create a [PubNub source](/sql/create-source/json-pubnub/#pubnub-source-details) that connects to the market orders channel with a subscribe key:
+1. Let's create a [PubNub source](/sql/create-source/pubnub) that connects to the market orders channel with a subscribe key:
 
     ```sql
     CREATE SOURCE market_orders_raw
@@ -140,9 +141,9 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
     FROM market_orders_raw;
     ```
 
-    One thing to note here is that we created a [non-materialized view](/overview/api-components/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement.
+    One thing to note here is that we created a [non-materialized view](/overview/key-concepts/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement.
 
-1. We can now use this view as a base to create a [materialized view](/overview/api-components/#materialized-views) that computes the average bid price:
+1. We can now use this view as a base to create a [materialized view](/overview/key-concepts/#materialized-views) that computes the average bid price:
 
     ```sql
     CREATE MATERIALIZED VIEW avg_bid AS
@@ -220,6 +221,9 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
     ```sql
     SELECT * FROM cnt_ticker;
+    ```
+
+    ```
      ticker | cnt
     --------+-----
      AAPL   |  42
@@ -233,7 +237,7 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
 ### Temporal filters
 
-In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
+In Materialize, [temporal filters](/sql/spellbook/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
 
 1. If, instead of computing and maintaining the _overall_ count, we want to get the _moving_ count over the past minute:
 
@@ -252,7 +256,9 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
 
     ```sql
     SELECT * FROM cnt_sliding;
+    ```
 
+    ```
        symbol    | cnt
     -------------+-----
      Apple       |  31
@@ -270,4 +276,4 @@ That's it! You just created your first materialized view and tried out some comm
 
 **Next steps**
 
-When you're done with this guide, you can move on to the [end-to-end demos](/demos/) to learn how to use Materialize with other external systems for different use cases.
+When you're done with this guide, you can move on to the [case-specific quickstarts](/quickstarts/) to learn how to use Materialize with other external systems for different use cases.

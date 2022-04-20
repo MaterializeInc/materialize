@@ -9,6 +9,8 @@
 
 $ set-sql-timeout duration=125ms
 
+> CREATE TABLE foo (a int)
+
 # DROP MATERIALIZED <anything> is not allowed
 ! DROP MATERIALIZED VIEW foo
 contains:DROP MATERIALIZED VIEW is not allowed, use DROP VIEW

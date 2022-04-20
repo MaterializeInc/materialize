@@ -47,7 +47,7 @@ macro_rules! cast_from {
 
             /// Casts [`$from`] to [`$to`].
             ///
-            /// This is equvialent to the [`CastFrom`] implementation but is
+            /// This is equivalent to the [`CastFrom`] implementation but is
             /// available as a `const fn`.
             pub const fn [< $from _to_ $to >](from: $from) -> $to {
                 from as $to

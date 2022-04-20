@@ -10,20 +10,41 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::Error;
+use bytes::BufMut;
+use proptest_derive::Arbitrary;
+use prost::Message;
 use serde::{Deserialize, Serialize};
+
+use mz_lowertest::MzReflect;
+use mz_repr::global_id::ProtoGlobalId;
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::GlobalId;
+
+include!(concat!(env!("OUT_DIR"), "/mz_expr.id.rs"));
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
+)]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
+    #[proptest(value = "Id::Global(GlobalId::System(2))")]
     Global(GlobalId),
-    /// Used to refer to a bare source within the RelationExpr defining the transformation of that source (before an ID has been
-    /// allocated for the bare source).
-    LocalBareSource,
 }
 
 impl fmt::Display for Id {
@@ -31,14 +52,49 @@ impl fmt::Display for Id {
         match self {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
-            Id::LocalBareSource => write!(f, "(bare source for this source)"),
+        }
+    }
+}
+
+impl From<&Id> for ProtoId {
+    fn from(x: &Id) -> Self {
+        ProtoId {
+            kind: Some(match x {
+                Id::Global(g) => proto_id::Kind::Global(ProtoGlobalId::from(g)),
+                Id::Local(l) => proto_id::Kind::Local(l.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoId> for Id {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoId) -> Result<Self, Self::Error> {
+        match x.kind {
+            Some(proto_id::Kind::Global(x)) => Ok(Id::Global(x.try_into()?)),
+            Some(proto_id::Kind::Local(x)) => Ok(Id::Local(x.try_into()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoId::kind")),
         }
     }
 }
 
 /// The identifier for a local component of a dataflow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct LocalId(u64);
+#[derive(
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
+)]
+pub struct LocalId(pub(crate) u64);
 
 impl LocalId {
     /// Constructs a new local identifier. It is the caller's responsibility
@@ -54,61 +110,17 @@ impl fmt::Display for LocalId {
     }
 }
 
-/// The identifier for a global dataflow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum GlobalId {
-    /// System namespace.
-    System(u64),
-    /// User namespace.
-    User(u64),
-    /// Transient namespace.
-    Transient(u64),
-    /// Dummy id for query being explained
-    Explain,
-}
-
-impl GlobalId {
-    /// Reports whether this ID is in the system namespace.
-    pub fn is_system(&self) -> bool {
-        matches!(self, GlobalId::System(_))
-    }
-
-    /// Reports whether this ID is in the user namespace.
-    pub fn is_user(&self) -> bool {
-        matches!(self, GlobalId::User(_))
-    }
-
-    /// Reports whether this ID is in the transient namespace.
-    pub fn is_transient(&self) -> bool {
-        matches!(self, GlobalId::Transient(_))
+impl From<&LocalId> for ProtoLocalId {
+    fn from(x: &LocalId) -> Self {
+        ProtoLocalId { value: x.0 }
     }
 }
 
-impl FromStr for GlobalId {
-    type Err = Error;
+impl TryFrom<ProtoLocalId> for LocalId {
+    type Error = TryFromProtoError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(anyhow!("couldn't parse id {}", s));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(GlobalId::System(val)),
-            'u' => Ok(GlobalId::User(val)),
-            't' => Ok(GlobalId::Transient(val)),
-            _ => Err(anyhow!("couldn't parse id {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for GlobalId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            GlobalId::System(id) => write!(f, "s{}", id),
-            GlobalId::User(id) => write!(f, "u{}", id),
-            GlobalId::Transient(id) => write!(f, "t{}", id),
-            GlobalId::Explain => write!(f, "Explained Query"),
-        }
+    fn try_from(x: ProtoLocalId) -> Result<Self, Self::Error> {
+        Ok(LocalId::new(x.value))
     }
 }
 
@@ -131,7 +143,7 @@ impl fmt::Display for SourceInstanceId {
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
 ///     None -> sources that have no notion of partitioning (e.g file sources)
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     None,
@@ -165,6 +177,64 @@ impl FromStr for PartitionId {
                 let val: i32 = s.parse()?;
                 Ok(PartitionId::Kafka(val))
             }
+        }
+    }
+}
+
+impl From<&PartitionId> for ProtoPartitionId {
+    fn from(x: &PartitionId) -> Self {
+        ProtoPartitionId {
+            kind: Some(match x {
+                PartitionId::Kafka(x) => proto_partition_id::Kind::Kafka(*x),
+                PartitionId::None => proto_partition_id::Kind::None(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoPartitionId> for PartitionId {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoPartitionId) -> Result<Self, Self::Error> {
+        match x.kind {
+            Some(proto_partition_id::Kind::Kafka(x)) => Ok(PartitionId::Kafka(x)),
+            Some(proto_partition_id::Kind::None(_)) => Ok(PartitionId::None),
+            None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
+        }
+    }
+}
+
+impl mz_persist_types::Codec for PartitionId {
+    fn codec_name() -> String {
+        "protobuf[PartitionId]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        ProtoPartitionId::from(self)
+            .encode(buf)
+            .expect("provided buffer had sufficient capacity")
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        ProtoPartitionId::decode(buf)
+            .map_err(|err| err.to_string())?
+            .try_into()
+            .map_err(|err: TryFromProtoError| err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn id_protobuf_roundtrip(expect in any::<Id>()) {
+            let actual = protobuf_roundtrip::<_, ProtoId>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

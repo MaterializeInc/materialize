@@ -11,14 +11,11 @@
 
 use std::io::{Read, Seek, Write};
 
-use arrow2::io::parquet::read::RecordReader;
-use arrow2::io::parquet::write::RowGroupIterator;
+use arrow2::io::parquet::read::{read_metadata, FileReader};
+use arrow2::io::parquet::write::{
+    Compression, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
+};
 use differential_dataflow::trace::Description;
-use parquet2::compression::Compression;
-use parquet2::encoding::Encoding;
-use parquet2::metadata::KeyValue;
-use parquet2::read::read_metadata;
-use parquet2::write::{write_file, Version, WriteOptions};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
@@ -31,7 +28,7 @@ use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
 };
-use crate::storage::SeqNo;
+use crate::location::SeqNo;
 
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 
@@ -123,7 +120,6 @@ fn encode_parquet_kvtd<W: Write>(
 ) -> Result<(), Error> {
     let iter = iter.into_iter().map(|x| Ok(encode_arrow_batch_kvtd(x)));
 
-    let schema = SCHEMA_ARROW_KVTD.clone();
     let options = WriteOptions {
         write_statistics: false,
         compression: Compression::Uncompressed,
@@ -131,7 +127,7 @@ fn encode_parquet_kvtd<W: Write>(
     };
     let row_groups = RowGroupIterator::try_new(
         iter,
-        &schema,
+        &SCHEMA_ARROW_KVTD,
         options,
         vec![
             Encoding::Plain,
@@ -141,27 +137,30 @@ fn encode_parquet_kvtd<W: Write>(
         ],
     )?;
 
-    let parquet_schema = row_groups.parquet_schema().clone();
     let metadata = vec![KeyValue {
         key: INLINE_METADATA_KEY.into(),
         value: Some(inline_base64),
     }];
-    write_file(w, row_groups, parquet_schema, options, None, Some(metadata))
-        .map_err(|err| err.to_string())?;
+    let mut writer = FileWriter::try_new(w, (**SCHEMA_ARROW_KVTD).clone(), options)?;
+    writer.start().map_err(|err| err.to_string())?;
+    for group in row_groups {
+        let (group, len) = group?;
+        writer.write(group, len).map_err(|err| err.to_string())?;
+    }
+    writer.end(Some(metadata)).map_err(|err| err.to_string())?;
 
     Ok(())
 }
 
 fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRecords>, Error> {
-    let reader = RecordReader::try_new(r, None, None, None, None)?;
+    let reader = FileReader::try_new(r, None, None, None, None)?;
 
-    let file_schema = reader.schema().fields().as_slice();
+    let file_schema = reader.schema().fields.as_slice();
     // We're not trying to accept any sort of user created data, so be strict.
-    if file_schema != SCHEMA_ARROW_KVTD.fields() {
+    if file_schema != SCHEMA_ARROW_KVTD.fields {
         return Err(format!(
             "expected arrow schema {:?} got: {:?}",
-            SCHEMA_ARROW_KVTD.fields(),
-            file_schema
+            SCHEMA_ARROW_KVTD.fields, file_schema
         )
         .into());
     }

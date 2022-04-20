@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn test_illformed_length() {
+    fn test_malformed_length() {
         let raw_schema = r#"
             {
                 "type": "record",
@@ -599,9 +599,9 @@ mod tests {
         let schema = Schema::from_str(raw_schema).unwrap();
 
         // Would allocated 18446744073709551605 bytes
-        let illformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
+        let malformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
 
-        let value = from_avro_datum(&schema, &mut &illformed[..]);
+        let value = from_avro_datum(&schema, &mut &malformed[..]);
         assert!(value.is_err());
     }
 }

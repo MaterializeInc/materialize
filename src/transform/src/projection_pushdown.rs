@@ -32,6 +32,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformArgs;
@@ -321,21 +322,6 @@ impl ProjectionPushdown {
                 let arity = input.arity();
                 self.action(input, &(0..arity).collect(), gets);
                 (0..arity).collect()
-            }
-            MirRelationExpr::DeclareKeys { input, keys } => {
-                // TODO[btv] - If and when we add a "debug mode" that asserts whether this is truly a key,
-                // we will probably need to add the key to the set of demanded
-                // columns.
-
-                // Current behavior is that if a key is not contained with the
-                // desired_projection, then it is not relevant to the query plan
-                // and can be removed.
-                keys.retain(|key_set| key_set.iter().all(|k| desired_projection.contains(k)));
-                self.action(input, desired_projection, gets);
-                if keys.is_empty() {
-                    *relation = input.take_dangerous();
-                }
-                desired_projection.clone()
             }
         };
         let add_project = desired_projection != &actual_projection;

@@ -7,21 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use itertools::Itertools;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::sources::MzOffset;
-use mz_expr::{GlobalId, PartitionId};
+use crate::catalog::builtin::BuiltinLog;
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_assert_eq;
-use mz_repr::Timestamp;
+use mz_ore::collections::CollectionExt;
+use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::names::{DatabaseSpecifier, FullName};
+use mz_sql::names::{
+    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
+};
 use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;
 
@@ -29,13 +32,37 @@ use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
+/// A catalog migration
+trait Migration {
+    /// Applies a catalog migration given the top level data directory and an active transaction to
+    /// the catalog's SQLite database.
+    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error>;
+}
+
+impl<'a> Migration for &'a str {
+    fn apply(&self, _path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
+        tx.execute_batch(self)?;
+        Ok(())
+    }
+}
+
+impl<F: Fn(&Path, &rusqlite::Transaction) -> Result<(), Error>> Migration for F {
+    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
+        (self)(path, tx)
+    }
+}
+
 /// Schema migrations for the on-disk state.
-const MIGRATIONS: &[&str] = &[
+const MIGRATIONS: &[&dyn Migration] = &[
     // Creates initial schema.
     //
     // Introduced for v0.1.0.
-    "CREATE TABLE gid_alloc (
+    &"CREATE TABLE user_gid_alloc (
          next_gid integer NOT NULL
+     );
+
+     CREATE TABLE system_gid_alloc (
+        next_gid integer NOT NULL
      );
 
      CREATE TABLE databases (
@@ -58,91 +85,51 @@ const MIGRATIONS: &[&str] = &[
          UNIQUE (schema_id, name)
      );
 
-     CREATE TABLE timestamps (
-         sid blob NOT NULL,
-         vid blob NOT NULL,
-         timestamp integer NOT NULL,
-         offset blob NOT NULL,
-         PRIMARY KEY (sid, vid, timestamp)
+     CREATE TABLE settings (
+        name TEXT PRIMARY KEY,
+        value TEXT
      );
 
-     INSERT INTO gid_alloc VALUES (1);
+     CREATE TABLE roles (
+        id   integer PRIMARY KEY,
+        name text NOT NULL UNIQUE
+     );
+
+     CREATE TABLE compute_instances (
+        id   integer PRIMARY KEY,
+        name text NOT NULL UNIQUE,
+        config text
+     );
+
+     CREATE TABLE system_gid_mapping (
+        schema_name text NOT NULL,
+        object_name text NOT NULL,
+        id integer NOT NULL,
+        fingerprint integer NOT NULL,
+        PRIMARY KEY (schema_name, object_name)
+     );
+
+     CREATE TABLE compute_introspection_source_indexes (
+        compute_id integer NOT NULL REFERENCES compute_instances (id) ON DELETE CASCADE,
+        name text NOT NULL,
+        index_id integer NOT NULL UNIQUE,
+        PRIMARY KEY (compute_id, name)
+     );
+
+     CREATE INDEX compute_introspection_source_indexes_ind
+        ON compute_introspection_source_indexes(compute_id);
+
+     INSERT INTO user_gid_alloc VALUES (1);
+     INSERT INTO system_gid_alloc VALUES (1);
      INSERT INTO databases VALUES (1, 'materialize');
      INSERT INTO schemas VALUES
          (1, NULL, 'mz_catalog'),
          (2, NULL, 'pg_catalog'),
-         (3, 1, 'public');",
-    // Adjusts timestamp table to support multi-partition Kafka topics.
-    //
-    // Introduced for v0.1.4.
-    //
-    // ATTENTION: this migration blows away data and must not be used as a model
-    // for future migrations! It is only acceptable now because we have not yet
-    // made any consistency promises to users.
-    "DROP TABLE timestamps;
-     CREATE TABLE timestamps (
-        sid blob NOT NULL,
-        vid blob NOT NULL,
-        pcount blob NOT NULL,
-        pid blob NOT NULL,
-        timestamp integer NOT NULL,
-        offset blob NOT NULL,
-        PRIMARY KEY (sid, vid, pid, timestamp)
-    );",
-    // Introduces settings table to support persistent node settings.
-    //
-    // Introduced in v0.4.0.
-    "CREATE TABLE settings (
-        name TEXT PRIMARY KEY,
-        value TEXT
-    );",
-    // Creates the roles table and a default "materialize" user.
-    //
-    // Introduced in v0.7.0.
-    "CREATE TABLE roles (
-        id   integer PRIMARY KEY,
-        name text NOT NULL UNIQUE
-    );
-    INSERT INTO roles VALUES (1, 'materialize');",
-    // Makes the mz_internal schema literal so it can store functions.
-    //
-    // Introduced in v0.7.0.
-    "INSERT INTO schemas (database_id, name) VALUES
-        (NULL, 'mz_internal');",
-    // Adjusts timestamp table to support replayable source timestamp bindings.
-    //
-    // Introduced for v0.7.4
-    //
-    // ATTENTION: this migration blows away data and must not be used as a model
-    // for future migrations! It is only acceptable now because we have not yet
-    // made any consistency promises to users.
-    "DROP TABLE timestamps;
-     CREATE TABLE timestamps (
-        sid blob NOT NULL,
-        pid blob NOT NULL,
-        timestamp integer NOT NULL,
-        offset blob NOT NULL,
-        PRIMARY KEY (sid, pid, timestamp, offset)
-    );",
-    // Makes the information_schema schema literal so it can store functions.
-    //
-    // Introduced in v0.9.12.
-    "INSERT INTO schemas (database_id, name) VALUES
-        (NULL, 'information_schema');",
-    // Adds index to timestamp table to more efficiently compact timestamps.
-    //
-    // Introduced in v0.12.0.
-    "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
-    // Adds table to track users' compute instances.
-    //
-    // Introduced in v0.22.0.
-    "CREATE TABLE compute_instances (
-        id   integer PRIMARY KEY,
-        name text NOT NULL UNIQUE
-    );
-    INSERT INTO compute_instances VALUES (1, 'default');",
-    // Introduced in v0.24.0.
-    "ALTER TABLE compute_instances ADD COLUMN config text",
+         (3, 1, 'public'),
+         (4, NULL, 'mz_internal'),
+         (5, NULL, 'information_schema');
+     INSERT INTO roles VALUES (1, 'materialize');
+     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size\":\"1\",\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -168,8 +155,11 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(path: &Path, experimental_mode: Option<bool>) -> Result<Connection, Error> {
-        let mut sqlite = rusqlite::Connection::open(path)?;
+    pub fn open(
+        data_dir_path: &Path,
+        experimental_mode: Option<bool>,
+    ) -> Result<Connection, Error> {
+        let mut sqlite = rusqlite::Connection::open(&data_dir_path.join("catalog"))?;
 
         // Validate application ID.
         let tx = sqlite.transaction()?;
@@ -180,7 +170,7 @@ impl Connection {
             // `user_version` of zero indicates that the zeroth migration has
             // been applied.
             tx.execute_batch(&format!("PRAGMA application_id = {}", APPLICATION_ID))?;
-            tx.execute_batch(MIGRATIONS[0])?;
+            MIGRATIONS[0].apply(data_dir_path, &tx)?;
         } else if app_id != APPLICATION_ID {
             return Err(Error::new(ErrorKind::Corruption {
                 detail: "catalog file has incorrect application_id".into(),
@@ -191,13 +181,13 @@ impl Connection {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run.
         let version: u32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
-        for (i, sql) in MIGRATIONS
+        for (i, migration) in MIGRATIONS
             .iter()
             .enumerate()
             .skip(usize::cast_from(version) + 1)
         {
             let tx = sqlite.transaction()?;
-            tx.execute_batch(sql)?;
+            migration.apply(data_dir_path, &tx)?;
             tx.execute_batch(&format!("PRAGMA user_version = {}", i))?;
             tx.commit()?;
         }
@@ -332,29 +322,29 @@ impl Connection {
         Ok(())
     }
 
-    pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
+    pub fn load_databases(&self) -> Result<Vec<(DatabaseId, String)>, Error> {
         self.inner
             .prepare("SELECT id, name FROM databases")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
-                Ok((id, name))
+                Ok((DatabaseId(id), name))
             })?
             .collect()
     }
 
-    pub fn load_schemas(&self) -> Result<Vec<(i64, Option<String>, String)>, Error> {
+    pub fn load_schemas(&self) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
         self.inner
             .prepare(
-                "SELECT schemas.id, databases.name, schemas.name
+                "SELECT schemas.id, schemas.name, databases.id
                 FROM schemas
                 LEFT JOIN databases ON schemas.database_id = databases.id",
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
-                let database_name: Option<String> = row.get(1)?;
-                let schema_name: String = row.get(2)?;
-                Ok((id, database_name, schema_name))
+                let schema_name: String = row.get(1)?;
+                let database_id: Option<i64> = row.get(2)?;
+                Ok((SchemaId(id), schema_name, database_id.map(DatabaseId)))
             })?
             .collect()
     }
@@ -380,7 +370,12 @@ impl Connection {
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
                 let config: ComputeInstanceConfig = match config {
-                    None => ComputeInstanceConfig::Virtual,
+                    None => {
+                        return Err(Error::new(ErrorKind::Unstructured(
+                            "migrating catalog from materialized to platform is not supported"
+                                .into(),
+                        )))
+                    }
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
                 };
@@ -389,19 +384,124 @@ impl Connection {
             .collect()
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+    /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
+    pub fn load_system_gids(&self) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
+        self.inner
+            .prepare("SELECT schema_name, object_name, id, fingerprint FROM system_gid_mapping")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let schema_name: String = row.get(0)?;
+                let object_name: String = row.get(1)?;
+                let id: i64 = row.get(2)?;
+                let fingerprint: i64 = row.get(3)?;
+                let id = id as u64;
+                let fingerprint = fingerprint as u64;
+                Ok((
+                    (schema_name, object_name),
+                    (GlobalId::System(id), fingerprint),
+                ))
+            })?
+            .collect()
+    }
+
+    pub fn load_introspection_source_index_gids(
+        &self,
+        compute_id: ComputeInstanceId,
+    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+        self.inner
+            .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
+            .query_and_then(params![compute_id], |row| -> Result<_, Error> {
+                let name: String = row.get(0)?;
+                let index_id: i64 = row.get(1)?;
+                Ok((name, GlobalId::System(index_id as u64)))
+            })?
+            .collect()
+    }
+
+    /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
+    /// (schema-name, object-name, global-id).
+    ///
+    /// Panics if provided id is not a system id
+    pub fn set_system_gids(
+        &mut self,
+        mappings: Vec<(&str, &str, GlobalId, u64)>,
+    ) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (schema_name, object_name, id, fingerprint) in mappings {
+            let id = if let GlobalId::System(id) = id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO system_gid_mapping (schema_name, object_name, id, fingerprint) VALUES (?, ?, ?, ?)
+                        ON CONFLICT (schema_name, object_name) DO UPDATE SET id=excluded.id, fingerprint=excluded.fingerprint;",
+                params![schema_name, object_name, id as i64, fingerprint as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Panics if provided id is not a system id
+    pub fn set_introspection_source_index_gids(
+        &mut self,
+        mappings: Vec<(ComputeInstanceId, &str, GlobalId)>,
+    ) -> Result<(), Error> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.inner.transaction()?;
+        for (compute_id, name, index_id) in mappings {
+            let index_id = if let GlobalId::System(id) = index_id {
+                id
+            } else {
+                panic!("non-system id provided")
+            };
+            tx.execute(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)",
+                params![compute_id, name, index_id as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        let id = self.allocate_global_id("system", amount)?;
+
+        Ok(id.into_iter().map(GlobalId::System).collect())
+    }
+
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.allocate_global_id("user", 1)?;
+        let id = id.into_element();
+        Ok(GlobalId::User(id))
+    }
+
+    fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
         // limited range of positive i64s.
-        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
-            row.get(0)
-        })?;
-        if id == i64::max_value() {
+        let id: i64 = tx.query_row(
+            format!("SELECT next_gid FROM {id_type}_gid_alloc").as_str(),
+            params![],
+            |row| row.get(0),
+        )?;
+        if id == i64::MAX {
             return Err(Error::new(ErrorKind::IdExhaustion));
         }
-        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
+        let id = id as u64;
+        tx.execute(
+            format!("UPDATE {id_type}_gid_alloc SET next_gid = ?").as_str(),
+            params![(id + amount) as i64],
+        )?;
         tx.commit()?;
-        Ok(GlobalId::User(id as u64))
+        Ok((id..id + amount).collect())
     }
 
     pub fn transaction(&mut self) -> Result<Transaction, Error> {
@@ -424,11 +524,11 @@ pub struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
-    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
+    pub fn load_items(&self) -> Result<Vec<(GlobalId, QualifiedObjectName, Vec<u8>)>, Error> {
         // Order user views by their GlobalId
         self.inner
             .prepare(
-                "SELECT items.gid, databases.name, schemas.name, items.name, items.definition
+                "SELECT items.gid, databases.id, schemas.id, items.name, items.definition
                 FROM items
                 JOIN schemas ON items.schema_id = schemas.id
                 JOIN databases ON schemas.database_id = databases.id
@@ -436,15 +536,17 @@ impl Transaction<'_> {
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
-                let database: Option<String> = row.get(1)?;
-                let schema: String = row.get(2)?;
+                let database: i64 = row.get(1)?;
+                let schema: i64 = row.get(2)?;
                 let item: String = row.get(3)?;
                 let definition: Vec<u8> = row.get(4)?;
                 Ok((
                     id.0,
-                    FullName {
-                        database: DatabaseSpecifier::from(database),
-                        schema,
+                    QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::from(database),
+                            schema_spec: SchemaSpecifier::from(schema),
+                        },
                         item,
                     },
                     definition,
@@ -453,91 +555,13 @@ impl Transaction<'_> {
             .collect()
     }
 
-    pub fn load_database_id(&self, database_name: &str) -> Result<i64, Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM databases WHERE name = ?")?
-            .query_row(params![database_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(SqlCatalogError::UnknownDatabase(database_name.to_owned()).into())
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn load_schema_id(&self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM schemas WHERE database_id = ? AND name = ?")?
-            .query_row(params![database_id, schema_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
-        let bindings_vec = self
-            .load_timestamp_bindings(*source_id)
-            .map_err(|e| format!("{}", e))?;
-
-        let bindings_by_pid = bindings_vec.iter().group_by(|(pid, _ts, _offset)| pid);
-
-        for (pid, bindings) in &bindings_by_pid {
-            let mut latest_offset = 0;
-            let mut latest_ts = 0;
-            for (_pid, ts, offset) in bindings {
-                if offset.offset < latest_offset {
-                    return Err(format!(
-                        "Unexpected offset {} for pid {}. All bindings: {:?}",
-                        offset, pid, bindings_vec
-                    ));
-                }
-                if *ts < latest_ts {
-                    return Err(format!(
-                        "Timestamps should not be decreasing but got {} for pid {}. All bindings: {:?}",
-                        ts, pid, bindings_vec
-                    ));
-                }
-                latest_offset = offset.offset;
-                latest_ts = *ts;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn load_timestamp_bindings(
-        &self,
-        source_id: GlobalId,
-    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
-        self.inner
-            .prepare_cached(
-                "SELECT pid, timestamp, offset from timestamps where sid = ? order by pid, timestamp")?
-            .query_and_then(params![SqlVal(&source_id)], |row| -> Result<_, Error> {
-                let partition: PartitionId = row.get::<_, String>(0)?.parse().expect("parsing partition id from string cannot fail");
-                let timestamp: Timestamp = row.get(1)?;
-                let offset = MzOffset {
-                    offset: row.get(2)?,
-                };
-
-                Ok((partition, timestamp, offset))
-            })?
-            .collect()
-    }
-
-    pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
+    pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
             .execute(params![database_name])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Ok(_) => Ok(DatabaseId(self.inner.last_insert_rowid())),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::DatabaseAlreadyExists(database_name.to_owned()),
             )),
@@ -545,13 +569,17 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn insert_schema(&mut self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
+    pub fn insert_schema(
+        &mut self,
+        database_id: DatabaseId,
+        schema_name: &str,
+    ) -> Result<SchemaId, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
-            .execute(params![database_id, schema_name])
+            .execute(params![database_id.0, schema_name])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Ok(_) => Ok(SchemaId(self.inner.last_insert_rowid())),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::SchemaAlreadyExists(schema_name.to_owned()),
             )),
@@ -573,22 +601,58 @@ impl Transaction<'_> {
         }
     }
 
+    /// Panics if any introspection source id is not a system id
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
         config: &ComputeInstanceConfig,
-    ) -> Result<i64, Error> {
+        introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
+    ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        match self
+        let id = match self
             .inner
             .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
             .execute(params![cluster_name, config])
         {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::ClusterAlreadyExists(cluster_name.to_owned()),
-            )),
+            Ok(_) => self.inner.last_insert_rowid(),
+            Err(err) if is_constraint_violation(&err) => {
+                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                    cluster_name.to_owned(),
+                )))
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        for (builtin, index_id) in introspection_sources {
+            let index_id = if let GlobalId::System(id) = index_id {
+                *id
+            } else {
+                panic!("non-system id provided")
+            };
+            self
+                .inner
+                .prepare_cached(
+                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)")?
+                .execute(params![id, builtin.name, index_id as i64])?;
+        }
+
+        Ok(id)
+    }
+
+    pub fn update_compute_instance_config(
+        &mut self,
+        id: ComputeInstanceId,
+        config: &ComputeInstanceConfig,
+    ) -> Result<(), Error> {
+        let config = serde_json::to_string(config)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        match self
+            .inner
+            .prepare_cached("UPDATE compute_instances SET config = ? WHERE id = ?")?
+            .execute(params![config, id])
+        {
+            Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }
@@ -596,7 +660,7 @@ impl Transaction<'_> {
     pub fn insert_item(
         &self,
         id: GlobalId,
-        schema_id: i64,
+        schema_id: SchemaId,
         item_name: &str,
         item: &[u8],
     ) -> Result<(), Error> {
@@ -605,7 +669,7 @@ impl Transaction<'_> {
             .prepare_cached(
                 "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
             )?
-            .execute(params![SqlVal(&id), schema_id, item_name, item])
+            .execute(params![SqlVal(&id), schema_id.0, item_name, item])
         {
             Ok(_) => Ok(()),
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
@@ -615,95 +679,33 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn insert_timestamp_binding(
-        &self,
-        source_id: &GlobalId,
-        partition_id: &str,
-        timestamp: Timestamp,
-        offset: i64,
-    ) -> Result<(), Error> {
-        let result = self
-            .inner
-            .prepare_cached(
-                "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
-            )?
-              .execute(params![SqlVal(source_id), partition_id, timestamp, offset]);
-
-        soft_assert_eq!(self.validate_timestamp_bindings(source_id), Ok(()));
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn delete_timestamp_bindings(&self, source_id: GlobalId) -> Result<(), Error> {
-        let result = self
-            .inner
-            .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
-            .execute(params![SqlVal(&source_id)]);
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn compact_timestamp_bindings(
-        &self,
-        source_id: GlobalId,
-        frontier: Timestamp,
-    ) -> Result<(), Error> {
-        // we need to keep one binding that is not beyond the frontier, so that
-        // on restart we don't emit timestamps that are beyond the previously
-        // written consistency frontier. Otherwise, data with those timestamps
-        // would get written again.
-        let latest_not_beyond_compaction: Option<Timestamp> = self
-            .inner
-            .prepare_cached(
-                "SELECT max(timestamp) FROM timestamps WHERE sid = ? AND timestamp <= ?",
-            )?
-            .query_row(params![SqlVal(&source_id), frontier], |row| row.get(0))?;
-
-        if let Some(latest_not_beyond_compaction) = latest_not_beyond_compaction {
-            let result = match self
-                .inner
-                .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
-                .execute(params![SqlVal(&source_id), latest_not_beyond_compaction])
-            {
-                Ok(_) => Ok(()),
-                Err(err) => Err(err.into()),
-            };
-
-            result
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn remove_database(&self, name: &str) -> Result<(), Error> {
+    pub fn remove_database(&self, id: &DatabaseId) -> Result<(), Error> {
         let n = self
             .inner
-            .prepare_cached("DELETE FROM databases WHERE name = ?")?
-            .execute(params![name])?;
+            .prepare_cached("DELETE FROM databases WHERE id = ?")?
+            .execute(params![id.0])?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownDatabase(name.to_owned()).into())
+            Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
         }
     }
 
-    pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), Error> {
+    pub fn remove_schema(
+        &self,
+        database_id: &DatabaseId,
+        schema_id: &SchemaId,
+    ) -> Result<(), Error> {
         let n = self
             .inner
-            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND name = ?")?
-            .execute(params![database_id, schema_name])?;
+            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND id = ?")?
+            .execute(params![database_id.0, schema_id.0])?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
+            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id.0, schema_id.0)).into())
         }
     }
 

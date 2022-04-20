@@ -19,7 +19,7 @@ RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console -- --dev --t
 (note that this may slow down `materialized` a lot, as it increases the amount of tracing by a lot,
 and may inadvertently turn on debug logging for `rdkafka`)
 
-The, in a different tmux pane/terminal, run:
+Then, in a different tmux pane/terminal, run:
 
 ```
 tokio-console

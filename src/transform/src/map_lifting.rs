@@ -24,6 +24,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
+use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Row, RowPacker};
@@ -622,7 +623,6 @@ impl LiteralLifting {
                     // Literals can just be lifted out of threshold.
                     self.action(input, gets)
                 }
-                MirRelationExpr::DeclareKeys { input, .. } => self.action(input, gets),
                 MirRelationExpr::Union { base, inputs } => {
                     let mut base_literals = self.action(base, gets)?;
 

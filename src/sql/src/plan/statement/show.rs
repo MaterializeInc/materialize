@@ -18,18 +18,19 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::ShowCreateConnectorStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, Statement, Value,
+    ShowSchemasStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{
     resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier, ResolvedClusterName,
+    ResolvedDatabaseName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
@@ -37,7 +38,7 @@ use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
-    _: ShowCreateViewStatement<Raw>,
+    _: &ShowCreateViewStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -50,9 +51,9 @@ pub fn plan_show_create_view(
     scx: &mut StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let view = scx.get_item_by_name(&view_name)?;
+    let view = scx.get_item_by_resolved_name(&view_name)?;
     if let CatalogItemType::View = view.item_type() {
-        let name = view.name().to_string();
+        let name = view_name.full_name_str();
         let view_sql = view.create_sql();
         let parsed = parse::parse(view_sql)?;
         let parsed = parsed[0].clone();
@@ -69,13 +70,13 @@ pub fn plan_show_create_view(
             ])],
         }))
     } else {
-        bail!("{} is not a view", view.name());
+        bail!("{} is not a view", view_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_table(
     _: &StatementContext,
-    _: ShowCreateTableStatement<Raw>,
+    _: &ShowCreateTableStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -88,9 +89,9 @@ pub fn plan_show_create_table(
     scx: &mut StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let table = scx.get_item_by_name(&table_name)?;
+    let table = scx.get_item_by_resolved_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
-        let name = table.name().to_string();
+        let name = table_name.full_name_str();
         let parsed = parse::parse(table.create_sql())?.into_element();
         let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
         let mut s = NameSimplifier {
@@ -104,13 +105,13 @@ pub fn plan_show_create_table(
             ])],
         }))
     } else {
-        bail!("{} is not a table", table.name());
+        bail!("{} is not a table", table_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_source(
     _: &StatementContext,
-    _: ShowCreateSourceStatement<Raw>,
+    _: &ShowCreateSourceStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -123,22 +124,23 @@ pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let source = scx.get_item_by_name(&source_name)?;
+    let source = scx.get_item_by_resolved_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
+        let name = source_name.full_name_str();
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
-                Datum::String(&source.name().to_string()),
+                Datum::String(&name),
                 Datum::String(source.create_sql()),
             ])],
         }))
     } else {
-        bail!("{} is not a source", source.name());
+        bail!("{} is not a source", source_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
-    _: ShowCreateSinkStatement<Raw>,
+    _: &ShowCreateSinkStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -151,22 +153,23 @@ pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let sink = scx.get_item_by_name(&sink_name)?;
+    let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
+        let name = sink_name.full_name_str();
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
-                Datum::String(&sink.name().to_string()),
+                Datum::String(&name),
                 Datum::String(sink.create_sql()),
             ])],
         }))
     } else {
-        bail!("'{}' is not a sink", sink.name());
+        bail!("'{}' is not a sink", sink_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_index(
     _: &StatementContext,
-    _: ShowCreateIndexStatement<Raw>,
+    _: &ShowCreateIndexStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -179,16 +182,46 @@ pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let index = scx.get_item_by_name(&index_name)?;
+    let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
+        let name = index_name.full_name_str();
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
-                Datum::String(&index.name().to_string()),
+                Datum::String(&name),
                 Datum::String(index.create_sql()),
             ])],
         }))
     } else {
-        bail!("'{}' is not an index", index.name());
+        bail!("'{}' is not an index", index_name.full_name_str());
+    }
+}
+
+pub fn describe_show_create_connector(
+    _: &StatementContext,
+    _: &ShowCreateConnectorStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Connector", ScalarType::String.nullable(false))
+            .with_column("Create Connector", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_connector(
+    scx: &StatementContext,
+    ShowCreateConnectorStatement { connector_name }: ShowCreateConnectorStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    let connector = scx.get_item_by_resolved_name(&connector_name)?;
+    if let CatalogItemType::Connector = connector.item_type() {
+        let name = connector_name.full_name_str();
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&name),
+                Datum::String(connector.create_sql()),
+            ])],
+        }))
+    } else {
+        bail!("'{}' is not a connector", connector_name.full_name_str());
     }
 }
 
@@ -197,6 +230,55 @@ pub fn show_databases<'a>(
     ShowDatabasesStatement { filter }: ShowDatabasesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
+    ShowSelect::new(scx, query, filter, None, None)
+}
+
+pub fn show_schemas<'a>(
+    scx: &'a StatementContext<'a>,
+    ShowSchemasStatement {
+        from,
+        extended,
+        full,
+        filter,
+    }: ShowSchemasStatement<Aug>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    let database_id = match from {
+        Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
+        None => match scx.active_database() {
+            Some(id) => id.0,
+            None => bail!("no database specified and no active database"),
+        },
+        Some(ResolvedDatabaseName::Error) => {
+            unreachable!("should have been handled in name resolution")
+        }
+    };
+    let query = if !full & !extended {
+        format!(
+            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
+            &database_id,
+        )
+    } else if full & !extended {
+        format!(
+            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {}",
+            &database_id,
+        )
+    } else if !full & extended {
+        format!(
+            "SELECT name
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {} OR database_id IS NULL",
+            &database_id,
+        )
+    } else {
+        format!(
+            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {} OR database_id IS NULL",
+            &database_id,
+        )
+    };
     ShowSelect::new(scx, query, filter, None, None)
 }
 
@@ -213,7 +295,6 @@ pub fn show_objects<'a>(
     }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     match object_type {
-        ObjectType::Schema => show_schemas(scx, extended, full, from, filter),
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
@@ -222,50 +303,33 @@ pub fn show_objects<'a>(
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Cluster => show_clusters(scx, filter),
-        ObjectType::Secret => show_secrets(scx, filter),
+        ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
+        ObjectType::Connector => show_connectors(scx, extended, full, from, filter),
     }
 }
 
-fn show_schemas<'a>(
+fn show_connectors<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let database = if let Some(from) = from {
-        scx.resolve_database(from)?
-    } else {
-        scx.resolve_active_database()?
-    };
-    let query = if !full & !extended {
-        format!(
-            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
-            database.id(),
-        )
-    } else if full & !extended {
-        format!(
-            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {}",
-            database.id(),
-        )
-    } else if !full & extended {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {} OR database_id IS NULL",
-            database.id(),
-        )
-    } else {
-        format!(
-            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {} OR database_id IS NULL",
-            database.id(),
-        )
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+    let mut query = format!(
+        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        FROM mz_catalog.mz_connectors t
+        JOIN mz_catalog.mz_schemas on t.schema_id = s.id
+        WHERE schema_id = {}",
+        schema_spec,
+    );
+    if extended {
+        query += " OR s.database_id IS NULL";
+    }
+    if !full {
+        query = format!("SELECT name FROM ({})", query);
+    }
     ShowSelect::new(scx, query, filter, None, None)
 }
 
@@ -273,21 +337,17 @@ fn show_tables<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_tables t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE schema_id = {}",
-        schema.id(),
+        schema_spec,
     );
     if extended {
         query += " OR s.database_id IS NULL";
@@ -303,14 +363,10 @@ fn show_sources<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = match (full, materialized) {
         (false, false) => format!(
@@ -320,7 +376,7 @@ fn show_sources<'a>(
                  mz_catalog.mz_sources
              WHERE
                  schema_id = {}",
-            schema.id()
+            schema_spec
         ),
         (false, true) => format!(
             "SELECT
@@ -329,7 +385,7 @@ fn show_sources<'a>(
              WHERE
                  mz_internal.mz_is_materialized(id) AND
                  schema_id = {}",
-            schema.id()
+            schema_spec
         ),
         (true, false) => format!(
             "SELECT
@@ -342,7 +398,7 @@ fn show_sources<'a>(
                  mz_catalog.mz_sources
              WHERE
                  schema_id = {}",
-            schema.id()
+            schema_spec
         ),
         (true, true) => format!(
             "SELECT
@@ -355,7 +411,7 @@ fn show_sources<'a>(
              WHERE
                   mz_internal.mz_is_materialized(id) AND
                   schema_id = {}",
-            schema.id()
+            schema_spec
         ),
     };
     ShowSelect::new(scx, query, filter, None, None)
@@ -365,19 +421,15 @@ fn show_views<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = if !full & !materialized {
         format!(
             "SELECT name FROM mz_catalog.mz_views WHERE schema_id = {}",
-            schema.id(),
+            schema_spec,
         )
     } else if full & !materialized {
         format!(
@@ -388,21 +440,21 @@ fn show_views<'a>(
                 volatility
              FROM mz_catalog.mz_views
              WHERE schema_id = {}",
-            schema.id(),
+            schema_spec,
         )
     } else if !full & materialized {
         format!(
             "SELECT name
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
+            schema_spec,
         )
     } else {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
+            schema_spec,
         )
     };
     ShowSelect::new(scx, query, filter, None, None)
@@ -411,16 +463,16 @@ fn show_views<'a>(
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let mut query_filters = vec![];
 
-    if let Some(from) = from {
-        query_filters.push(format!("schema_id = {}", scx.resolve_schema(from)?.id()));
+    if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
+        query_filters.push(format!("schema_id = {}", schema_spec));
     } else if in_cluster.is_none() {
-        query_filters.push(format!("schema_id = {}", scx.resolve_active_schema()?.id()));
+        query_filters.push(format!("schema_id = {}", scx.resolve_active_schema()?));
     };
 
     if let Some(cluster) = in_cluster {
@@ -463,21 +515,17 @@ fn show_types<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_types t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE t.schema_id = {}",
-        schema.id(),
+        schema_spec,
     );
     if extended {
         query += " OR s.database_id IS NULL";
@@ -493,21 +541,17 @@ fn show_all_objects<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<UnresolvedObjectName>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema = if let Some(from) = from {
-        scx.resolve_schema(from)?
-    } else {
-        scx.resolve_active_schema()?
-    };
+    let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
         "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
         FROM mz_catalog.mz_objects o
         JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
         WHERE o.schema_id = {}",
-        schema.id(),
+        schema_spec,
     );
     if extended {
         query += " OR s.database_id IS NULL";
@@ -535,14 +579,14 @@ pub fn show_indexes<'a>(
     let mut query_filter = vec![];
 
     if let Some(table_name) = table_name {
-        let from = scx.get_item_by_name(&table_name)?;
+        let from = scx.get_item_by_resolved_name(&table_name)?;
         if from.item_type() != CatalogItemType::View
             && from.item_type() != CatalogItemType::Source
             && from.item_type() != CatalogItemType::Table
         {
             bail!(
                 "cannot show indexes on {} because it is a {}",
-                from.name(),
+                table_name.full_name_str(),
                 from.item_type(),
             );
         }
@@ -600,7 +644,7 @@ pub fn show_columns<'a>(
         bail_unsupported!("SHOW FULL COLUMNS");
     }
 
-    let entry = scx.get_item_by_name(&table_name)?;
+    let entry = scx.get_item_by_resolved_name(&table_name)?;
 
     let query = format!(
         "SELECT
@@ -634,11 +678,19 @@ pub fn show_clusters<'a>(
 
 pub fn show_secrets<'a>(
     scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     scx.require_experimental_mode("SHOW SECRETS")?;
 
-    let query = "SELECT mz_secrets.name FROM mz_catalog.mz_secrets".to_string();
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+
+    let query = format!(
+        "SELECT sec.name FROM mz_catalog.mz_secrets sec
+        JOIN mz_catalog.mz_schemas s ON sec.schema_id = s.id
+        WHERE schema_id = {}",
+        schema_spec,
+    );
 
     ShowSelect::new(scx, query, filter, None, None)
 }

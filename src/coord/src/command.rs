@@ -17,9 +17,8 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 
 use mz_dataflow_types::PeekResponseUnary;
-use mz_expr::GlobalId;
 use mz_ore::str::StrExt;
-use mz_repr::{Row, ScalarType};
+use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
@@ -178,6 +177,10 @@ pub enum ExecuteResponse {
         columns: Vec<usize>,
         params: mz_sql::plan::CopyParams,
     },
+    /// The requested connector was created.
+    CreatedConnector {
+        existed: bool,
+    },
     /// The requested database was created.
     CreatedDatabase {
         existed: bool,
@@ -232,6 +235,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
+    /// The requested connector was dropped
+    DroppedConnector,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
     /// The requested database was dropped.
@@ -252,6 +257,8 @@ pub enum ExecuteResponse {
     DroppedSink,
     /// The requested type was dropped.
     DroppedType,
+    /// The requested secret was dropped.
+    DroppedSecret,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.

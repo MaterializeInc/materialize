@@ -4,9 +4,9 @@ description: "Learn more about the SQL data types you love...."
 menu:
   main:
     identifier: sql-types
-    name: Data Types
-    parent: sql
-    weight: 10
+    name: SQL Data Types
+    parent: reference
+    weight: 110
 disable_list: true
 ---
 
@@ -50,7 +50,7 @@ Value | Description
 ## Custom types
 
 Custom types, in general, provide a mechanism to create names for specific
-instances of  anonymous types to suite users' needs.
+instances of anonymous types to suit users' needs.
 
 However, types are considered custom if the type:
 - Was created through [`CREATE TYPE`][create-type].

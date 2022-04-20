@@ -21,6 +21,8 @@ use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
+use aws_types::credentials::ProvideCredentials;
+use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -30,7 +32,6 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::display::DisplayExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -78,6 +79,8 @@ pub struct Config {
     pub temp_dir: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
+    /// The default number of tries for retriable operations.
+    pub default_max_tries: usize,
     /// The initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
@@ -93,11 +96,8 @@ pub struct Config {
     pub materialized_pgconfig: tokio_postgres::Config,
     /// Session parameters to set after connecting to materialized.
     pub materialized_params: Vec<(String, String)>,
-    /// An optional path to the catalog file for the materialized instance.
-    ///
-    /// If present, testdrive will periodically verify that the on-disk catalog
-    /// matches its expectations.
-    pub materialized_catalog_path: Option<PathBuf>,
+    /// An optional path to the data directory for the materialized instance.
+    pub materialized_data_path: Option<PathBuf>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -125,7 +125,7 @@ pub struct Config {
 
     // === AWS options. ===
     /// The configuration to use when connecting to AWS.
-    pub aws_config: AwsConfig,
+    pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
 }
@@ -138,13 +138,15 @@ pub struct State {
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
     timeout: Duration,
+    default_max_tries: usize,
+    max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
     regex: Option<Regex>,
     regex_replacement: String,
 
     // === Materialize state. ===
-    materialized_catalog_path: Option<PathBuf>,
+    materialized_data_path: Option<PathBuf>,
     materialized_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
@@ -162,7 +164,7 @@ pub struct State {
 
     // === AWS state. ===
     aws_account: String,
-    aws_config: AwsConfig,
+    aws_config: SdkConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
     s3_client: S3Client,
@@ -179,13 +181,20 @@ pub struct State {
 
 impl State {
     pub fn aws_endpoint(&self) -> String {
-        match self.aws_config.endpoint() {
-            None => String::new(),
-            Some(endpoint) => {
+        match (
+            self.aws_config.endpoint_resolver(),
+            self.aws_config.region(),
+        ) {
+            (Some(endpoint_resolver), Some(region)) => {
+                let endpoint = match endpoint_resolver.resolve_endpoint(region) {
+                    Ok(endpoint) => endpoint,
+                    Err(_) => return String::new(),
+                };
                 let mut uri = Uri::builder().build().unwrap();
                 endpoint.set_endpoint(&mut uri, None);
                 uri.to_string()
             }
+            _ => String::new(),
         }
     }
 
@@ -282,7 +291,7 @@ impl State {
     async fn delete_bucket_objects(&self, bucket: String) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
-            .retry_async(|_| async {
+            .retry_async_canceling(|_| async {
                 // loop until error or response has no continuation token
                 let mut continuation_token = None;
                 loop {
@@ -321,7 +330,7 @@ impl State {
     pub async fn reset_sqs(&self) -> Result<(), anyhow::Error> {
         Retry::default()
             .max_duration(self.default_timeout)
-            .retry_async(|_| async {
+            .retry_async_canceling(|_| async {
                 for queue_url in &self.sqs_queues_created {
                     self.sqs_client
                         .delete_queue()
@@ -405,6 +414,8 @@ pub(crate) async fn build(
     {
         let aws_credentials = state
             .aws_config
+            .credentials_provider()
+            .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
             .provide_credentials()
             .await
             .context("fetching AWS credentials")?;
@@ -536,10 +547,12 @@ pub(crate) async fn build(
                     "s3-add-notifications" => {
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
-                    "set-regex" => Box::new(set::build_regex(builtin).map_err(wrap_err)?),
+                    "set-regex" => Box::new(set::build_regex_set(builtin).map_err(wrap_err)?),
+                    "unset-regex" => Box::new(set::build_regex_unset(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         Box::new(set::build_sql_timeout(builtin).map_err(wrap_err)?)
                     }
+                    "set-max-tries" => Box::new(set::build_max_tries(builtin).map_err(wrap_err)?),
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
                     }
@@ -660,16 +673,15 @@ pub async fn create_state(
         }
     };
 
-    let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
-        match fs::metadata(&path) {
-            Ok(m) if !m.is_file() => {
-                bail!("materialized catalog path is not a regular file");
+    let materialized_data_path = match config.materialized_data_path.clone() {
+        Some(path) => match fs::metadata(&path) {
+            Ok(m) if !m.is_dir() => {
+                bail!("materialized data path is not a directory");
             }
-            Ok(_) => Some(path.to_path_buf()),
-            Err(e) => return Err(e).context("opening materialized catalog path"),
-        }
-    } else {
-        None
+            Ok(_) => Some(path),
+            Err(e) => return Err(e).context("opening materialized data directory"),
+        },
+        None => None,
     };
 
     let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
@@ -780,13 +792,15 @@ pub async fn create_state(
         _tempfile,
         default_timeout: config.default_timeout,
         timeout: config.default_timeout,
+        default_max_tries: config.default_max_tries,
+        max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
-        materialized_catalog_path,
+        materialized_data_path,
         materialized_addr,
         materialized_user,
         pgclient,

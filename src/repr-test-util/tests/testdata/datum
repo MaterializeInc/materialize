@@ -104,6 +104,6 @@ build-datum
 Timestamp(1999-12-31T23:42:23.342)
 
 build-datum
-2 (list jsonb 100)
+2 (list jsonb (user 100))
 ----
-error: Unsupported literal type List { element_type: Jsonb, custom_oid: Some(100) }
+error: Unsupported literal type List { element_type: Jsonb, custom_id: Some(User(100)) }

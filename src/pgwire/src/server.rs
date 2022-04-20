@@ -162,10 +162,6 @@ impl Server {
             }
         }
     }
-
-    pub fn metrics(&self) -> Metrics {
-        self.metrics.clone()
-    }
 }
 
 pub struct MeteredConn<'a, A> {

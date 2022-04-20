@@ -12,11 +12,14 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime as AsyncRuntime;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::warn;
 
 use crate::client::RuntimeClient;
@@ -24,8 +27,11 @@ use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::Indexed;
+use crate::location::{
+    Atomicity, Blob, BlobMulti, BlobRead, Consensus, ExternalError, LockInfo, Log, SeqNo,
+    VersionedData,
+};
 use crate::runtime::{self, RuntimeConfig};
-use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -510,6 +516,7 @@ impl MemRegistry {
 pub struct MemMultiRegistry {
     log_by_path: HashMap<String, Arc<Mutex<MemLogCore>>>,
     blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
+    blob_multi_by_path: HashMap<String, Arc<tokio::sync::Mutex<MemBlobMultiCore>>>,
 }
 
 #[cfg(test)]
@@ -519,6 +526,7 @@ impl MemMultiRegistry {
         MemMultiRegistry {
             log_by_path: HashMap::new(),
             blob_by_path: HashMap::new(),
+            blob_multi_by_path: HashMap::new(),
         }
     }
 
@@ -566,6 +574,20 @@ impl MemMultiRegistry {
         }
     }
 
+    /// Opens a [MemBlobMulti] associated with `path`.
+    pub async fn blob_multi(&mut self, path: &str) -> MemBlobMulti {
+        if let Some(blob) = self.blob_multi_by_path.get(path) {
+            MemBlobMulti::open(MemBlobMultiConfig {
+                core: Arc::clone(&blob),
+            })
+        } else {
+            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobMultiCore::default()));
+            self.blob_multi_by_path
+                .insert(path.to_string(), Arc::clone(&blob));
+            MemBlobMulti::open(MemBlobMultiConfig { core: blob })
+        }
+    }
+
     /// Open a [RuntimeClient] associated with `path`.
     pub fn open(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient, Error> {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
@@ -582,10 +604,142 @@ impl MemMultiRegistry {
     }
 }
 
+#[derive(Debug, Default)]
+struct MemBlobMultiCore {
+    dataz: HashMap<String, Vec<u8>>,
+}
+
+impl MemBlobMultiCore {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        Ok(self.dataz.get(key).cloned())
+    }
+
+    fn set(&mut self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
+        self.dataz.insert(key.to_owned(), value);
+        Ok(())
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        Ok(self.dataz.keys().cloned().collect())
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), ExternalError> {
+        self.dataz.remove(key);
+        Ok(())
+    }
+}
+
+/// Configuration for opening a [MemBlobMulti].
+#[derive(Debug, Default)]
+pub struct MemBlobMultiConfig {
+    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+}
+
+/// An in-memory implementation of [BlobMulti].
+#[derive(Debug)]
+pub struct MemBlobMulti {
+    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+}
+
+impl MemBlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub fn open(config: MemBlobMultiConfig) -> Self {
+        MemBlobMulti { core: config.core }
+    }
+}
+
+#[async_trait]
+impl BlobMulti for MemBlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        self.core.lock().await.get(key)
+    }
+
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+        self.core.lock().await.list_keys()
+    }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        _atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        // NB: This is always atomic, so we're free to ignore the atomic param.
+        self.core.lock().await.set(key, value)
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        self.core.lock().await.delete(key)
+    }
+}
+
+/// An in-memory implementation of [Consensus].
+#[derive(Debug)]
+pub struct MemConsensus {
+    data: Arc<TokioMutex<HashMap<String, VersionedData>>>,
+}
+
+impl Default for MemConsensus {
+    fn default() -> Self {
+        Self {
+            data: Arc::new(TokioMutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl Consensus for MemConsensus {
+    async fn head(
+        &self,
+        _deadline: Instant,
+        key: &str,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        Ok(self.data.lock().await.get(key).cloned())
+    }
+
+    async fn compare_and_set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+        if let Some(expected) = expected {
+            if new.seqno <= expected {
+                return Err(ExternalError::from(
+                        anyhow!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
+                                 new.seqno, expected)));
+            }
+        }
+
+        if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
+            return Err(ExternalError::from(anyhow!(
+                "sequence numbers must fit within [0, i64::MAX], received: {:?}",
+                new.seqno
+            )));
+        }
+        let mut store = self.data.lock().await;
+
+        let data = store.get(key);
+        let seqno = data.as_ref().map(|data| data.seqno);
+
+        if seqno != expected {
+            return Ok(Err(data.cloned()));
+        }
+
+        store.insert(key.to_string(), new);
+
+        Ok(Ok(()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, log_impl_test};
-    use crate::storage::Atomicity::RequireAtomic;
+    use crate::location::tests::{
+        blob_impl_test, blob_multi_impl_test, consensus_impl_test, log_impl_test,
+    };
+    use crate::location::Atomicity::RequireAtomic;
 
     use super::*;
 
@@ -608,6 +762,22 @@ mod tests {
             move |path| Ok(registry_read.lock()?.blob_read(path)),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn mem_blob_multi() -> Result<(), ExternalError> {
+        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
+        blob_multi_impl_test(move |path| {
+            let path = path.to_owned();
+            let registry = Arc::clone(&registry);
+            async move { Ok(registry.lock().await.blob_multi(&path).await) }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn mem_consensus() -> Result<(), ExternalError> {
+        consensus_impl_test(|| Ok(MemConsensus::default())).await
     }
 
     // This test covers a regression that was affecting the nemesis tests where
