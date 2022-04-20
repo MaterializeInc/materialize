@@ -385,6 +385,9 @@ pub struct Args {
     )]
     opentelemetry_headers: Option<String>,
 
+    #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
+    cluster_replica_sizes: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -711,6 +714,11 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
+    let replica_sizes = match args.cluster_replica_sizes {
+        None => Default::default(),
+        Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -732,6 +740,7 @@ max log level: {max_log_level}",
             .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
         now: SYSTEM_TIME.clone(),
+        replica_sizes,
     }))?;
 
     eprintln!(

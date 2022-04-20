@@ -187,7 +187,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         if let Some(memory_limit) = memory_limit {
             limits.insert(
                 "memory".into(),
-                Quantity(memory_limit.as_bytes().to_string()),
+                Quantity(memory_limit.0.as_u64().to_string()),
             );
         }
         if let Some(cpu_limit) = cpu_limit {
@@ -282,7 +282,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: name.clone(),
-                replicas: Some(processes.try_into()?),
+                replicas: Some(processes.get().try_into()?),
                 template: pod_template_spec,
                 ..Default::default()
             }),
@@ -306,7 +306,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..processes {
+        for pod_id in 0..processes.get() {
             let pod_name = format!("{}-{}", &name, pod_id);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
@@ -327,7 +327,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        let hosts = (0..processes)
+        let hosts = (0..processes.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",

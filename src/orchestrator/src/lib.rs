@@ -9,10 +9,15 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use derivative::Derivative;
+use serde::de::Unexpected;
+use serde::{Deserialize, Deserializer};
 
 /// An orchestrator manages services.
 ///
@@ -83,7 +88,7 @@ pub struct ServiceConfig<'a> {
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of processes to run.
-    pub processes: usize,
+    pub processes: NonZeroUsize,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -104,26 +109,27 @@ pub struct ServicePort {
     pub port_hint: i32,
 }
 
-/// Describes a limit on memory resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryLimit {
-    bytes: usize,
-}
+#[derive(Copy, Clone, Debug)]
+pub struct MemoryLimit(pub ByteSize);
 
-impl MemoryLimit {
-    /// Constructs a new memory limit from a number of bytes.
-    pub fn from_bytes(&self, bytes: usize) -> MemoryLimit {
-        MemoryLimit { bytes }
-    }
-
-    /// Returns the memory limit in bytes.
-    pub fn as_bytes(&self) -> usize {
-        self.bytes
+impl<'de> Deserialize<'de> for MemoryLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <String as Deserialize>::deserialize(deserializer)
+            .and_then(|s| {
+                ByteSize::from_str(&s).map_err(|_e| {
+                    use serde::de::Error;
+                    D::Error::invalid_value(serde::de::Unexpected::Str(&s), &"valid size in bytes")
+                })
+            })
+            .map(MemoryLimit)
     }
 }
 
 /// Describes a limit on CPU resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CpuLimit {
     millicpus: usize,
 }
@@ -137,5 +143,27 @@ impl CpuLimit {
     /// Returns the CPU limit in millicpus.
     pub fn as_millicpus(&self) -> usize {
         self.millicpus
+    }
+}
+
+impl<'de> Deserialize<'de> for CpuLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Note -- we just round off any precision beyond 0.001 here.
+        let float = f64::deserialize(deserializer)?;
+        let millicpus = (float * 1000.).round();
+        if millicpus < 0. || millicpus > (std::usize::MAX as f64) {
+            use serde::de::Error;
+            Err(D::Error::invalid_value(
+                Unexpected::Float(float),
+                &"a float representing a plausible number of CPUs",
+            ))
+        } else {
+            Ok(Self {
+                millicpus: millicpus as usize,
+            })
+        }
     }
 }

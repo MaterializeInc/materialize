@@ -125,7 +125,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let path = self.image_dir.join(image);
         let mut processes = vec![];
         let mut handles = vec![];
-        for _ in 0..processes_in {
+        for _ in 0..(processes_in.get()) {
             let mut ports = HashMap::new();
             for port in &ports_in {
                 let p = self

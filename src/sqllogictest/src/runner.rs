@@ -586,6 +586,7 @@ impl Runner {
             metrics_registry: MetricsRegistry::new(),
             metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
+            replica_sizes: Default::default(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
