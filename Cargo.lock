@@ -3805,8 +3805,10 @@ name = "mz-persist-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bincode",
  "bytes",
+ "clap",
  "crossbeam-channel",
  "differential-dataflow",
  "futures-executor",

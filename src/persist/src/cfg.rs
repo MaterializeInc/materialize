@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::file::{FileBlobConfig, FileBlobMulti};
 use crate::location::{BlobMulti, Consensus, ExternalError};
+use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3BlobConfig, S3BlobMulti};
 use crate::sqlite::SqliteConsensus;
 
@@ -99,6 +100,8 @@ impl BlobMultiConfig {
 pub enum ConsensusConfig {
     /// Config for [SqliteConsensus].
     Sqlite(String),
+    /// Config for [PostgresConsensus].
+    Postgres(PostgresConsensusConfig),
 }
 
 impl ConsensusConfig {
@@ -109,6 +112,9 @@ impl ConsensusConfig {
     ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         match self {
             ConsensusConfig::Sqlite(config) => SqliteConsensus::open(config)
+                .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
+            ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
+                .await
                 .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
         }
     }
@@ -126,6 +132,9 @@ impl ConsensusConfig {
 
         let config = match url.scheme() {
             "sqlite" => Ok(ConsensusConfig::Sqlite(url.path().to_owned())),
+            "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
+                PostgresConsensusConfig::new(value).await?,
+            )),
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",
                 p,
