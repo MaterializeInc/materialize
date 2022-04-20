@@ -242,6 +242,11 @@ mod test {
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
 macro_rules! derive_unary {
     ($($name:ident),*) => {
+        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        pub enum UnaryFunc {
+            $($name($name),)*
+        }
+
         impl UnaryFunc {
             pub fn eval<'a>(
                 &'a self,
@@ -251,32 +256,27 @@ macro_rules! derive_unary {
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, a),)*
-                    _ => self.eval_manual(datums, temp_storage, a),
                 }
             }
 
             pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*
-                    _ => self.output_type_manual(input_type),
                 }
             }
             pub fn propagates_nulls(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::propagates_nulls(f),)*
-                    _ => self.propagates_nulls_manual(),
                 }
             }
             pub fn introduces_nulls(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::introduces_nulls(f),)*
-                    _ => self.introduces_nulls_manual(),
                 }
             }
             pub fn preserves_uniqueness(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::preserves_uniqueness(f),)*
-                    _ => self.preserves_uniqueness_manual(),
                 }
             }
         }
@@ -285,7 +285,6 @@ macro_rules! derive_unary {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self {
                     $(Self::$name(func) => func.fmt(f),)*
-                    _ => self.fmt_manual(f),
                 }
             }
         }

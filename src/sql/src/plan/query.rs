@@ -3053,7 +3053,9 @@ fn plan_field_access(
             field,
             ecx.humanize_scalar_type(&ty)
         ),
-        Some(i) => Ok(expr.call_unary(UnaryFunc::RecordGet(i)).into()),
+        Some(i) => Ok(expr
+            .call_unary(UnaryFunc::RecordGet(expr_func::RecordGet(i)))
+            .into()),
     }
 }
 

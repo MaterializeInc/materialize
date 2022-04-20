@@ -2775,7 +2775,7 @@ lazy_static! {
                 }) => Int32, oid::FUNC_LIST_N_LAYERS_OID;
             },
             "list_length" => Scalar {
-                vec![ListAny] => UnaryFunc::ListLength => Int32, oid::FUNC_LIST_LENGTH_OID;
+                vec![ListAny] => UnaryFunc::ListLength(func::ListLength) => Int32, oid::FUNC_LIST_LENGTH_OID;
             },
             "list_length_max" => Scalar {
                 vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
@@ -2794,7 +2794,7 @@ lazy_static! {
                 }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
             },
             "map_length" => Scalar {
-                params![MapAny] => UnaryFunc::MapLength => Int32, oid::FUNC_MAP_LENGTH_OID;
+                params![MapAny] => UnaryFunc::MapLength(func::MapLength) => Int32, oid::FUNC_MAP_LENGTH_OID;
             },
             "mz_cluster_id" => Scalar {
                 params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;

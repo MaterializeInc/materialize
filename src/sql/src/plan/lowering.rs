@@ -1006,11 +1006,13 @@ impl HirScalarExpr {
                                                     reduce
                                                         .take_dangerous()
                                                         .map_one(mz_expr::MirScalarExpr::CallUnary {
-                                                        func: mz_expr::UnaryFunc::RecordGet(c),
+                                                        func: mz_expr::UnaryFunc::RecordGet(
+                                                            mz_expr::func::RecordGet(c),
+                                                        ),
                                                         expr: Box::new(
                                                             mz_expr::MirScalarExpr::CallUnary {
                                                                 func: mz_expr::UnaryFunc::RecordGet(
-                                                                    1,
+                                                                    mz_expr::func::RecordGet(1),
                                                                 ),
                                                                 expr: Box::new(
                                                                     mz_expr::MirScalarExpr::Column(
@@ -1025,7 +1027,9 @@ impl HirScalarExpr {
                                             // Append the column with the result of the window function.
                                             reduce = reduce.take_dangerous().map_one(
                                                 mz_expr::MirScalarExpr::CallUnary {
-                                                    func: mz_expr::UnaryFunc::RecordGet(0),
+                                                    func: mz_expr::UnaryFunc::RecordGet(
+                                                        mz_expr::func::RecordGet(0),
+                                                    ),
                                                     expr: Box::new(mz_expr::MirScalarExpr::Column(
                                                         record_col,
                                                     )),
@@ -1224,11 +1228,13 @@ impl HirScalarExpr {
                                                     reduce
                                                         .take_dangerous()
                                                         .map_one(mz_expr::MirScalarExpr::CallUnary {
-                                                        func: mz_expr::UnaryFunc::RecordGet(c),
+                                                        func: mz_expr::UnaryFunc::RecordGet(
+                                                            mz_expr::func::RecordGet(c),
+                                                        ),
                                                         expr: Box::new(
                                                             mz_expr::MirScalarExpr::CallUnary {
                                                                 func: mz_expr::UnaryFunc::RecordGet(
-                                                                    1,
+                                                                    mz_expr::func::RecordGet(1),
                                                                 ),
                                                                 expr: Box::new(
                                                                     mz_expr::MirScalarExpr::Column(
@@ -1243,7 +1249,9 @@ impl HirScalarExpr {
                                             // Append the column with the result of the window function.
                                             reduce = reduce.take_dangerous().map_one(
                                                 mz_expr::MirScalarExpr::CallUnary {
-                                                    func: mz_expr::UnaryFunc::RecordGet(0),
+                                                    func: mz_expr::UnaryFunc::RecordGet(
+                                                        mz_expr::func::RecordGet(0),
+                                                    ),
                                                     expr: Box::new(mz_expr::MirScalarExpr::Column(
                                                         record_col,
                                                     )),

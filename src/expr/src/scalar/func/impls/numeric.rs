@@ -7,10 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dec::{OrderedDecimal, Rounding};
-use mz_repr::adt::numeric::{self, Numeric};
-use mz_repr::strconv;
+use std::fmt;
 
+use dec::{OrderedDecimal, Rounding};
+use serde::{Deserialize, Serialize};
+
+use mz_lowertest::MzReflect;
+use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::{strconv, ColumnType, ScalarType};
+
+use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
 sqlfunc!(
@@ -206,3 +212,31 @@ sqlfunc!(
         buf
     }
 );
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RescaleNumeric(pub NumericMaxScale);
+
+impl<'a> EagerUnaryFunc<'a> for RescaleNumeric {
+    type Input = Numeric;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, mut d: Numeric) -> Result<Numeric, EvalError> {
+        if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        };
+        Ok(d)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric {
+            max_scale: Some(self.0),
+        }
+        .nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for RescaleNumeric {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("rescale_numeric")
+    }
+}

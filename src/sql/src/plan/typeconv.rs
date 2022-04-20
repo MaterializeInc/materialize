@@ -461,7 +461,7 @@ lazy_static! {
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString(func::CastRecordToString { ty })))
             }),
             (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
@@ -481,13 +481,13 @@ lazy_static! {
                     .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
                     .collect::<Option<Vec<_>>>()?;
                 let to = to_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2{ return_ty: to, cast_exprs }))
+                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2(func::CastRecord1ToRecord2 { return_ty: to, cast_exprs })))
             }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString(func::CastArrayToString { ty })))
             }),
             (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
 
@@ -495,12 +495,12 @@ lazy_static! {
             (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
                 Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)))
             }),
-            (Int2Vector, String) => Explicit: CastInt2VectorToString,
+            (Int2Vector, String) => Explicit: CastInt2VectorToString(func::CastInt2VectorToString),
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastListToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastListToString(func::CastListToString { ty })))
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
 
@@ -515,16 +515,16 @@ lazy_static! {
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_el_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2 {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2(func::CastList1ToList2 {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
 
             // MAP
             (Map, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastMapToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastMapToString(func::CastMapToString { ty })))
             }),
 
             // JSONB
@@ -548,7 +548,7 @@ lazy_static! {
                 let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
-                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
+                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(func::RescaleNumeric(scale))),
                 })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
@@ -629,7 +629,8 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 ));
                 exprs.push(to_jsonb(
                     ecx,
-                    expr.clone().call_unary(UnaryFunc::RecordGet(i)),
+                    expr.clone()
+                        .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
                 ));
             }
             HirScalarExpr::CallVariadic {

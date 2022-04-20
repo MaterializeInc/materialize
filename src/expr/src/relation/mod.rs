@@ -1542,16 +1542,26 @@ impl AggregateExpr {
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
                 func: VariadicFunc::JsonbBuildArray,
-                exprs: vec![self.expr.clone().call_unary(UnaryFunc::RecordGet(0))],
+                exprs: vec![self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)))],
             },
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
             AggregateFunc::JsonbObjectAgg { .. } => {
-                let record = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+                let record = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildObject,
                     exprs: (0..2)
-                        .map(|i| record.clone().call_unary(UnaryFunc::RecordGet(i)))
+                        .map(|i| {
+                            record
+                                .clone()
+                                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
+                        })
                         .collect(),
                 }
             }
@@ -1560,13 +1570,14 @@ impl AggregateExpr {
             AggregateFunc::StringAgg { .. } => self
                 .expr
                 .clone()
-                .call_unary(UnaryFunc::RecordGet(0))
-                .call_unary(UnaryFunc::RecordGet(0)),
+                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)))
+                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
 
             // ListConcat and ArrayConcat take a single level of records and output a list containing exactly 1 element
-            AggregateFunc::ListConcat { .. } | AggregateFunc::ArrayConcat { .. } => {
-                self.expr.clone().call_unary(UnaryFunc::RecordGet(0))
-            }
+            AggregateFunc::ListConcat { .. } | AggregateFunc::ArrayConcat { .. } => self
+                .expr
+                .clone()
+                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
 
             // RowNumber takes a list of records and outputs a list containing exactly 1 element
             AggregateFunc::RowNumber { .. } => {
@@ -1574,7 +1585,7 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(0));
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // extract the expression within the list
                 let record = MirScalarExpr::CallVariadic {
@@ -1614,7 +1625,7 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(0));
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // extract the expression within the list
                 let record = MirScalarExpr::CallVariadic {
@@ -1650,7 +1661,10 @@ impl AggregateExpr {
 
             // The input type for Lag is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
             AggregateFunc::Lag { .. } => {
-                let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
                 let return_type = self
@@ -1661,13 +1675,21 @@ impl AggregateExpr {
                 let lag_type = return_type.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
-                let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the encoded args
-                let encoded_args = tuple.call_unary(UnaryFunc::RecordGet(1));
-                let expr = encoded_args.clone().call_unary(UnaryFunc::RecordGet(0));
-                let offset = encoded_args.clone().call_unary(UnaryFunc::RecordGet(1));
-                let default_value = encoded_args.call_unary(UnaryFunc::RecordGet(2));
+                let encoded_args =
+                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let expr = encoded_args
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+                let offset = encoded_args
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let default_value =
+                    encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
 
                 // In this case, the window always has only one element, so if the offset is not null and
                 // not zero, the default value should be returned instead.
