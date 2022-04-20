@@ -19,7 +19,7 @@ This page details how to connect Materialize to a Kafka broker to read data from
 {{% /create-source/intro %}}
 
 {{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker, unless stated otherwise.
+The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
 ## Syntax
@@ -241,10 +241,6 @@ Note that:
 
 It's also possible to set a start offset based on Kafka timestamps, using the `kafka_time_offset` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `start_offset` was provided directly.
 
-{{< note >}}
-The `kafka_time_offset` option is not supported yet for Redpanda sources ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
-{{</ note >}}
-
 It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
 
 If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/spellbook/temporal-filters/) instead.
@@ -254,8 +250,7 @@ If you need to limit the amount of data maintained as state after source creatio
 Field               | Value | Description
 --------------------|-------|--------------------
 `start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `(DEBEZIUM) UPSERT`.
-`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used. **This option is not currently supported for [Redpanda](/integrations/redpanda).**
-
+`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
 
 ## Authentication
 
