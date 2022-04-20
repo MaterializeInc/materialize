@@ -341,7 +341,6 @@ where
                                     key_encoding,
                                     value_encoding,
                                     dataflow_debug_name,
-                                    &envelope,
                                     metadata_columns,
                                     &mut linear_operators,
                                     storage_state.decode_metrics.clone(),
@@ -390,7 +389,6 @@ where
                                             error_collections.push(tx_source_err);
 
                                             super::debezium::render_tx(
-                                                src_id,
                                                 dbz_envelope,
                                                 &results,
                                                 tx_source_ok,
