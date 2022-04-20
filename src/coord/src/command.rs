@@ -303,10 +303,29 @@ pub struct SimpleExecuteResponse {
     pub results: Vec<SimpleResult>,
 }
 
+/// The result of a single query executed with `simple_execute`.
 #[derive(Debug, Serialize)]
-pub struct SimpleResult {
-    pub rows: Vec<Vec<serde_json::Value>>,
-    pub col_names: Vec<String>,
+#[serde(untagged)]
+pub enum SimpleResult {
+    /// The query returned rows.
+    Rows {
+        /// The result rows.
+        rows: Vec<Vec<serde_json::Value>>,
+        /// The name of the columns in the row.
+        col_names: Vec<String>,
+    },
+    /// The query executed successfully but did not return rows.
+    Ok,
+    /// The query returned an error.
+    Err { error: String },
+}
+
+impl SimpleResult {
+    pub(crate) fn err(msg: impl fmt::Display) -> SimpleResult {
+        SimpleResult::Err {
+            error: msg.to_string(),
+        }
+    }
 }
 
 /// The state of a cancellation request.

@@ -244,11 +244,29 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
         },
-        // CREATEs should not work.
+        // Succeeding and failing queries can mix and match.
+        TestCase {
+            query: "select 1; select * from noexist;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"error":"unknown catalog item 'noexist'"}]}"#,
+        },
+        // CREATEs should work when provided alone.
         TestCase {
             query: "create view v as select 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[null]}"#,
+        },
+        // Multiple CREATEs do not work.
+        TestCase {
+            query: "create view v1 as select 1; create view v2 as select 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"},{"error":"CREATE VIEW v2 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
+        },
+        // Syntax errors fail the request.
+        TestCase {
+            query: "'",
             status: StatusCode::BAD_REQUEST,
-            body: r#"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block"#,
+            body: r#"unterminated quoted string"#,
         },
     ];
 
