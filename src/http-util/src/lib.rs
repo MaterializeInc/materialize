@@ -28,7 +28,7 @@ where
 macro_rules! make_handle_static {
     ($static_dir:expr, $prod_base_path:expr, $dev_base_path:expr) => {
         #[allow(clippy::unused_async)]
-        pub async fn handle_static(path: axum::extract::Path<String>) -> impl IntoResponse {          
+        pub async fn handle_static(path: axum::extract::Path<String>) -> impl IntoResponse {
             #[cfg(not(feature = "dev-web"))]
             const STATIC_DIR: include_dir::Dir = $static_dir;
 
@@ -45,13 +45,14 @@ macro_rules! make_handle_static {
                 compile_error!("cannot enable insecure `dev-web` feature in release mode");
 
                 // Prefer the unminified files in static-dev, if they exist.
-                let dev_path = format!(
+                let dev_path =
+                    format!("{}/{}/{}", env!("CARGO_MANIFEST_DIR"), $dev_base_path, path);
+                let prod_path = format!(
                     "{}/{}/{}",
                     env!("CARGO_MANIFEST_DIR"),
-                    $dev_base_path,
+                    $prod_base_path,
                     path
                 );
-                let prod_path = format!("{}/{}/{}", env!("CARGO_MANIFEST_DIR"), $prod_base_path, path);
                 match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
                     Ok(contents) => Some(contents),
                     Err(e) => {
@@ -59,17 +60,24 @@ macro_rules! make_handle_static {
                         None
                     }
                 }
-            }     
+            }
             let path = path.strip_prefix('/').unwrap_or(&path);
-            let content_type = match std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
-                Some("js") => Some(axum::TypedHeader(headers::ContentType::from(mime::TEXT_JAVASCRIPT))),
-                Some("css") => Some(axum::TypedHeader(headers::ContentType::from(mime::TEXT_CSS))),
+            let content_type = match std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+            {
+                Some("js") => Some(axum::TypedHeader(headers::ContentType::from(
+                    mime::TEXT_JAVASCRIPT,
+                ))),
+                Some("css") => Some(axum::TypedHeader(headers::ContentType::from(
+                    mime::TEXT_CSS,
+                ))),
                 None | Some(_) => None,
             };
             match get_static_file(path) {
                 Some(body) => Ok((content_type, body)),
                 None => Err((StatusCode::NOT_FOUND, "not found")),
             }
-        }   
-    }
+        }
+    };
 }

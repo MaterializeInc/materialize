@@ -43,7 +43,6 @@ lazy_static! {
     };
 }
 
-
 mz_http_util::make_handle_static!(
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
     "src/http/static",
