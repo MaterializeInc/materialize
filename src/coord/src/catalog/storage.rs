@@ -17,9 +17,7 @@ use futures::future::BoxFuture;
 use prost::{self, Message};
 use uuid::Uuid;
 
-use crate::catalog::builtin::BuiltinLog;
-use crate::coord::ConcreteComputeInstanceConfig;
-use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
@@ -30,8 +28,10 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
+use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 
+use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
 
 const USER_VERSION: &str = "user_version";
@@ -132,15 +132,30 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                         )],
                     )
                     .await?;
-                COLLECTION_COMPUTE_INSTANCES.upsert(
-                stash,
-                vec![(
+                COLLECTION_COMPUTE_INSTANCES
+                    .upsert(
+                        stash,
+                        vec![(
                     ComputeInstanceKey { id: 1 },
                     ComputeInstanceValue {
                         name: "default".into(),
-                        config: Some("{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}".into()),
+                        config: Some(
+                            "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
+                        ),
                     },
                 )],
+                    )
+                    .await?;
+                COLLECTION_COMPUTE_INSTANCE_REPLICAS.upsert(
+                    stash,
+                    vec![
+                        (
+                            ComputeInstanceReplicaKey{ compute_instance_id: 1, name: "default_instance".into() },
+                            ComputeInstanceReplicaValue{
+                                config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
+                            }
+                        )
+                    ]
                 ).await?;
                 Ok(())
             })
@@ -382,23 +397,47 @@ impl<S: Append> Connection<S> {
 
     pub async fn load_compute_instances(
         &mut self,
-    ) -> Result<Vec<(i64, String, ConcreteComputeInstanceConfig)>, Error> {
+    ) -> Result<
+        Vec<(
+            ComputeInstanceId,
+            String,
+            Option<ComputeInstanceIntrospectionConfig>,
+        )>,
+        Error,
+    > {
         COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
-                let config = match v.config {
-                    None => {
-                        return Err(Error::new(ErrorKind::Unstructured(
-                            "migrating catalog from materialized to platform is not supported"
-                                .into(),
-                        )))
-                    }
+                let config: Option<ComputeInstanceIntrospectionConfig> = match v.config {
+                    None => None,
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| Error::from(StashError::from(err.to_string())))?,
                 };
                 Ok((k.id, v.name, config))
+            })
+            .collect()
+    }
+
+    pub async fn load_compute_instance_replicas(
+        &mut self,
+    ) -> Result<
+        Vec<(
+            ComputeInstanceId,
+            String,
+            ConcreteComputeInstanceReplicaConfig,
+        )>,
+        Error,
+    > {
+        COLLECTION_COMPUTE_INSTANCE_REPLICAS
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(|(k, v)| {
+                let config = serde_json::from_str(&v.config)
+                    .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+                Ok((k.compute_instance_id, k.name, config))
             })
             .collect()
     }
@@ -670,7 +709,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
-        config: &ConcreteComputeInstanceConfig,
+        config: &Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
@@ -710,23 +749,29 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(id)
     }
 
-    pub fn update_compute_instance_config(
+    pub fn insert_compute_instance_replica(
         &mut self,
-        id: ComputeInstanceId,
-        config: &ConcreteComputeInstanceConfig,
+        compute_id: ComputeInstanceId,
+        compute_name: &str,
+        replica_name: &str,
+        config: &ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-        self.compute_instances.update(|k, v| {
-            if k.id == id {
-                Some(ComputeInstanceValue {
-                    name: v.name.clone(),
-                    config: Some(config.clone()),
-                })
-            } else {
-                None
-            }
-        })?;
+        self.compute_instances
+            .update(|k, v| {
+                if k.id == compute_id {
+                    Some(ComputeInstanceValue {
+                        name: v.name.clone(),
+                        config: Some(config.clone()),
+                    })
+                } else {
+                    None
+                }
+            })
+            .map_err(|_| {
+                ErrorKind::ReplicaAlreadyExists(replica_name.to_owned(), compute_name.to_owned())
+            })?;
         Ok(())
     }
 
@@ -1012,6 +1057,22 @@ struct DatabaseKey {
 }
 impl_codec!(DatabaseKey);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ComputeInstanceReplicaKey {
+    #[prost(int64)]
+    compute_instance_id: i64,
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(ComputeInstanceReplicaKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct ComputeInstanceReplicaValue {
+    #[prost(string)]
+    config: String,
+}
+impl_codec!(ComputeInstanceReplicaValue);
+
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct DatabaseValue {
     #[prost(string)]
@@ -1113,6 +1174,10 @@ static COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX: TypedCollection<
     ComputeIntrospectionSourceIndexKey,
     ComputeIntrospectionSourceIndexValue,
 > = TypedCollection::new("compute_introspection_source_index");
+static COLLECTION_COMPUTE_INSTANCE_REPLICAS: TypedCollection<
+    ComputeInstanceReplicaKey,
+    ComputeInstanceReplicaValue,
+> = TypedCollection::new("compute_instance_replicas");
 static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
     TypedCollection::new("database");
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");

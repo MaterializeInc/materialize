@@ -87,13 +87,12 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceConfig,
-    ComputeInstanceIntrospectionConfig, Connector, CreateComputeInstancePlan, CreateConnectorPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table,
-    Type, View,
+    AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    Connector, CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
+    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2829,7 +2828,7 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
 
 fn plan_cluster_options(
     options: Vec<ClusterOption<Aug>>,
-) -> Result<ComputeInstanceConfig, anyhow::Error> {
+) -> Result<Option<ComputeInstanceIntrospectionConfig>, anyhow::Error> {
     let mut remote_replicas = BTreeMap::new();
     let mut size = None;
     let mut introspection_debugging = None;
@@ -2872,7 +2871,7 @@ fn plan_cluster_options(
     let introspection_granularity =
         introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
 
-    let introspection = match (introspection_debugging, introspection_granularity) {
+    Ok(match (introspection_debugging, introspection_granularity) {
         (None | Some(false), None) => None,
         (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
             debugging: debugging.unwrap_or(false),
@@ -2881,24 +2880,7 @@ fn plan_cluster_options(
         (Some(true), None) => {
             bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
         }
-    };
-
-    match (remote_replicas.len() > 0, size) {
-        (true, None) => Ok(ComputeInstanceConfig::Remote {
-            replicas: remote_replicas,
-            introspection,
-        }),
-        (false, Some(size)) => Ok(ComputeInstanceConfig::Managed {
-            size,
-            introspection,
-        }),
-        (false, None) => {
-            bail!("one of REMOTE or SIZE must be specified")
-        }
-        (true, Some(_)) => {
-            bail!("only one of REMOTE or SIZE may be specified")
-        }
-    }
+    })
 }
 
 pub fn describe_create_secret(

@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
+use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
@@ -49,8 +49,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::Append;
@@ -61,7 +62,6 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::coord::ConcreteComputeInstanceConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -377,19 +377,9 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
-        config: ConcreteComputeInstanceConfig,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
-        let (config, introspection) = match config {
-            ConcreteComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            } => (InstanceConfig::Remote { replicas }, introspection),
-            ConcreteComputeInstanceConfig::Managed {
-                size_config,
-                introspection,
-            } => (InstanceConfig::Managed { size_config }, introspection),
-        };
         let logging = match introspection {
             None => None,
             Some(introspection) => {
@@ -454,8 +444,7 @@ impl CatalogState {
                 })
             }
         };
-        let mut replicas = HashMap::with_capacity(1);
-        replicas.insert(name.clone(), config);
+
         self.compute_instances_by_id.insert(
             id,
             ComputeInstance {
@@ -463,10 +452,20 @@ impl CatalogState {
                 id,
                 indexes: HashSet::new(),
                 logging,
-                replicas,
+                replicas: HashMap::new(),
             },
         );
-        self.compute_instances_by_name.insert(name, id);
+        assert!(self.compute_instances_by_name.insert(name, id).is_none());
+    }
+
+    fn insert_compute_instance_replica(
+        &mut self,
+        on_instance: ComputeInstanceId,
+        name: String,
+        config: ConcreteComputeInstanceReplicaConfig,
+    ) {
+        let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
+        assert!(compute_instance.replicas.insert(name, config).is_none());
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -715,7 +714,7 @@ pub struct ComputeInstance {
     pub logging: Option<DataflowLoggingConfig>,
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
-    pub replicas: HashMap<String, InstanceConfig>,
+    pub replicas: HashMap<String, ConcreteComputeInstanceReplicaConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -1373,8 +1372,8 @@ impl Catalog {
             .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
-        for (id, name, conf) in compute_instances {
-            let introspection_sources = if conf.introspection().is_some() {
+        for (id, name, introspection) in compute_instances {
+            let introspection_sources = if introspection.is_some() {
                 let introspection_source_index_gids = catalog
                     .storage()
                     .await
@@ -1412,8 +1411,19 @@ impl Catalog {
             };
             catalog
                 .state
-                .insert_compute_instance(id, name, conf, introspection_sources)
+                .insert_compute_instance(id, name, introspection, introspection_sources)
                 .await;
+        }
+
+        let replicas = catalog
+            .storage()
+            .await
+            .load_compute_instance_replicas()
+            .await?;
+        for (instance_id, replica_id, name, config) in replicas {
+            catalog
+                .state
+                .insert_compute_instance_replica(instance_id, name, replica_id, config);
         }
 
         if !config.skip_migrations {
@@ -2218,8 +2228,13 @@ impl Catalog {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
-                config: ConcreteComputeInstanceConfig,
+                config: Option<ComputeInstanceIntrospectionConfig>,
                 introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+            },
+            CreateComputeInstanceReplica {
+                name: String,
+                on_cluster: ComputeInstanceId,
+                config: ConcreteComputeInstanceReplicaConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -2345,6 +2360,29 @@ impl Catalog {
                         name,
                         config,
                         introspection_sources,
+                    }]
+                }
+                Op::CreateComputeInstanceReplica {
+                    name,
+                    on_cluster,
+                    on_cluster_name,
+                    config,
+                } => {
+                    if is_reserved_name(&name) {
+                        return Err(CoordError::Catalog(Error::new(
+                            ErrorKind::ReservedReplicaName(name),
+                        )));
+                    }
+                    tx.insert_compute_instance_replica(
+                        on_cluster,
+                        &on_cluster_name,
+                        &name,
+                        &config,
+                    )?;
+                    vec![Action::CreateComputeInstanceReplica {
+                        name,
+                        on_cluster,
+                        config,
                     }]
                 }
                 Op::CreateItem {
@@ -2618,6 +2656,16 @@ impl Catalog {
                     for id in introspection_source_index_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
+                }
+
+                Action::CreateComputeInstanceReplica {
+                    on_cluster,
+                    name,
+                    config,
+                } => {
+                    info!("create replica {} of instance {}", name, on_cluster);
+                    state.insert_compute_instance_replica(on_cluster, name.clone(), config);
+                    // TODO: replica system table
                 }
 
                 Action::CreateItem {
@@ -2968,8 +3016,14 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
-        config: ConcreteComputeInstanceConfig,
+        config: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+    },
+    CreateComputeInstanceReplica {
+        name: String,
+        config: ConcreteComputeInstanceReplicaConfig,
+        on_cluster: ComputeInstanceId,
+        on_cluster_name: String,
     },
     CreateItem {
         id: GlobalId,

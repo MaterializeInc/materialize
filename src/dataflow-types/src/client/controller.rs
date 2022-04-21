@@ -38,8 +38,8 @@ use mz_persist_types::Codec64;
 
 use crate::client::GenericClient;
 use crate::client::{
-    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse, ControllerResponse,
-    InstanceConfig, RemoteClient, StorageResponse,
+    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
+    ConcreteComputeInstanceReplicaConfig, ControllerResponse, RemoteClient, StorageResponse,
 };
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
@@ -168,7 +168,7 @@ where
     pub async fn add_replica_to_instance(
         &mut self,
         instance: ComputeInstanceId,
-        config: InstanceConfig,
+        config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         assert!(
             self.compute.contains_key(&instance),
@@ -177,15 +177,15 @@ where
 
         // Add replicas backing that instance.
         match config {
-            InstanceConfig::Remote { replicas } => {
+            ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance).unwrap();
-                for (name, hosts) in replicas {
-                    let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-                    let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                    compute_instance.add_replica(name, client).await;
-                }
+                let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
+                let client: Box<dyn ComputeClient<T>> = Box::new(client);
+                compute_instance
+                    .add_replica(format!("cluster-{instance}"), client)
+                    .await;
             }
-            InstanceConfig::Managed { size_config } => {
+            ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,

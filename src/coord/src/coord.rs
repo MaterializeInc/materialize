@@ -89,11 +89,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ReadPolicy,
-};
+use mz_dataflow_types::client::controller::{ClusterReplicaSizeMap, ReadPolicy};
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ControllerResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
+    ComputeInstanceId, ControllerResponse, LinearizedTimestampBindingFeedback,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -131,15 +129,14 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterSecretPlan, ComputeInstanceConfig,
-    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateConnectorPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
-    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
-    TailFrom, TailPlan, View,
+    AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind,
+    OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -264,66 +261,6 @@ pub struct CatalogTxn<'a, T> {
     catalog: &'a CatalogState,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceConfig {
-    Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-    Managed {
-        size_config: ClusterReplicaSizeConfig,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-}
-
-impl ConcreteComputeInstanceConfig {
-    pub fn from_plan(
-        plan: ComputeInstanceConfig,
-        replica_sizes: &ClusterReplicaSizeMap,
-    ) -> Result<Self, CoordError> {
-        let config = match plan {
-            mz_sql::plan::ComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            } => ConcreteComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            },
-            mz_sql::plan::ComputeInstanceConfig::Managed {
-                size,
-                introspection,
-            } => {
-                let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
-                    entries.sort_by_key(
-                        |(
-                            _name,
-                            ClusterReplicaSizeConfig {
-                                scale, cpu_limit, ..
-                            },
-                        )| (*scale, *cpu_limit),
-                    );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    CoordError::InvalidReplicaSize { size, expected }
-                })?;
-                ConcreteComputeInstanceConfig::Managed {
-                    size_config: *size_config,
-                    introspection,
-                }
-            }
-        };
-        Ok(config)
-    }
-
-    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
-        match self {
-            Self::Remote { introspection, .. } => introspection,
-            Self::Managed { introspection, .. } => introspection,
-        }
-    }
-}
-
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
@@ -380,7 +317,7 @@ pub struct Coordinator {
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
     /// Map of strings to corresponding compute replica sizes.
-    replica_sizes: ClusterReplicaSizeMap,
+    _replica_sizes: ClusterReplicaSizeMap,
 }
 
 /// Metadata about an active connection.
@@ -525,7 +462,7 @@ impl Coordinator {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (_replica_name, config) in &instance.replicas {
+            for config in instance.replicas.values() {
                 self.dataflow_client
                     .add_replica_to_instance(instance.id, config.clone())
                     .await
@@ -1639,6 +1576,12 @@ impl Coordinator {
             Plan::CreateComputeInstance(plan) => {
                 tx.send(self.sequence_create_compute_instance(plan).await, session);
             }
+            Plan::CreateComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_create_compute_instance_replica(plan).await,
+                    session,
+                );
+            }
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
@@ -1968,17 +1911,15 @@ impl Coordinator {
 
     async fn sequence_create_compute_instance(
         &mut self,
-        plan: CreateComputeInstancePlan,
+        CreateComputeInstancePlan { name, config }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let introspection_sources = if plan.config.introspection().is_some() {
+        let introspection_sources = if config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
-        let config =
-            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
         let op = catalog::Op::CreateComputeInstance {
-            name: plan.name.clone(),
+            name: name.clone(),
             config,
             introspection_sources,
         };
@@ -1987,15 +1928,48 @@ impl Coordinator {
             Ok(()) => {
                 let instance = self
                     .catalog
-                    .resolve_compute_instance(&plan.name)
+                    .resolve_compute_instance(&name)
                     .expect("compute instance must exist after creation");
-                for (_replica_name, config) in &instance.replicas {
+                for config in instance.replicas.values() {
                     self.dataflow_client
                         .add_replica_to_instance(instance.id, config.clone())
                         .await
                         .unwrap();
                 }
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_create_compute_instance_replica(
+        &mut self,
+        plan: CreateComputeInstanceReplicaPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let instance = self.catalog.resolve_compute_instance(&plan.on_cluster)?;
+        let op = catalog::Op::CreateComputeInstanceReplica {
+            name: plan.name.clone(),
+            config: plan.config.clone(),
+            on_cluster: instance.id,
+            on_cluster_name: instance.name.clone(),
+        };
+
+        let instance_id = instance.id;
+
+        let r = self.catalog_transact(vec![op], |_| Ok(())).await;
+        match r {
+            Ok(()) => {
+                self.dataflow_client
+                    .add_replica_to_instance(instance_id, plan.config)
+                    .await
+                    .unwrap();
+                Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
+            }
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ClusterAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => {
+                Ok(ExecuteResponse::CreatedComputeInstance { existed: true })
             }
             Err(err) => Err(err),
         }
@@ -4711,7 +4685,7 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
-                replica_sizes,
+                _replica_sizes: replica_sizes,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

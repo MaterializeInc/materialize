@@ -26,14 +26,14 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
@@ -77,6 +77,7 @@ pub enum Plan {
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
     CreateComputeInstance(CreateComputeInstancePlan),
+    CreateComputeInstanceReplica(CreateComputeInstanceReplicaPlan),
     CreateSource(CreateSourcePlan),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
@@ -148,29 +149,15 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub config: ComputeInstanceConfig,
+    pub config: Option<ComputeInstanceIntrospectionConfig>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeInstanceConfig {
-    Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-    Managed {
-        size: String,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-}
-
-impl ComputeInstanceConfig {
-    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
-        match self {
-            Self::Remote { introspection, .. } => introspection,
-            Self::Managed { introspection, .. } => introspection,
-        }
-    }
+#[derive(Debug)]
+pub struct CreateComputeInstanceReplicaPlan {
+    pub name: String,
+    pub if_not_exists: bool,
+    pub on_cluster: String,
+    pub config: ConcreteComputeInstanceReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
