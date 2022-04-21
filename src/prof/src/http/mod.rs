@@ -61,6 +61,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/",
             routing::post(move |form| handle_post(form, build_info)),
         )
+        .route("/static/*path", routing::get(handle_static))
 }
 
 #[allow(dead_code)]

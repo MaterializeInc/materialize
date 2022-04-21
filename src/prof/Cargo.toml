@@ -32,5 +32,12 @@ anyhow = "1.0.56"
 mz-npm = { path = "../npm" }
 
 [features]
+# When enabled, static assets for the web UI are loaded from disk on every HTTP
+# request rather than compiled into the binary. This vastly speeds up the
+# iteration cycle when developing the web UI.
+#
+# WARNING: For development use only! When enabled, may allow unrestricted read
+# access to the file system.
+dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["dep:tikv-jemalloc-ctl"]
