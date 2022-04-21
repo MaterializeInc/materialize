@@ -28,7 +28,7 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::boundary::ComputeReplay;
+use mz_storage_types::boundary::ComputeReplay;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 

@@ -14,6 +14,8 @@ use timely::dataflow::Scope;
 use mz_dataflow_types::{DataflowError, SourceInstanceRequest};
 use mz_repr::{Diff, GlobalId, Row};
 
+pub mod tcp_boundary;
+
 /// A type that can capture a specific source.
 pub trait StorageCapture {
     /// Captures the source and binds to `id`.

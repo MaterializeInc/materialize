@@ -25,12 +25,12 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
-use crate::boundary::BoundaryHook;
-use crate::boundary::StorageCapture;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::ActiveStorageState;
 use crate::storage_state::StorageState;
 use crate::DecodeMetrics;
+use mz_storage_types::boundary::BoundaryHook;
+use mz_storage_types::boundary::StorageCapture;
 
 /// Configures a dataflow server.
 pub struct Config {
@@ -69,7 +69,7 @@ pub fn serve_boundary_requests<SC: StorageCapture, B: Fn(usize) -> SC + Send + S
     let (server, storage_client) = serve_boundary(config, create_boundary)?;
     Ok((
         server,
-        crate::boundary::BoundaryHook::new(storage_client, requests, workers),
+        mz_storage_types::boundary::BoundaryHook::new(storage_client, requests, workers),
     ))
 }
 /// Initiates a timely dataflow computation, processing materialized commands.

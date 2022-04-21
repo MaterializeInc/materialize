@@ -3261,7 +3261,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-prof",
  "mz-repr",
- "mz-storage",
+ "mz-storage-types",
  "mz-timely-util",
  "postgres-protocol",
  "prometheus",
@@ -4199,6 +4199,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-prof",
  "mz-repr",
+ "mz-storage-types",
  "mz-timely-util",
  "postgres-protocol",
  "prometheus",
@@ -4218,11 +4219,33 @@ dependencies = [
  "tokio",
  "tokio-byteorder",
  "tokio-postgres",
- "tokio-serde",
  "tokio-util 0.7.1",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "mz-storage-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "differential-dataflow",
+ "futures",
+ "mz-dataflow-types",
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "mz-timely-util",
+ "serde",
+ "timely",
+ "tokio",
+ "tokio-byteorder",
+ "tokio-serde",
+ "tokio-util 0.7.1",
+ "tracing",
  "uuid",
 ]
 

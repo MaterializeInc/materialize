@@ -23,7 +23,7 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, Lo
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_storage::boundary::ComputeReplay;
+use mz_storage_types::boundary::ComputeReplay;
 
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;

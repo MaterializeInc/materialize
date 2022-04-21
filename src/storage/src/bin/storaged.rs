@@ -188,7 +188,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     let workers = config.workers;
     let (storage_server, request_rx, _thread) =
-        mz_storage::tcp_boundary::server::serve(args.storage_addr, workers).await?;
+        mz_storage_types::boundary::tcp_boundary::server::serve(args.storage_addr, workers).await?;
     let boundary = (0..workers)
         .into_iter()
         .map(|_| Some(storage_server.clone()))

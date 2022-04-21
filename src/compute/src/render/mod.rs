@@ -120,7 +120,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
-use mz_storage::boundary::ComputeReplay;
+use mz_storage_types::boundary::ComputeReplay;
 
 pub mod context;
 mod flat_map;

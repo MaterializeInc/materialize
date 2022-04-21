@@ -46,7 +46,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
-mz-storage = { path = "../storage" }
+mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { version = "0.13.0", default-features = false }

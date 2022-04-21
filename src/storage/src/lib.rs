@@ -11,13 +11,11 @@
 
 //! Driver for timely/differential dataflow.
 
-pub mod boundary;
 pub(crate) mod decode;
 pub(crate) mod render;
 pub(crate) mod server;
 pub mod source;
 pub mod storage_state;
 
-pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, StorageCapture};
 pub use decode::metrics::DecodeMetrics;
 pub use server::{serve_boundary_requests, Config, Server};

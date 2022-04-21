@@ -31,11 +31,11 @@ use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
-use crate::boundary::StorageCapture;
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
+use mz_storage_types::boundary::StorageCapture;
 
 /// How frequently each dataflow worker sends timestamp binding updates
 /// back to the coordinator.

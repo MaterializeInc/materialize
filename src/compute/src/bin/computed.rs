@@ -219,8 +219,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
-    let (storage_client, _thread) =
-        mz_storage::tcp_boundary::client::connect(args.storage_addr, config.workers).await?;
+    let (storage_client, _thread) = mz_storage_types::boundary::tcp_boundary::client::connect(
+        args.storage_addr,
+        config.workers,
+    )
+    .await?;
     let boundary = (0..config.workers)
         .into_iter()
         .map(|_| Some(storage_client.clone()))
