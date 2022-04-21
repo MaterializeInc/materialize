@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 use anyhow::Error;
+use async_trait::async_trait;
 use mz_secrets::{SecretOp, SecretsController};
 use std::fs;
 use std::fs::OpenOptions;
@@ -26,8 +27,9 @@ impl FilesystemSecretsController {
     }
 }
 
+#[async_trait]
 impl SecretsController for FilesystemSecretsController {
-    fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
+    async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
         assert_eq!(ops.len(), 1);
         for op in ops.iter() {
             match op {

@@ -6,10 +6,12 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+use async_trait::async_trait;
 use mz_repr::GlobalId;
 
 /// Securely stores secrets.
-pub trait SecretsController: Send {
+#[async_trait]
+pub trait SecretsController: Send + Sync {
     /// Applies the specified secret operations in bulk.
     ///
     /// Implementations must apply the operations atomically. If the method
@@ -19,7 +21,7 @@ pub trait SecretsController: Send {
     ///
     /// Implementations are permitted to reject combinations of operations which
     /// they cannot apply atomically.
-    fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
+    async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
 }
 
 /// An operation on a [`SecretsController`].
