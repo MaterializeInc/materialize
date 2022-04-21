@@ -116,8 +116,7 @@ uuid = "0.8.2"
 # (Namely: if the application relies on new threads not being created for whatever reason)
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-mz-prof = { path = "../prof", features = ["jemalloc"] }
-tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
@@ -154,6 +153,7 @@ tar = "0.4.38"
 walkdir = "2.3.2"
 
 [features]
+default = ["jemalloc"]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.
@@ -162,6 +162,7 @@ walkdir = "2.3.2"
 # access to the file system.
 dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
+jemalloc = ["mz-prof/jemalloc", "dep:tikv-jemallocator"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.

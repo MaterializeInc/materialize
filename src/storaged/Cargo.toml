@@ -30,4 +30,8 @@ url = { version = "2.2.2", features = ["serde"] }
 # (Namely: if the application relies on new threads not being created for whatever reason)
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
+
+[features]
+default = ["jemalloc"]
+jemalloc = ["dep:tikv-jemallocator", "mz-prof/jemalloc"]
