@@ -212,6 +212,7 @@ where
 pub struct State<K, V, T, D> {
     shard_id: ShardId,
 
+    seqno: SeqNo,
     collections: StateCollections<T>,
 
     _phantom: PhantomData<(K, V, D)>,
@@ -222,6 +223,7 @@ impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             shard_id: self.shard_id.clone(),
+            seqno: self.seqno.clone(),
             collections: self.collections.clone(),
             _phantom: self._phantom.clone(),
         }
@@ -238,6 +240,7 @@ where
     pub fn new(shard_id: ShardId) -> Self {
         State {
             shard_id,
+            seqno: SeqNo::minimum(),
             collections: StateCollections {
                 writers: HashMap::new(),
                 readers: HashMap::new(),
@@ -252,20 +255,21 @@ where
         self.shard_id
     }
 
-    pub fn clone_apply<R, E, WorkFn>(
-        &self,
-        seqno: SeqNo,
-        work_fn: &mut WorkFn,
-    ) -> Result<(R, Self), E>
+    pub fn seqno(&self) -> SeqNo {
+        self.seqno
+    }
+
+    pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> Result<(R, Self), E>
     where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
     {
         let mut new_state = State {
             shard_id: self.shard_id,
+            seqno: self.seqno.next(),
             collections: self.collections.clone(),
             _phantom: PhantomData,
         };
-        let work_ret = work_fn(seqno, &mut new_state.collections)?;
+        let work_ret = work_fn(new_state.seqno, &mut new_state.collections)?;
         Ok((work_ret, new_state))
     }
 
@@ -327,6 +331,7 @@ struct StateRollupMeta {
     ts_codec: String,
     diff_codec: String,
 
+    seqno: SeqNo,
     writers: Vec<(WriterId, AntichainMeta)>,
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
     since: AntichainMeta,
@@ -383,6 +388,7 @@ mod codec_impls {
         fn from(x: &State<K, V, T, D>) -> Self {
             StateRollupMeta {
                 shard_id: x.shard_id,
+                seqno: x.seqno,
                 key_codec: K::codec_name(),
                 val_codec: V::codec_name(),
                 ts_codec: T::codec_name(),
@@ -483,6 +489,7 @@ mod codec_impls {
             };
             Ok(State {
                 shard_id: x.shard_id,
+                seqno: x.seqno,
                 collections,
                 _phantom: PhantomData,
             })

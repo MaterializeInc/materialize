@@ -18,6 +18,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures_executor::block_on;
+use mz_persist_types::Codec;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -78,8 +79,14 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, Default, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
+
+impl std::fmt::Display for SeqNo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}", self.0)
+    }
+}
 
 impl timely::PartialOrder for SeqNo {
     fn less_equal(&self, other: &Self) -> bool {
@@ -91,6 +98,11 @@ impl SeqNo {
     /// Returns the next SeqNo in the sequence.
     pub fn next(self) -> SeqNo {
         SeqNo(self.0 + 1)
+    }
+
+    /// A minimum value suitable as a default.
+    pub fn minimum() -> Self {
+        SeqNo(0)
     }
 }
 
@@ -304,6 +316,34 @@ pub struct VersionedData {
     pub seqno: SeqNo,
     /// The data itself.
     pub data: Vec<u8>,
+}
+
+impl<T: Codec> From<(SeqNo, &T)> for VersionedData {
+    fn from(x: (SeqNo, &T)) -> Self {
+        let (seqno, t) = x;
+        let mut ret = VersionedData {
+            seqno,
+            data: Vec::new(),
+        };
+        Codec::encode(t, &mut ret.data);
+        ret
+    }
+}
+
+impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
+    type Error = ExternalError;
+
+    fn try_from(x: &VersionedData) -> Result<Self, Self::Error> {
+        let t = T::decode(&x.data).map_err(|err| {
+            ExternalError::from(anyhow!(
+                "invalid {} at {}: {}",
+                T::codec_name(),
+                x.seqno,
+                err
+            ))
+        })?;
+        Ok((x.seqno, t))
+    }
 }
 
 /// An abstraction for [VersionedData] held in a location in persistent storage

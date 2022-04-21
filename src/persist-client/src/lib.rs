@@ -226,7 +226,7 @@ impl Client {
     {
         trace!("Client::open timeout={:?} shard_id={:?}", timeout, shard_id);
         let deadline = Instant::now() + timeout;
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus));
+        let mut machine = Machine::new(deadline, shard_id, Arc::clone(&self.consensus)).await?;
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
         let (write_cap, read_cap) = machine.register(deadline, &writer_id, &reader_id).await?;
         let writer = WriteHandle {
