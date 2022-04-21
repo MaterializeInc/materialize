@@ -75,11 +75,11 @@ pub struct Model {
     /// The ID of the box representing the entry-point of the query.
     pub(crate) top_box: BoxId,
     /// All boxes in the query graph model.
-    boxes: HashMap<BoxId, Box<RefCell<QueryBox>>>,
+    boxes: HashMap<BoxId, RefCell<QueryBox>>,
     /// Used for assigning unique IDs to query boxes.
     box_id_gen: Gen<BoxId>,
     /// All quantifiers in the query graph model.
-    quantifiers: HashMap<QuantifierId, Box<RefCell<Quantifier>>>,
+    quantifiers: HashMap<QuantifierId, RefCell<Quantifier>>,
     /// Used for assigning unique IDs to quantifiers.
     quantifier_id_gen: Gen<QuantifierId>,
 }
@@ -334,7 +334,7 @@ impl From<Values> for BoxType {
 impl Model {
     pub(crate) fn make_box(&mut self, box_type: BoxType) -> BoxId {
         let id = self.box_id_gen.allocate_id();
-        let b = Box::new(RefCell::new(QueryBox {
+        let b = RefCell::new(QueryBox {
             id,
             box_type,
             columns: Vec::new(),
@@ -342,7 +342,7 @@ impl Model {
             ranging_quantifiers: QuantifierSet::new(),
             distinct: DistinctOperation::Preserve,
             attributes: Attributes::new(),
-        }));
+        });
         self.boxes.insert(id, b);
         id
     }
@@ -397,13 +397,13 @@ impl Model {
         parent_box: BoxId,
     ) -> QuantifierId {
         let id = self.quantifier_id_gen.allocate_id();
-        let q = Box::new(RefCell::new(Quantifier {
+        let q = RefCell::new(Quantifier {
             id,
             quantifier_type,
             input_box,
             parent_box,
             alias: None,
-        }));
+        });
         self.quantifiers.insert(id, q);
         self.get_mut_box(parent_box).quantifiers.insert(id);
         self.get_mut_box(input_box).ranging_quantifiers.insert(id);
@@ -991,7 +991,7 @@ pub(crate) mod model_test_util {
 
     impl Model {
         /// Return an iterator over all quantifiers in the model
-        pub(crate) fn quantifiers(&self) -> impl Iterator<Item = &Box<RefCell<Quantifier>>> {
+        pub(crate) fn quantifiers(&self) -> impl Iterator<Item = &RefCell<Quantifier>> {
             self.quantifiers.values()
         }
     }
