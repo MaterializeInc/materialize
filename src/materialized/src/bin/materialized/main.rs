@@ -608,6 +608,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     )),
                     suppress_output: false,
                     process_listen_host: args.process_listen_host,
+                    data_dir: args.data_directory.clone(),
                 })
             }
         },

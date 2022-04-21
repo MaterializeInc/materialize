@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
 use mz_compute::server::Server;
+use mz_pid_file::DevelopmentPidFile;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -108,6 +110,13 @@ struct Args {
     /// The address of the HTTP profiling UI.
     #[clap(long, value_name = "HOST:PORT")]
     http_console_addr: Option<String>,
+
+    /// Where to write a pid lock file. Should only be used for local process orchestrators.
+    #[clap(long, value_name = "PATH", requires = "pid-port-metadata")]
+    pid_file_location: Option<PathBuf>,
+    /// Process port mapping for pid lock file. Should only be used for local process orchestration.
+    #[clap(long, requires = "pid-file-location")]
+    pid_port_metadata: Option<String>,
 }
 
 #[tokio::main]
@@ -234,6 +243,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
+
+    let mut _pid_file = None;
+    if let Some(pid_file_location) = &args.pid_file_location {
+        let port_metadata = args
+            .pid_port_metadata
+            .as_ref()
+            .expect("empty pid port metadata");
+        _pid_file = Some(DevelopmentPidFile::open(&pid_file_location, port_metadata).unwrap());
+    }
+
     serve(serve_config, server, client).await
 }
 

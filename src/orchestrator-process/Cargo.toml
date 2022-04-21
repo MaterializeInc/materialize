@@ -12,7 +12,11 @@ async-trait = "0.1.53"
 itertools = "0.10.3"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore" }
+mz-pid-file = { path = "../pid-file" }
 mz-stash = { path = "../stash" }
+serde = "1.0.136"
+serde_json = "1.0.79"
 scopeguard = "1.1.0"
+sysinfo = "0.23.10"
 tokio = "1.17.0"
 tracing = "0.1.34"

@@ -34,10 +34,12 @@
 
 #![warn(missing_docs)]
 
+use std::collections::HashMap;
 use std::ffi::{CString, NulError};
 use std::fmt;
-use std::fs::Permissions;
+use std::fs::{OpenOptions, Permissions};
 use std::io;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -160,6 +162,12 @@ impl From<NulError> for Error {
     }
 }
 
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -175,3 +183,48 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// An extension of `PidFile` that also stores metadata about a process' ports
+///
+/// This is not meant to be used in production, it is to help orchestrate
+/// processes on local deployments.
+pub struct DevelopmentPidFile(PidFile);
+
+/// Contents of a `DevelopmentPidFile`
+pub struct DevelopmentPidContents {
+    /// Process PID
+    pub pid: u32,
+    /// Process port mappings
+    pub port_metadata: HashMap<String, i32>,
+}
+
+impl DevelopmentPidFile {
+    /// Attempts to open and lock the specified PID file, as well as write metadata
+    /// to the file.
+    ///
+    /// If the file is already locked by another process, it returns
+    /// `Error::AlreadyRunning`.
+    pub fn open<P: AsRef<Path>>(path: P, port_metadata: &str) -> Result<DevelopmentPidFile, Error> {
+        let pid_file = PidFile::open(&path)?;
+        let mut file = OpenOptions::new().write(true).append(true).open(path)?;
+        write!(file, "\n{port_metadata}")?;
+        Ok(DevelopmentPidFile(pid_file))
+    }
+
+    /// Reads the contents of a `DevelopmentPidFile`
+    pub fn read<P: AsRef<Path>>(path: P) -> Result<DevelopmentPidContents, Error> {
+        let file = OpenOptions::new().read(true).open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let pid: u32 = lines
+            .next()
+            .expect("empty pid file")?
+            .parse()
+            .expect("malformed pid");
+        let port_metadata = match lines.next() {
+            Some(line) => serde_json::from_str(line?.as_str()).expect("malformed port metadata"),
+            None => HashMap::new(),
+        };
+        Ok(DevelopmentPidContents { pid, port_metadata })
+    }
+}

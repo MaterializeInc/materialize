@@ -148,7 +148,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             blob_uri: format!("file://{}/persist/blob", data_directory.display()),
             consensus_uri: format!("sqlite://{}/persist/consensus", data_directory.display()),
         },
-        data_directory,
+        data_directory: data_directory.clone(),
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?
@@ -162,6 +162,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
                 process_listen_host: None,
+                data_dir: data_directory,
             }),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),

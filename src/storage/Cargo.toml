@@ -40,6 +40,7 @@ mz-ore = { path = "../ore", features = ["task"] }
 mz-persist-client = { path = "../persist-client", optional = true }
 mz-persist-types = { path = "../persist-types", optional = true }
 mz-pgcopy = { path = "../pgcopy", optional = true }
+mz-pid-file = { path = "../pid-file" }
 mz-postgres-util = { path = "../postgres-util", optional = true }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
