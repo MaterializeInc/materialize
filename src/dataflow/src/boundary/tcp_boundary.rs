@@ -687,23 +687,23 @@ pub mod client {
 
             // Construct activators and replay data
             let mut ok_rx = Some(ok_rx);
-            let ok = storage_workers
+            let (ok, ok_tok) = storage_workers
                 .iter()
                 .map(|_| {
                     UnboundedEventPuller::new(ok_rx.take().unwrap_or_else(|| unbounded_channel().1))
                 })
-                .mz_replay(scope, &format!("{name}-ok"), Duration::MAX, ok_activator)
-                .as_collection();
+                .mz_replay(scope, &format!("{name}-ok"), Duration::MAX, ok_activator);
+            let ok = ok.as_collection();
             let mut err_rx = Some(err_rx);
-            let err = storage_workers
+            let (err, err_tok) = storage_workers
                 .iter()
                 .map(|_| {
                     UnboundedEventPuller::new(
                         err_rx.take().unwrap_or_else(|| unbounded_channel().1),
                     )
                 })
-                .mz_replay(scope, &format!("{name}-err"), Duration::MAX, err_activator)
-                .as_collection();
+                .mz_replay(scope, &format!("{name}-err"), Duration::MAX, err_activator);
+            let err = err.as_collection();
 
             // Construct token to unsubscribe from source
             let token = Rc::new(DropReplay {
@@ -711,7 +711,7 @@ pub mod client {
                 message: Some(Announce::Drop(source_id, scope.index(), storage_workers)),
             });
 
-            (ok, err, Rc::new(token))
+            (ok, err, Rc::new((token, ok_tok, err_tok)))
         }
     }
 

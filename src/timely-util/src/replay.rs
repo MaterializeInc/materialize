@@ -12,6 +12,8 @@
 //! This is roughly based on [timely::dataflow::operators::capture::Replay], which
 //! provides the protocol and semantics of the [MzReplay] operator.
 
+use std::any::Any;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use timely::dataflow::channels::pushers::buffer::Buffer as PushBuffer;
@@ -23,11 +25,13 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::Data;
 
+use timely::scheduling::ActivateOnDrop;
+
 use super::activator::ActivatorTrait;
 
 /// Replay a capture stream into a scope with the same timestamp.
 pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
-    /// Replays `self` into the provided scope, as a `Stream<S, D>'.
+    /// Replays `self` into the provided scope, as a `Stream<S, D>' and provides a cancelation token.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
     /// will re-activate itself every so often.
@@ -37,7 +41,7 @@ pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
         name: &str,
         perid: Duration,
         activator: A,
-    ) -> Stream<S, D>;
+    ) -> (Stream<S, D>, Rc<dyn Any>);
 }
 
 impl<T: Timestamp, D: Data, I, A: ActivatorTrait + 'static> MzReplay<T, D, A> for I
@@ -58,7 +62,7 @@ where
         name: &str,
         period: Duration,
         activator: A,
-    ) -> Stream<S, D> {
+    ) -> (Stream<S, D>, Rc<dyn Any>) {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -72,6 +76,15 @@ where
         let mut started = false;
 
         let mut last_active = Instant::now();
+
+        let mut progress_sofar =
+            timely::progress::ChangeBatch::new_from(S::Timestamp::minimum(), 1);
+        let token = Rc::new(ActivateOnDrop::new(
+            (),
+            Rc::new(address.clone()),
+            scope.activations(),
+        ));
+        let weak_token = Rc::downgrade(&token);
 
         activator.register(scope, &address[..]);
 
@@ -94,23 +107,31 @@ where
                 // our very first action.
                 progress.internals[0]
                     .update(S::Timestamp::minimum(), (event_streams.len() as i64) - 1);
+                progress_sofar.update(S::Timestamp::minimum(), (event_streams.len() as i64) - 1);
                 started = true;
             }
 
-            let mut buffer = Vec::new();
+            if weak_token.upgrade().is_some() {
+                let mut buffer = Vec::new();
 
-            for event_stream in event_streams.iter_mut() {
-                while let Some(event) = event_stream.next() {
-                    match &event {
-                        Event::Progress(vec) => {
-                            progress.internals[0].extend(vec.iter().cloned());
-                        }
-                        Event::Messages(time, data) => {
-                            buffer.extend_from_slice(data);
-                            output.session(time).give_vec(&mut buffer);
+                for event_stream in event_streams.iter_mut() {
+                    while let Some(event) = event_stream.next() {
+                        match &event {
+                            Event::Progress(vec) => {
+                                progress.internals[0].extend(vec.iter().cloned());
+                                progress_sofar.extend(vec.iter().cloned());
+                            }
+                            Event::Messages(time, data) => {
+                                buffer.extend_from_slice(data);
+                                output.session(time).give_vec(&mut buffer);
+                            }
                         }
                     }
                 }
+            } else {
+                // Negate the accumulated progress contents emitted so far.
+                progress.internals[0]
+                    .extend(progress_sofar.drain().map(|(time, diff)| (time, -diff)));
             }
 
             output.cease();
@@ -123,6 +144,6 @@ where
             false
         });
 
-        stream
+        (stream, token)
     }
 }

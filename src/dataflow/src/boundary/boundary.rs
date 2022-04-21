@@ -336,24 +336,22 @@ mod event_link {
                 boundary
             };
 
-            let ok = Some(boundary.ok.inner)
-                .mz_replay(
-                    scope,
-                    &format!("{name}-ok"),
-                    Duration::MAX,
-                    boundary.ok.activator,
-                )
-                .as_collection();
-            let err = Some(boundary.err.inner)
-                .mz_replay(
-                    scope,
-                    &format!("{name}-err"),
-                    Duration::MAX,
-                    boundary.err.activator,
-                )
-                .as_collection();
+            let (ok, ok_tok) = Some(boundary.ok.inner).mz_replay(
+                scope,
+                &format!("{name}-ok"),
+                Duration::MAX,
+                boundary.ok.activator,
+            );
+            let ok = ok.as_collection();
+            let (err, err_tok) = Some(boundary.err.inner).mz_replay(
+                scope,
+                &format!("{name}-err"),
+                Duration::MAX,
+                boundary.err.activator,
+            );
+            let err = err.as_collection();
 
-            (ok, err, boundary.token)
+            (ok, err, Rc::new((boundary.token, ok_tok, err_tok)))
         }
     }
 
