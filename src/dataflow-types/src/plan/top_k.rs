@@ -17,11 +17,18 @@
 //! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
-use mz_expr::ColumnOrder;
+#![allow(missing_docs)]
+
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use mz_expr::ColumnOrder;
+use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.top_k.rs"));
+
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -82,6 +89,35 @@ impl TopKPlan {
     }
 }
 
+impl From<&TopKPlan> for ProtoTopKPlan {
+    fn from(x: &TopKPlan) -> Self {
+        use crate::plan::top_k::proto_top_k_plan::Kind::*;
+
+        ProtoTopKPlan {
+            kind: match x {
+                TopKPlan::Basic(plan) => Some(Basic(plan.into())),
+                TopKPlan::MonotonicTop1(plan) => Some(MonotonicTop1(plan.into())),
+                TopKPlan::MonotonicTopK(plan) => Some(MonotonicTopK(plan.into())),
+            },
+        }
+    }
+}
+
+impl TryFrom<ProtoTopKPlan> for TopKPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTopKPlan) -> Result<Self, Self::Error> {
+        use crate::plan::top_k::proto_top_k_plan::Kind::*;
+
+        match x.kind {
+            Some(Basic(plan)) => Ok(TopKPlan::Basic(plan.try_into()?)),
+            Some(MonotonicTop1(plan)) => Ok(TopKPlan::MonotonicTop1(plan.try_into()?)),
+            Some(MonotonicTopK(plan)) => Ok(TopKPlan::MonotonicTopK(plan.try_into()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoTopKPlan::kind")),
+        }
+    }
+}
+
 /// A plan for monotonic TopKs with an offset of 0 and a limit of 1.
 ///
 /// If the input to a TopK is monotonic (aka append-only aka no retractions) then we
@@ -97,7 +133,7 @@ impl TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -105,8 +141,36 @@ pub struct MonotonicTop1Plan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
 }
 
+impl From<&MonotonicTop1Plan> for ProtoMonotonicTop1Plan {
+    fn from(x: &MonotonicTop1Plan) -> Self {
+        ProtoMonotonicTop1Plan {
+            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
+            order_key: x.order_key.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoMonotonicTop1Plan) -> Result<Self, Self::Error> {
+        Ok(MonotonicTop1Plan {
+            group_key: x
+                .group_key
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            order_key: x
+                .order_key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+        })
+    }
+}
+
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -119,8 +183,40 @@ pub struct MonotonicTopKPlan {
     pub arity: usize,
 }
 
+impl From<&MonotonicTopKPlan> for ProtoMonotonicTopKPlan {
+    fn from(x: &MonotonicTopKPlan) -> Self {
+        ProtoMonotonicTopKPlan {
+            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
+            order_key: x.order_key.iter().map(Into::into).collect(),
+            limit: x.limit.into_proto(),
+            arity: x.arity.into_proto(),
+        }
+    }
+}
+
+impl TryFrom<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoMonotonicTopKPlan) -> Result<Self, Self::Error> {
+        Ok(MonotonicTopKPlan {
+            group_key: x
+                .group_key
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            order_key: x
+                .order_key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            limit: Option::<usize>::from_proto(x.limit)?,
+            arity: usize::from_proto(x.arity)?,
+        })
+    }
+}
+
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -136,4 +232,54 @@ pub struct BasicTopKPlan {
     pub offset: usize,
     /// The number of columns in the input and output.
     pub arity: usize,
+}
+
+impl From<&BasicTopKPlan> for ProtoBasicTopKPlan {
+    fn from(x: &BasicTopKPlan) -> Self {
+        ProtoBasicTopKPlan {
+            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
+            order_key: x.order_key.iter().map(Into::into).collect(),
+            limit: x.limit.into_proto(),
+            offset: x.offset.into_proto(),
+            arity: x.arity.into_proto(),
+        }
+    }
+}
+
+impl TryFrom<ProtoBasicTopKPlan> for BasicTopKPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoBasicTopKPlan) -> Result<Self, Self::Error> {
+        Ok(BasicTopKPlan {
+            group_key: x
+                .group_key
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            order_key: x
+                .order_key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            limit: Option::<usize>::from_proto(x.limit)?,
+            offset: usize::from_proto(x.offset)?,
+            arity: usize::from_proto(x.arity)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn top_k_plan_protobuf_roundtrip(expect in any::<TopKPlan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoTopKPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }
