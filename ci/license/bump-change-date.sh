@@ -30,7 +30,7 @@ git pull
 sed -Ei \
     -e "s/Licensed Work:.*/Licensed Work:             Materialize Version $version_date/g" \
     -e "s/Change Date:.*/Change Date:               $change_date/g" \
-    -e "s/The Licensed Work is ¬© [0-9]{4}/The Licensed Work is ¬© $year/g" \
+    -e "s/The Licensed Work is © [0-9]{4}/The Licensed Work is © $year/g" \
     LICENSE
 git add LICENSE
 git commit -m "LICENSE: update change date"
