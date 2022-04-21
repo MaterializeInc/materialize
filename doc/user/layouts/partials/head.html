@@ -72,15 +72,15 @@ addEventListener("DOMContentLoaded", () => {
 {{/* Segment */}}
 <script>
   !function(){var analytics=window.analytics=window.analytics||[];if(!analytics.initialize)if(analytics.invoked)window.console&&console.error&&console.error("Segment snippet included twice.");else{analytics.invoked=!0;analytics.methods=["trackSubmit","trackClick","trackLink","trackForm","pageview","identify","reset","group","track","ready","alias","debug","page","once","off","on","addSourceMiddleware","addIntegrationMiddleware","setAnonymousId","addDestinationMiddleware"];analytics.factory=function(e){return function(){var t=Array.prototype.slice.call(arguments);t.unshift(e);analytics.push(t);return analytics}};for(var e=0;e<analytics.methods.length;e++){var key=analytics.methods[e];analytics[key]=analytics.factory(key)}analytics.load=function(key,e){var t=document.createElement("script");t.type="text/javascript";t.async=!0;t.src="https://cdn.segment.materialize.com/analytics.js/v1/" + key + "/analytics.min.js";var n=document.getElementsByTagName("script")[0];n.parentNode.insertBefore(t,n);analytics._loadOptions=e};analytics.SNIPPET_VERSION="4.15.3";
-  {{ if in (printf "%s" .Site.BaseURL) "preview" }}
-    {{/* Stage */}}
-    analytics._writeKey="fuo8pqI0wvoojiShBQXSZopWLZggS8ny";
-    analytics.load("fuo8pqI0wvoojiShBQXSZopWLZggS8ny");
-  {{ else if hugo.IsProduction }}
-    {{/* Prod */}}
-    analytics._writeKey="NCe6YQCHM9g04X9yEBUFtoWOuqZU8J1m";
+  {{ if hugo.IsProduction }}
+    {{/* Prod/Stage */}}
+    var SEGMENT_ID = 'NCe6YQCHM9g04X9yEBUFtoWOuqZU8J1m';
+    if(window.location.hostname.includes('preview')) {
+      SEGMENT_ID = 'fuo8pqI0wvoojiShBQXSZopWLZggS8ny';
+    }
+    analytics._writeKey=SEGMENT_ID;
     analytics._cdn="https://cdn.segment.materialize.com";
-    analytics.load("NCe6YQCHM9g04X9yEBUFtoWOuqZU8J1m");
+    analytics.load(SEGMENT_ID);
   {{ else }}
     {{/* Dev */}}
     analytics._writeKey="dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk";
