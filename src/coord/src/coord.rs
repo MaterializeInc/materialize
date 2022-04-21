@@ -1987,10 +1987,12 @@ impl Coordinator {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
 
-        self.secrets_controller.apply(vec![SecretOp::Ensure {
-            id,
-            contents: payload,
-        }])?;
+        self.secrets_controller
+            .apply(vec![SecretOp::Ensure {
+                id,
+                contents: payload,
+            }])
+            .await?;
 
         let ops = vec![catalog::Op::CreateItem {
             id,
@@ -2006,7 +2008,11 @@ impl Coordinator {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => {
-                match self.secrets_controller.apply(vec![SecretOp::Delete { id }]) {
+                match self
+                    .secrets_controller
+                    .apply(vec![SecretOp::Delete { id }])
+                    .await
+                {
                     Ok(_) => {}
                     Err(e) => {
                         warn!(
@@ -4129,10 +4135,12 @@ impl Coordinator {
 
         let payload = self.extract_secret(session, &mut secret_as)?;
 
-        self.secrets_controller.apply(vec![SecretOp::Ensure {
-            id,
-            contents: payload,
-        }])?;
+        self.secrets_controller
+            .apply(vec![SecretOp::Ensure {
+                id,
+                contents: payload,
+            }])
+            .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
@@ -4429,7 +4437,7 @@ impl Coordinator {
             .map(|id| SecretOp::Delete { id })
             .collect_vec();
 
-        match self.secrets_controller.apply(ops) {
+        match self.secrets_controller.apply(ops).await {
             Ok(_) => {}
             Err(e) => {
                 warn!("Dropping secrets has encountered an error: {}", e);

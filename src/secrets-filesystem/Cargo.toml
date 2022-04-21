@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.56"
+async-trait = "0.1.53"
 mz-secrets = { path = "../secrets" }

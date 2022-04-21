@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.56"
+async-trait = "0.1.53"
 mz-secrets = { path = "../secrets" }
 k8s-openapi = { version = "0.14.0", features = ["v1_22"] }
 kube = { version = "0.71.0", features = ["ws"] }
+tracing = "0.1.34"
