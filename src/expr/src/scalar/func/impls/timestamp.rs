@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -116,7 +117,9 @@ where
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ExtractInterval(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractInterval {
@@ -138,7 +141,9 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct DatePartInterval(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
@@ -193,7 +198,9 @@ where
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
@@ -215,7 +222,9 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
@@ -237,7 +246,9 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
@@ -259,7 +270,9 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
@@ -310,7 +323,9 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: T) -> Result
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
@@ -332,7 +347,9 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
@@ -388,7 +405,9 @@ pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> NaiveDateTime {
     utc.naive_utc() + offset
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct TimezoneTimestamp(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
@@ -410,7 +429,9 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct TimezoneTimestampTz(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {

@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -121,7 +122,9 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ExtractDate(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractDate {

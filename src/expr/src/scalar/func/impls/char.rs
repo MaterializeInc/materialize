@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -20,7 +21,9 @@ use crate::scalar::func::EagerUnaryFunc;
 /// All Char data is stored in Datum::String with its blank padding removed
 /// (i.e. trimmed), so this function provides a means of restoring any
 /// removed padding.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct PadChar {
     pub length: Option<CharLength>,
 }

@@ -10,7 +10,10 @@
 fn main() {
     prost_build::Config::new()
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
+        .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")
+        .extern_path(".mz_repr.adt.datetime", "::mz_repr::adt::datetime")
         .extern_path(".mz_repr.adt.numeric", "::mz_repr::adt::numeric")
+        .extern_path(".mz_repr.adt.varchar", "::mz_repr::adt::varchar")
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")

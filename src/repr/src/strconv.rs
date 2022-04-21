@@ -1540,7 +1540,7 @@ impl TryFrom<ProtoParseError> for ParseError {
                 details: error.details,
             })
         } else {
-            Err(TryFromProtoError::missing_field("`ProtoParseError::kind`"))
+            Err(TryFromProtoError::missing_field("ProtoParseError::kind"))
         }
     }
 }
