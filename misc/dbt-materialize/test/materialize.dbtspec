@@ -77,14 +77,15 @@ sequences:
       - type: dbt
         cmd: run
       - type: relations_equal
-        relations: [test_materialized_view, test_view_index, test_source_index]
+        relations: [test_materialized_view, test_view_index]
       - type: relations_equal
         relations: [actual_indexes, expected_indexes]
-      # TODO(benesch): figure out how to test that the sink emits the correct
-      # data. Ideally we'd just ingest the sink back into Materialize with a
-      # source and then use a `relations_equal` step, but that's hard to do
-      # presently because Avro OCF sinks do not have a stable output filename
-      # and Avro OCF sources do not support glob patterns.
+      # TODO(benesch): figure out how to test that the source/sink emit the
+      # correct data. Ideally we'd just ingest the sink back into Materialize
+      # with the source and then use `relations_equal` with
+      # `test_materialized_view`, but that doesn't work right now because you
+      # can't use `reuse_topic = true` with a sink built on a materialized view.
+      # That will get fixed soon in platform.
   # dbt-materialize does not support incremental models or snapshots
   # test_dbt_incremental: incremental
   # test_dbt_snapshot_strategy_timestamp: snapshot_strategy_timestamp
@@ -106,11 +107,6 @@ projects:
         swappable: view
   - name: custom_materializations
     paths:
-        testdata/test_csv.csv: |
-            a,b
-            chicken,pig
-            cow,horse
-
         models/test_materialized_view.sql: |
             {{ config(materialized='materializedview') }}
 
@@ -136,9 +132,8 @@ projects:
             {{ config(materialized='source') }}
 
             CREATE SOURCE {{ mz_generate_name('test_source') }}
-            -- TODO(benesch): is there a better way to get the CWD in a test?
-            FROM FILE '{{ flags.os.getcwd() }}/testdata/test_csv.csv'
-            FORMAT CSV WITH HEADER
+            FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source'
+            FORMAT BYTES
 
         models/test_index.sql: |
             {{ config(materialized='index') }}
@@ -149,19 +144,20 @@ projects:
         models/test_source_index.sql: |
             {{ config(
                 materialized='source',
-                indexes=[{'columns': ['a']}]
+                indexes=[{'columns': ['data']}]
             ) }}
 
             CREATE SOURCE {{ mz_generate_name('test_source_index') }}
-            FROM FILE '{{ flags.os.getcwd() }}/testdata/test_csv.csv'
-            FORMAT CSV WITH HEADER
+            FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source-index'
+            FORMAT BYTES
 
         models/test_sink.sql: |
             {{ config(materialized='sink') }}
 
             CREATE SINK {{ mz_generate_name('test_sink') }}
-            FROM {{ ref('test_source') }}
-            INTO AVRO OCF 'test_sink.ocf'
+            FROM {{ ref('test_materialized_view') }}
+            INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
 
         models/actual_indexes.sql: |
             SELECT
@@ -182,7 +178,6 @@ projects:
             test_materialized_view_index,1,1,
             test_source,1,1,
             test_source,2,2,
-            test_source,3,3,
             test_source_index,1,1,
             test_view_index,1,1,
             test_view_index,2,,pg_catalog.length(a)
