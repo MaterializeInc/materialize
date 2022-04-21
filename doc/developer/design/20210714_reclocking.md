@@ -99,3 +99,48 @@ The use of antichains is potentially confusing for sources.
 For example, Kakfa's (partition, offset) pairs would be frustrating with dynamically arriving parts if the part identifiers are not both ordered and starting from small identifiers.
 Otherwise, recording "these parts have not yet started" is non-trivial.
 One could use a different meaning of the antichain, for example "all records less than an antichain element", though this seems likely to be at odds with timely and differential.
+
+## Practical Addendum
+
+The goal of reclocking is to translate potentially incomparable sources into a common reckoning.
+
+One primary *motivation* is to allow us to record consistent moments between the input data and persistent data we might record ourselves.
+Reclocking provides the basis by which we can recover from a failure, read durable `remap` information and persistent collection data, and resume operation at input offsets that allow us to continue correct operation.
+
+Let's detail this for a simple case, where the input data are independent records.
+We will reclock input data, durably recording associations between `FromTime` and `IntoTime` in `remap`.
+Additionally, we will likely record a collection of the data itself, also in a collection that changes as a function of `IntoTime`.
+Imagine we ensure that we commit an output collection `IntoTime` only after that time is committed to `remap`, containing exactly those records up through its `FromTime` at the same `IntoTime`.
+At any moment, say just after a crash, we can choose the greatest `IntoTime` available in the output collection, and resume processing from the `FromTime` present in `remap` at that `IntoTime`.
+
+This is an example of how `remap`, durably recorded, introduces the basis for consistent recovery.
+
+Let's detail this for a more complicated case, where the input data are independently data and transaction metadata, the latter describing which data are in a transaction.
+We will reclock both of the inputs, although there are now multiple offsets across independent topics.
+The `remap` collection must contain all of this information: `FromTime` for each involved input.
+We would like to record `remap` and an output collection containing at each time the data up through the offsets of the reclocking collection at that time.
+However, there is additional state that we must record to recover correctly: the data and transaction metadata that are not yet complete.
+
+We can instead produce *two* output collections:
+    * A TEMP collection containing at each `IntoTime` the data and transaction records up through `remap`'s `FromTime` at this `IntoTime`, excluding any records that form a complete transaction.
+    * An output collection, containing at each `IntoTime` the data from transactions that are complete on records up through `remap`'s `FromTime` at this `IntoTime`.
+
+These *two* collections are sufficient to summarize at each `IntoTime` all of the records up through `remap`'s `FromTime` at this `IntoTime`.
+However, unlike the simpler case, the summary is not exactly the output collection, but the output collection plus some side information; "state" that we must hold on to.
+
+The above approach actually fails to provide certain appealing end-to-end consistency properties we might want of "timestamp assignment" (I intentionally avoided "reclocking").
+Above, a transaction is available at the first `IntoTime` for which it and its constituent data are available through `remap`'s `FromTime`.
+However, the transaction may occur strictly after another transaction that is not yet complete.
+We may want to change the definition of the two output collections, to respect the transaction order, to be:
+    * A TEMP collection containing at each `IntoTime` the data and transaction records up through `remap`'s `FromTime` for this `IntoTime`, excluding records accepted in to the output.
+    * An output collection, containing at each `IntoTime` the data from transactions for which all less-or-equal transactions are complete on records up through `remap`'s `FromTime` for this `IntoTime`.
+Notice how we restricted the emission of transactions to await all prior transactions completing.
+This will result in a larger TEMP collection, but an association of timestamps to transactions that respects the input order.
+
+Our recipe for "practical reclocking" is therefore:
+1. Maintain a durable collection `remap` containing `FromTime` at each `IntoTime`.
+2. For each `IntoTime` that is durable in `remap`, summarize all input records up through `remap`'s `FromTime` at that `IntoTime`.
+    a. The summary should contain an output collection of published records, varying as a function of `IntoTime`.
+    b. The summary may optionally contain auxiliary information ("state"), varying as a funtion of `IntoTime`.
+
+The summary should have the property that for any `remap`, all `it` in `IntoTime` produce identical summaries when restarted with their inputs at `remap[it]`, and their summary at `it`.
