@@ -12,10 +12,25 @@ menu:
 
 ## Syntax
 
+```sql
+FETCH [ FORWARD ] [ ALL | count ] [ FROM ] cursor_name
+  [ WITH ( option_name = option_value [, ... ] ) ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "fetch.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
+**FORWARD** | Explicit mention of default behavior. The fetch cursor always goes forward.
+**ALL** | Fetch all the available rows.
 _count_ | The number of rows to retrieve. Defaults to `1` if unspecified.
 _cursor&lowbar;name_ | The name of an open cursor.
 
@@ -42,3 +57,19 @@ rows to be returned.
 
 For [`TAIL`](/sql/tail) queries, `FETCH` by default will wait for rows to be available before returning.
 Specify a timeout of `0s` to return only rows that are immediately available.
+
+## Example
+
+Retrieve rows using `fetch`:
+```sql
+BEGIN;
+DECLARE tail_cursor CURSOR FOR TAIL t;
+
+-- Fetch with timeout
+FETCH ALL tail_cursor WITH ( timeout = '1s');
+
+-- Fetch and wait for one row without timeout
+FETCH 1 tail_cursor;
+
+COMMIT;
+```

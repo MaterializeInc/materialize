@@ -25,7 +25,19 @@ for details.
 
 ## Syntax
 
+```sql
+CREATE ROLE role_name { LOGIN | NOLOGIN | SUPERUSER | NOSUPERUSER } [ ...]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-role.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

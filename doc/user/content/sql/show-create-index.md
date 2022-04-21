@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW CREATE INDEX index_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-create-index.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

@@ -12,7 +12,19 @@ aliases:
 
 ## Syntax
 
+```sql
+SHOW COLUMNS FROM item_ref [ LIKE 'pattern' | WHERE expr]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-columns.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

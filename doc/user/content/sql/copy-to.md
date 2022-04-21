@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+COPY ( query ) TO STDOUT [ [ WITH ] ( field val [, ... ] ) ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "copy-to.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

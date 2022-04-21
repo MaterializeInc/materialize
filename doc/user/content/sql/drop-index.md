@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP INDEX [ IF EXISTS ] index_name [ CASCADE | RESTRICT ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-index.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

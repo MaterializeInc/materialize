@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP TYPE [ IF EXISTS ] data_type_name [ RESTRICT | CASCADE ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-type.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

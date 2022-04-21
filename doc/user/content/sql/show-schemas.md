@@ -11,7 +11,19 @@ instances.
 
 ## Syntax
 
+```sql
+SHOW SCHEMAS [ FROM database_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-schemas.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

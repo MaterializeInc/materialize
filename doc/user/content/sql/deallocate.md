@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+DEALLOCATE [ PREPARE ]  [ name | ALL ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "deallocate.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

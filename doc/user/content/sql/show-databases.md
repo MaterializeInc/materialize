@@ -11,7 +11,19 @@ instances.
 
 ## Syntax
 
+```sql
+SHOW DATABASES [ LIKE 'pattern' | WHERE expr ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-databases.svg" >}}
+
+</details>
+<br/>
 
 ## Details
 

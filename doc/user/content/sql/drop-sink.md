@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP SINK [ IF EXISTS ] sink_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-sink.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

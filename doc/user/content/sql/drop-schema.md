@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP SCHEMA [ IF EXISTS ] schema_name [ CASCADE | RESTRICT ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-schema.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

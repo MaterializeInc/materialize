@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+PREPARE name AS statement
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "prepare.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

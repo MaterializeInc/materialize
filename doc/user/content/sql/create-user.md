@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+CREATE USER user_name [ { LOGIN | NOLOGIN | SUPERUSER | NOSUPERUSER } [, ... ] ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-user.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
@@ -26,6 +38,14 @@ _role_name_ | A name for the role.
 
 `CREATE USER` is an alias for [`CREATE ROLE`](../create-role), except that the
 `LOGIN` option is implied if it is not explicitly specified.
+
+
+## Example
+
+Create a login user named '_super_developer_':
+```sql
+CREATE USER super_developer LOGIN SUPERUSER;
+```
 
 ## Related pages
 

@@ -10,7 +10,21 @@ menu:
 
 ## Syntax
 
+```sql
+COPY table_name [ ( column [, ... ] ) ]
+FROM STDIN
+[ [ WITH ] ( field val [, ... ] ) ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "copy-from.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
@@ -65,7 +79,7 @@ except that:
   PostgreSQL, all open unescaped quotation punctuation must have a matching
   piece of unescaped quotation punctuation or it generates an error.
 
-## Example
+## Examples
 
 ```sql
 COPY t FROM STDIN WITH (DELIMITER '|');

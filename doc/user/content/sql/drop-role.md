@@ -12,7 +12,19 @@ menu:
 
 ## Syntax
 
+```sql
+DROP ROLE [ IF EXISTS ] role_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-role.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

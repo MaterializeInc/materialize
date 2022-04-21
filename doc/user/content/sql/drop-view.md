@@ -18,7 +18,19 @@ rely on a source before you can [drop the source](../drop-source) itself. You ca
 
 ## Syntax
 
+```sql
+DROP VIEW [ IF EXISTS ] view_name [ RESTRICT | CASCADE ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-view.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

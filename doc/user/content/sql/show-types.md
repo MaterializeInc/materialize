@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW [ EXTENDED ] [ FULL ] TYPES;
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-types.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

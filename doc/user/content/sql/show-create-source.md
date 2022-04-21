@@ -10,7 +10,19 @@ menu:
 
 ## Syntax
 
+```sql
+SHOW CREATE SOURCE source_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-create-source.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

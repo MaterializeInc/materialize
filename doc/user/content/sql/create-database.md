@@ -24,7 +24,19 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
+```sql
+CREATE DATABASE [ IF NOT EXISTS ] database_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "create-database.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

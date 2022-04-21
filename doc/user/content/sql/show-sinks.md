@@ -12,7 +12,19 @@ aliases:
 
 ## Syntax
 
+```sql
+SHOW [ FULL ] SINKS [ FROM schema_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-sinks.svg" >}}
+
+</details>
+<br/>
 
 ## Details
 

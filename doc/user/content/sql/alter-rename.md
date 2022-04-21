@@ -14,7 +14,17 @@ Note that renaming schemas and databases are in development. {{% gh 3680 %}}
 
 ## Syntax
 
+```sql
+ALTER (INDEX | SINK | SOURCE | VIEW | TABLE) name RENAME TO new_name
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
 {{< diagram "alter-rename.svg" >}}
+</details>
+<br/>
 
 Field | Use
 ------|-----

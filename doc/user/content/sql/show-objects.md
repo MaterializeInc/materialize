@@ -13,7 +13,19 @@ Objects include tables, sources, views, indexes, and sinks.
 
 ## Syntax
 
+```sql
+SHOW [ EXTENDED ] [ FULL ] OBJECTS [ FROM schema_name ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-objects.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

@@ -13,7 +13,20 @@ aliases:
 
 ## Syntax
 
+```sql
+SHOW { INDEX | INDEXES | KEYS } { FROM | IN } on_name
+  [ LIKE 'pattern' | WHERE expr ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "show-index.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

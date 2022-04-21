@@ -19,7 +19,19 @@ explicitly](../drop-view) or use the **CASCADE** option.
 
 ## Syntax
 
+```sql
+DROP SOURCE [ IF EXISTS ] source_name [ RESTRICT | CASCADE ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-source.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

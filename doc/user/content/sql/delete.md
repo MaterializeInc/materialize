@@ -10,7 +10,21 @@ menu:
 
 ## Syntax
 
+```sql
+  DELETE FROM table_name [ [ AS ] alias ]
+  USING from_item [, ... ]
+  WHERE condition
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "delete-stmt.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----

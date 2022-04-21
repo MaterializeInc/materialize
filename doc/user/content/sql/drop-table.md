@@ -15,7 +15,19 @@ statements. `DROP TABLE` removes tables from your Materialize instance.
 
 ## Syntax
 
+```sql
+DROP TABLE [ IF EXISTS ] table_name [ RESTRICT | CASCADE ]
+```
+
+<br/>
+<details>
+<summary>Diagram</summary>
+<br>
+
 {{< diagram "drop-table.svg" >}}
+
+</details>
+<br/>
 
 Field | Use
 ------|-----
