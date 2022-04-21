@@ -15,7 +15,7 @@ use std::fmt::Write;
 use std::time::Duration;
 
 use askama::Template;
-use axum::response::{IntoResponse, Redirect};
+use axum::response::IntoResponse;
 use axum::routing::{self, Router};
 use cfg_if::cfg_if;
 use http::StatusCode;
