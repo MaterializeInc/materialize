@@ -183,6 +183,7 @@ where
                                 "cluster-id".into() => instance.to_string(),
                                 "type".into() => "cluster".into(),
                             },
+                            availability_zone: None,
                         },
                     )
                     .await?;

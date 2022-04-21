@@ -115,6 +115,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             cpu_limit: _,
             processes: processes_in,
             labels: _,
+            availability_zone: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);

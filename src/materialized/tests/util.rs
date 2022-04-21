@@ -180,6 +180,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         now: config.now,
         cors_allowed_origin: Origin::list([]).into(),
         replica_sizes: Default::default(),
+        availability_zones: Default::default(),
     }))?;
     let server = Server {
         inner,
