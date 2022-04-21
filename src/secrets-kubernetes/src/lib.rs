@@ -63,14 +63,13 @@ impl KubernetesSecretsController {
         let secret = KubernetesSecretsController::make_secret_with_name(name.clone());
         match secret_api.create(&PostParams::default(), &secret).await {
             Ok(_) => Ok(()),
+            Err(kube::Error::Api(e)) if e.code == 409 => {
+                info!("Secret {} already exists", name);
+                Ok(())
+            }
             Err(e) => {
-                if e.to_string().contains("AlreadyExists") {
-                    info!("Secret {} already exists", name);
-                    Ok(())
-                } else {
-                    error!("creating secret failed: {}", e);
-                    Err(e)
-                }
+                error!("creating secret failed: {}", e);
+                Err(e)
             }
         }?;
 
