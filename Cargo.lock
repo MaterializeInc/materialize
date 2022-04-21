@@ -3519,6 +3519,7 @@ version = "0.0.0"
 dependencies = [
  "askama",
  "axum",
+ "include_dir",
 ]
 
 [[package]]
@@ -3936,6 +3937,7 @@ dependencies = [
  "cfg-if",
  "headers",
  "http",
+ "include_dir",
  "lazy_static",
  "mz-build-info",
  "mz-http-util",
