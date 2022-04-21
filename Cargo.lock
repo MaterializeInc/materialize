@@ -4166,12 +4166,10 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
- "axum",
  "bincode",
  "byteorder",
  "bytes",
  "chrono",
- "clap",
  "crossbeam-channel",
  "csv-core",
  "dec",
@@ -4186,7 +4184,6 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
- "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
@@ -4197,7 +4194,6 @@ dependencies = [
  "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
- "mz-prof",
  "mz-repr",
  "mz-timely-util",
  "postgres-protocol",
@@ -4213,7 +4209,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-byteorder",
@@ -4221,8 +4216,6 @@ dependencies = [
  "tokio-serde",
  "tokio-util 0.7.1",
  "tracing",
- "tracing-subscriber",
- "url",
  "uuid",
 ]
 
@@ -5944,6 +5937,29 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "storaged"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "futures",
+ "mz-build-info",
+ "mz-dataflow-types",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-prof",
+ "mz-storage",
+ "serde",
+ "tikv-jemallocator",
+ "timely",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
 
 [[package]]
 name = "streaming-decompression"
