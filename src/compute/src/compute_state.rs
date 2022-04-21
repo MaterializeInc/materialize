@@ -414,41 +414,41 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         }
 
         // Install traces as maintained indexes
-        for (log, trace) in t_traces {
+        for (log, (trace, token)) in t_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
             logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in r_traces {
+        for (log, (trace, token)) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
             logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in d_traces {
+        for (log, (trace, token)) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
             logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
-        for (log, trace) in m_traces {
+        for (log, (trace, token)) in m_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
