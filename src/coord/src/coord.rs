@@ -130,8 +130,8 @@ use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, ComputeInstanceConfig,
+    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterSecretPlan, ComputeInstanceConfig,
     ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateConnectorPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
@@ -1380,7 +1380,6 @@ impl Coordinator {
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
-                    | Statement::AlterCluster(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::CreateConnector(_)
                     | Statement::CreateDatabase(_)
@@ -1746,9 +1745,6 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::AlterComputeInstance(plan) => {
-                tx.send(self.sequence_alter_compute_instance(plan).await, session);
-            }
             Plan::AlterItemRename(plan) => {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
@@ -2003,80 +1999,6 @@ impl Coordinator {
             }
             Err(err) => Err(err),
         }
-    }
-
-    async fn sequence_alter_compute_instance(
-        &mut self,
-        plan: AlterComputeInstancePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let instance = self.catalog.state().get_compute_instance(plan.id);
-        let old_config = instance.config.clone();
-
-        let config =
-            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
-        let ops = vec![catalog::Op::UpdateComputeInstanceConfig {
-            id: plan.id,
-            config,
-        }];
-        let mut replicas_to_remove = vec![];
-        let mut replicas_to_add = vec![];
-        self.catalog_transact(ops, |tx| {
-            let new_config = &tx.catalog.get_compute_instance(plan.id).config;
-            match (old_config, new_config) {
-                (
-                    InstanceConfig::Remote {
-                        replicas: old_replicas,
-                    },
-                    InstanceConfig::Remote {
-                        replicas: new_replicas,
-                    },
-                ) => {
-                    for (name, old_hosts) in &old_replicas {
-                        match new_replicas.get(name) {
-                            None => replicas_to_remove.push(name.clone()),
-                            Some(new_hosts) => {
-                                if old_hosts != new_hosts {
-                                    coord_bail!("cannot change definition of existing replica");
-                                }
-                            }
-                        }
-                    }
-                    for (name, new_hosts) in new_replicas {
-                        if !old_replicas.contains_key(name) {
-                            replicas_to_add.push((name.clone(), new_hosts.clone()));
-                        }
-                    }
-                    Ok(())
-                }
-                (
-                    InstanceConfig::Managed {
-                        size_config: old_size,
-                    },
-                    InstanceConfig::Managed {
-                        size_config: new_size,
-                    },
-                ) => {
-                    if old_size != *new_size {
-                        coord_bail!("cannot yet change size of cluster");
-                    }
-                    Ok(())
-                }
-                _ => coord_bail!("cannot change type of existing cluster"),
-            }
-        })
-        .await?;
-        // TODO(benesch,mcsherry): move this logic into the controller.
-        let mut compute_instance = self.dataflow_client.compute_mut(plan.id).unwrap();
-        for name in replicas_to_remove {
-            compute_instance.remove_replica(&name);
-        }
-        for (name, hosts) in replicas_to_add {
-            use mz_dataflow_types::client::{ComputeClient, RemoteClient};
-            let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-            let client: Box<dyn ComputeClient<_>> = Box::new(client);
-            compute_instance.add_replica(name, client).await;
-        }
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
     }
 
     async fn sequence_create_secret(

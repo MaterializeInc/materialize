@@ -709,8 +709,8 @@ pub struct Role {
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstance {
     pub name: String,
-    pub id: ComputeInstanceId,
     pub config: InstanceConfig,
+    pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
@@ -2245,10 +2245,6 @@ impl Catalog {
                 to_name: QualifiedObjectName,
                 to_item: CatalogItem,
             },
-            UpdateComputeInstanceConfig {
-                id: ComputeInstanceId,
-                config: InstanceConfig,
-            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -2538,20 +2534,6 @@ impl Catalog {
                         to_item,
                     }]
                 }
-                Op::UpdateComputeInstanceConfig { id, config } => {
-                    tx.update_compute_instance_config(id, &config)?;
-                    let config = match config {
-                        ConcreteComputeInstanceConfig::Remote {
-                            replicas,
-                            introspection: _,
-                        } => InstanceConfig::Remote { replicas },
-                        ConcreteComputeInstanceConfig::Managed {
-                            size_config,
-                            introspection: _,
-                        } => InstanceConfig::Managed { size_config },
-                    };
-                    vec![Action::UpdateComputeInstanceConfig { id, config }]
-                }
             });
         }
 
@@ -2757,10 +2739,6 @@ impl Catalog {
                     schema.items.insert(new_entry.name().item.clone(), id);
                     state.entry_by_id.insert(id, new_entry.clone());
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
-                }
-
-                Action::UpdateComputeInstanceConfig { id, config } => {
-                    state.compute_instances_by_id.get_mut(&id).unwrap().config = config;
                 }
             }
         }
@@ -3022,10 +3000,6 @@ pub enum Op {
     UpdateItem {
         id: GlobalId,
         to_item: CatalogItem,
-    },
-    UpdateComputeInstanceConfig {
-        id: ComputeInstanceId,
-        config: ConcreteComputeInstanceConfig,
     },
 }
 

@@ -128,7 +128,6 @@ pub fn describe(
         Statement::AlterObjectRename(stmt) => Some(ddl::describe_alter_object_rename(&scx, stmt)?),
         Statement::AlterIndex(stmt) => Some(ddl::describe_alter_index_options(&scx, stmt)?),
         Statement::AlterSecret(stmt) => Some(ddl::describe_alter_secret_options(&scx, stmt)?),
-        Statement::AlterCluster(stmt) => Some(ddl::describe_alter_cluster(&scx, stmt)?),
 
         // `SHOW` statements.
         Statement::ShowCreateTable(stmt) => Some(show::describe_show_create_table(&scx, stmt)?),
@@ -344,10 +343,6 @@ pub fn plan(
         stmt @ Statement::AlterSecret(_) => {
             let (stmt, _) = resolve_stmt!(Statement::AlterSecret, scx, stmt);
             ddl::plan_alter_secret(scx, stmt)
-        }
-        stmt @ Statement::AlterCluster(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::AlterCluster, scx, stmt);
-            ddl::plan_alter_cluster(scx, stmt)
         }
 
         // DML statements.

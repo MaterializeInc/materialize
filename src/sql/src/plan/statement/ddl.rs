@@ -57,20 +57,20 @@ use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarT
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
-    AlterClusterStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AvroSchema, ClusterOption, ColumnOption, Compression,
-    CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
-    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
-    CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
-    DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
-    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption,
+    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
+    AvroSchema, ClusterOption, ColumnOption, Compression, CreateClusterStatement,
+    CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector, CreateSinkStatement,
+    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto,
+    CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, Op,
+    ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::connectors::populate_connectors;
@@ -86,14 +86,14 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan,
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, Connector,
-    CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
-    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceConfig,
+    ComputeInstanceIntrospectionConfig, Connector, CreateComputeInstancePlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table,
+    Type, View,
 };
 use crate::pure::Schema;
 
@@ -3467,38 +3467,6 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
-}
-
-pub fn describe_alter_cluster(
-    _: &StatementContext,
-    _: &AlterClusterStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_cluster(
-    scx: &StatementContext,
-    AlterClusterStatement {
-        name,
-        if_exists,
-        options,
-    }: AlterClusterStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
-    let id = match scx.resolve_compute_instance(Some(&name)) {
-        Ok(instance) => instance.id(),
-        Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this
-            // item does not exist.
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Cluster,
-            }));
-        }
-        Err(err) => return Err(err.into()),
-    };
-    Ok(Plan::AlterComputeInstance(AlterComputeInstancePlan {
-        id,
-        config: plan_cluster_options(options)?,
-    }))
 }
 
 struct DependsOnCollector {

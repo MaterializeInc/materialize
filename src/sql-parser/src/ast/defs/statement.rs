@@ -53,7 +53,6 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
-    AlterCluster(AlterClusterStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement<T>),
     DropSchema(DropSchemaStatement<T>),
@@ -112,7 +111,6 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
-            Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -1046,33 +1044,6 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
-
-/// `ALTER CLUSTER ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterStatement<T: AstInfo> {
-    /// Name of the cluster to alter.
-    pub name: Ident,
-    /// Whether the `IF EXISTS` clause was specified.
-    pub if_exists: bool,
-    /// The comma-separated options.
-    pub options: Vec<ClusterOption<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER CLUSTER ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if !self.options.is_empty() {
-            f.write_str(" ");
-            f.write_node(&display::comma_separated(&self.options));
-        }
-    }
-}
-
-impl_display_t!(AlterClusterStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {

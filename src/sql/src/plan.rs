@@ -107,7 +107,6 @@ pub enum Plan {
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
     AlterNoop(AlterNoopPlan),
-    AlterComputeInstance(AlterComputeInstancePlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
@@ -364,12 +363,6 @@ pub struct ReadThenWritePlan {
 #[derive(Debug)]
 pub struct AlterNoopPlan {
     pub object_type: ObjectType,
-}
-
-#[derive(Debug)]
-pub struct AlterComputeInstancePlan {
-    pub id: ComputeInstanceId,
-    pub config: ComputeInstanceConfig,
 }
 
 #[derive(Debug)]

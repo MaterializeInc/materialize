@@ -1304,27 +1304,6 @@ CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('hos
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
 
 parse-statement
-ALTER CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
-----
-ALTER CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
-=>
-AlterCluster(AlterClusterStatement { name: Ident("cluster"), if_exists: false, options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
-
-parse-statement
-ALTER CLUSTER cluster SIZE 'small'
-----
-ALTER CLUSTER cluster SIZE 'small'
-=>
-AlterCluster(AlterClusterStatement { name: Ident("cluster"), if_exists: false, options: [Size(Value(String("small")))] })
-
-parse-statement
-ALTER CLUSTER cluster RENAME TO cluster2
-----
-error: Expected one of REMOTE or SIZE or INTROSPECTION, found RENAME
-ALTER CLUSTER cluster RENAME TO cluster2
-                      ^
-
-parse-statement
 DROP CLUSTER cluster
 ----
 DROP CLUSTER cluster

@@ -2986,18 +2986,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self
-            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET, CLUSTER])?
-        {
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            VIEW => ObjectType::View,
-            TABLE => ObjectType::Table,
-            INDEX => return self.parse_alter_index(),
-            SECRET => return self.parse_alter_secret(),
-            CLUSTER => return self.parse_alter_cluster(),
-            _ => unreachable!(),
-        };
+        let object_type =
+            match self.expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET])? {
+                SINK => ObjectType::Sink,
+                SOURCE => ObjectType::Source,
+                VIEW => ObjectType::View,
+                TABLE => ObjectType::Table,
+                INDEX => return self.parse_alter_index(),
+                SECRET => return self.parse_alter_secret(),
+                _ => unreachable!(),
+            };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_raw_name()?;
@@ -3086,23 +3084,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
-    }
-
-    fn parse_alter_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_identifier()?;
-
-        let _ = self.parse_keyword(WITH);
-        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-            vec![]
-        } else {
-            self.parse_comma_separated(Parser::parse_cluster_option)?
-        };
-        Ok(Statement::AlterCluster(AlterClusterStatement {
-            name,
-            if_exists,
-            options,
-        }))
     }
 
     /// Parse a copy statement
