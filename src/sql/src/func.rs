@@ -2962,6 +2962,9 @@ lazy_static! {
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep(func::Sleep), oid::FUNC_MZ_SLEEP_OID;
             },
+            "mz_panic" => Scalar {
+                params!(String) => UnaryFunc::Panic(func::Panic), oid::FUNC_MZ_PANIC_OID;
+            },
             "mz_type_name" => Scalar {
                 params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName), oid::FUNC_MZ_TYPE_NAME;
             }

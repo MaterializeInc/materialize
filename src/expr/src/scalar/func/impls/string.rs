@@ -709,3 +709,11 @@ impl fmt::Display for RegexpMatch {
         write!(f, "regexp_match[{}]", self.0.as_str())
     }
 }
+
+sqlfunc!(
+    #[sqlname = "mz_panic"]
+    fn panic<'a>(a: &'a str) -> String {
+        print!("{}", a);
+        panic!("{}", a)
+    }
+);

@@ -3436,6 +3436,7 @@ derive_unary!(
     Exp,
     ExpNumeric,
     Sleep,
+    Panic,
     RescaleNumeric,
     PgColumnSize,
     MzRowSize,
@@ -3666,6 +3667,7 @@ impl Arbitrary for UnaryFunc {
             Exp::arbitrary().prop_map_into(),
             ExpNumeric::arbitrary().prop_map_into(),
             Sleep::arbitrary().prop_map_into(),
+            Panic::arbitrary().prop_map_into(),
             RescaleNumeric::arbitrary().prop_map_into(),
             PgColumnSize::arbitrary().prop_map_into(),
             MzRowSize::arbitrary().prop_map_into(),
@@ -3905,6 +3907,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::Exp(_) => Exp(()),
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
+            UnaryFunc::Panic(_) => Panic(()),
             UnaryFunc::RescaleNumeric(func) => RescaleNumeric((&func.0).into()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
@@ -4173,6 +4176,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 Exp(()) => Ok(impls::Exp.into()),
                 ExpNumeric(()) => Ok(impls::ExpNumeric.into()),
                 Sleep(()) => Ok(impls::Sleep.into()),
+                Panic(()) => Ok(impls::Panic.into()),
                 RescaleNumeric(max_scale) => {
                     Ok(impls::RescaleNumeric(max_scale.try_into()?).into())
                 }
