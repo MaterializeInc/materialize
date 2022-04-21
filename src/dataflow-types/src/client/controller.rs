@@ -254,7 +254,6 @@ where
     T: Timestamp + Lattice,
 {
     pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let mut storage_alive = true;
         loop {
             let mut compute_stream: StreamMap<_, _> = self
                 .compute
@@ -301,7 +300,7 @@ where
                         }
                     }
                 }
-                response = self.storage_controller.recv(), if storage_alive => {
+                response = self.storage_controller.recv() => {
                     match response? {
                         Some(StorageResponse::TimestampBindings(feedback)) => {
                             // Order is important here. We must durably record
@@ -318,7 +317,7 @@ where
                         Some(StorageResponse::LinearizedTimestamps(res)) => {
                             return Ok(Some(ControllerResponse::LinearizedTimestamps(res)));
                         }
-                        None => storage_alive = false,
+                        None => (),
                     }
                 }
                 else => return Ok(None),
