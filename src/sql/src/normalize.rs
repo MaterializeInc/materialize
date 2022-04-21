@@ -492,9 +492,22 @@ macro_rules! with_option_type {
         match $name {
             Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
             Some(crate::ast::WithOptionValue::ObjectName(name)) => {
-                crate::ast::display::AstDisplay::to_ast_string(&name)
+                // TODO[btv]
+                //
+                // This is a hack to allow unquoted with options; e.g., `WITH foo=bar` instead of `WITH foo="bar"`.
+                // Despite it being an object name, it makes no sense for it to have more than one component.
+                //
+                // We would like to make this `WithOptionValue` variant take an ident,
+                // not an object name; the only reason we can't do that yet is because the "tx_metadata" WITH option
+                // actually genuinely needs an object name, but that is probably being promoted to syntax soon.
+                //
+                // Once we do that, we can simplify this code.
+                if name.0.len() != 1 {
+                    ::anyhow::bail!("expected String or bare identifier")
+                }
+                name.0.into_iter().next().unwrap().into_string()
             }
-            _ => ::anyhow::bail!("expected String"),
+            _ => ::anyhow::bail!("expected String or bare identifier"),
         }
     };
     ($name:expr, bool) => {
