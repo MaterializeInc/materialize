@@ -9,13 +9,8 @@
 
 //! HTTP endpoints for the homepage and static files.
 
-use std::path::Path;
-
 use askama::Template;
-use axum::extract::Path as RequestPath;
 use axum::response::IntoResponse;
-use axum::TypedHeader;
-use headers::ContentType;
 use http::StatusCode;
 #[cfg(feature = "dev-web")]
 use tracing::debug;

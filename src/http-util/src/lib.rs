@@ -23,11 +23,11 @@ where
 #[macro_export]
 macro_rules! make_handle_static {
     ($static_dir:expr, $prod_base_path:expr, $dev_base_path:expr) => {      
-        pub async fn handle_static(path: RequestPath<String>) -> impl IntoResponse {
+        pub async fn handle_static(path: axum::extract::Path<String>) -> impl IntoResponse {
             let path = path.strip_prefix('/').unwrap_or(&path);
-            let content_type = match Path::new(path).extension().and_then(|e| e.to_str()) {
-                Some("js") => Some(TypedHeader(ContentType::from(mime::TEXT_JAVASCRIPT))),
-                Some("css") => Some(TypedHeader(ContentType::from(mime::TEXT_CSS))),
+            let content_type = match std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+                Some("js") => Some(axum::TypedHeader(headers::ContentType::from(mime::TEXT_JAVASCRIPT))),
+                Some("css") => Some(axum::TypedHeader(headers::ContentType::from(mime::TEXT_CSS))),
                 None | Some(_) => None,
             };
             match get_static_file(path) {
@@ -62,7 +62,7 @@ macro_rules! make_handle_static {
             match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
                 Ok(contents) => Some(contents),
                 Err(e) => {
-                    debug!("dev-web failed to load static file: {}: {}", path, e);
+                    tracing::debug!("dev-web failed to load static file: {}: {}", path, e);
                     None
                 }
             }

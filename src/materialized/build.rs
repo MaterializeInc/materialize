@@ -9,8 +9,6 @@
 
 use std::env;
 
-mod npm;
-
 fn main() -> Result<(), anyhow::Error> {
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
 
@@ -18,5 +16,5 @@ fn main() -> Result<(), anyhow::Error> {
         .file("src/bin/materialized/sys.c")
         .compile("materialized_sys");
 
-    npm::ensure()
+    mz_npm::ensure()
 }

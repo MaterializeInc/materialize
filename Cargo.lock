@@ -2842,7 +2842,6 @@ version = "0.26.1-dev"
 dependencies = [
  "anyhow",
  "askama",
- "askama_shared",
  "assert_cmd",
  "async-trait",
  "atty",
@@ -2860,11 +2859,9 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "fallible-iterator",
- "flate2",
  "futures",
  "headers",
  "hex",
- "hex-literal",
  "http",
  "http-body",
  "hyper",
@@ -2884,6 +2881,7 @@ dependencies = [
  "mz-http-proxy",
  "mz-http-util",
  "mz-kafka-util",
+ "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
@@ -2921,11 +2919,9 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2",
  "shell-words",
  "sysctl",
  "sysinfo",
- "tar",
  "tempfile",
  "thiserror",
  "tikv-jemallocator",
@@ -2942,7 +2938,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -3675,6 +3670,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-npm"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "askama_shared",
+ "cc",
+ "flate2",
+ "hex",
+ "hex-literal",
+ "reqwest",
+ "sha2",
+ "tar",
+ "walkdir",
+]
+
+[[package]]
 name = "mz-orchestrator"
 version = "0.0.0"
 dependencies = [
@@ -3939,8 +3950,10 @@ dependencies = [
  "http",
  "include_dir",
  "lazy_static",
+ "mime",
  "mz-build-info",
  "mz-http-util",
+ "mz-npm",
  "pprof",
  "serde",
  "tempfile",
