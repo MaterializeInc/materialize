@@ -63,12 +63,13 @@ pub fn construct<A: Allocate>(
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         use differential_dataflow::collection::AsCollection;
 
-        let logs = Some(linked).mz_replay(
+        let (logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator,
         );
+        std::mem::forget(token);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 

@@ -51,12 +51,13 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let logs = Some(linked).mz_replay(
+        let (logs, token) = Some(linked).mz_replay(
             scope,
             "timely logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator,
         );
+        std::mem::forget(token);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 

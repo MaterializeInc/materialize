@@ -49,12 +49,13 @@ pub fn construct<A: Allocate>(
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let logs = Some(linked).mz_replay(
+        let (logs, token) = Some(linked).mz_replay(
             scope,
             "differential logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator,
         );
+        std::mem::forget(token);
 
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());

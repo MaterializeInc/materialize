@@ -91,12 +91,13 @@ pub fn construct<A: Allocate>(
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: mz logging", move |scope| {
-        let compute_logs = Some(compute).mz_replay(
+        let (compute_logs, token) = Some(compute).mz_replay(
             scope,
             "materialized logs",
             Duration::from_nanos(config.granularity_ns as u64),
             activator.clone(),
         );
+        std::mem::forget(token);
 
         let mut demux = OperatorBuilder::new(
             "Materialize Compute Logging Demux".to_string(),
