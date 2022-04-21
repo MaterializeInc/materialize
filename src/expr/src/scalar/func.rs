@@ -3132,7 +3132,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
                 PowerNumeric(()) => Ok(BinaryFunc::PowerNumeric),
             }
         } else {
-            Err(TryFromProtoError::missing_field("`ProtoBinaryFunc::kind`"))
+            Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
         }
     }
 }
@@ -4064,7 +4064,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 MzTypeName(_) => todo!(),
             }
         } else {
-            Err(TryFromProtoError::missing_field("`ProtoUnaryFunc::kind`"))
+            Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
         }
     }
 }

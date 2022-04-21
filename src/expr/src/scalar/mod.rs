@@ -1190,7 +1190,7 @@ impl TryFrom<ProtoDomainLimit> for DomainLimit {
                 Exclusive(v) => Ok(DomainLimit::Exclusive(v)),
             }
         } else {
-            Err(TryFromProtoError::missing_field("`ProtoDomainLimit::kind`"))
+            Err(TryFromProtoError::missing_field("ProtoDomainLimit::kind"))
         }
     }
 }
@@ -1638,8 +1638,8 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),
                 ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v)),
                 OutOfDomain(v) => Ok(EvalError::OutOfDomain(
-                    v.lower.try_into_if_some("`ProtoDomainLimit::lower`")?,
-                    v.upper.try_into_if_some("`ProtoDomainLimit::upper`")?,
+                    v.lower.try_into_if_some("ProtoDomainLimit::lower")?,
+                    v.upper.try_into_if_some("ProtoDomainLimit::upper")?,
                     v.id,
                 )),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v)),
@@ -1666,7 +1666,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
             },
-            None => Err(TryFromProtoError::missing_field("`ProtoEvalError::kind`")),
+            None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
     }
 }
