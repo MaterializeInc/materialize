@@ -23,16 +23,13 @@ reclocked mappings to end users.
 
 We define a **reclockable** source type as one where the upstream system
 provides a useful [gauge of progress](20210714_reclocking.md#description).
-The following source types are reclockable:
+At the time of writing, all source types are reclockable:
 
 * Kafka
 * Kinesis
 * PostgreSQL
-* S3
-
-The following sources types are nonreclockable:
-
 * PubNub
+* S3
 
 ### Storage layer implementation
 
@@ -52,6 +49,7 @@ The type of the `remap` collection depends on the source type:
 | Kafka       | `partition: i32`     | `offset_increment: i64`       |
 | Kinesis     | `shard: i64`         | `sequence_increment: numeric` |
 | PostgreSQL  | `ignored: ()`        | `lsn_increment: i64`          |
+| PubNub      | `region: u32`        | `timetoken_ns_increment: i64` |
 | S3          | `object_key: text`   | `byte_offset_increment: i64`  |
 
 The `remap` collection exists in the Materialize time domain, where a `u64`
@@ -194,6 +192,12 @@ type of the source:
   | mz_timestamp | lsn |
   |--------------|-----|
   | ...          | ... |
+
+* PubNub sources
+
+  | mz_timestamp | region | timetoken |
+  |--------------|--------|-----------|
+  | ...          | ...    | ...       |
 
 * S3 sources
 
