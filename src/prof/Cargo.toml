@@ -20,9 +20,11 @@ mz-http-util = { path = "../http-util" }
 pprof = "0.7.0"
 serde = { version = "1.0.136", features = ["derive"] }
 tempfile = "3.2.0"
-tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 tokio = { version = "1.17.0", features = ["time"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 
 [features]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["tikv-jemalloc-ctl"]
+jemalloc = ["dep:tikv-jemalloc-ctl"]

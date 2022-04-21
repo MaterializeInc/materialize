@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::{collections::HashMap, ffi::c_void, time::Instant};
 
 pub mod http;
-#[cfg(feature = "jemalloc")]
+#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 pub mod jemalloc;
 pub mod time;
 

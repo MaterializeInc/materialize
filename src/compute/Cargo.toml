@@ -77,10 +77,14 @@ uuid = { version = "0.8.2", features = ["serde", "v4"] }
 # (Namely: if the application relies on new threads not being created for whatever reason)
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 
 [build-dependencies]
 prost-build = { version = "0.10.1", features = ["vendored"] }
+
+[features]
+default = ["jemalloc"]
+jemalloc = ["dep:tikv-jemallocator", "mz-prof/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

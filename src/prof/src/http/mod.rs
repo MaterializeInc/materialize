@@ -25,7 +25,7 @@ use mz_build_info::BuildInfo;
 use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
-    if #[cfg(target_os = "macos")] {
+    if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
         use disabled::{handle_get, handle_post};
     } else {
         use enabled::{handle_get, handle_post};
@@ -84,7 +84,7 @@ struct FlamegraphTemplate<'a> {
 async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
-        if #[cfg(target_os = "macos")] {
+        if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
             ctl_lock = ();
         } else {
             ctl_lock = if let Some(ctl) = crate::jemalloc::PROF_CTL.as_ref() {
@@ -148,7 +148,7 @@ fn flamegraph(
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", not(feature = "jemalloc")))]
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
@@ -199,7 +199,7 @@ mod disabled {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 mod enabled {
     use std::borrow::Cow;
     use std::fmt::Write;

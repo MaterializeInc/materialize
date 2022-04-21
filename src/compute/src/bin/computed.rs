@@ -38,7 +38,7 @@ use mz_compute::server::Server;
 // [0]: https://github.com/jemalloc/jemalloc/issues/26
 // [1]: https://github.com/jemalloc/jemalloc/issues/843
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
