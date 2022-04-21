@@ -522,13 +522,15 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
-                .create_instance(
-                    instance.id,
-                    instance.config.clone(),
-                    instance.logging.clone(),
-                )
+                .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
+            for (_replica_name, config) in &instance.replicas {
+                self.dataflow_client
+                    .add_replica_to_instance(instance.id, config.clone())
+                    .await
+                    .unwrap();
+            }
         }
 
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
@@ -1987,14 +1989,12 @@ impl Coordinator {
                     .catalog
                     .resolve_compute_instance(&plan.name)
                     .expect("compute instance must exist after creation");
-                self.dataflow_client
-                    .create_instance(
-                        instance.id,
-                        instance.config.clone(),
-                        instance.logging.clone(),
-                    )
-                    .await
-                    .unwrap();
+                for (_replica_name, config) in &instance.replicas {
+                    self.dataflow_client
+                        .add_replica_to_instance(instance.id, config.clone())
+                        .await
+                        .unwrap();
+                }
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
             }
             Err(err) => Err(err),

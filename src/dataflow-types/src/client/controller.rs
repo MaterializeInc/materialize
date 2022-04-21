@@ -149,13 +149,30 @@ where
     pub async fn create_instance(
         &mut self,
         instance: ComputeInstanceId,
-        config: InstanceConfig,
         logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
         // Insert a new compute instance controller.
         self.compute.insert(
             instance,
             compute::ComputeControllerState::new(&logging).await?,
+        );
+
+        Ok(())
+    }
+
+    /// Adds replicas of an instance.
+    ///
+    /// # Panics
+    /// - If the identified `instance` has not yet been created via
+    ///   [`Self::create_instance`].
+    pub async fn add_replica_to_instance(
+        &mut self,
+        instance: ComputeInstanceId,
+        config: InstanceConfig,
+    ) -> Result<(), anyhow::Error> {
+        assert!(
+            self.compute.contains_key(&instance),
+            "call Controller::create_instance before calling add_replica_to_instance"
         );
 
         // Add replicas backing that instance.

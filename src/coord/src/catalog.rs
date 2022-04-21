@@ -454,14 +454,16 @@ impl CatalogState {
                 })
             }
         };
+        let mut replicas = HashMap::with_capacity(1);
+        replicas.insert(name.clone(), config);
         self.compute_instances_by_id.insert(
             id,
             ComputeInstance {
                 name: name.clone(),
-                config,
                 id,
                 indexes: HashSet::new(),
                 logging,
+                replicas,
             },
         );
         self.compute_instances_by_name.insert(name, id);
@@ -709,11 +711,11 @@ pub struct Role {
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstance {
     pub name: String,
-    pub config: InstanceConfig,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
+    pub replicas: HashMap<String, InstanceConfig>,
 }
 
 #[derive(Clone, Debug)]
