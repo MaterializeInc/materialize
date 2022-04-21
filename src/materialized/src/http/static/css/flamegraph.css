@@ -1,0 +1,53 @@
+/* Copyright Materialize, Inc. and contributors. All rights reserved.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the LICENSE file.
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0.
+ */
+
+body {
+    font-family: verdana, sans-serif;
+    padding-bottom: 22px;
+}
+
+h1 {
+    font-size: 18px;
+    margin: 0;
+}
+
+button, form {
+    display: inline;
+}
+
+.separator {
+  display: inline-block;
+  width: 60px;
+}
+
+#wrapper {
+    margin: 0 auto;
+    width: 960px;
+}
+
+#header {
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+}
+
+#details {
+    background: #fff;
+    border-top: 1px solid #ccc;
+    bottom: 0;
+    font-size: 12px;
+    line-height: 12px;
+    height: 12px;
+    padding: 5px;
+    position: fixed;
+    width: 950px;
+}
