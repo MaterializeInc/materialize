@@ -15,9 +15,11 @@ fn main() {
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
+        .type_attribute(".", "#[allow(missing_docs)]")
         .compile_protos(
             &[
                 "expr/src/id.proto",
+                "expr/src/relation.proto",
                 "expr/src/scalar.proto",
                 "expr/src/scalar/func.proto",
             ],

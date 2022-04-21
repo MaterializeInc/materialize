@@ -15,6 +15,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -22,6 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::proto::{ProtoRepr, TryFromProtoError};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -35,6 +37,8 @@ use crate::{
 pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
+
+include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.rs"));
 
 /// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
 ///
@@ -1440,13 +1444,33 @@ impl VisitChildren for MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
     /// Whether to sort in descending order.
     #[serde(default)]
     pub desc: bool,
+}
+
+impl From<&ColumnOrder> for ProtoColumnOrder {
+    fn from(x: &ColumnOrder) -> Self {
+        ProtoColumnOrder {
+            column: x.column.into_proto(),
+            desc: x.desc,
+        }
+    }
+}
+
+impl TryFrom<ProtoColumnOrder> for ColumnOrder {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoColumnOrder) -> Result<Self, Self::Error> {
+        Ok(ColumnOrder {
+            column: usize::from_proto(x.column)?,
+            desc: x.desc,
+        })
+    }
 }
 
 impl fmt::Display for ColumnOrder {
@@ -1947,4 +1971,20 @@ where
         }
     }
     tiebreaker()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
+            let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }

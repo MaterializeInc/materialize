@@ -39,6 +39,7 @@ pub use linear::{
 pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
+pub use relation::ProtoColumnOrder;
 pub use relation::{
     compare_columns, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
     MirRelationExpr, RowSetFinishing, RECURSION_LIMIT,
