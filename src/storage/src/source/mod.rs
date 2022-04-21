@@ -176,7 +176,9 @@ where
         .map(Self)
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         match self.0.get_next_message()? {
             NextMessage::Ready(SourceMessage {
                 key: _,
@@ -357,6 +359,21 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
     }
 }
 
+/// A structured error for `SourceReader::get_next_message`
+/// implementors. Also implements `From<anyhow::Error>`
+/// for convenience.
+pub(crate) struct SourceReaderError {
+    pub inner: SourceErrorDetails,
+}
+
+impl From<anyhow::Error> for SourceReaderError {
+    fn from(e: anyhow::Error) -> Self {
+        SourceReaderError {
+            inner: SourceErrorDetails::Other(format!("{}", e)),
+        }
+    }
+}
+
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.
 ///
@@ -391,7 +408,9 @@ pub(crate) trait SourceReader {
     ///
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error>;
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError>;
 }
 
 pub(crate) enum NextMessage<Key, Value> {
@@ -1005,7 +1024,10 @@ where
                     }
                     Ok(NextMessage::Finished) => (SourceStatus::Done, MessageProcessing::Stopped),
                     Err(e) => {
-                        output.session(&cap).give(Err(e.to_string()));
+                        output.session(&cap).give(Err(SourceError {
+                            source_id: id,
+                            error: e.inner,
+                        }));
                         (SourceStatus::Done, MessageProcessing::Stopped)
                     }
                 };
@@ -1043,9 +1065,7 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", move |r| {
-        r.map_err(|e| SourceError::new(id, SourceErrorDetails::FileIO(e)))
-    });
+    let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", |r| r);
 
     if active {
         ((ok_stream, err_stream), Some(capability))
@@ -1066,8 +1086,8 @@ fn handle_message<S: SourceReader>(
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value>, String>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, String>>,
+        Result<SourceOutput<S::Key, S::Value>, SourceError>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, SourceError>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     timer: &std::time::Instant,
