@@ -19,7 +19,14 @@ use mz_expr::MapFilterProject;
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
+use mz_repr::proto::ProtoRepr;
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::TryIntoIfSome;
 use serde::{Deserialize, Serialize};
+
+use super::ProtoLinearJoinPlan;
+use super::ProtoLinearStagePlan;
+use super::ProtoMirScalarVec;
 
 /// A plan for the execution of a linear join.
 ///
@@ -41,6 +48,59 @@ pub struct LinearJoinPlan {
     ///
     /// Values of `None` indicate the identity closure.
     pub final_closure: Option<JoinClosure>,
+}
+
+impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoLinearJoinPlan) -> Result<Self, Self::Error> {
+        let sk: Option<Result<_, _>> = x.source_key.map(TryFrom::try_from);
+
+        Ok(LinearJoinPlan {
+            source_relation: ProtoRepr::from_proto(x.source_relation)?,
+            source_key: sk.transpose()?,
+            initial_closure: x.initial_closure.map(|x| x.try_into()).transpose()?,
+            stage_plans: x
+                .stage_plans
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            final_closure: x.final_closure.map(|x| x.try_into()).transpose()?,
+        })
+    }
+}
+
+impl From<Vec<MirScalarExpr>> for ProtoMirScalarVec {
+    fn from(x: Vec<MirScalarExpr>) -> Self {
+        Self {
+            values: x.into_iter().map(|x| Into::into(&x)).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoMirScalarVec> for Vec<MirScalarExpr> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoMirScalarVec) -> Result<Self, Self::Error> {
+        x.values.into_iter().map(TryInto::try_into).collect()
+    }
+}
+
+impl From<&LinearJoinPlan> for ProtoLinearJoinPlan {
+    fn from(x: &LinearJoinPlan) -> Self {
+        ProtoLinearJoinPlan {
+            source_relation: x.source_relation.into_proto(),
+            source_key: x.source_key.clone().map(Into::into),
+            initial_closure: x.initial_closure.clone().map(|x| Into::into(&x)),
+            stage_plans: x
+                .stage_plans
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            final_closure: x.final_closure.clone().map(|x| Into::into(&x)),
+        }
+    }
 }
 
 /// A plan for the execution of one stage of a linear join.
@@ -67,6 +127,63 @@ pub struct LinearStagePlan {
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
+}
+
+impl From<&LinearStagePlan> for ProtoLinearStagePlan {
+    fn from(x: &LinearStagePlan) -> Self {
+        Self {
+            lookup_relation: x.lookup_relation.into_proto(),
+            stream_key: x
+                .stream_key
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            stream_thinning: x
+                .stream_thinning
+                .clone()
+                .into_iter()
+                .map(|x| x.into_proto())
+                .collect(),
+            lookup_key: x
+                .lookup_key
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            closure: Some(Into::into(&x.closure)),
+        }
+    }
+}
+
+impl TryFrom<ProtoLinearStagePlan> for LinearStagePlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoLinearStagePlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            lookup_relation: ProtoRepr::from_proto(x.lookup_relation)?,
+            stream_key: x
+                .stream_key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            stream_thinning: x
+                .stream_thinning
+                .into_iter()
+                .map(ProtoRepr::from_proto)
+                .collect::<Result<_, _>>()?,
+
+            lookup_key: x
+                .lookup_key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+
+            closure: x
+                .closure
+                .try_into_if_some("ProtoLinearStagePlan::closure")?,
+        })
+    }
 }
 
 impl LinearJoinPlan {

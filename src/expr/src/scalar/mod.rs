@@ -75,6 +75,20 @@ pub enum MirScalarExpr {
     },
 }
 
+impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
+    type Error = TryFromProtoError;
+
+    fn try_from(_value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
+
+impl From<&MirScalarExpr> for ProtoMirScalarExpr {
+    fn from(_: &MirScalarExpr) -> Self {
+        todo!()
+    }
+}
+
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
         is.iter().map(|i| MirScalarExpr::Column(*i)).collect()

@@ -22,7 +22,7 @@ use mz_repr::{ColumnType, GlobalId, ScalarType};
 mod id;
 mod linear;
 mod relation;
-mod scalar;
+pub mod scalar;
 
 pub mod explain;
 pub mod visit;

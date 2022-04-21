@@ -32,6 +32,7 @@ pub mod linear_join;
 
 use std::collections::HashMap;
 
+use mz_repr::proto::TryFromProtoError;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
@@ -40,6 +41,8 @@ use mz_repr::{Datum, Row, RowArena};
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.join.rs"));
+
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum JoinPlan {
@@ -47,6 +50,33 @@ pub enum JoinPlan {
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
+}
+
+impl TryFrom<ProtoJoinPlan> for JoinPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: ProtoJoinPlan) -> Result<Self, Self::Error> {
+        use proto_join_plan::Kind;
+        let kind = value
+            .kind
+            .ok_or_else(|| TryFromProtoError::MissingField("ProtoJoinPlan::kind".into()))?;
+        Ok(match kind {
+            Kind::Linear(inner) => JoinPlan::Linear(LinearJoinPlan::try_from(inner)?),
+            Kind::Delta(inner) => JoinPlan::Delta(DeltaJoinPlan::try_from(inner)?),
+        })
+    }
+}
+
+impl From<&JoinPlan> for ProtoJoinPlan {
+    fn from(repr: &JoinPlan) -> Self {
+        use proto_join_plan::Kind;
+        ProtoJoinPlan {
+            kind: Some(match repr {
+                JoinPlan::Linear(inner) => Kind::Linear(inner.into()),
+                JoinPlan::Delta(inner) => Kind::Delta(inner.into()),
+            }),
+        }
+    }
 }
 
 /// A manual closure implementation of filtering and logic application.
@@ -59,6 +89,45 @@ pub enum JoinPlan {
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: mz_expr::SafeMfpPlan,
+}
+
+impl From<&JoinClosure> for ProtoJoinClosure {
+    fn from(x: &JoinClosure) -> Self {
+        Self {
+            ready_equivalences: x
+                .ready_equivalences
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            before: None, // TODO: Implement me
+        }
+    }
+}
+
+impl TryFrom<ProtoJoinClosure> for JoinClosure {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoJoinClosure) -> Result<Self, Self::Error> {
+        Ok(Self {
+            ready_equivalences: x
+                .ready_equivalences
+                .clone()
+                .into_iter()
+                .map(|x| TryFrom::try_from(x))
+                .collect::<Result<_, TryFromProtoError>>()?,
+
+            // TODO: Implement me
+            before: mz_expr::SafeMfpPlan {
+                mfp: mz_expr::MapFilterProject {
+                    expressions: vec![],
+                    predicates: vec![],
+                    projection: vec![],
+                    input_arity: 0,
+                },
+            },
+        })
+    }
 }
 
 impl JoinClosure {

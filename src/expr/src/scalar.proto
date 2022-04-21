@@ -118,3 +118,7 @@ message ProtoEvalError {
         string type_from_oid = 53;
     }
 }
+
+message ProtoMirScalarExpr {
+    //TODO: fill me
+}

@@ -27,7 +27,10 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
+use mz_repr::proto::TryFromProtoError;
 use serde::{Deserialize, Serialize};
+
+use super::ProtoDeltaJoinPlan;
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -42,6 +45,20 @@ pub struct DeltaJoinPlan {
     /// Each path identifies its source relation, so the order is only
     /// important for determinism of dataflow construction.
     pub path_plans: Vec<DeltaPathPlan>,
+}
+
+impl From<&DeltaJoinPlan> for ProtoDeltaJoinPlan {
+    fn from(_: &DeltaJoinPlan) -> Self {
+        todo!()
+    }
+}
+
+impl TryFrom<ProtoDeltaJoinPlan> for DeltaJoinPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(_value: ProtoDeltaJoinPlan) -> Result<Self, Self::Error> {
+        todo!()
+    }
 }
 
 /// A delta query path is implemented by a sequences of stages,
