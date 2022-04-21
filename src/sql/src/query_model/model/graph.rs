@@ -104,7 +104,7 @@ impl<T> Deref for BoundRef<'_, T> {
 /// bound to a specific [`Model`].
 #[derive(Debug)]
 pub(crate) struct BoundRefMut<'a, T> {
-    model: &'a mut Model,
+    model: &'a Model,
     r#ref: RefMut<'a, T>,
 }
 
@@ -376,19 +376,16 @@ impl Model {
     }
 
     /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
-    pub(crate) fn get_mut_box(&mut self, box_id: BoxId) -> BoundRefMut<'_, QueryBox> {
-        let model_ptr = self as *mut Self;
-        unsafe {
-            let reference = (*model_ptr)
-                .boxes
-                .get(&box_id)
-                .expect("a valid box identifier")
-                .borrow_mut();
+    pub(crate) fn get_mut_box(&self, box_id: BoxId) -> BoundRefMut<'_, QueryBox> {
+        let reference = self
+            .boxes
+            .get(&box_id)
+            .expect("a valid box identifier")
+            .borrow_mut();
 
-            BoundRefMut {
-                model: &mut *model_ptr,
-                r#ref: reference,
-            }
+        BoundRefMut {
+            model: self,
+            r#ref: reference,
         }
     }
 
@@ -433,18 +430,15 @@ impl Model {
         &'a mut self,
         quantifier_id: QuantifierId,
     ) -> BoundRefMut<'a, Quantifier> {
-        let model_ptr = self as *mut Self;
-        unsafe {
-            let reference = (*model_ptr)
-                .quantifiers
-                .get(&quantifier_id)
-                .expect("a valid quantifier identifier")
-                .borrow_mut();
+        let reference = self
+            .quantifiers
+            .get(&quantifier_id)
+            .expect("a valid quantifier identifier")
+            .borrow_mut();
 
-            BoundRefMut {
-                model: &mut *model_ptr,
-                r#ref: reference,
-            }
+        BoundRefMut {
+            model: self,
+            r#ref: reference,
         }
     }
 
