@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This module provides functions that
+//! build decoding pipelines from _base_ source streams.
+//!
+//! The primary exports are [`render_decode`], [`render_decode_delimited`], and
+//! [`render_decode_cdcv2`]. See their docs for more details about their differences.
+
 use std::{
     any::Any,
     cell::RefCell,
@@ -53,7 +59,12 @@ mod csv;
 pub mod metrics;
 mod protobuf;
 
-pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
+/// Decode delimited CDCv2 messages.
+///
+/// This not only literally decodes the avro-encoded messages, but
+/// also builds a differential dataflow collection that respects the
+/// data and progress messages in the underlying CDCv2 stream.
+pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     schema: &str,
     registry: Option<mz_ccsr::ClientConfig>,

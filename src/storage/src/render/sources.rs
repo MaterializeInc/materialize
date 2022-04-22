@@ -28,9 +28,7 @@ use mz_dataflow_types::*;
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
-use crate::decode::decode_cdcv2;
-use crate::decode::render_decode;
-use crate::decode::render_decode_delimited;
+use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
     KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, S3SourceReader, SourceConfig,
@@ -366,7 +364,7 @@ where
                             };
                             // TODO(petrosagg): this should move to the envelope section below and
                             // made to work with a stream of Rows instead of decoding Avro directly
-                            let (oks, token) = decode_cdcv2(
+                            let (oks, token) = render_decode_cdcv2(
                                 &ok_source,
                                 &schema,
                                 schema_registry_config,
