@@ -28,7 +28,9 @@ where
 macro_rules! make_handle_static {
     ($static_dir:expr, $prod_base_path:expr, $dev_base_path:expr) => {
         #[allow(clippy::unused_async)]
-        pub async fn handle_static(path: ::axum::extract::Path<String>) -> impl ::axum::response::IntoResponse {
+        pub async fn handle_static(
+            path: ::axum::extract::Path<String>,
+        ) -> impl ::axum::response::IntoResponse {
             #[cfg(not(feature = "dev-web"))]
             const STATIC_DIR: ::include_dir::Dir = $static_dir;
 
