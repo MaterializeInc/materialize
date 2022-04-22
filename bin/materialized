@@ -17,17 +17,35 @@ set -euo pipefail
 
 bin=$(basename "$0")
 release=false
+channel=
 build_flags=()
+positional_args=()
 
-if [[ "${1:-}" = --release ]]; then
-    shift
-    release=true
-    build_flags+=(--release)
-fi
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --release)
+            release=true
+            build_flags+=("$1")
+            shift
+            ;;
+        +*)
+            channel="$1"
+            shift
+            ;;
+        --timings|--no-default-features)
+            build_flags+=("$1")
+            shift
+            ;;
+        *)
+            positional_args+=("$1")
+            shift
+            ;;
+    esac
+done
 
-cargo build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
+cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
 if $release; then
-    target/release/"$bin" "$@"
+    target/release/"$bin" "${positional_args[@]}"
 else
-    target/debug/"$bin" "$@"
+    target/debug/"$bin" "${positional_args[@]}"
 fi
