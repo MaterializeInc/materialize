@@ -43,6 +43,12 @@ lazy_static! {
     };
 }
 
+mz_http_util::make_handle_static!(
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
+    "src/http/static",
+    "src/http/static-dev"
+);
+
 /// Creates a router that serves the profiling endpoints.
 pub fn router(build_info: &'static BuildInfo) -> Router {
     Router::new()
@@ -54,6 +60,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/",
             routing::post(move |form| handle_post(form, build_info)),
         )
+        .route("/static/*path", routing::get(handle_static))
 }
 
 #[allow(dead_code)]

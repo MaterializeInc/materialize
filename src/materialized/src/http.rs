@@ -120,7 +120,7 @@ impl Server {
                 "/hierarchical-memory",
                 routing::get(memory::handle_hierarchical_memory),
             )
-            .nest("/prof", mz_prof::http::router(&BUILD_INFO))
+            .nest("/prof/", mz_prof::http::router(&BUILD_INFO))
             .route("/static/*path", routing::get(root::handle_static))
             .layer(Extension(coord_client))
             .layer(middleware::from_fn(move |req, next| {

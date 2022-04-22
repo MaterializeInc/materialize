@@ -39,7 +39,7 @@
 //!
 //! To determine the file paths to use when adding a new package, visit
 //!
-//!     http://unpkg.com/PACKAGE@VERSION/
+//!#     <http://unpkg.com/PACKAGE@VERSION/>
 //!
 //! and browse the directory contents. (Note the trailing slash on the URL.) The
 //! compiled JavaScript/CSS assets are usually in a folder named "dist" or
@@ -53,8 +53,8 @@
 //! To reference the vendored assets, use HTML tags like the following in your
 //! templates:
 //!
-//!     <link href="/css/vendor/package.CSS" rel="stylesheet">
-//!     <script src="/js/vendor/PACKAGE.js"></script>
+//!#     <link href="/css/vendor/package.CSS" rel="stylesheet">
+//!#     <script src="/js/vendor/PACKAGE.js"></script>
 //!
 //! The "/js/vendor/PACKAGE.js" will automatically switch between the production
 //! and development assets based on the presence of the `dev-web` feature.

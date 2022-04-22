@@ -25,6 +25,7 @@ members = [
     "src/materialized",
     "src/metabase",
     "src/mzcloud-cli",
+    "src/npm",
     "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
