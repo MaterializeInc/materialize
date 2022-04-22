@@ -98,15 +98,16 @@ Query:
                     "raw": true,
                     "arranged": []
                   },
-                  "mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0
-                    ],
-                    "input_arity": 16
-                  },
-                  "key_val": null
+                  "plan": {
+                    "Collection": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0
+                      ],
+                      "input_arity": 16
+                    }
+                  }
                 }
               },
               "forms": {
@@ -145,13 +146,14 @@ Query:
                 "raw": true,
                 "arranged": []
               },
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [],
-                "input_arity": 9
-              },
-              "key_val": null
+              "plan": {
+                "Collection": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [],
+                  "input_arity": 9
+                }
+              }
             }
           }
         ],
@@ -198,15 +200,7 @@ Query:
                 "raw": true,
                 "arranged": []
               },
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 1
-              },
-              "key_val": null
+              "plan": "PassArrangements"
             }
           },
           {
@@ -229,16 +223,17 @@ Query:
                                   "raw": true,
                                   "arranged": []
                                 },
-                                "mfp": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    11,
-                                    12
-                                  ],
-                                  "input_arity": 16
-                                },
-                                "key_val": null
+                                "plan": {
+                                  "Collection": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      11,
+                                      12
+                                    ],
+                                    "input_arity": 16
+                                  }
+                                }
                               }
                             },
                             "forms": {
@@ -282,15 +277,7 @@ Query:
                                       "raw": true,
                                       "arranged": []
                                     },
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    },
-                                    "key_val": null
+                                    "plan": "PassArrangements"
                                   }
                                 },
                                 "key_val_plan": {
@@ -361,37 +348,38 @@ Query:
                                   "raw": true,
                                   "arranged": []
                                 },
-                                "mfp": {
-                                  "expressions": [],
-                                  "predicates": [
-                                    [
-                                      1,
-                                      {
-                                        "CallUnary": {
-                                          "func": {
-                                            "Not": null
-                                          },
-                                          "expr": {
-                                            "CallUnary": {
-                                              "func": {
-                                                "IsNull": null
-                                              },
-                                              "expr": {
-                                                "Column": 0
+                                "plan": {
+                                  "Collection": {
+                                    "expressions": [],
+                                    "predicates": [
+                                      [
+                                        1,
+                                        {
+                                          "CallUnary": {
+                                            "func": {
+                                              "Not": null
+                                            },
+                                            "expr": {
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": 0
+                                                }
                                               }
                                             }
                                           }
                                         }
-                                      }
-                                    ]
-                                  ],
-                                  "projection": [
-                                    0,
-                                    4
-                                  ],
-                                  "input_arity": 9
-                                },
-                                "key_val": null
+                                      ]
+                                    ],
+                                    "projection": [
+                                      0,
+                                      4
+                                    ],
+                                    "input_arity": 9
+                                  }
+                                }
                               }
                             },
                             "forms": {
