@@ -165,6 +165,9 @@ pub struct Args {
     /// ADAPTER is lost.
     #[clap(long, possible_values = &["true", "false"])]
     orchestrator_linger: Option<bool>,
+    /// Base port for spawning various services
+    #[structopt(long, default_value = "2100")]
+    base_service_port: i32,
 
     // === Secrets controller options. ===
     /// The secrets controller implementation to use
@@ -597,10 +600,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     // binaries and release binaries look for other release
                     // binaries.
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                    // Chosen arbitrarily to be a relatively unused port
-                    // range. Could be made configurable via CLI flags if
-                    // necessary.
-                    port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
+                    port_allocator: Arc::new(IdAllocator::new(
+                        args.base_service_port,
+                        args.base_service_port
+                            .checked_add(100)
+                            .expect("Port number overflow, base-service-port too large."),
+                    )),
                     suppress_output: false,
                     process_listen_host: args.process_listen_host,
                 })
