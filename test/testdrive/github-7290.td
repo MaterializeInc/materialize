@@ -7,26 +7,42 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=posix.txt
+$ s3-create-bucket bucket=test
+
+$ s3-put-object bucket=test key=posix
 foo
 bar
 
 > CREATE MATERIALIZED SOURCE posix
-  FROM FILE '${testdrive.temp-dir}/posix.txt'
+  FROM S3 DISCOVER OBJECTS MATCHING 'posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
   FORMAT BYTES;
 
-> SELECT data FROM posix ORDER BY mz_line_no;
+> SELECT data FROM posix ORDER BY mz_record;
 foo
 bar
 
-$ file-append path=non_posix.txt trailing-newline=false
+$ s3-put-object bucket=test key=non-posix trailing-newline=false
 foo
 bar
 
 > CREATE MATERIALIZED SOURCE non_posix
-  FROM FILE '${testdrive.temp-dir}/non_posix.txt'
+  FROM S3 DISCOVER OBJECTS MATCHING 'non-posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
   FORMAT BYTES;
 
-> SELECT data FROM non_posix ORDER BY mz_line_no;
+> SELECT data FROM non_posix ORDER BY mz_record;
 foo
 bar
