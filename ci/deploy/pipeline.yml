@@ -12,7 +12,7 @@ steps:
     branches: main
     timeout_in_minutes: 30
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
     concurrency: 1
     concurrency_group: deploy/devsite
     retry:
@@ -23,7 +23,7 @@ steps:
     branches: main
     timeout_in_minutes: 30
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
     concurrency: 1
     concurrency_group: deploy/website
     retry:
@@ -32,6 +32,8 @@ steps:
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.linux
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy/linux
     retry:
@@ -62,6 +64,8 @@ steps:
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/pypi
+    agents:
+      queue: linux-x86_64
     retry:
       manual:
         permit_on_passed: true
@@ -70,6 +74,8 @@ steps:
     trigger: sql-logic-tests
     async: true
     branches: "v*.*rc*"
+    agents:
+      queue: linux-x86_64
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
@@ -80,6 +86,8 @@ steps:
     trigger: nightlies
     async: true
     branches: "v*.*rc*"
+    agents:
+      queue: linux-x86_64
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
