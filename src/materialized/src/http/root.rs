@@ -11,9 +11,6 @@
 
 use askama::Template;
 use axum::response::IntoResponse;
-use http::StatusCode;
-#[cfg(feature = "dev-web")]
-use tracing::debug;
 
 use crate::BUILD_INFO;
 
