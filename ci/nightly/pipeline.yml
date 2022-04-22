@@ -44,7 +44,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
     timeout_in_minutes: 60
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.nightly.trim_pipeline
     if: build.source == "ui"
@@ -58,6 +58,8 @@ steps:
     label: "Feature benchmark against latest release"
     timeout_in_minutes: 180
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -69,11 +71,15 @@ steps:
     label: Code coverage
     timeout_in_minutes: 240
     command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+    agents:
+      queue: linux-x86_64
     skip: Disabled due to persistent OOMs when linking
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
@@ -81,6 +87,8 @@ steps:
   - id: kafka-multi-broker
     label: Kafka multi-broker test
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-multi-broker
@@ -88,6 +96,8 @@ steps:
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -96,7 +106,7 @@ steps:
   - id: redpanda-testdrive-aarch64
     label: ":panda_face: :racing_car: testdrive aarch64"
     agents:
-      queue: aarch64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -105,6 +115,8 @@ steps:
   - id: upgrade
     label: "Upgrade testing"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
@@ -113,6 +125,8 @@ steps:
   - id: limits
     label: "Product limits"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
@@ -121,6 +135,8 @@ steps:
   - id: cluster-limits
     label: "Cluster Product limits"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
@@ -130,6 +146,8 @@ steps:
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -139,6 +157,8 @@ steps:
   - id: proxy
     label: ":squid: proxy"
     depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -149,6 +169,8 @@ steps:
     label: ":racing_car: testdrive with --workers 1"
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -167,12 +189,14 @@ steps:
   #         composition: testdrive
   #         args: [--aws-region=us-east-2, --workers=32]
   #   agents:
-  #     queue: x86_64-large
+  #     queue: linux-x86_64-large
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -183,6 +207,8 @@ steps:
     label: ":racing_car: testdrive with --persistent-user-tables"
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -194,6 +220,8 @@ steps:
     label: "AWS credentials and role assumption"
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -202,6 +230,8 @@ steps:
   - id: zippy
     label: "Zippy"
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -209,6 +239,8 @@ steps:
   - id: secrets
     label: "Secrets"
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: secrets
@@ -218,6 +250,8 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
@@ -229,6 +263,8 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
+    agents:
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: catalog-compat
