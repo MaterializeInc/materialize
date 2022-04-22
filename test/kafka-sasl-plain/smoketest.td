@@ -104,53 +104,54 @@ a
 1
 2
 
-# Ensure connectors work with SASL_PLAIN auth
-> CREATE CONNECTOR sasl_connector
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password = 'sekurity',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-
-> CREATE MATERIALIZED SOURCE connector_data
-  FROM KAFKA CONNECTOR sasl_connector
-  TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  ENVELOPE DEBEZIUM
-
-> SELECT * FROM connector_data
-a
----
-1
-2
-
-> CREATE CONNECTOR sasl_env_pw_connector
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password_env = 'SASL_PASSWORD',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-
-> CREATE MATERIALIZED SOURCE connector_env_pw_data
-  FROM KAFKA CONNECTOR sasl_env_pw_connector
-  TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  ENVELOPE DEBEZIUM
-
-> SELECT * from connector_env_pw_data
-a
----
-1
-2
+#TODO(nharring-adjacent): Uncomment once this test runs with experimental enabled
+## Ensure connectors work with SASL_PLAIN auth
+#> CREATE CONNECTOR sasl_connector
+#  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+#  WITH (
+#      security_protocol = 'SASL_SSL',
+#      sasl_mechanisms = 'PLAIN',
+#      sasl_username = 'materialize',
+#      sasl_password = 'sekurity',
+#      ssl_ca_location = '/share/secrets/ca.crt'
+#  )
+#
+#> CREATE MATERIALIZED SOURCE connector_data
+#  FROM KAFKA CONNECTOR sasl_connector
+#  TOPIC 'testdrive-data-${testdrive.seed}'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#  WITH (
+#      ssl_ca_location = '/share/secrets/ca.crt'
+#  )
+#  ENVELOPE DEBEZIUM
+#
+#> SELECT * FROM connector_data
+#a
+#---
+#1
+#2
+#
+#> CREATE CONNECTOR sasl_env_pw_connector
+#  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+#  WITH (
+#      security_protocol = 'SASL_SSL',
+#      sasl_mechanisms = 'PLAIN',
+#      sasl_username = 'materialize',
+#      sasl_password_env = 'SASL_PASSWORD',
+#      ssl_ca_location = '/share/secrets/ca.crt'
+#  )
+#
+#> CREATE MATERIALIZED SOURCE connector_env_pw_data
+#  FROM KAFKA CONNECTOR sasl_env_pw_connector
+#  TOPIC 'testdrive-data-${testdrive.seed}'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#  WITH (
+#      ssl_ca_location = '/share/secrets/ca.crt'
+#  )
+#  ENVELOPE DEBEZIUM
+#
+#> SELECT * from connector_env_pw_data
+#a
+#---
+#1
+#2
