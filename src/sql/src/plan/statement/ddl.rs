@@ -603,6 +603,13 @@ pub fn plan_create_source(
 
     let key_envelope = get_key_envelope(include_metadata, envelope, &encoding)?;
 
+    // Not all source envelopes are compatible with all source connectors.
+    // Whoever constructs the source ingestion pipeline is responsible for
+    // choosing compatible envelopes and connectors.
+    //
+    // TODO(guswynn): ambiguously assert which connectors and envelopes are
+    // compatible in typechecking
+    //
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
