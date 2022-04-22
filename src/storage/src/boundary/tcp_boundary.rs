@@ -25,6 +25,7 @@ pub mod server {
     use differential_dataflow::Collection;
     use futures::{SinkExt, TryStreamExt};
     use std::any::Any;
+    use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
     use std::rc::Rc;
     use std::sync::{Arc, Weak};
@@ -283,6 +284,7 @@ pub mod server {
             _name: &str,
             dataflow_id: uuid::Uuid,
         ) {
+            let token = Rc::new(RefCell::new(Some(token)));
             let subscription_id = ((dataflow_id, id), ok.inner.scope().index());
             let client_token = Arc::new(());
 
@@ -327,7 +329,7 @@ pub mod server {
         /// A function to convert the input data into something the sender can transport.
         convert: F,
         /// A token that's dropped once `client_token` is dropped.
-        token: Option<Rc<dyn Any>>,
+        token: Rc<RefCell<Option<Rc<dyn Any>>>>,
         /// A weak reference to a token that e.g. the network layer can drop.
         client_token: Weak<()>,
     }
@@ -336,7 +338,7 @@ pub mod server {
         /// Construct a new pusher. It'll retain a weak reference to `client_token`.
         fn new(
             sender: UnboundedSender<R>,
-            token: Rc<dyn Any>,
+            token: Rc<RefCell<Option<Rc<dyn Any>>>>,
             client_token: &Arc<()>,
             convert: F,
         ) -> Self {
@@ -344,20 +346,21 @@ pub mod server {
                 sender,
                 client_token: Arc::downgrade(client_token),
                 convert,
-                token: Some(token),
+                token,
             }
         }
     }
 
     impl<T, D, R, F: Fn(EventCore<T, D>) -> R> EventPusherCore<T, D> for UnboundedEventPusher<R, F> {
         fn push(&mut self, event: EventCore<T, D>) {
+            let mut token = self.token.borrow_mut();
             if self.client_token.upgrade().is_none() {
-                self.token.take();
+                token.take();
             }
-            if self.token.is_some() {
+            if token.is_some() {
                 match self.sender.send((self.convert)(event)) {
                     Err(_) => {
-                        self.token.take();
+                        token.take();
                     }
                     _ => {}
                 }
