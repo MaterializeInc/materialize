@@ -14,7 +14,7 @@ create, alter, drop, and list clusters, respectively:
 
 ```
 create_cluster_stmt ::=
-  CREATE CLUSTER [IF NOT EXISTS] <name> [[WITH] <option> [, <option>...]]
+  CREATE CLUSTER <name> [[WITH] <option> [, <option>...]]
 
 alter_cluster_stmt ::=
   ALTER CLUSTER <name> [[SET] <option> [, <option>...]]
@@ -38,8 +38,7 @@ a catalog, and so do not belong in the usual namespace of databases and schemas.
 For a similarly scoped object in PostgreSQL, see [publications].
 
 The `CREATE CLUSTER` statement creates a new cluster. It returns an error if
-a cluster with the specified name already exists unless the `IF NOT EXISTS`
-clause is present.
+a cluster with the specified name already exists.
 
 The `ALTER CLUSTER` statement changes properties of an existing cluster.
 

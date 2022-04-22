@@ -879,8 +879,6 @@ impl_display_t!(CreateTypeStatement);
 pub struct CreateClusterStatement<T: AstInfo> {
     /// Name of the created cluster.
     pub name: Ident,
-    /// Whether the `IF NOT EXISTS` clause was specified.
-    pub if_not_exists: bool,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
 }
@@ -888,9 +886,6 @@ pub struct CreateClusterStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
-        if self.if_not_exists {
-            f.write_str("IF NOT EXISTS ");
-        }
         f.write_node(&self.name);
         if !self.options.is_empty() {
             f.write_str(" ");

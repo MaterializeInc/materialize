@@ -1889,12 +1889,6 @@ impl Coordinator {
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ClusterAlreadyExists(_),
-                ..
-            })) if plan.if_not_exists => {
-                Ok(ExecuteResponse::CreatedComputeInstance { existed: true })
-            }
             Err(err) => Err(err),
         }
     }

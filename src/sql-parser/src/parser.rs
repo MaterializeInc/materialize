@@ -2491,7 +2491,6 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
-        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
@@ -2501,7 +2500,6 @@ impl<'a> Parser<'a> {
         };
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
-            if_not_exists,
             options,
         }))
     }
