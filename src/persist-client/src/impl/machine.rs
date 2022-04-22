@@ -220,7 +220,7 @@ where
             }
             let sleep = Duration::from_secs(1);
             if Instant::now() + sleep > deadline {
-                return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                return Err(ExternalError::new_timeout(deadline));
             }
             // Wait a bit and try again.
             //
@@ -280,7 +280,7 @@ where
                     // TODO: Some sort of exponential backoff here?
                     let sleep = Duration::from_secs(0);
                     if Instant::now() + sleep > deadline {
-                        return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                        return Err(ExternalError::new_timeout(deadline));
                     }
                     continue;
                 }

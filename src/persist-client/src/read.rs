@@ -121,7 +121,7 @@ where
                     None => {
                         let sleep = Duration::from_secs(1);
                         if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                            return Err(ExternalError::new_timeout(deadline));
                         }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
@@ -283,7 +283,7 @@ where
                     None => {
                         let sleep = Duration::from_secs(1);
                         if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                            return Err(ExternalError::new_timeout(deadline));
                         }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
