@@ -49,6 +49,8 @@ class Materialized(Service):
                 # To dynamically change the environment during a workflow run,
                 # use Composition.override.
                 "MZ_LOG_FILTER",
+                "STORAGED_LOG_FILTER",
+                "COMPUTED_LOG_FILTER",
             ]
 
         if forward_aws_credentials:
