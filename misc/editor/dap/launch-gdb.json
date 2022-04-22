@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "mzd attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "${workspaceFolder}/target/debug/materialized",
+            "cwd": "${workspaceFolder}",
+            "processId": "${command:pickProcess}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "rust-gdb"
+        },
+        {
+            "name": "computed attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "${workspaceFolder}/target/debug/computed",
+            "cwd": "${workspaceFolder}",
+            "processId": "${command:pickProcess}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "rust-gdb"
+        },
+        {
+            "name": "storaged attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "${workspaceFolder}/target/debug/storaged",
+            "cwd": "${workspaceFolder}",
+            "processId": "${command:pickProcess}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "rust-gdb"
+        }
+    ]
+}
