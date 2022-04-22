@@ -22,7 +22,7 @@ use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use mz_coord::session::{
     row_future_to_stream, EndTransactionAction, InProgressRows, Portal, PortalState,
@@ -179,7 +179,8 @@ where
             .and_then(|token| frontegg.check_expiry(token, user.clone()))
         {
             Ok(check) => check.left_future(),
-            _ => {
+            Err(e) => {
+                warn!("PGwire connection failed authentication: {}", e);
                 return conn
                     .send(ErrorResponse::fatal(
                         SqlState::INVALID_PASSWORD,

@@ -30,7 +30,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tower::ServiceBuilder;
 use tower_http::cors::{self, CorsLayer, Origin};
-use tracing::error;
+use tracing::{error, warn};
 
 use mz_coord::session::Session;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -198,7 +198,10 @@ impl Server {
                             }
                             Ok(email)
                         })
-                        .map_err(|_e| "unauthorized")
+                        .map_err(|e| {
+                            warn!("HTTP request failed authentication: {}", e);
+                            "unauthorized"
+                        })
                 } else {
                     // If there was no mzcloud auth, we can use the cert's username if present,
                     // otherwise the system user.
