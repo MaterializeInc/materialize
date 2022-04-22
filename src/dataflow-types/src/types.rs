@@ -751,12 +751,32 @@ pub mod sources {
         User(String),
     }
 
+    /// `SourceEnvelope`s, describe how to turn a stream of messages from `SourceConnector`s,
+    /// and turn them into a _differential stream_, that is, a stream of (data, time, diff)
+    /// triples.
+    ///
+    /// Some sources (namely postgres and pubnub) skip any explicit envelope handling, effectively
+    /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
+    // TODO(guswynn): update this ^ when SimpleSource is gone.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
-        /// If present, include the key columns as an output column of the source with the given properties.
+        /// The most trivial version is `None`, which typically produces triples where the diff
+        /// is ALWAYS `1`
+        ///
+        /// If the `KeyEnvelope` is present,
+        /// include the key columns as an output column of the source with the given properties.
+        // TODO(guswynn): update `None` docs to describe `-1` diff case, when support for it is
+        // added for postgres sources.
         None(KeyEnvelope),
+        /// `Debezium` avoids holding onto previously seen values by trusting the required
+        /// `before` and `after` value fields coming from the upstream source.
         Debezium(DebeziumEnvelope),
+        /// `Upsert` holds onto previously seen values and produces `1` or `-1` diffs depending on
+        /// whether or not the required _key_ outputed by the source has been seen before. This also
+        /// supports a `Debezium` mode.
         Upsert(UpsertEnvelope),
+        /// `CdcV2` requires sources output messages in a strict form that requires a upstream-provided
+        /// timeline.
         CdcV2,
     }
 
@@ -1143,6 +1163,10 @@ pub mod sources {
         pub desc: RelationDesc,
     }
 
+    /// A `SourceConnector` describes how data is produced for a source, be
+    /// it from a local table, or some upstream service. It is the first
+    /// step of _rendering_ of a source, and describes only how to produce
+    /// a stream of messages associated with MzOffset's.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceConnector {
         External {
@@ -1168,6 +1192,7 @@ pub mod sources {
                 // Conservatively, set all Kafka/File sources as having stable inputs because
                 // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
                 match connector {
+                    // TODO(guswynn): does postgres count here as well?
                     ExternalSourceConnector::Kafka(_) | ExternalSourceConnector::File(_) => true,
                     // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
                     // and this order is not replayable across different reads of the same Kinesis stream.
