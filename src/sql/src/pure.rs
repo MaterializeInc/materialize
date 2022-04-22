@@ -60,6 +60,10 @@ pub fn purify_create_source(
     mut stmt: CreateSourceStatement<Raw>,
     catalog: &dyn SessionCatalog,
 ) -> impl Future<Output = Result<CreateSourceStatement<Raw>, anyhow::Error>> {
+    // For a kafka source using a connector we need to resolve the connector and pull data from it to perform purification
+    // since we need to connect to a broker and get partition offsets from it
+    // Interacting with the catalog must be done before the async block since otherwise it could remain locked for
+    // indeterminate periods of time while we wait for external systems
     let resolved_connector = if let CreateSourceStatement {
         connector:
             CreateSourceConnector::Kafka(
