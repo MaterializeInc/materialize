@@ -18,12 +18,14 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
+$ kafka-create-topic topic=data
+$ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": "dog"}
 
 # Create library of objects and verify names
 > CREATE MATERIALIZED SOURCE mz_data
-  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > CREATE SINK sink1 FROM mz_data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
@@ -37,7 +39,6 @@ cluster on_name  key_name             seq_in_index  column_name  expression  nul
 ---------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  1             a            <null>      false    true
 <VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  2             b            <null>      false    true
-<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false    true
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -59,9 +60,9 @@ materialize.public.mz_data_primary_idx
 
 # Test that data can be selected from the source before renaming.
 > SELECT * FROM mz_data
-a  b    mz_obj_no
------------------
-1  dog  1
+a  b
+------
+1  dog
 
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
@@ -77,9 +78,9 @@ materialize.public.renamed_mz_data
 
 # Test that data can be selected from the source after renaming.
 > SELECT * FROM renamed_mz_data
-a  b    mz_obj_no
------------------
-1  dog  1
+a  b
+------
+1  dog
 
 # Test that data can be selected from the source if it is rematerialized with
 # the new name. This previously tripped an assertion that asserted that a source
@@ -88,9 +89,9 @@ a  b    mz_obj_no
 > DROP INDEX mz_data_primary_idx
 > CREATE DEFAULT INDEX ON renamed_mz_data
 > SELECT * FROM renamed_mz_data
-a  b    mz_obj_no
------------------
-1  dog  1
+a  b
+------
+1  dog
 
 > SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
 name
@@ -175,12 +176,11 @@ cluster on_name          key_name       seq_in_index  column_name expression nul
 ---------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> renamed_mz_view  renamed_index  1             a           <null>     false    true
 <VARIABLE_OUTPUT> renamed_mz_view  renamed_index  2             b           <null>     false    true
-<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false    true
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"
 ---------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_index "CREATE INDEX \"renamed_index\" IN CLUSTER [1] ON \"materialize\".\"public\".\"renamed_mz_view\" (\"a\", \"b\", \"mz_obj_no\")"
+materialize.public.renamed_index "CREATE INDEX \"renamed_index\" IN CLUSTER [1] ON \"materialize\".\"public\".\"renamed_mz_view\" (\"a\", \"b\")"
 
 # Simple dependencies are renamed
 > SHOW CREATE VIEW dependent_view
@@ -210,7 +210,7 @@ materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"o
 > ALTER VIEW renamed_mz_view RENAME TO t1
 > CREATE VIEW a AS SELECT 1 AS a
 > CREATE VIEW v0 AS SELECT 2 AS b
-> CREATE VIEW t2 (a, b, t1_a, t1_b, mz_obj_no) AS
+> CREATE VIEW t2 (a, b, t1_a, t1_b) AS
   SELECT * FROM a
   JOIN v0
   ON a.a = v0.b
