@@ -28,6 +28,7 @@ use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
+use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
@@ -145,7 +146,7 @@ pub fn purify_create_source(
                         with_options.retain(|val| match val {
                             WithOption { key, .. } => key.as_str() != "kafka_time_offset",
                         });
-
+                        info!("add start_offset {:?}", start_offsets);
                         // Add `start_offset`
                         with_options.push(WithOption {
                             key: Ident::new("start_offset"),

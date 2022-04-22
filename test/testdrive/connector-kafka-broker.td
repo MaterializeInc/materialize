@@ -47,10 +47,10 @@ $ kafka-ingest format=bytes topic=connector_test
   FORMAT CSV WITH 2 COLUMNS
 
 # For some reason this does not work in testdrive, ignoring for now so it can prove drop semantics work correctly
-#> SELECT * FROM connector_source
-#first second mz_offset
-#----------------------
-#2     3      1
+> SELECT * FROM connector_source
+first second mz_offset
+----------------------
+2     3      1
 
 # Confirm we cannot drop the connector while a source depends upon it
 ! DROP CONNECTOR testconn;

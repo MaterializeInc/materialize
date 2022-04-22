@@ -872,16 +872,6 @@ impl CatalogItem {
         }
     }
 
-    pub fn catalog_connector(
-        &self,
-        name: &QualifiedObjectName,
-    ) -> Result<&dyn CatalogConnector, SqlCatalogError> {
-        match &self {
-            CatalogItem::Connector(conn) => Ok(conn),
-            _ => Err(SqlCatalogError::UnknownConnector(name.item.clone())),
-        }
-    }
-
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
