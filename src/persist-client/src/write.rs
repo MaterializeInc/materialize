@@ -90,6 +90,18 @@ where
         &self.upper
     }
 
+    /// Fetches and returns the shard-global `upper`.
+    ///
+    /// This requires fetching the latest state from consensus and is therefore a potentially
+    /// expensive operation.
+    pub async fn fetch_upper(&mut self, timeout: Duration) -> Result<Antichain<T>, ExternalError> {
+        trace!("WriteHandle::fetch_upper timeout={:?}", timeout,);
+        let deadline = Instant::now() + timeout;
+        let upper = self.machine.upper(deadline).await?;
+
+        Ok(upper)
+    }
+
     /// Applies `updates` to this shard and downgrades this handle's upper to
     /// `new_upper`.
     ///
