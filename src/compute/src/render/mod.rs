@@ -108,6 +108,7 @@ use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
@@ -125,6 +126,7 @@ use mz_storage::boundary::ComputeReplay;
 pub mod context;
 mod flat_map;
 mod join;
+mod recursion;
 mod reduce;
 pub mod sinks;
 mod threshold;
@@ -141,6 +143,17 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
     dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
     boundary: &mut B,
 ) {
+    // Mutually recursive view definitions require special handling.
+    let recursive = dataflow.objects_to_build.iter().any(|object| {
+        use mz_expr::CollectionPlan;
+        let mut depends_on = BTreeSet::new();
+        object.plan.depends_on_into(&mut depends_on);
+        depends_on.into_iter().any(|id| id >= object.id)
+    });
+    if recursive {
+        return recursion::build_compute_dataflow(timely_worker, compute_state, dataflow, boundary);
+    }
+
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
@@ -297,7 +310,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, G::Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -571,5 +584,23 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
+    }
+}
+
+impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> {
+    fn system_time(&mut self) -> &mut mz_repr::Timestamp {
+        &mut self.outer
+    }
+    fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        Product::new(delay, Default::default())
+    }
+    fn event_time(&mut self) -> &mut mz_repr::Timestamp {
+        &mut self.outer
+    }
+    fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        Product::new(delay, Default::default())
+    }
+    fn step_back(&self) -> Self {
+        Product::new(self.outer.saturating_sub(1), self.inner.clone())
     }
 }

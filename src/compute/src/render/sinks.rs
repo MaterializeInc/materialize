@@ -16,18 +16,21 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::sinks::*;
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use crate::render::context::Context;
+use crate::render::RenderTimestamp;
 
-impl<G> Context<G, Row, Timestamp>
+impl<'g, G, T> Context<Child<'g, G, T>, Row>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
@@ -70,7 +73,8 @@ where
             let (collection, _err_collection) =
                 bundle.as_collection_core(mfp, Some((key.clone(), None)));
             collection
-        };
+        }
+        .leave();
 
         let collection = apply_sink_envelope(sink, &sink_render, collection);
 
@@ -97,7 +101,7 @@ fn apply_sink_envelope<G>(
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     // Some connectors support keys - extract them.
     let keyed = if sink_render.uses_keys() {
@@ -205,7 +209,7 @@ where
 /// A type that can be rendered as a dataflow sink.
 pub(crate) trait SinkRender<G>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     /// TODO
     fn uses_keys(&self) -> bool;
@@ -222,12 +226,12 @@ where
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Rc<dyn Any>>
     where
-        G: Scope<Timestamp = Timestamp>;
+        G: Scope<Timestamp = mz_repr::Timestamp>;
 }
 
 fn get_sink_render_for<G>(connector: &SinkConnector) -> Box<dyn SinkRender<G>>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     match connector {
         SinkConnector::Kafka(connector) => Box::new(connector.clone()),

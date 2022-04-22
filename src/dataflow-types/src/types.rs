@@ -330,7 +330,13 @@ where
     }
 
     /// Like `depends_on`, but appends to an existing `BTreeSet`.
+    ///
+    /// This method includes identifiers for e.g. intermediate views, and should be filtered
+    /// if one only wants sources and indexes.
+    ///
+    /// This method is safe for mutually recursive view defintions.
     pub fn depends_on_into(&self, collection_id: GlobalId, out: &mut BTreeSet<GlobalId>) {
+        out.insert(collection_id);
         if self.source_imports.contains_key(&collection_id) {
             // The collection is provided by an imported source. Report the
             // dependency on the source.
@@ -358,7 +364,9 @@ where
         // It must be a collection whose plan we have handy. Recurse.
         let build = self.build_desc(collection_id);
         for id in build.plan.depends_on() {
-            self.depends_on_into(id, out)
+            if !out.contains(&id) {
+                self.depends_on_into(id, out)
+            }
         }
     }
 
