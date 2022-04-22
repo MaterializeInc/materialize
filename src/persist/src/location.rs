@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use serde::{Deserialize, Serialize};
@@ -102,6 +103,26 @@ impl SeqNo {
 #[derive(Debug)]
 pub struct ExternalError {
     inner: anyhow::Error,
+}
+
+impl ExternalError {
+    /// Returns a new error representing a timeout.
+    ///
+    /// TODO: When we overhaul errors, this presumably should instead be a type
+    /// that can be matched on.
+    #[track_caller]
+    pub fn new_timeout(deadline: Instant) -> Self {
+        ExternalError::from(anyhow!("timeout at {:?}", deadline))
+    }
+
+    /// Returns whether this error represents a timeout.
+    ///
+    /// TODO: When we overhaul errors, this presumably should instead be a type
+    /// that can be matched on.
+    pub fn is_timeout(&self) -> bool {
+        // Gross...
+        self.inner.to_string().contains("timeout")
+    }
 }
 
 impl std::fmt::Display for ExternalError {
@@ -1260,5 +1281,11 @@ pub mod tests {
         assert_eq!(block_on(blob.list_keys())?, Vec::<String>::new());
 
         Ok(())
+    }
+
+    #[test]
+    fn timeout_error() {
+        assert!(ExternalError::new_timeout(Instant::now()).is_timeout());
+        assert!(!ExternalError::from(anyhow!("foo")).is_timeout());
     }
 }
