@@ -136,12 +136,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn CatalogComputeInstance, CatalogError>;
 
-    // /// Resolves the named connector
-    // fn resolve_connector(
-    //     &self,
-    //     connector_name: &PartialObjectName,
-    // ) -> Result<&dyn CatalogConnector, CatalogError>;
-
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the

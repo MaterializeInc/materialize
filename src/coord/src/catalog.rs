@@ -20,7 +20,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
@@ -1862,19 +1862,6 @@ impl Catalog {
         Ok(&self.state.compute_instances_by_id[id])
     }
 
-    pub fn resolve_connector(
-        &self,
-        connector: &PartialObjectName,
-        conn_id: u32,
-    ) -> Result<&Connector, SqlCatalogError> {
-        debug!(%connector, "resolve connector");
-        let entry = self.resolve(|schema| &schema.items, None, &vec![], connector, conn_id)?;
-        match entry.item() {
-            CatalogItem::Connector(ctr) => Ok(ctr),
-            _ => Err(SqlCatalogError::UnknownConnector(connector.to_string())),
-        }
-    }
-
     /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
@@ -3223,17 +3210,6 @@ impl SessionCatalog for ConnCatalog<'_> {
                 compute_instance as &dyn mz_sql::catalog::CatalogComputeInstance
             })
     }
-
-    // fn resolve_connector(
-    //     &self,
-    //     connector: &PartialObjectName,
-    // ) -> Result<&dyn mz_sql::catalog::CatalogConnector, SqlCatalogError> {
-    //     // self.catalog.resolve_item(connector).map(|entry| {entry as &dyn mz_sql::catalog::CatalogConnector})
-    //     self.catalog
-    //         .resolve_connector(connector, self.conn_id)
-    //         .map(|entry| entry as &dyn mz_sql::catalog::CatalogConnector)
-    //     // Err(SqlCatalogError::UnknownConnector(connector.to_string())
-    // }
 
     fn resolve_item(
         &self,
