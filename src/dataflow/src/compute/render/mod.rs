@@ -405,32 +405,34 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get {
-                id,
-                keys,
-                mfp,
-                key_val,
-            } => {
+            Plan::Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
-                if mfp.is_identity() {
-                    // Assert that each of `keys` are present in `collection`.
-                    assert!(keys
-                        .arranged
-                        .iter()
-                        .all(|(key, _, _)| collection.arranged.contains_key(key)));
-                    assert!(keys.raw <= collection.collection.is_some());
-                    // Retain only those keys we want to import.
-                    collection
-                        .arranged
-                        .retain(|key, _value| keys.arranged.iter().any(|(key2, _, _)| key2 == key));
-                    collection
-                } else {
-                    let (oks, errs) = collection.as_collection_core(mfp, key_val);
-                    CollectionBundle::from_collections(oks, errs)
+                match plan {
+                    mz_dataflow_types::plan::GetPlan::PassArrangements => {
+                        // Assert that each of `keys` are present in `collection`.
+                        assert!(keys
+                            .arranged
+                            .iter()
+                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                        assert!(keys.raw <= collection.collection.is_some());
+                        // Retain only those keys we want to import.
+                        collection.arranged.retain(|key, _value| {
+                            keys.arranged.iter().any(|(key2, _, _)| key2 == key)
+                        });
+                        collection
+                    }
+                    mz_dataflow_types::plan::GetPlan::Arrangement(key, row, mfp) => {
+                        let (oks, errs) = collection.as_collection_core(mfp, Some((key, row)));
+                        CollectionBundle::from_collections(oks, errs)
+                    }
+                    mz_dataflow_types::plan::GetPlan::Collection(mfp) => {
+                        let (oks, errs) = collection.as_collection_core(mfp, None);
+                        CollectionBundle::from_collections(oks, errs)
+                    }
                 }
             }
             Plan::Let { id, value, body } => {

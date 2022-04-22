@@ -340,16 +340,7 @@ Query:
       "raw": true,
       "arranged": []
     },
-    "mfp": {
-      "expressions": [],
-      "predicates": [],
-      "projection": [
-        0,
-        1
-      ],
-      "input_arity": 2
-    },
-    "key_val": null
+    "plan": "PassArrangements"
   }
 }
 
@@ -379,16 +370,7 @@ Query:
       "raw": true,
       "arranged": []
     },
-    "mfp": {
-      "expressions": [],
-      "predicates": [],
-      "projection": [
-        0,
-        1
-      ],
-      "input_arity": 2
-    },
-    "key_val": null
+    "plan": "PassArrangements"
   }
 }
 
@@ -420,16 +402,7 @@ Query:
           "raw": true,
           "arranged": []
         },
-        "mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0,
-            1
-          ],
-          "input_arity": 2
-        },
-        "key_val": null
+        "plan": "PassArrangements"
       }
     },
     "top_k_plan": {
@@ -481,16 +454,7 @@ Query:
           "raw": true,
           "arranged": []
         },
-        "mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0,
-            1
-          ],
-          "input_arity": 2
-        },
-        "key_val": null
+        "plan": "PassArrangements"
       }
     },
     "top_k_plan": {
@@ -540,16 +504,7 @@ Query:
       "raw": true,
       "arranged": []
     },
-    "mfp": {
-      "expressions": [],
-      "predicates": [],
-      "projection": [
-        0,
-        1
-      ],
-      "input_arity": 2
-    },
-    "key_val": null
+    "plan": "PassArrangements"
   }
 }
 
@@ -581,16 +536,7 @@ Query:
       "raw": true,
       "arranged": []
     },
-    "mfp": {
-      "expressions": [],
-      "predicates": [],
-      "projection": [
-        0,
-        1
-      ],
-      "input_arity": 2
-    },
-    "key_val": null
+    "plan": "PassArrangements"
   }
 }
 

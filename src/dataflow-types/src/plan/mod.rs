@@ -157,15 +157,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         // seems generally advantageous to do that instead (to avoid cloning
         // rows, by using `mfp` first on borrowed data).
         keys: AvailableCollections,
-        /// Any linear operator work to apply as part of producing the data.
-        ///
-        /// This logic allows us to efficiently extract collections from data
-        /// that have been pre-arranged, avoiding copying rows that are not
-        /// used and columns that are projected away.
-        mfp: MapFilterProject,
-        /// Whether the input is from an arrangement, and if so,
-        /// whether we can seek to a specific value therein
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        /// The actions to take when introducing the collection.
+        plan: GetPlan,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -314,6 +307,17 @@ pub enum Plan<T = mz_repr::Timestamp> {
     },
 }
 
+/// How a `Get` stage will be rendered.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum GetPlan {
+    /// Simply pass input arrangements on to the next stage.
+    PassArrangements,
+    /// Using the supplied key, optionally seek the row, and apply the MFP.
+    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
+    /// Scan the input collection (unarranged) and apply the MFP.
+    Collection(MapFilterProject),
+}
+
 impl<T: timely::progress::Timestamp> Plan<T> {
     /// Replace the plan with another one
     /// that has the collection in some additional forms.
@@ -445,36 +449,43 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .iter()
                     .filter_map(|key| {
                         mfp.literal_constraints(&key.0)
-                            .map(|val| (key.clone(), Some(val)))
+                            .map(|val| (key.clone(), val))
                     })
-                    .max_by_key(|(key, _val)| key.0.len())
-                    .or_else(|| {
-                        in_keys
-                            .arbitrary_arrangement()
-                            .map(|key| (key.clone(), None))
-                    });
+                    .max_by_key(|(key, _val)| key.0.len());
 
-                if let Some(((key, permutation, thinning), _)) = &key_val {
+                // Determine the plan of action for the `Get` stage.
+                let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
                     mfp.permute(permutation.clone(), thinning.len() + key.len());
-                }
+                    in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
+                    GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
+                } else if !mfp.is_identity() {
+                    // We need to ensure a collection exists, which means we must form it.
+                    if let Some((key, permutation, thinning)) =
+                        in_keys.arbitrary_arrangement().cloned()
+                    {
+                        mfp.permute(permutation.clone(), thinning.len() + key.len());
+                        in_keys.arranged = vec![(key.clone(), permutation, thinning)];
+                        GetPlan::Arrangement(key, None, mfp)
+                    } else {
+                        GetPlan::Collection(mfp)
+                    }
+                } else {
+                    // By default, just pass input arrangements through.
+                    GetPlan::PassArrangements
+                };
 
-                let out_keys = if mfp.is_identity() {
+                let out_keys = if let GetPlan::PassArrangements = plan {
                     in_keys.clone()
                 } else {
                     AvailableCollections::new_raw()
                 };
 
-                // If we discover a literal constraint, we can discard other arrangements.
-                if let Some((key, Some(_))) = &key_val {
-                    in_keys.arranged = vec![key.clone()];
-                }
                 // Return the plan, and any keys if an identity `mfp`.
                 (
                     Plan::Get {
                         id: id.clone(),
                         keys: in_keys,
-                        mfp,
-                        key_val: key_val.map(|((key, _, _), val)| (key, val)),
+                        plan,
                     },
                     out_keys,
                 )
@@ -986,20 +997,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                 // For all other variants, just replace inputs with appropriately sharded versions.
                 // This is surprisingly verbose, but that is all it is doing.
-                Plan::Get {
-                    id,
-                    keys,
-                    mfp,
-                    key_val,
-                } => vec![
-                    Plan::Get {
-                        id,
-                        keys,
-                        mfp,
-                        key_val,
-                    };
-                    parts
-                ],
+                Plan::Get { id, keys, plan } => vec![Plan::Get { id, keys, plan }; parts],
                 Plan::Let { value, body, id } => {
                     let value_parts = value.partition_among(parts);
                     let body_parts = body.partition_among(parts);
@@ -1142,8 +1140,7 @@ impl<T> CollectionPlan for Plan<T> {
             Plan::Get {
                 id,
                 keys: _,
-                mfp: _,
-                key_val: _,
+                plan: _,
             } => match id {
                 Id::Global(id) => {
                     out.insert(*id);
