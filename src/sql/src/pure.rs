@@ -113,17 +113,13 @@ pub fn purify_create_source(
                 connector, topic, ..
             }) => {
                 let (broker, connector_options) = match connector {
-                    mz_sql_parser::ast::KafkaConnector::Reference { .. } => {
-                        match resolved_connector? {
-                            ConnectorInner::Kafka {
-                                broker,
-                                config_options,
-                            } => (broker.to_string(), Some(config_options)),
-                        }
-                    }
-                    mz_sql_parser::ast::KafkaConnector::Inline { broker } => {
-                        (broker.to_string(), None)
-                    }
+                    KafkaConnector::Reference { .. } => match resolved_connector? {
+                        ConnectorInner::Kafka {
+                            broker,
+                            config_options,
+                        } => (broker.to_string(), Some(config_options)),
+                    },
+                    KafkaConnector::Inline { broker } => (broker.to_string(), None),
                 };
                 config_options = if let Some(options) = connector_options {
                     options
@@ -147,15 +143,13 @@ pub fn purify_create_source(
                     Some(start_offsets) => {
                         // Drop `kafka_time_offset`
                         with_options.retain(|val| match val {
-                            mz_sql_parser::ast::WithOption { key, .. } => {
-                                key.as_str() != "kafka_time_offset"
-                            }
+                            WithOption { key, .. } => key.as_str() != "kafka_time_offset",
                         });
 
                         // Add `start_offset`
-                        with_options.push(mz_sql_parser::ast::WithOption {
-                            key: mz_sql_parser::ast::Ident::new("start_offset"),
-                            value: Some(mz_sql_parser::ast::WithOptionValue::Value(Value::Array(
+                        with_options.push(WithOption {
+                            key: Ident::new("start_offset"),
+                            value: Some(WithOptionValue::Value(Value::Array(
                                 start_offsets
                                     .iter()
                                     .map(|offset| Value::Number(offset.to_string()))
@@ -166,7 +160,6 @@ pub fn purify_create_source(
                     None => {}
                 }
             }
-
             CreateSourceConnector::AvroOcf { path, .. } => {
                 let path = path.clone();
                 task::block_in_place(|| {
@@ -176,11 +169,9 @@ pub fn purify_create_source(
                     let r = mz_avro::Reader::new(f)?;
                     if !with_options_map.contains_key("reader_schema") {
                         let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                        with_options.push(mz_sql_parser::ast::WithOption {
-                            key: mz_sql_parser::ast::Ident::new("reader_schema"),
-                            value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                mz_sql_parser::ast::Value::String(schema),
-                            )),
+                        with_options.push(WithOption {
+                            key: Ident::new("reader_schema"),
+                            value: Some(WithOptionValue::Value(Value::String(schema))),
                         });
                     }
                     Ok::<_, anyhow::Error>(())
