@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! Logic related to the creation of dataflow sources.
+//!
+//! See [`render_source`] for more details.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -50,8 +52,8 @@ enum SourceType<Delimited, ByteStream> {
     ByteStream(ByteStream),
 }
 
-/// A description of a table imported by [`import_table`].
-struct ImportedTable<G>
+/// A description of a table imported by [`render_table`].
+struct RenderedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -69,10 +71,10 @@ where
 }
 
 /// Imports a table (non-durable, local source of input).
-fn import_table<G>(
+fn render_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     scope: &mut G,
-) -> ImportedTable<G>
+) -> RenderedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -118,7 +120,7 @@ where
         })
         .as_collection();
 
-    ImportedTable {
+    RenderedTable {
         ok_collection,
         err_collection,
         handle,
@@ -127,11 +129,13 @@ where
     }
 }
 
-/// Constructs a `CollectionBundle` and tokens from source arguments.
+/// Constructs a data [`Collection`], an error [`Collection`],
+/// and tokens from a [`SourceInstanceDesc`].
 ///
 /// The first returned pair are the row and error collections, and the
 /// second is a token that will keep the source alive as long as it is held.
-pub(crate) fn import_source<G>(
+// TODO(guswynn): write docs inline for this function
+pub(crate) fn render_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
@@ -178,7 +182,7 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { .. } => {
-            let mut table = import_table(as_of_frontier, scope);
+            let mut table = render_table(as_of_frontier, scope);
 
             let table_state = match storage_state.table_state.get_mut(&src_id) {
                 Some(table_state) => table_state,
@@ -411,7 +415,7 @@ where
                                                 .clone();
                                             // TODO(#11667): reuse the existing arrangement if it exists
                                             let ((tx_source_ok, tx_source_err), tx_token) =
-                                                import_source(
+                                                render_source(
                                                     dataflow_debug_name,
                                                     dataflow_id,
                                                     as_of_frontier,
