@@ -69,8 +69,9 @@ u      false     uuid
 "85907cb9-ac9b-4e35-84b8-60dc69368aca"
 
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data_view
-  INTO AVRO OCF '${testdrive.temp-dir}/uuid-sink.ocf'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ avro-ocf-verify sink=materialize.public.uuid_sink_${testdrive.seed}
+$ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
 {"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}
 {"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}}
