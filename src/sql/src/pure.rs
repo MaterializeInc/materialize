@@ -166,14 +166,7 @@ pub fn purify_create_source(
                     None => {}
                 }
             }
-            // Report an error if a file cannot be opened, or if it is a directory.
-            CreateSourceConnector::File { path, .. } => {
-                let f = File::open(&path).await?;
-                if f.metadata().await?.is_dir() {
-                    bail!("Expected a regular file, but {} is a directory.", path);
-                }
-                file = Some(f);
-            }
+
             CreateSourceConnector::AvroOcf { path, .. } => {
                 let path = path.clone();
                 task::block_in_place(|| {
@@ -192,6 +185,14 @@ pub fn purify_create_source(
                     }
                     Ok::<_, anyhow::Error>(())
                 })?;
+            }
+            // Report an error if a file cannot be opened, or if it is a directory.
+            CreateSourceConnector::File { path, .. } => {
+                let f = File::open(&path).await?;
+                if f.metadata().await?.is_dir() {
+                    bail!("Expected a regular file, but {} is a directory.", path);
+                }
+                file = Some(f);
             }
             CreateSourceConnector::S3 { .. } => {
                 let aws_config = normalize::aws_config(&mut with_options_map, None)?;
