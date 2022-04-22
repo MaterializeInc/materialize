@@ -3959,6 +3959,7 @@ dependencies = [
  "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

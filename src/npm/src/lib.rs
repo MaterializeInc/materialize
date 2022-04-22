@@ -39,7 +39,7 @@
 //!
 //! To determine the file paths to use when adding a new package, visit
 //!
-//!#     http://unpkg.com/PACKAGE@VERSION/
+//!#     <http://unpkg.com/PACKAGE@VERSION/>
 //!
 //! and browse the directory contents. (Note the trailing slash on the URL.) The
 //! compiled JavaScript/CSS assets are usually in a folder named "dist" or
