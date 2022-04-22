@@ -13,9 +13,9 @@
 
 pub mod boundary;
 #[cfg(feature = "server")]
-pub(crate) mod decode;
+pub mod decode;
 #[cfg(feature = "server")]
-pub(crate) mod render;
+pub mod render;
 #[cfg(feature = "server")]
 pub(crate) mod server;
 #[cfg(feature = "server")]

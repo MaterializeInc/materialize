@@ -7,7 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types related to the creation of dataflow sources.
+//! Types related to the creation of dataflow raw sources.
+//!
+//! Raw sources are streams (currently, Timely streams) of data directly produced by the
+//! upstream service. The main exports of this module are [`create_raw_source`]
+//! and [`create_raw_source_simple`], which turns [`RawSourceCreationConfig`]'s,
+//! [`ExternalSourceConnector`]'s, and [`SourceReader`]/[`SimpleSource`]
+//! implementations into the aforementioned streams.
+//!
+//! The full source, which is the _differential_ stream that represents the actual object
+//! created by a `CREATE SOURCE` statement, is created by composing
+//! [`create_raw_source`] or [`create_raw_source_simple`] with
+//! decoding, `SourceEnvelope` rendering, and more.
+//! See the doc comment on [`rendering`](`crate::render::sources::render_source`)
+//! for more details.
 
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
@@ -82,7 +95,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.source.rs"));
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Shared configuration information for all source types.
-pub struct SourceConfig<'a, G> {
+/// This is used in the `create_raw_source` functions, which
+/// produce raw sources.
+pub struct RawSourceCreationConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
     /// The name of the upstream resource this source corresponds to
@@ -366,7 +381,7 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
 /// A structured error for `SourceReader::get_next_message`
 /// implementors. Also implements `From<anyhow::Error>`
 /// for convenience.
-pub(crate) struct SourceReaderError {
+pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
 
@@ -385,7 +400,7 @@ impl From<anyhow::Error> for SourceReaderError {
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
 #[async_trait(?Send)]
-pub(crate) trait SourceReader {
+pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
 
@@ -468,7 +483,7 @@ pub(crate) trait SourceReader {
     }
 }
 
-pub(crate) enum NextMessage<Key, Value> {
+pub enum NextMessage<Key, Value> {
     Ready(SourceMessage<Key, Value>),
     Pending,
     TransientDelay,
@@ -759,6 +774,7 @@ impl Timestamper {
     }
 
     /// Record a deletion of a row
+    // Possibly used by no `SimpleSource` implementors
     #[allow(unused)]
     pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
         self.start_tx().await.delete(row).await
@@ -805,8 +821,8 @@ impl Timestamper {
     }
 }
 
-/// Simple sources must implement this trait. Sources will then get created as part of the
-/// [`create_source_simple`] function.
+/// Simple sources must implement this trait. Raw source streams will then get created as part of the
+/// [`create_raw_source_simple`] function.
 ///
 /// Each simple source is given access to a timestamper instance that can be used to insert or
 /// retract rows for this source. See the API of the [Timestamper](Timestamper) for more details.
@@ -820,9 +836,14 @@ pub trait SimpleSource {
     async fn start(self, timestamper: &Timestamper) -> Result<(), SourceError>;
 }
 
-/// Creates a source dataflow operator from a connector implementing [SimpleSource](SimpleSource)
-pub fn create_source_simple<G, C>(
-    config: SourceConfig<G>,
+/// Creates a raw source dataflow operator from a connector that has a corresponding [`SimpleSource`]
+/// implentation. The type of ExternalSourceConnector determines the type of
+/// connector that _should_ be created.
+///
+/// See the [`module` docs](self) for more details about how
+/// raw sources are used.
+pub fn create_raw_source_simple<G, C>(
+    config: RawSourceCreationConfig<G>,
     connector: C,
 ) -> (
     (
@@ -835,7 +856,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     C: SimpleSource + Send + 'static,
 {
-    let SourceConfig {
+    let RawSourceCreationConfig {
         id,
         name,
         upstream_name,
@@ -931,10 +952,18 @@ where
     )
 }
 
-/// Creates a source dataflow operator. The type of ExternalSourceConnector determines the type of
-/// source that should be created
-pub(crate) fn create_source<G, S: 'static>(
-    config: SourceConfig<G>,
+/// Creates a raw source dataflow operator from a connector that has a corresponding [`SourceReader`]
+/// implentation. The type of ExternalSourceConnector determines the type of
+/// connector that _should_ be created.
+///
+/// This is also the place where _reclocking_
+/// (<https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md>)
+/// happens.
+///
+/// See the [`module` docs](self) for more details about how
+/// raw sources are used.
+pub fn create_raw_source<G, S: 'static>(
+    config: RawSourceCreationConfig<G>,
     source_connector: &ExternalSourceConnector,
     aws_external_id: AwsExternalId,
 ) -> (
@@ -948,7 +977,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
-    let SourceConfig {
+    let RawSourceCreationConfig {
         name,
         upstream_name,
         id,
