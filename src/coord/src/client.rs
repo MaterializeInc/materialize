@@ -474,6 +474,7 @@ impl SessionClient {
                 | ExecuteResponse::CreatedSchema { existed: _ }
                 | ExecuteResponse::CreatedRole
                 | ExecuteResponse::CreatedComputeInstance { existed: _ }
+                | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
                 | ExecuteResponse::CreatedTable { existed: _ }
                 | ExecuteResponse::CreatedIndex { existed: _ }
                 | ExecuteResponse::CreatedSecret { existed: _ }

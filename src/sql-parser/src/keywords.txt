@@ -233,6 +233,7 @@ Remote
 Rename
 Repeatable
 Replace
+Replica
 Reset
 Restrict
 Right

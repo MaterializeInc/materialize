@@ -119,6 +119,9 @@ pub fn describe(
         Statement::CreateType(stmt) => Some(ddl::describe_create_type(&scx, stmt)?),
         Statement::CreateRole(stmt) => Some(ddl::describe_create_role(&scx, stmt)?),
         Statement::CreateCluster(stmt) => Some(ddl::describe_create_cluster(&scx, stmt)?),
+        Statement::CreateClusterReplica(stmt) => {
+            Some(ddl::describe_create_cluster_replica(&scx, stmt)?)
+        }
         Statement::CreateSecret(stmt) => Some(ddl::describe_create_secret(&scx, stmt)?),
         Statement::DropDatabase(stmt) => Some(ddl::describe_drop_database(&scx, stmt)?),
         Statement::DropSchema(stmt) => Some(ddl::describe_drop_schema(&scx, stmt)?),
@@ -314,6 +317,10 @@ pub fn plan(
         stmt @ Statement::CreateCluster(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateCluster, scx, stmt);
             ddl::plan_create_cluster(scx, stmt)
+        }
+        stmt @ Statement::CreateClusterReplica(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::CreateClusterReplica, scx, stmt);
+            ddl::plan_create_cluster_replica(scx, stmt)
         }
         stmt @ Statement::CreateSecret(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateSecret, scx, stmt);

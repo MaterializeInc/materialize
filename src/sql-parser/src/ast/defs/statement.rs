@@ -49,6 +49,7 @@ pub enum Statement<T: AstInfo> {
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
+    CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
@@ -108,6 +109,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
+            Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
@@ -880,6 +882,8 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub name: Ident,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
+    /// Replicas to create alongside the cluster.
+    pub replicas: Vec<ReplicaDefinition<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
@@ -897,15 +901,6 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
-    Remote {
-        /// The name.
-        name: Ident,
-        /// The hosts.
-        hosts: Vec<WithOptionValue<T>>,
-    },
-    /// The `SIZE [[=] <size>]` option.
-    Size(WithOptionValue<T>),
     /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
     IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
@@ -915,17 +910,6 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::Remote { name, hosts } => {
-                f.write_str("REMOTE ");
-                f.write_node(name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(hosts));
-                f.write_str(")");
-            }
-            ClusterOption::Size(size) => {
-                f.write_str("SIZE ");
-                f.write_node(size);
-            }
             ClusterOption::IntrospectionGranularity(granularity) => {
                 f.write_str("INTROSPECTION GRANULARITY ");
                 f.write_node(granularity);
@@ -933,6 +917,66 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
                 f.write_node(debugging);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReplicaDefinition<T: AstInfo> {
+    /// Name of the created replica.
+    pub name: Ident,
+    /// The comma-separated options.
+    pub options: Vec<ReplicaOption<T>>,
+}
+
+/// `CREATE CLUSTER REPLICA ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateClusterReplicaStatement<T: AstInfo> {
+    /// The replica's definition.
+    pub definition: ReplicaDefinition<T>,
+    /// Name of the replica's cluster.
+    pub for_cluster: Ident,
+}
+
+impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CLUSTER REPLICA ");
+        f.write_node(&self.definition.name);
+        f.write_str(" FOR ");
+        f.write_node(&self.for_cluster);
+        if !self.definition.options.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.definition.options));
+        }
+    }
+}
+impl_display_t!(CreateClusterReplicaStatement);
+
+/// An option in a `CREATE CLUSTER` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReplicaOption<T: AstInfo> {
+    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
+    Remote {
+        /// The hosts.
+        hosts: Vec<WithOptionValue<T>>,
+    },
+    /// The `SIZE [[=] <size>]` option.
+    Size(WithOptionValue<T>),
+}
+
+impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ReplicaOption::Remote { hosts } => {
+                f.write_str("REMOTE ");
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(hosts));
+                f.write_str(")");
+            }
+            ReplicaOption::Size(size) => {
+                f.write_str("SIZE ");
+                f.write_node(size);
             }
         }
     }

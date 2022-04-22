@@ -22,10 +22,6 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_postgres_util::TableInfo;
-use mz_repr::adt::interval::Interval;
-use mz_sql_parser::ast::{CreateConnector, CreateConnectorStatement};
-use mz_sql_parser::ast::{CsrConnector, WithOptionValue};
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -52,7 +48,14 @@ use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_postgres_util::TableInfo;
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
+use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::{
+    CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement, CsrConnector,
+    ReplicaDefinition, ReplicaOption, WithOptionValue,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
@@ -88,11 +91,12 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
-    Connector, CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
-    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    Connector, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2812,11 +2816,23 @@ pub fn describe_create_cluster(
 
 pub fn plan_create_cluster(
     _: &StatementContext,
-    CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
+    CreateClusterStatement {
+        name,
+        options,
+        replicas,
+    }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
+    let mut replicas_out = Vec::with_capacity(replicas.len());
+    for definition in replicas {
+        replicas_out.push((
+            normalize::ident(definition.name),
+            plan_replica_config(definition.options)?,
+        ));
+    }
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
         config: plan_cluster_options(options)?,
+        replicas: replicas_out,
     }))
 }
 
@@ -2829,23 +2845,11 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
 fn plan_cluster_options(
     options: Vec<ClusterOption<Aug>>,
 ) -> Result<Option<ComputeInstanceIntrospectionConfig>, anyhow::Error> {
-    let mut remote_replicas = BTreeMap::new();
-    let mut size = None;
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
 
     for option in options {
         match option {
-            ClusterOption::Remote { name, hosts } => {
-                let name = normalize::ident(name);
-                let mut hosts_out = BTreeSet::new();
-                for host in hosts {
-                    hosts_out.insert(with_option_type!(Some(host), String));
-                }
-                if remote_replicas.insert(name, hosts_out).is_some() {
-                    bail!("REMOTE replicas must have unique names");
-                }
-            }
             ClusterOption::IntrospectionDebugging(enabled) => {
                 if introspection_debugging.is_some() {
                     bail!("INTROSPECTION DEBUGGING specified more than once");
@@ -2858,12 +2862,6 @@ fn plan_cluster_options(
                 }
                 introspection_granularity =
                     Some(with_option_type!(Some(interval), OptionalInterval));
-            }
-            ClusterOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
-                }
-                size = Some(with_option_type!(Some(s), String));
             }
         }
     }
@@ -2881,6 +2879,63 @@ fn plan_cluster_options(
             bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
         }
     })
+}
+
+fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
+    let mut remote_replicas = BTreeSet::new();
+    let mut size = None;
+
+    for option in options {
+        match option {
+            ReplicaOption::Remote { hosts } => {
+                for host in hosts {
+                    remote_replicas.insert(with_option_type!(Some(host), String));
+                }
+            }
+            ReplicaOption::Size(s) => {
+                if size.is_some() {
+                    bail!("SIZE specified more than once");
+                }
+                size = Some(with_option_type!(Some(s), String));
+            }
+        }
+    }
+
+    match (remote_replicas.len() > 0, size) {
+        (true, None) => Ok(ReplicaConfig::Remote {
+            replicas: remote_replicas,
+        }),
+        (false, Some(size)) => Ok(ReplicaConfig::Managed { size }),
+        (false, None) => {
+            bail!("one of REMOTE or SIZE must be specified")
+        }
+        (true, Some(_)) => {
+            bail!("only one of REMOTE or SIZE may be specified")
+        }
+    }
+}
+
+pub fn describe_create_cluster_replica(
+    _: &StatementContext,
+    _: &CreateClusterReplicaStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_cluster_replica(
+    _: &StatementContext,
+    CreateClusterReplicaStatement {
+        definition: ReplicaDefinition { name, options },
+        for_cluster,
+    }: CreateClusterReplicaStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    Ok(Plan::CreateComputeInstanceReplica(
+        CreateComputeInstanceReplicaPlan {
+            name: normalize::ident(name),
+            for_cluster: normalize::ident(for_cluster),
+            config: plan_replica_config(options)?,
+        },
+    ))
 }
 
 pub fn describe_create_secret(

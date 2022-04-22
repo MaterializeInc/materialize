@@ -26,14 +26,14 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
@@ -150,14 +150,14 @@ pub struct CreateRolePlan {
 pub struct CreateComputeInstancePlan {
     pub name: String,
     pub config: Option<ComputeInstanceIntrospectionConfig>,
+    pub replicas: Vec<(String, ReplicaConfig)>,
 }
 
 #[derive(Debug)]
 pub struct CreateComputeInstanceReplicaPlan {
     pub name: String,
-    pub if_not_exists: bool,
-    pub on_cluster: String,
-    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub for_cluster: String,
+    pub config: ReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
@@ -167,6 +167,12 @@ pub struct ComputeInstanceIntrospectionConfig {
     pub debugging: bool,
     /// The interval at which to introspect.
     pub granularity: Duration,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ReplicaConfig {
+    Remote { replicas: BTreeSet<String> },
+    Managed { size: String },
 }
 
 #[derive(Debug)]

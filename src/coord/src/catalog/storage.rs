@@ -578,6 +578,9 @@ impl<S: Append> Connection<S> {
         let compute_instances = COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?;
+        let compute_instance_replicas = COLLECTION_COMPUTE_INSTANCE_REPLICAS
+            .peek_one(&mut self.stash)
+            .await?;
         let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
             .peek_one(&mut self.stash)
             .await?;
@@ -595,6 +598,11 @@ impl<S: Append> Connection<S> {
             compute_instances: TableTransaction::new(compute_instances, Some(|k| k.id), |a, b| {
                 a.name == b.name
             }),
+            compute_instance_replicas: TableTransaction::new(
+                compute_instance_replicas,
+                None,
+                |_a, _b| false,
+            ),
             introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
                 false
             }),
@@ -617,6 +625,8 @@ pub struct Transaction<'a, S> {
     items: TableTransaction<ItemKey, ItemValue, i64>,
     roles: TableTransaction<RoleKey, RoleValue, i64>,
     compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue, i64>,
+    compute_instance_replicas:
+        TableTransaction<ComputeInstanceReplicaKey, ComputeInstanceReplicaValue, i64>,
     introspection_sources: TableTransaction<
         ComputeIntrospectionSourceIndexKey,
         ComputeIntrospectionSourceIndexValue,
@@ -751,24 +761,34 @@ impl<'a, S: Append> Transaction<'a, S> {
 
     pub fn insert_compute_instance_replica(
         &mut self,
-        compute_id: ComputeInstanceId,
         compute_name: &str,
         replica_name: &str,
         config: &ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-        self.compute_instances
-            .update(|k, v| {
-                if k.id == compute_id {
-                    Some(ComputeInstanceValue {
-                        name: v.name.clone(),
-                        config: Some(config.clone()),
-                    })
-                } else {
-                    None
-                }
-            })
+        let mut compute_instance_id = None;
+        for (
+            ComputeInstanceKey { id },
+            ComputeInstanceValue {
+                name,
+                config: _config,
+            },
+        ) in self.compute_instances.items()
+        {
+            if &name == compute_name {
+                compute_instance_id = Some(id);
+                break;
+            }
+        }
+        self.compute_instance_replicas
+            .insert(
+                |_| ComputeInstanceReplicaKey {
+                    compute_instance_id: compute_instance_id.unwrap(),
+                    name: replica_name.into(),
+                },
+                ComputeInstanceReplicaValue { config },
+            )
             .map_err(|_| {
                 ErrorKind::ReplicaAlreadyExists(replica_name.to_owned(), compute_name.to_owned())
             })?;

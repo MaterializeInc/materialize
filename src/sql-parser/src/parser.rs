@@ -1567,7 +1567,12 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
             self.parse_create_role()
         } else if self.peek_keyword(CLUSTER) {
-            self.parse_create_cluster()
+            self.next_token();
+            if self.peek_keyword(REPLICA) {
+                self.parse_create_cluster_replica()
+            } else {
+                self.parse_create_cluster()
+            }
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
@@ -2570,6 +2575,13 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
         let name = self.parse_identifier()?;
+
+        let replicas = if self.peek_keyword(REPLICA) {
+            self.parse_comma_separated(Parser::parse_inline_replica)?
+        } else {
+            vec![]
+        };
+
         let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
             vec![]
@@ -2578,40 +2590,68 @@ impl<'a> Parser<'a> {
         };
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
+            replicas,
             options,
         }))
     }
 
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REMOTE, SIZE, INTROSPECTION])? {
+    fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
+        self.expect_keyword(REPLICA)?;
+        let name = self.parse_identifier()?;
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        Ok(ReplicaDefinition { name, options })
+    }
+
+    fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[REMOTE, SIZE])? {
             REMOTE => {
-                let name = self.parse_identifier()?;
                 self.expect_token(&Token::LParen)?;
                 let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
                 self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Remote { name, hosts })
+                Ok(ReplicaOption::Remote { hosts })
             }
             SIZE => {
                 let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::Size(self.parse_with_option_value()?))
+                Ok(ReplicaOption::Size(self.parse_with_option_value()?))
             }
-            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
-                DEBUGGING => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionDebugging(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                GRANULARITY => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionGranularity(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                _ => unreachable!(),
-            },
             _ => unreachable!(),
         }
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        self.expect_keyword(INTROSPECTION)?;
+        match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+            DEBUGGING => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::IntrospectionDebugging(
+                    self.parse_with_option_value()?,
+                ))
+            }
+            GRANULARITY => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::IntrospectionGranularity(
+                    self.parse_with_option_value()?,
+                ))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let name = self.parse_identifier()?;
+
+        self.expect_keyword(FOR)?;
+
+        let for_cluster = self.parse_identifier()?;
+
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        Ok(Statement::CreateClusterReplica(
+            CreateClusterReplicaStatement {
+                definition: ReplicaDefinition { name, options },
+                for_cluster,
+            },
+        ))
     }
 
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {

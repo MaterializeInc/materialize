@@ -2233,7 +2233,7 @@ impl Catalog {
             },
             CreateComputeInstanceReplica {
                 name: String,
-                on_cluster: ComputeInstanceId,
+                on_cluster_name: String,
                 config: ConcreteComputeInstanceReplicaConfig,
             },
             CreateItem {
@@ -2364,7 +2364,6 @@ impl Catalog {
                 }
                 Op::CreateComputeInstanceReplica {
                     name,
-                    on_cluster,
                     on_cluster_name,
                     config,
                 } => {
@@ -2373,15 +2372,10 @@ impl Catalog {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    tx.insert_compute_instance_replica(
-                        on_cluster,
-                        &on_cluster_name,
-                        &name,
-                        &config,
-                    )?;
+                    tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?;
                     vec![Action::CreateComputeInstanceReplica {
                         name,
-                        on_cluster,
+                        on_cluster_name,
                         config,
                     }]
                 }
@@ -2659,12 +2653,17 @@ impl Catalog {
                 }
 
                 Action::CreateComputeInstanceReplica {
-                    on_cluster,
                     name,
+                    on_cluster_name,
                     config,
                 } => {
-                    info!("create replica {} of instance {}", name, on_cluster);
-                    state.insert_compute_instance_replica(on_cluster, name.clone(), config);
+                    info!("create replica {} of instance {}", name, on_cluster_name);
+                    let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
+                    state.insert_compute_instance_replica(
+                        compute_instance_id,
+                        name.clone(),
+                        config,
+                    );
                     // TODO: replica system table
                 }
 
@@ -3022,7 +3021,6 @@ pub enum Op {
     CreateComputeInstanceReplica {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
-        on_cluster: ComputeInstanceId,
         on_cluster_name: String,
     },
     CreateItem {

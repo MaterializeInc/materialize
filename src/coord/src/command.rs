@@ -195,6 +195,10 @@ pub enum ExecuteResponse {
     CreatedComputeInstance {
         existed: bool,
     },
+    /// The requested compute instance replica was created.
+    CreatedComputeInstanceReplica {
+        existed: bool,
+    },
     /// The requested index was created.
     CreatedIndex {
         existed: bool,

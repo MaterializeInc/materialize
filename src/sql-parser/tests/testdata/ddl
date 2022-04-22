@@ -1266,42 +1266,63 @@ CREATE CLUSTER cluster
 ----
 CREATE CLUSTER cluster
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [] })
 
 parse-statement
 CREATE CLUSTER cluster VIRTUAL
 ----
-error: Expected one of REMOTE or SIZE or INTROSPECTION, found identifier "virtual"
+error: Expected INTROSPECTION, found identifier "virtual"
 CREATE CLUSTER cluster VIRTUAL
                        ^
 
 parse-statement
 CREATE CLUSTER cluster SIZE 'small'
 ----
+error: Expected INTROSPECTION, found SIZE
 CREATE CLUSTER cluster SIZE 'small'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
+                       ^
 
 parse-statement
 CREATE CLUSTER cluster SIZE = 'small'
 ----
-CREATE CLUSTER cluster SIZE 'small'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
+error: Expected INTROSPECTION, found SIZE
+CREATE CLUSTER cluster SIZE = 'small'
+                       ^
 
 parse-statement
-CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
+CREATE CLUSTER cluster REPLICA a REMOTE ('host1')
 ----
-CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
+CREATE CLUSTER cluster
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small"))), Remote { name: Ident("replica1"), hosts: [Value(String("host1"))] }, Size(Value(String("medium"))), Remote { name: Ident("replica2"), hosts: [Value(String("host2"))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }] })
 
 parse-statement
-CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
+CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
 ----
-CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
+error: Expected REPLICA, found SIZE
+CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
+                                                   ^
+
+parse-statement
+CREATE CLUSTER REPLICA replica REMOTE ('host1')
+----
+error: Expected FOR, found REMOTE
+CREATE CLUSTER REPLICA replica REMOTE ('host1')
+                               ^
+
+parse-statement
+CREATE CLUSTER REPLICA replica SIZE 'small'
+----
+error: Expected FOR, found SIZE
+CREATE CLUSTER REPLICA replica SIZE 'small'
+                               ^
+
+parse-statement
+CREATE CLUSTER REPLICA replica SIZE 'small', REMOTE ('host1')
+----
+error: Expected FOR, found SIZE
+CREATE CLUSTER REPLICA replica SIZE 'small', REMOTE ('host1')
+                               ^
 
 parse-statement
 DROP CLUSTER cluster
@@ -1323,6 +1344,27 @@ DROP CLUSTER IF EXISTS cluster RESTRICT
 DROP CLUSTER IF EXISTS cluster
 =>
 DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER REPLICA replica FROM cluster
+----
+DROP CLUSTER REPLICA replica FROM cluster
+=>
+DropClusterReplica(DropClusterReplicaStatement { if_exists: false, name: UnresolvedObjectName([Ident("replica")]), cluster: UnresolvedObjectName([Ident("cluster")]) })
+
+parse-statement
+DROP CLUSTER REPLICA IF EXISTS replica FROM cluster
+----
+DROP CLUSTER REPLICA IF EXISTS replica FROM cluster
+=>
+DropClusterReplica(DropClusterReplicaStatement { if_exists: true, name: UnresolvedObjectName([Ident("replica")]), cluster: UnresolvedObjectName([Ident("cluster")]) })
+
+parse-statement
+DROP CLUSTER REPLICA IF EXISTS replica
+----
+error: Expected FROM, found EOF
+DROP CLUSTER REPLICA IF EXISTS replica
+                                      ^
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster CASCADE

@@ -160,6 +160,11 @@ where
         Ok(())
     }
 
+    /// Deterministically generates replica names based on inputs.
+    fn generate_replica_name(instance: ComputeInstanceId, name: &str) -> String {
+        format!("cluster-{instance}-{name}")
+    }
+
     /// Adds replicas of an instance.
     ///
     /// # Panics
@@ -168,6 +173,7 @@ where
     pub async fn add_replica_to_instance(
         &mut self,
         instance: ComputeInstanceId,
+        name: &str,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         assert!(
@@ -175,15 +181,15 @@ where
             "call Controller::create_instance before calling add_replica_to_instance"
         );
 
+        let replica_name = Self::generate_replica_name(instance, name);
+
         // Add replicas backing that instance.
         match config {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance).unwrap();
                 let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                compute_instance
-                    .add_replica(format!("cluster-{instance}"), client)
-                    .await;
+                compute_instance.add_replica(replica_name, client).await;
             }
             ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
                 let OrchestratorConfig {
@@ -199,7 +205,7 @@ where
                     orchestrator
                         .namespace("compute")
                         .ensure_service(
-                            &format!("cluster-{instance}"),
+                            &replica_name,
                             ServiceConfig {
                                 image: computed_image.clone(),
                                 args: &|hosts_ports, my_ports, my_index| {
@@ -248,7 +254,7 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance)
                     .unwrap()
-                    .add_replica("default".into(), client)
+                    .add_replica(replica_name, client)
                     .await;
             }
         }

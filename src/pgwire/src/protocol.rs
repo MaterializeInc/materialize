@@ -1067,6 +1067,9 @@ where
             ExecuteResponse::CreatedComputeInstance { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
             }
+            ExecuteResponse::CreatedComputeInstanceReplica { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
