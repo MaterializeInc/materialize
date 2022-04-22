@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
+        .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.proto", "::mz_repr::proto")
         .type_attribute(
@@ -19,6 +20,7 @@ fn main() {
             &[
                 "dataflow-types/src/logging.proto",
                 "dataflow-types/src/postgres_source.proto",
+                "dataflow-types/src/plan/top_k.proto",
             ],
             &[".."],
         )
