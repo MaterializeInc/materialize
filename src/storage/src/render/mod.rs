@@ -155,7 +155,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                 // but we will do this with an empty source.
                 let valid = storage_state.source_uppers.contains_key(src_id);
                 let ((ok, err), token) = if valid {
-                    let ((ok, err), token) = crate::render::sources::import_source(
+                    let ((ok, err), token) = crate::render::sources::render_source(
                         &debug_name,
                         source_dataflow_id,
                         &as_of,
