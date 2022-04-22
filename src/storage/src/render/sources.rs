@@ -33,8 +33,8 @@ use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
-    KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, S3SourceReader, SourceConfig,
-    SourceToken,
+    KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig,
+    S3SourceReader, SourceToken,
 };
 use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -127,13 +127,19 @@ where
     }
 }
 
-/// Constructs a data [`Collection`], an error [`Collection`],
-/// and tokens from a [`SourceInstanceDesc`].
+/// _Renders_ complete _differential_ [`Collection`]s
+/// that represent the final source and its errors
+/// as requested by the original `CREATE SOURCE` statement,
+/// encapsulated in the passed [`SourceInstanceDesc`].
 ///
-/// The first returned pair are the row and error collections, and the
-/// second is a token that will keep the source alive as long as it is held.
-// TODO(guswynn): write docs inline for this function
-pub(crate) fn render_source<G>(
+/// The first element in the returned tuple is the pair of [`Collection`]s,
+/// the second is a type-erased token that will keep the source
+/// alive as long as it is not dropped.
+///
+/// This function is intended to implement the recipe described here:
+/// <https://github.com/MaterializeInc/materialize/pull/12109>
+// TODO(guswynn): Link to merged document
+pub fn render_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
@@ -178,7 +184,7 @@ where
     // This has a lot of potential for improvement in the near future.
     match src.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
-        // via Command::Insert commands.
+        // via Command::Insert commands. Defers entirely to `render_table`
         SourceConnector::Local { .. } => {
             let mut table = render_table(as_of_frontier, scope);
 
@@ -228,6 +234,12 @@ where
             // whose contents will be concatenated and inserted along the collection.
             let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
+            // Note that this `render_source` attaches a single _instance_ of a source
+            // to the passed `Scope`, and this instance may be disabled if the
+            // source type does not support multiple instances. `render_source`
+            // is called on each timely worker as part of
+            // [`super::build_storage_dataflow`].
+
             // All workers are responsible for reading in Kafka sources. Other sources
             // support single-threaded ingestion only. Note that in all cases we want all
             // readers of the same source or same partition to reside on the same worker,
@@ -250,7 +262,7 @@ where
                 .get(&src_id)
                 .map(|history| history.clone());
             let source_name = format!("{}-{}", connector.name(), uid);
-            let source_config = SourceConfig {
+            let base_source_config = RawSourceCreationConfig {
                 name: source_name,
                 upstream_name: connector.upstream_name().map(ToOwned::to_owned),
                 id: uid,
@@ -267,248 +279,266 @@ where
                 aws_external_id: storage_state.aws_external_id.clone(),
             };
 
-            let (mut collection, capability) =
-                if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
-                    let source = PubNubSourceReader::new(uid, pubnub_connector);
-                    let ((ok_stream, err_stream), capability) =
-                        source::create_source_simple(source_config, source);
+            // Pubnub and Postgres are `SimpleSource`s, so they produce _raw_ sources
+            // that are usable as final _differential_ `Collection`s
+            let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
+                pubnub_connector,
+            ) = connector
+            {
+                let source = PubNubSourceReader::new(uid, pubnub_connector);
+                let ((ok_stream, err_stream), capability) =
+                    source::create_raw_source_simple(base_source_config, source);
 
-                    error_collections.push(
-                        err_stream
-                            .map(DataflowError::SourceError)
-                            .pass_through("source-errors", 1)
-                            .as_collection(),
-                    );
+                error_collections.push(
+                    err_stream
+                        .map(DataflowError::SourceError)
+                        .pass_through("source-errors", 1)
+                        .as_collection(),
+                );
 
-                    (ok_stream.as_collection(), capability)
-                } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                    let source =
-                        PostgresSourceReader::new(uid, pg_connector, source_config.base_metrics);
+                (ok_stream.as_collection(), capability)
+            } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
+                let source =
+                    PostgresSourceReader::new(uid, pg_connector, base_source_config.base_metrics);
 
-                    let ((ok_stream, err_stream), capability) =
-                        source::create_source_simple(source_config, source);
+                let ((ok_stream, err_stream), capability) =
+                    source::create_raw_source_simple(base_source_config, source);
 
-                    error_collections.push(
-                        err_stream
-                            .map(DataflowError::SourceError)
-                            .pass_through("source-errors", 1)
-                            .as_collection(),
-                    );
+                error_collections.push(
+                    err_stream
+                        .map(DataflowError::SourceError)
+                        .pass_through("source-errors", 1)
+                        .as_collection(),
+                );
 
-                    (ok_stream.as_collection(), capability)
-                } else if let ExternalSourceConnector::Persist(_) = connector {
-                    unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
-                } else {
-                    let ((ok_source, err_source), capability) = match connector {
-                        ExternalSourceConnector::Kafka(_) => {
-                            let ((ok, err), cap) = source::create_source::<_, KafkaSourceReader>(
-                                source_config,
-                                &connector,
-                                storage_state.aws_external_id.clone(),
-                            );
-                            ((SourceType::Delimited(ok), err), cap)
-                        }
-                        ExternalSourceConnector::Kinesis(_) => {
-                            let ((ok, err), cap) = source::create_source::<
-                                _,
-                                DelimitedValueSource<KinesisSourceReader>,
-                            >(
-                                source_config,
-                                &connector,
-                                storage_state.aws_external_id.clone(),
-                            );
-                            ((SourceType::Delimited(ok), err), cap)
-                        }
-                        ExternalSourceConnector::S3(_) => {
-                            let ((ok, err), cap) = source::create_source::<_, S3SourceReader>(
-                                source_config,
-                                &connector,
-                                storage_state.aws_external_id.clone(),
-                            );
-                            ((SourceType::ByteStream(ok), err), cap)
-                        }
-                        ExternalSourceConnector::File(_) => {
-                            let ((ok, err), cap) = source::create_source::<_, FileSourceReader>(
-                                source_config,
-                                &connector,
-                                storage_state.aws_external_id.clone(),
-                            );
-                            ((SourceType::ByteStream(ok), err), cap)
-                        }
-                        ExternalSourceConnector::Postgres(_) => unreachable!(),
-                        ExternalSourceConnector::PubNub(_) => unreachable!(),
-                        ExternalSourceConnector::Persist(_) => unreachable!(),
+                (ok_stream.as_collection(), capability)
+            } else if let ExternalSourceConnector::Persist(_) = connector {
+                unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
+            } else {
+                // Build the _raw_ ok and error sources using `create_raw_source` and the
+                // correct `SourceReader` implementations
+                let ((ok_source, err_source), capability) = match connector {
+                    ExternalSourceConnector::Kafka(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
+                            base_source_config,
+                            &connector,
+                            storage_state.aws_external_id.clone(),
+                        );
+                        ((SourceType::Delimited(ok), err), cap)
+                    }
+                    ExternalSourceConnector::Kinesis(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<
+                            _,
+                            DelimitedValueSource<KinesisSourceReader>,
+                        >(
+                            base_source_config,
+                            &connector,
+                            storage_state.aws_external_id.clone(),
+                        );
+                        ((SourceType::Delimited(ok), err), cap)
+                    }
+                    ExternalSourceConnector::S3(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
+                            base_source_config,
+                            &connector,
+                            storage_state.aws_external_id.clone(),
+                        );
+                        ((SourceType::ByteStream(ok), err), cap)
+                    }
+                    ExternalSourceConnector::File(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<_, FileSourceReader>(
+                            base_source_config,
+                            &connector,
+                            storage_state.aws_external_id.clone(),
+                        );
+                        ((SourceType::ByteStream(ok), err), cap)
+                    }
+                    ExternalSourceConnector::Postgres(_) => unreachable!(),
+                    ExternalSourceConnector::PubNub(_) => unreachable!(),
+                    ExternalSourceConnector::Persist(_) => unreachable!(),
+                };
+
+                // Include any source errors.
+                error_collections.push(
+                    err_source
+                        .map(DataflowError::SourceError)
+                        .pass_through("source-errors", 1)
+                        .as_collection(),
+                );
+
+                let (stream, errors) = {
+                    let (key_encoding, value_encoding) = match encoding {
+                        SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
+                        SourceDataEncoding::Single(value) => (None, value),
                     };
 
-                    // Include any source errors.
-                    error_collections.push(
-                        err_source
-                            .map(DataflowError::SourceError)
-                            .pass_through("source-errors", 1)
-                            .as_collection(),
-                    );
-
-                    let (stream, errors) = {
-                        let (key_encoding, value_encoding) = match encoding {
-                            SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
-                            SourceDataEncoding::Single(value) => (None, value),
+                    // CDCv2 can't quite be slotted in to the below code, since it determines
+                    // its own diffs/timestamps as part of decoding.
+                    //
+                    // `render_decode_cdcv2` accomplishes what decoding and envelope-processing
+                    // below do for other `SourceEnvelope`s
+                    if let SourceEnvelope::CdcV2 = &envelope {
+                        let AvroEncoding {
+                            schema,
+                            schema_registry_config,
+                            confluent_wire_format,
+                        } = match value_encoding {
+                            DataEncoding::Avro(enc) => enc,
+                            _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
                         };
+                        let ok_source = match ok_source {
+                            SourceType::Delimited(s) => s,
+                            _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
+                        };
+                        // TODO(petrosagg): this should move to the envelope section below and
+                        // made to work with a stream of Rows instead of decoding Avro directly
+                        let (oks, token) = render_decode_cdcv2(
+                            &ok_source,
+                            &schema,
+                            schema_registry_config,
+                            confluent_wire_format,
+                        );
+                        needed_tokens.push(Arc::new(token));
+                        (oks, None)
+                    } else {
+                        // Depending on the type of _raw_ source produced for the given source
+                        // connector, render the _decode_ part of the pipeline, that turns a raw data
+                        // stream into a `DecodeResult`.
+                        let (results, extra_token) = match ok_source {
+                            SourceType::Delimited(source) => render_decode_delimited(
+                                &source,
+                                key_encoding,
+                                value_encoding,
+                                dataflow_debug_name,
+                                metadata_columns,
+                                &mut linear_operators,
+                                storage_state.decode_metrics.clone(),
+                            ),
+                            SourceType::ByteStream(source) => render_decode(
+                                &source,
+                                value_encoding,
+                                dataflow_debug_name,
+                                metadata_columns,
+                                &mut linear_operators,
+                                storage_state.decode_metrics.clone(),
+                            ),
+                        };
+                        if let Some(tok) = extra_token {
+                            needed_tokens.push(Arc::new(tok));
+                        }
 
-                        // CDCv2 can't quite be slotted in to the below code, since it determines
-                        // its own diffs/timestamps as part of decoding.
-                        if let SourceEnvelope::CdcV2 = &envelope {
-                            let AvroEncoding {
-                                schema,
-                                schema_registry_config,
-                                confluent_wire_format,
-                            } = match value_encoding {
-                                DataEncoding::Avro(enc) => enc,
-                                _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
-                            };
-                            let ok_source = match ok_source {
-                                SourceType::Delimited(s) => s,
-                                _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
-                            };
-                            // TODO(petrosagg): this should move to the envelope section below and
-                            // made to work with a stream of Rows instead of decoding Avro directly
-                            let (oks, token) = render_decode_cdcv2(
-                                &ok_source,
-                                &schema,
-                                schema_registry_config,
-                                confluent_wire_format,
-                            );
-                            needed_tokens.push(Arc::new(token));
-                            (oks, None)
-                        } else {
-                            let (results, extra_token) = match ok_source {
-                                SourceType::Delimited(source) => render_decode_delimited(
-                                    &source,
-                                    key_encoding,
-                                    value_encoding,
-                                    dataflow_debug_name,
-                                    metadata_columns,
-                                    &mut linear_operators,
-                                    storage_state.decode_metrics.clone(),
-                                ),
-                                SourceType::ByteStream(source) => render_decode(
-                                    &source,
-                                    value_encoding,
-                                    dataflow_debug_name,
-                                    metadata_columns,
-                                    &mut linear_operators,
-                                    storage_state.decode_metrics.clone(),
-                                ),
-                            };
-                            if let Some(tok) = extra_token {
-                                needed_tokens.push(Arc::new(tok));
-                            }
-
-                            // render envelopes
-                            match &envelope {
-                                SourceEnvelope::Debezium(dbz_envelope) => {
-                                    let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
-                                        Some(tx_metadata) => {
-                                            let tx_src_desc = storage_state
-                                                .source_descriptions
-                                                .get(&tx_metadata.tx_metadata_global_id)
-                                                // N.B. tx_id is validated when constructing dbz_envelope
-                                                .expect("bad tx metadata spec")
-                                                .clone();
-                                            // TODO(#11667): reuse the existing arrangement if it exists
-                                            let ((tx_source_ok, tx_source_err), tx_token) =
-                                                render_source(
-                                                    dataflow_debug_name,
-                                                    dataflow_id,
-                                                    as_of_frontier,
-                                                    SourceInstanceDesc {
-                                                        description: tx_src_desc,
-                                                        arguments: SourceInstanceArguments {
-                                                            operators: None,
-                                                        },
+                        // Render `SourceEnvelope`s. An Envelope decribes how to turn a stream
+                        // of `DecodeResult`s into a _differential_ `Collection`, and is the
+                        // final stage of rendering (minus some extra transformations below).
+                        //
+                        // Note that currently this code happens to not call the final
+                        // `as_collection` until later.
+                        match &envelope {
+                            SourceEnvelope::Debezium(dbz_envelope) => {
+                                let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
+                                    Some(tx_metadata) => {
+                                        let tx_src_desc = storage_state
+                                            .source_descriptions
+                                            .get(&tx_metadata.tx_metadata_global_id)
+                                            // N.B. tx_id is validated when constructing dbz_envelope
+                                            .expect("bad tx metadata spec")
+                                            .clone();
+                                        // TODO(#11667): reuse the existing arrangement if it exists
+                                        let ((tx_source_ok, tx_source_err), tx_token) =
+                                            render_source(
+                                                dataflow_debug_name,
+                                                dataflow_id,
+                                                as_of_frontier,
+                                                SourceInstanceDesc {
+                                                    description: tx_src_desc,
+                                                    arguments: SourceInstanceArguments {
+                                                        operators: None,
                                                     },
-                                                    storage_state,
-                                                    scope,
-                                                    tx_metadata.tx_metadata_global_id,
-                                                );
-                                            needed_tokens.push(tx_token);
-                                            error_collections.push(tx_source_err);
+                                                },
+                                                storage_state,
+                                                scope,
+                                                tx_metadata.tx_metadata_global_id,
+                                            );
+                                        needed_tokens.push(tx_token);
+                                        error_collections.push(tx_source_err);
 
-                                            super::debezium::render_tx(
-                                                dbz_envelope,
-                                                &results,
-                                                tx_source_ok,
-                                                dataflow_debug_name.clone(),
-                                            )
-                                        }
-                                        None => super::debezium::render(
+                                        super::debezium::render_tx(
                                             dbz_envelope,
                                             &results,
+                                            tx_source_ok,
                                             dataflow_debug_name.clone(),
-                                        ),
-                                    };
-                                    (stream.as_collection(), Some(errors.as_collection()))
-                                }
-                                SourceEnvelope::Upsert(upsert_envelope) => {
-                                    // TODO: use the key envelope to figure out when to add keys.
-                                    // The operator currently does it unconditionally
-                                    let transformed_results =
-                                        transform_keys_from_key_envelope(upsert_envelope, results);
-
-                                    let as_of_frontier = as_of_frontier.clone();
-
-                                    let source_arity = src.desc.typ().arity();
-
-                                    let (upsert_ok, upsert_err) = super::upsert::upsert(
-                                        &transformed_results,
-                                        as_of_frontier,
-                                        &mut linear_operators,
-                                        source_arity,
-                                        upsert_envelope.clone(),
-                                    );
-
-                                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
-                                }
-                                SourceEnvelope::None(key_envelope) => {
-                                    let results = append_metadata_to_value(results);
-
-                                    let flattened_stream =
-                                        flatten_results_prepend_keys(key_envelope, results);
-
-                                    let flattened_stream =
-                                        flattened_stream.pass_through("decode", 1);
-
-                                    // TODO: Maybe we should finally move this to some central
-                                    // place and re-use. There seem to be enough instances of this
-                                    // by now.
-                                    fn split_ok_err(
-                                        x: (Result<Row, DecodeError>, u64, Diff),
-                                    ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)>
-                                    {
-                                        match x {
-                                            (Ok(row), ts, diff) => Ok((row, ts, diff)),
-                                            (Err(err), ts, diff) => Err((err.into(), ts, diff)),
-                                        }
+                                        )
                                     }
+                                    None => super::debezium::render(
+                                        dbz_envelope,
+                                        &results,
+                                        dataflow_debug_name.clone(),
+                                    ),
+                                };
+                                (stream.as_collection(), Some(errors.as_collection()))
+                            }
+                            SourceEnvelope::Upsert(upsert_envelope) => {
+                                // TODO: use the key envelope to figure out when to add keys.
+                                // The operator currently does it unconditionally
+                                let transformed_results =
+                                    transform_keys_from_key_envelope(upsert_envelope, results);
 
-                                    let (stream, errors) = flattened_stream.ok_err(split_ok_err);
+                                let as_of_frontier = as_of_frontier.clone();
 
-                                    let errors = errors.as_collection();
-                                    (stream.as_collection(), Some(errors))
+                                let source_arity = src.desc.typ().arity();
+
+                                let (upsert_ok, upsert_err) = super::upsert::upsert(
+                                    &transformed_results,
+                                    as_of_frontier,
+                                    &mut linear_operators,
+                                    source_arity,
+                                    upsert_envelope.clone(),
+                                );
+
+                                (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
+                            }
+                            SourceEnvelope::None(key_envelope) => {
+                                let results = append_metadata_to_value(results);
+
+                                let flattened_stream =
+                                    flatten_results_prepend_keys(key_envelope, results);
+
+                                let flattened_stream = flattened_stream.pass_through("decode", 1);
+
+                                // TODO: Maybe we should finally move this to some central
+                                // place and re-use. There seem to be enough instances of this
+                                // by now.
+                                fn split_ok_err(
+                                    x: (Result<Row, DecodeError>, u64, Diff),
+                                ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)>
+                                {
+                                    match x {
+                                        (Ok(row), ts, diff) => Ok((row, ts, diff)),
+                                        (Err(err), ts, diff) => Err((err.into(), ts, diff)),
+                                    }
                                 }
-                                SourceEnvelope::CdcV2 => unreachable!(),
-                                SourceEnvelope::DifferentialRow => {
-                                    unreachable!("persist sources go through a special render path")
-                                }
+
+                                let (stream, errors) = flattened_stream.ok_err(split_ok_err);
+
+                                let errors = errors.as_collection();
+                                (stream.as_collection(), Some(errors))
+                            }
+                            SourceEnvelope::CdcV2 => unreachable!(),
+                            SourceEnvelope::DifferentialRow => {
+                                unreachable!("persist sources go through a special render path")
                             }
                         }
-                    };
-
-                    if let Some(errors) = errors {
-                        error_collections.push(errors);
                     }
-
-                    (stream, capability)
                 };
+
+                if let Some(errors) = errors {
+                    error_collections.push(errors);
+                }
+
+                (stream, capability)
+            };
+
+            // Perform various additional transformations on the collection.
 
             // Force a shuffling of data in case sources are not uniformly distributed.
             use timely::dataflow::operators::Exchange;

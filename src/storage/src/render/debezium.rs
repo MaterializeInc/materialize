@@ -903,7 +903,6 @@ struct SkipInfo {
     old_offset: i64,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn log_duplication_info(
     position: RowCoordinates,
     connector_offset: i64,

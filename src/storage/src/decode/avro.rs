@@ -20,7 +20,6 @@ pub struct AvroDecoderState {
 }
 
 impl AvroDecoderState {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         value_schema: &str,
         schema_registry_config: Option<mz_ccsr::ClientConfig>,
