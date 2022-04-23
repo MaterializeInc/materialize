@@ -240,7 +240,7 @@ In a future iteration, we'll make this demo more interactive.
 
 ### Preparing the environment
 
-1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
+1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
    already.
 
 1. Verify that you have Python 3 or greater installed.
@@ -250,25 +250,25 @@ In a future iteration, we'll make this demo more interactive.
     Python 3.7.5
     ```
 
-1. Clone the Materialize repo at the latest release:
+1. Clone the Materialize demos repository:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
-1. Move to the `demo/http_logs` dir:
+1. Move to the `demos/http-logs` directory:
 
     ```shell
-    cd materialize/demo/http_logs
+    cd demos/http-logs
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/http_logs).
+    [GitHub](https://github.com/MaterializeInc/demos/tree/main/http-logs).
 
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   ./mzcompose up
+   docker-compose up -d
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -280,12 +280,12 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can see that Materialize is ingesting the logs and structuring them. We'll also
 get a chance to see how Materialize can handle queries on our data.
 
-1. Launch a new terminal window and `cd materialize/demo/http_logs`.
+1. Launch a new terminal window and `cd demos/http_logs`.
 
 1. Launch the Materialize CLI (`mzcli`) by running:
 
     ```shell
-    ./mzcompose run cli
+    docker-compose run cli
     ```
 
 1. Within `mzcli`, ensure you have all of the necessary sources, which represent
@@ -388,7 +388,7 @@ In this demo, we saw:
 
 ## Related pages
 
-- [Microservice demo](/quickstarts/microservice/)
-- [Build a Real-time analytics dashboard](/quickstarts/live-analytics/)
+- [Microservice demo](../microservice)
+- [Business intelligence demo](../business-intelligence)
 - [`CREATE SOURCE`](/sql/create-source)
 - [Functions + Operators](/sql/functions)

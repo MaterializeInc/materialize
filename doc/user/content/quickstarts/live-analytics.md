@@ -115,28 +115,28 @@ Putting this all together, our deployment looks like this:
 
 ### Preparing the environment
 
-1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
+1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
    already.
 
    **Note for macOS users:** Be sure to [increase Docker
-   resources](/integrations/docker/#increase-docker-resources) to at least 2 CPUs
+   resources](/third-party/docker/#increase-docker-resources) to at least 2 CPUs
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize repository at the latest release:
+1. Clone the Materialize demos repository:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
    You can also view the demo's code on
-   [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
+   [GitHub](https://github.com/MaterializeInc/demos/tree/main/chbench).
 
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   cd materialize/demo/chbench
-   ./mzcompose run default
+   cd demos/chbench
+   docker-compose up -d
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -152,10 +152,10 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. Launch the `psql` SQL shell against Materialize by running:
+1. Launch the `mzcli` SQL shell against Materialize by running:
 
     ```shell
-    ./mzcompose sql materialized
+    docker-compose run cli
     ```
 
 1. Within the CLI, ensure you have all of the necessary sources, which represent
@@ -352,9 +352,6 @@ Materialize to maintain for us.
     alt="Materialize real-time business intelligence dashboard in metabase"
 >}}
 
-If you want to see more chBench queries, you can repeat these steps for the view
-`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/{{< version >}}/demo/chbench/chbench/mz-default-mysql.cfg).
-
 ## Recap
 
 In this demo, we saw:
@@ -387,6 +384,6 @@ etc. but this is a reasonable workflow.
 
 ## Related pages
 
--   [Replace a microservice with a SQL query](/quickstarts/microservice/)
--   [Run SQL on streaming logs](/quickstarts/log-parsing/)
+-   [Microservice demo](../microservice)
+-   [Log parsing demo](../log-parsing)
 -   [`CREATE SOURCE`](/sql/create-source)
