@@ -2681,15 +2681,10 @@ pub fn describe_create_cluster(
 
 pub fn plan_create_cluster(
     _: &StatementContext,
-    CreateClusterStatement {
-        name,
-        if_not_exists,
-        options,
-    }: CreateClusterStatement<Aug>,
+    CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
-        if_not_exists,
         config: plan_cluster_options(options)?,
     }))
 }

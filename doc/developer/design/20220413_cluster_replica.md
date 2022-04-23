@@ -16,11 +16,11 @@ follows:
 
 ```sql
 create_cluster_stmt ::=
-  CREATE CLUSTER [IF NOT EXISTS] <name>
+  CREATE CLUSTER <name>
     [<inline_replica> [, <inline_replica> ...]]
 
 create_cluster_replica_stmt ::=
-  CREATE CLUSTER REPLICA [IF NOT EXISTS] <name> FOR <cluster>
+  CREATE CLUSTER REPLICA <name> FOR <cluster>
     [<replica_option> [, <replica_option> ...]]
 
 inline_replica ::= REPLICA <name> [<replica_option> [, <replica_option> ...]]

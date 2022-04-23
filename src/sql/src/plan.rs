@@ -149,7 +149,6 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub if_not_exists: bool,
     pub config: ComputeInstanceConfig,
 }
 
