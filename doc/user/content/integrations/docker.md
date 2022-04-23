@@ -44,23 +44,6 @@ On macOS:
 
 Note that on Linux, Docker automatically shares memory with the host machines; as long as your host machine has more than 8 GB of memory, you shouldn't run into issues.
 
-### Use the `mzcompose` wrapper script
-
-Materialize's Docker Compose configurations do not work directly with the
-`docker-compose` command, but require a thin wrapper called `mzcompose`.
-
-You will need [**Python 3.5+**][python] to run
-`mzcompose`. This is installed by default on recent versions of macOS and most
-Linux distributions.
-
-The `mzcompose` wrapper accepts all the same arguments and options as
-`docker-compose`. Use it just as you would `docker-compose`:
-
-```shell
-$ cd demo/http_logs
-$ ./mzcompose up -d  # replaces `docker-compose up -d`
-```
-
 [Docker]: https://docs.docker.com/get-started/overview/
 [Docker Compose]: https://docs.docker.com/compose/
 [python]: https://www.python.org/downloads/
