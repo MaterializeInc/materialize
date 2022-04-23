@@ -536,6 +536,5 @@ In this demo, we saw:
 ## Related pages
 
 - [Microservice demo](/quickstarts/microservice/)
-- [Build a real-time analytics dashboard](/quickstarts/live-analytics/)
 - [Log parsing demo](/quickstarts/log-parsing/)
 - [`CREATE SOURCE`](/sql/create-source/)
