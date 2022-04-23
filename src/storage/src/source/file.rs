@@ -9,7 +9,6 @@
 
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -22,12 +21,9 @@ use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 use tracing::{debug, error, trace};
 
-use mz_avro::Block;
-use mz_avro::BlockIter;
-use mz_avro::{AvroRead, Schema, Skip};
+use mz_avro::{AvroRead, Skip};
 use mz_dataflow_types::sources::{
-    encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
-    ExternalSourceConnector, MzOffset,
+    encoding::SourceDataEncoding, Compression, ExternalSourceConnector, MzOffset,
 };
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::{PartitionId, SourceInstanceId};
@@ -75,7 +71,7 @@ impl SourceReader for FileSourceReader {
         connector: ExternalSourceConnector,
         _: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
-        encoding: SourceDataEncoding,
+        _encoding: SourceDataEncoding,
         _: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {
@@ -97,47 +93,6 @@ impl SourceReader for FileSourceReader {
                     })
                     .chain(std::iter::once(Ok(MessagePayload::EOF))))
                 };
-                let (tx, rx) = std::sync::mpsc::sync_channel(10000);
-                let tail = if fc.tail {
-                    FileReadStyle::TailFollowFd
-                } else {
-                    FileReadStyle::ReadOnce
-                };
-                std::thread::spawn(move || {
-                    read_file_task(
-                        fc.path,
-                        tx,
-                        Some(consumer_activator),
-                        tail,
-                        fc.compression,
-                        ctor,
-                    );
-                });
-                rx
-            }
-            ExternalSourceConnector::AvroOcf(fc) => {
-                debug!("creating Avro FileSourceReader worker_id={}", worker_id);
-                let value_encoding = match &encoding {
-                    SourceDataEncoding::Single(enc) => enc,
-                    SourceDataEncoding::KeyValue { .. } => {
-                        unreachable!("A KeyValue encoding for an OCF source should have been rejected in the planner.")
-                    }
-                };
-                let reader_schema = match value_encoding {
-                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => &*reader_schema,
-                    // We should be checking for this in the planner.
-                    _ => unreachable!("Wrong encoding for OCF file"),
-                };
-                let reader_schema = Schema::from_str(reader_schema)?;
-                let ctor = move |file| {
-                    BlockIter::with_schema(&reader_schema, file).map(|bi| {
-                        bi.map(|result| {
-                            result.map(|Block { bytes, len: _ }| MessagePayload::Data(bytes))
-                        })
-                        .chain(std::iter::once(Ok(MessagePayload::EOF)))
-                    })
-                };
-
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
                     FileReadStyle::TailFollowFd

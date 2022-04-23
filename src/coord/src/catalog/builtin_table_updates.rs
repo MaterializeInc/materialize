@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::os::unix::ffi::OsStringExt;
-
-use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
+use mz_dataflow_types::sinks::KafkaSinkConnector;
 use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
@@ -21,10 +19,10 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_CONNECTORS,
-    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_CONNECTORS, MZ_DATABASES,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
@@ -300,16 +298,6 @@ impl CatalogState {
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
                             consistency_topic,
-                        ]),
-                        diff,
-                    });
-                }
-                SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                    updates.push(BuiltinTableUpdate {
-                        id: self.resolve_builtin_table(&MZ_AVRO_OCF_SINKS),
-                        row: Row::pack_slice(&[
-                            Datum::String(&id.to_string()),
-                            Datum::Bytes(&path.clone().into_os_string().into_vec()),
                         ]),
                         diff,
                     });

@@ -283,7 +283,7 @@ where
                             );
                             ((SourceType::ByteStream(ok), err), cap)
                         }
-                        ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
+                        ExternalSourceConnector::File(_) => {
                             let ((ok, err), cap) = source::create_source::<_, FileSourceReader>(
                                 source_config,
                                 &connector,

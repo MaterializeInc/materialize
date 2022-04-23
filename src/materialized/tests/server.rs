@@ -205,16 +205,6 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
         .unwrap_db_error();
     assert_eq!(err.message(), "Expected one of KAFKA or AVRO, found FILE");
 
-    // No Avro OCF sources or sinks.
-    let err = client
-        .batch_execute("CREATE SOURCE src FROM AVRO OCF '/ignored'")
-        .unwrap_db_error();
-    assert_eq!(err.message(), "cannot create Avro OCF source in safe mode");
-    let err = client
-        .batch_execute("CREATE SINK snk FROM mz_sources INTO AVRO OCF '/ignored'")
-        .unwrap_db_error();
-    assert_eq!(err.message(), "cannot create Avro OCF sink in safe mode");
-
     Ok(())
 }
 

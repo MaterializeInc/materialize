@@ -185,7 +185,7 @@ or source, Materialize automatically generates the required schema and writes do
 the stream of changes to that view or source. In effect, Materialize sinks act as
 change data capture (CDC) producers for the given source or view.
 
-Currently, Materialize only supports sending sink data to Kafka or Avro OCFs,
+Currently, Materialize only supports sending sink data to Kafka,
 encoded in Avro with the [Debezium diff envelope](/sql/create-sink#debezium-envelope-details).
 
 ## Clusters

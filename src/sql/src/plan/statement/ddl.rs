@@ -14,7 +14,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -34,12 +33,12 @@ use tracing::{debug, warn};
 
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
-    AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-    KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, SinkConnectorBuilder,
+    SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
-    included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding, DataEncoding,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
+    RegexEncoding, SourceDataEncoding,
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
@@ -599,33 +598,6 @@ pub fn plan_create_source(
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
-        CreateSourceConnector::AvroOcf { path, .. } => {
-            let tail = match with_options.remove("tail") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("tail must be a boolean"),
-            };
-
-            let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
-                path: path.clone().into(),
-                compression: mz_dataflow_types::sources::Compression::None,
-                tail,
-            });
-            if !matches!(format, CreateSourceFormat::None) {
-                bail!("avro ocf sources cannot specify a format");
-            }
-            let reader_schema = match with_options
-                .remove("reader_schema")
-                .expect("purification guarantees presence of reader_schema")
-            {
-                Value::String(s) => s,
-                _ => bail!("reader_schema option must be a string"),
-            };
-            let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
-                reader_schema,
-            }));
-            (connector, encoding)
-        }
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
@@ -804,11 +776,6 @@ pub fn plan_create_source(
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             //TODO check that key envelope is not set
-            if let CreateSourceConnector::AvroOcf { .. } = connector {
-                // TODO[btv] - there is no fundamental reason not to support this eventually,
-                // but OCF goes through a separate pipeline that it hasn't been implemented for.
-                bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
-            }
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
@@ -1430,7 +1397,7 @@ fn get_key_envelope(
                 //
                 // Otherwise it gets the names of the columns in the type
                 let is_composite = match key {
-                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                    DataEncoding::Postgres => {
                         bail!("{} sources cannot use INCLUDE KEY", key.op_name())
                     }
                     DataEncoding::Bytes | DataEncoding::Text => false,
@@ -2094,29 +2061,6 @@ fn get_kafka_sink_consistency_config(
     Ok(result)
 }
 
-fn avro_ocf_sink_builder(
-    format: Option<Format<Aug>>,
-    path: String,
-    file_name_suffix: String,
-    value_desc: RelationDesc,
-) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    if format.is_some() {
-        bail!("avro ocf sinks cannot specify a format");
-    }
-
-    let path = PathBuf::from(path);
-
-    if path.is_dir() {
-        bail!("avro ocf sink cannot write to a directory");
-    }
-
-    Ok(SinkConnectorBuilder::AvroOcf(AvroOcfSinkConnectorBuilder {
-        path,
-        file_name_suffix,
-        value_desc,
-    }))
-}
-
 pub fn describe_create_sink(
     _: &StatementContext,
     _: &CreateSinkStatement<Raw>,
@@ -2217,7 +2161,6 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnector::AvroOcf { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2265,9 +2208,6 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnector::AvroOcf { path } => {
-            avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
-        }
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
