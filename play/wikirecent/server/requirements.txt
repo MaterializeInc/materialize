@@ -1,2 +1,0 @@
-psycopg==3.0.7
-tornado==6.1

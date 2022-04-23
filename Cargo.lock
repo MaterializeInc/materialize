@@ -3555,17 +3555,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-json-flattened-view-gen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "mz-ore",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "mz-kafka-util"
 version = "0.0.0"
 dependencies = [
@@ -3609,24 +3598,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "mz-mbta"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "clap",
- "futures",
- "json",
- "mz-ore",
- "mz-repr",
- "mz-test-util",
- "ordered-float",
- "rdkafka",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
