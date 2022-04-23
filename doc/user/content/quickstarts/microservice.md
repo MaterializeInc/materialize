@@ -281,13 +281,13 @@ We'll then create a materialized view for this data, as well as convert its unit
 
 ```sql
 CREATE MATERIALIZED VIEW billing_prices AS
-	SELECT
-		CAST(column1 AS INT8) AS client_id,
-		((CAST(column2 AS FLOAT8)) / 1000.0)
-			AS price_per_cpu_ms,
-		((CAST(column3 AS FLOAT8)) / 1000.0)
-			AS price_per_gb_ms
-	FROM price_source;
+    SELECT
+        CAST(column1 AS INT8) AS client_id,
+        ((CAST(column2 AS FLOAT8)) / 1000.0)
+            AS price_per_cpu_ms,
+        ((CAST(column3 AS FLOAT8)) / 1000.0)
+            AS price_per_gb_ms
+    FROM price_source;
 ```
 
 For more details on how CSV sources work, see [`CREATE SOURCES`](/sql/create-source/csv-file).
@@ -405,20 +405,20 @@ In a future iteration, we'll make this demo more interactive.
 1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
    already.
 
-1. Clone the Materialize repository:
+1. Clone the Materialize demos repository:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
     You can also view the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/billing).
+    [GitHub](https://github.com/MaterializeInc/demos/tree/main/billing).
 
 1. Download and start all of the components we've listed above by running:
 
     ```shell
-    cd materialize/demo/billing
-    ./mzcompose run default
+    cd demos/billing
+    docker-compose up -d
     ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -432,10 +432,10 @@ In a future iteration, we'll make this demo more interactive.
 Now that our deployment is running (and looks like the diagram shown above), we
 can see that Materialize is ingesting the `protobuf` data and normalizing it.
 
-1. Launch a `psql` shell connected to `materialized`:
+1. Launch the `mzcli` SQL shell connected to `materialized`:
 
     ```shell
-    ./mzcompose sql materialized
+    docker-compose run cli
     ```
 
 1. Show the source we've created:

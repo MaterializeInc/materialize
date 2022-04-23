@@ -123,20 +123,20 @@ Putting this all together, our deployment looks like this:
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize repository at the latest release:
+1. Clone the Materialize demos repository:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
    You can also view the demo's code on
-   [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
+   [GitHub](https://github.com/MaterializeInc/demos/tree/main/chbench).
 
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   cd materialize/demo/chbench
-   ./mzcompose run default
+   cd demos/chbench
+   docker-compose up -d
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -152,10 +152,10 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. Launch the `psql` SQL shell against Materialize by running:
+1. Launch the `mzcli` SQL shell against Materialize by running:
 
     ```shell
-    ./mzcompose sql materialized
+    docker-compose run cli
     ```
 
 1. Within the CLI, ensure you have all of the necessary sources, which represent
@@ -351,9 +351,6 @@ Materialize to maintain for us.
     src="https://user-images.githubusercontent.com/11527560/107248709-8f339a00-6a00-11eb-81b5-beb01a95156c.gif"
     alt="Materialize real-time business intelligence dashboard in metabase"
 >}}
-
-If you want to see more chBench queries, you can repeat these steps for the view
-`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/{{< version >}}/demo/chbench/chbench/mz-default-mysql.cfg).
 
 ## Recap
 
