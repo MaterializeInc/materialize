@@ -9,18 +9,21 @@
 
 # Test behavior of timedomains with non-materialized sources.
 
-$ file-append path=static.csv
+$ kafka-create-topic topic=static
+$ kafka-ingest topic=static format=bytes
 1
 2
 4
 
 > CREATE MATERIALIZED SOURCE indexed (c)
-  FROM FILE '${testdrive.temp-dir}/static.csv'
-  FORMAT CSV WITH 1 COLUMNS
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-static-${testdrive.seed}'
+  FORMAT TEXT
 
 > CREATE SOURCE unindexed (c)
-  FROM FILE '${testdrive.temp-dir}/static.csv'
-  FORMAT CSV WITH 1 COLUMNS
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-static-${testdrive.seed}'
+  FORMAT TEXT
 
 > CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed
 

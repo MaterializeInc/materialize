@@ -132,14 +132,16 @@ $ kafka-create-topic topic=input_cdcv2
 
 > CREATE MATERIALIZED VIEW input_kafka_dbz_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_dbz ) AS a1;
 
-$ file-append path=static.csv
+$ kafka-create-topic topic=static
+$ kafka-ingest topic=static format=bytes
 city,state,zip
 Rochester,NY,14618
 New York,NY,10004
 "bad,place""",CA,92679
 
 > CREATE SOURCE input_csv
-  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-static-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
 > CREATE SINK output1 FROM input_kafka_cdcv2
