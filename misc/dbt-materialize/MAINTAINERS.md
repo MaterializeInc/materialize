@@ -29,28 +29,31 @@
 5. Launch `materialized` in a different terminal:
 
    ```
-   brew install materialize/materialize/materialized
+   brew install MaterializeInc/materialize/materialized
+
    materialized
    ```
 
-6. Run tests:
+6. Install `pytest-dbt-adapter` and run tests:
 
    ```
+   pip install pytest-dbt-adapter
+
    pytest
    ```
 
-7. Remember to re-install (`pip install .`) if you change the dbt-materialize
+7. Remember to re-install (`pip install .`) if you change the `dbt-materialize`
    Python code.
 
 ## Tips and tricks
 
-All-in-one command to run after making a change to dbt-materialize:
+All-in-one command to run after making a change to `dbt-materialize`:
 
 ```shell
 pip install . && pytest
 ```
 
-If you want to test dbt-materialize against the latest changes to
+If you want to test `dbt-materialize` against the latest changes to
 `materialized`, build `materialized` from source:
 
 ```shell
@@ -80,10 +83,11 @@ inspect the objects that the test created via `psql`:
 
 ```shell
 pytest --no-drop-schema
+
 psql -h localhost -p 6875 -U materialize materialize
 ```
 
-Run dbt-materialize test suite via [mzcompose](../../doc/developer/mzbuild.md#mzcompose)
+Run the `dbt-materialize` test suite via [mzcompose](../../doc/developer/mzbuild.md#mzcompose)
 to match how it is run in CI:
 
 ```shell

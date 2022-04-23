@@ -108,11 +108,17 @@
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
   {%- set comma_separated_columns = ", ".join(index_config.columns) -%}
-  {%- set index_name = index_config.render(relation) -%}
+  {%- set index_name = index_config.name -%}
+  {% if index_config.name is none -%}
+    {% set index_name = index_config.render(relation) %}
+  {%- endif -%}
     create index if not exists
       "{{ index_name }}"
       on {{ relation }} {% if index_config.type -%}
         using {{ index_config.type }}
+    }
+  }
+  }
   {%- endif %}
   ({{ comma_separated_columns }});
 {%- endmacro %}

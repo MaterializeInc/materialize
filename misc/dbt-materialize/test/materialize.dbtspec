@@ -115,7 +115,7 @@ projects:
         models/test_materialized_view_index.sql: |
             {{ config(
                 materialized='materializedview',
-                indexes=[{'columns': ['a']}]
+                indexes=[{'name': 'mv_index', 'columns': ['a']}]
             ) }}
 
             SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)

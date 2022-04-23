@@ -14,9 +14,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
+from typing import Optional, List, Any
+
+from dbt.adapters.base.meta import available
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
+from dbt.adapters.postgres.impl import PostgresIndexConfig
+
+@dataclass
+class MaterializeIndexConfig(PostgresIndexConfig):
+     columns: List[str]
+     type: Optional[str] = None
+     name: Optional[str] = None
+
+     @classmethod
+     def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
+        if raw_index is None:
+            return None
+        try:
+            cls.validate(raw_index)
+            return cls.from_dict(raw_index)
+        except ValidationError as exc:
+            msg = dbt.exceptions.validator_error_message(exc)
+            dbt.exceptions.raise_compiler_error(f"Could not parse index config: {msg}")
+        except TypeError:
+            dbt.exceptions.raise_compiler_error(
+                f"Invalid index config:\n"
+                f"  Got: {raw_index}\n"
+                f'  Expected a dictionary with at minimum a "columns" key'
+            )
 
 
 class MaterializeAdapter(PostgresAdapter):
@@ -30,3 +58,7 @@ class MaterializeAdapter(PostgresAdapter):
         #
         # [0]: https://github.com/dbt-labs/dbt-core/blob/13b18654f03d92eab3f5a9113e526a2a844f145d/plugins/postgres/dbt/adapters/postgres/impl.py#L126-L133
         pass
+
+    @available
+    def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
+        return MaterializeIndexConfig.parse(raw_index)
