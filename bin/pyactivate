@@ -28,8 +28,8 @@ def main(args: List[str]) -> int:
     logger.debug("args={}".format(args))
 
     # Validate Python version.
-    if sys.hexversion < 0x03080000:
-        print("fatal: python v3.8.0+ required", file=sys.stderr)
+    if sys.hexversion < 0x03090000:
+        print("fatal: python v3.9.0+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
@@ -42,17 +42,12 @@ def main(args: List[str]) -> int:
     py_dir = root_dir / "misc" / "python"
     logger.debug("root_dir={} py_dir={}".format(root_dir, py_dir))
 
-    dev = False
-    if len(args) > 0 and args[0] == "--dev":
-        del args[0]
-        dev = True
-
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
     if os.environ.get("MZ_DEV_CI_BUILDER"):
         python = "python3"
     else:
-        python = str(activate_venv(py_dir, dev))
+        python = str(activate_venv(py_dir))
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
@@ -63,7 +58,7 @@ def main(args: List[str]) -> int:
     os.execvp(python, [python, *args])
 
 
-def activate_venv(py_dir: Path, dev: bool = False) -> Path:
+def activate_venv(py_dir: Path) -> Path:
     """Bootstrap and activate a virtualenv at py_dir/venv."""
     venv_dir = py_dir / "venv"
     stamp_path = venv_dir / "dep_stamp"
@@ -131,8 +126,6 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     # pip that we know supports the flag.
     acquire_deps(venv_dir, "core")
     acquire_deps(venv_dir, use_pep517=True)
-    if dev:
-        acquire_deps(venv_dir, "dev", use_pep517=True)
 
     # The virtualenv's `bin` dir takes precedence over all existing PATH
     # entries. This is normally handled by the `activate` shell script, but

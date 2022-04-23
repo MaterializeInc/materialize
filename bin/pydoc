@@ -11,7 +11,7 @@
 #
 # pyfmt — formats Python code with Black.
 
-exec "$(dirname "$0")"/pyactivate --dev -Werror -m pdoc \
+exec "$(dirname "$0")"/pyactivate -Werror -m pdoc \
     --html --force \
     -c 'git_link_template="https://github.com/MaterializeInc/materialize/blob/{commit}/{path}#L{start_line}-L{end_line}"' \
     -o target/pydoc \

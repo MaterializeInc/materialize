@@ -41,12 +41,12 @@ steps:
 
   - id: build-x86_64
     label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
 
-  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.nightly.trim_pipeline
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.trim_pipeline
     if: build.source == "ui"
     agents:
       queue: linux
@@ -70,7 +70,7 @@ steps:
   - id: coverage
     label: Code coverage
     timeout_in_minutes: 240
-    command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+    command: bin/ci-builder run nightly bin/pyactivate -m ci.nightly.coverage
     agents:
       queue: linux-x86_64
     skip: Disabled due to persistent OOMs when linking

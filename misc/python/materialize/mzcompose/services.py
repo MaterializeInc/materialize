@@ -13,8 +13,8 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from materialize.mzcompose import Service, ServiceConfig
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
-DEFAULT_DEBEZIUM_VERSION = "1.6"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
+DEFAULT_DEBEZIUM_VERSION = "1.9"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = ["mzdata:/share/mzdata", "tmp:/share/tmp"]

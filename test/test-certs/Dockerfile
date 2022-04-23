@@ -9,7 +9,7 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -y openjdk-8-jdk openssl
+RUN apt-get update && apt-get install -y openjdk-11-jdk openssl
 
 COPY create-certs.sh /
 

@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:focal-20220404 AS crosstool
+FROM ubuntu:jammy-20220421 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -23,6 +23,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     autoconf \
     automake \
     bison \
+    bzip2 \
     ca-certificates \
     curl \
     file \
@@ -59,7 +60,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:focal-20220404
+FROM ubuntu:jammy-20220421
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -158,12 +159,9 @@ COPY libvoidstar.so /usr/local/lib/
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
-COPY requirements.txt requirements-dev.txt /workdir/
+COPY requirements.txt /workdir/
 
-RUN pip3 install \
-    -r /workdir/requirements.txt \
-    -r /workdir/requirements-dev.txt \
-    && rm /workdir/requirements*.txt
+RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 

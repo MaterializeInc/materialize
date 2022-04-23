@@ -37,7 +37,7 @@ case "$cmd" in
         for name in "${python_autocompletions[@]}"; do
           for shell in "${supported_shells[@]}"; do
             mkdir -p "$directory"/../misc/completions/"$shell"
-            "$directory"/pyactivate --dev -m materialize.cli."$name" completion "$shell" > "$directory"/../misc/completions/"$shell"/_"$name"
+            "$directory"/pyactivate -m materialize.cli."$name" completion "$shell" > "$directory"/../misc/completions/"$shell"/_"$name"
           done
         done
         ;;
@@ -54,7 +54,7 @@ case "$cmd" in
               exit 1
             fi
 
-            latest=$("$directory"/pyactivate --dev -m materialize.cli."$name" completion "$shell" | "$shasum")
+            latest=$("$directory"/pyactivate -m materialize.cli."$name" completion "$shell" | "$shasum")
             existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
 
             if [[ "$latest" != "$existing" ]]; then

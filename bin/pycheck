@@ -19,15 +19,15 @@ cd "$(dirname "$0")/.."
 
 py_folders=(ci misc/python)
 
-try bin/pyactivate --dev -m mypy "${py_folders[@]}"
+try bin/pyactivate -m mypy "${py_folders[@]}"
 if ! try_last_failed; then
     # mzcompose.py files need to be passed to mypy individually to avoid
     # duplicate module warnings. We don't check these if the previous `mypy`
     # invocation failed, though, or we'll get a ton of duplicate warnings.
     for file in $(git_files "**/mzcompose.py"); do
-        try bin/pyactivate --dev -m mypy "$file"
+        try bin/pyactivate -m mypy "$file"
     done
 fi
-try bin/pyactivate --dev -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
-try bin/pyactivate --dev -m pytest -qq --doctest-modules misc/python
+try bin/pyactivate -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
+try bin/pyactivate -m pytest -qq --doctest-modules misc/python
 try_finish

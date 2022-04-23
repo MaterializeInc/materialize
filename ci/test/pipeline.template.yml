@@ -20,7 +20,7 @@ env:
 steps:
   - id: build-x86_64
     label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     inputs:
       - "*"
     timeout_in_minutes: 60
@@ -30,7 +30,7 @@ steps:
 
   - id: build-aarch64
     label: Build aarch64
-    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
     inputs:
       - "*"
     timeout_in_minutes: 60
