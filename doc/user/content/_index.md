@@ -24,7 +24,6 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 - [Materialize Cloud overview](/cloud/)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Quickstarts" >}}
-- [Real-time analytics dashboard](/quickstarts/live-analytics/)
 - [Streaming SQL on server logs](/quickstarts/log-parsing/)
 - [Microservices](/quickstarts/microservice/)
 {{</ linkbox >}}
