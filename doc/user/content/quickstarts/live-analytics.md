@@ -115,11 +115,11 @@ Putting this all together, our deployment looks like this:
 
 ### Preparing the environment
 
-1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
    already.
 
    **Note for macOS users:** Be sure to [increase Docker
-   resources](/third-party/docker/#increase-docker-resources) to at least 2 CPUs
+   resources](/integrations/docker/#increase-docker-resources) to at least 2 CPUs
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
@@ -384,6 +384,6 @@ etc. but this is a reasonable workflow.
 
 ## Related pages
 
--   [Microservice demo](../microservice)
--   [Log parsing demo](../log-parsing)
+-   [Replace a microservice with a SQL query](/quickstarts/microservice/)
+-   [Run SQL on streaming logs](/quickstarts/log-parsing/)
 -   [`CREATE SOURCE`](/sql/create-source)

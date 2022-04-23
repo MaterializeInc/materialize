@@ -240,7 +240,7 @@ In a future iteration, we'll make this demo more interactive.
 
 ### Preparing the environment
 
-1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
    already.
 
 1. Verify that you have Python 3 or greater installed.
@@ -388,7 +388,7 @@ In this demo, we saw:
 
 ## Related pages
 
-- [Microservice demo](../microservice)
-- [Business intelligence demo](../business-intelligence)
+- [Microservice demo](/quickstarts/microservice/)
+- [Build a Real-time analytics dashboard](/quickstarts/live-analytics/)
 - [`CREATE SOURCE`](/sql/create-source)
 - [Functions + Operators](/sql/functions)
