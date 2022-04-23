@@ -1341,7 +1341,7 @@ pub mod sources {
                     // TODO: should key be included in the sorted list? Breaking change, and it's
                     // already special (it commonly multiple columns embedded in it).
                     let mut items = BTreeMap::new();
-                    if include_defaults {
+                    if include_defaults && offset.is_none() {
                         items.insert(4, IncludedColumnSource::DefaultPosition);
                     }
                     for (include, ty) in [
