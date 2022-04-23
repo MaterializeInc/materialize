@@ -19,7 +19,7 @@ updates:
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: docker
-  directory: /misc/ubuntu-base-image
+  directory: /misc/ubuntu-base
   schedule:
     interval: weekly
     day: sunday

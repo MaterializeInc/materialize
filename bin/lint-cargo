@@ -11,4 +11,4 @@
 #
 # lint-cargo -- lint Cargo.toml files
 
-exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.lint-cargo "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.lint-cargo "$@"

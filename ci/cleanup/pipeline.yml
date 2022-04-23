@@ -10,7 +10,7 @@
 # Cleans up CI resources that occasionally leak.
 
 steps:
-  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.cleanup.aws
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.aws
     timeout_in_minutes: 10
     agents:
       queue: linux-x86_64

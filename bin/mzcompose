@@ -11,4 +11,4 @@
 #
 # mzcompose — runs Docker Compose with Materialize customizations.
 
-exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.mzcompose "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzcompose "$@"

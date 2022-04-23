@@ -17,6 +17,6 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-try bin/pyactivate --dev -m black . "$@"
-try bin/pyactivate --dev -m isort . "$@"
+try bin/pyactivate -m black . "$@"
+try bin/pyactivate -m isort . "$@"
 try_finish

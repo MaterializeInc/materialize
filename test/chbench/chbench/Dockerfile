@@ -29,8 +29,8 @@ COPY mysql.asc .
 
 RUN gpg --import mysql.asc \
     && echo "trusted-key 8C718D3B5072E1F5" >> ~/.gnupg/gpg.conf \
-    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc-8.0.26-src.tar.gz > mysql-odbc.tar.gz \
-    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-8.0.26-src.tar.gz&p=10" > mysql-odbc.asc \
+    && curl -fsSL https://downloads.mysql.com/archives/get/p/10/file/mysql-connector-odbc-8.0.26-src.tar.gz > mysql-odbc.tar.gz \
+    && curl -fsSL "https://downloads.mysql.com/archives/gpg/?file=mysql-connector-odbc-8.0.26-src.tar.gz&p=10" > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && tar -xzf mysql-odbc.tar.gz
 

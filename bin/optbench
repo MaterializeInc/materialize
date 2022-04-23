@@ -11,4 +11,4 @@
 #
 # dashboard-clean - Clean the dashboard model json to be fit for public consumption
 
-exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.optbench "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.optbench "$@"
