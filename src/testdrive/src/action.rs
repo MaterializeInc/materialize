@@ -40,7 +40,6 @@ use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
-mod avro_ocf;
 mod file;
 mod http;
 mod kafka;
@@ -477,13 +476,6 @@ pub(crate) async fn build(
                     *line = subst(line)?;
                 }
                 match builtin.name.as_ref() {
-                    "avro-ocf-write" => Box::new(avro_ocf::build_write(builtin).map_err(wrap_err)?),
-                    "avro-ocf-append" => {
-                        Box::new(avro_ocf::build_append(builtin).map_err(wrap_err)?)
-                    }
-                    "avro-ocf-verify" => {
-                        Box::new(avro_ocf::build_verify(builtin).map_err(wrap_err)?)
-                    }
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),

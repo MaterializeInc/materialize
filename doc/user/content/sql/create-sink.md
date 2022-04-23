@@ -44,7 +44,6 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset. {{< version-added v0.5.1 />}}
 **TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name. {{< version-added v0.8.4 />}}
-**AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
 _sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
 _with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Authentication](#authentication).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
@@ -88,7 +87,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
     - Avro-formatted sinks that write to either a topic or an Avro object container file.
     - JSON-formatted sinks that write to a topic.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart. A beta feature enables the use of the same topic after restart. For details, see [Exactly-once sinks](#exactly-once-sinks-with-topic-reuse-after-restart).
-- Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
+- Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` log sources. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction information inline with the data, and adds a separate transaction metadata topic.
 
@@ -310,14 +309,6 @@ _data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END
 - There are no ordering guarantees on transaction `id` in the consistency topic.
 - Multiple transactions can be interleaved in the consistency topic, so it's possible that some `ids` don't have a corresponding `BEGIN` or `END` record.
 
-### Avro OCF sinks
-
-When creating Avro Object Container File (OCF) sinks, Materialize creates a new sink OCF and appends the Avro schema data in its header. Materialize names the new file using the format below.
-```nofmt
-{path.base_directory}-{path.file_stem}-{sink_global_id}-{materialize-startup_time}-{nonce}-{path.file_extension}
-```
-You can query `mz_avro_ocf_sinks` to get file name information for each Avro OCF sink. Look [here](#avro-ocf-sinks-1) for a more concrete example.
-
 ## Examples
 
 ### Avro sinks
@@ -372,58 +363,6 @@ JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
 -----------+--------------------------------------+------------------------------------------------------
  u5        | materialize.public.quotes_sink       | quotes-sink-u6-1586024632-15401700525642547992
  u6        | materialize.public.frank_quotes_sink | frank-quotes-sink-u5-1586024632-15401700525642547992
-```
-
-### Avro OCF sinks
-
-#### From sources
-
-```sql
-CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
-```
-```sql
-CREATE SINK quotes_sink
-FROM quotes
-INTO AVRO OCF '/path/to/sink-file.ocf;'
-```
-
-#### From materialized views
-
-```sql
-CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
-```
-```sql
-CREATE MATERIALIZED VIEW frank_quotes AS
-    SELECT * FROM quotes
-    WHERE attributed_to = 'Frank McSherry';
-```
-```sql
-CREATE SINK frank_quotes_sink
-FROM frank_quotes
-INTO AVRO OCF '/path/to/frank-sink-file.ocf;'
-```
-
-#### Get actual file names
-
-Materialize stores the actual path as a byte array so we need to use the `convert_from` function to convert it to a UTF-8 string.
-
-```sql
-SELECT sink_id, name, convert_from(path, 'utf8')
-FROM mz_sinks
-JOIN mz_avro_ocf_sinks ON mz_sinks.id = mz_avro_ocf_sinks.sink_id
-```
-
-```nofmt
- sink_id   |        name       |                           path
------------+-------------------+----------------------------------------------------------------
- u10       | quotes_sink       | /path/to/sink-file-u10-1586108399-8671224166353132585.ocf
- u11       | frank_quotes_sink | /path/to/frank-sink-file-u11-1586108399-8671224166353132585.ocf
 ```
 
 ### JSON sinks

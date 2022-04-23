@@ -510,10 +510,6 @@ pub enum CreateSourceConnector {
     Kinesis {
         arn: String,
     },
-    /// Avro Object Container File
-    AvroOcf {
-        path: String,
-    },
     S3 {
         /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
         key_sources: Vec<S3KeySource>,
@@ -580,11 +576,6 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
-            CreateSourceConnector::AvroOcf { path } => {
-                f.write_str("AVRO OCF '");
-                f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
-            }
             CreateSourceConnector::S3 {
                 key_sources,
                 pattern,
@@ -640,7 +631,6 @@ impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceConnectorType {
     fn from(connector: &CreateSinkConnector<T>) -> SourceConnectorType {
         match connector {
             CreateSinkConnector::Kafka { .. } => SourceConnectorType::Kafka,
-            CreateSinkConnector::AvroOcf { .. } => SourceConnectorType::AvroOcf,
         }
     }
 }
@@ -654,8 +644,6 @@ pub enum CreateSinkConnector<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
-    /// Avro Object Container File
-    AvroOcf { path: String },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
@@ -679,11 +667,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
                 }
-            }
-            CreateSinkConnector::AvroOcf { path } => {
-                f.write_str("AVRO OCF '");
-                f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
             }
         }
     }

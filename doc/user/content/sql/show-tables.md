@@ -65,7 +65,6 @@ SHOW EXTENDED FULL TABLES;
 name                  |  type
 ----------------------+--------
  mz_array_types       | system
- mz_avro_ocf_sinks    | system
  mz_base_types        | system
  ...
  my_table             | user
