@@ -9,18 +9,22 @@
 
 $ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
 
-$ file-append path=test.csv
-a,b
+$ kafka-create-topic topic=test
+$ kafka-ingest topic=test format=bytes
 jack,jill
 goofus,gallant
 
-> CREATE SOURCE src
-  FROM FILE '${testdrive.temp-dir}/test.csv'
-  FORMAT CSV WITH HEADER
+> CREATE SOURCE src (a, b)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-test-${testdrive.seed}'
+  FORMAT CSV WITH 2 COLUMNS
+  INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE src_materialized
-  FROM FILE '${testdrive.temp-dir}/test.csv'
-  FORMAT CSV WITH HEADER
+> CREATE MATERIALIZED SOURCE src_materialized (a, b)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-test-${testdrive.seed}'
+  FORMAT CSV WITH 2 COLUMNS
+  INCLUDE OFFSET
 
 > CREATE VIEW v1 AS
   SELECT a || b AS c FROM src
@@ -109,12 +113,12 @@ cluster name   type  volatility
 <CLUSTER_NAME> snk5   user  unknown
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_offset": 2}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_offset": 1}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_offset": 2}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_offset": 1}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "goofusgallant"}}}
@@ -142,36 +146,27 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 {"before": null, "after": {"row":{"c": true}}}
 
 # Test AS OF and WITH/WITHOUT SNAPSHOT.
-> CREATE MATERIALIZED SOURCE dynamic_src
-  FROM FILE '${testdrive.temp-dir}/test.csv' WITH (tail = true)
-  FORMAT CSV WITH HEADER
 
-# Ensure the data is read into the source before creating sinks from it
-# to correctly test WITH/WITHOUT SNAPSHOT.
-> SELECT * FROM dynamic_src
-jack jill 1
-goofus gallant 2
-
-> CREATE SINK snk7 FROM dynamic_src
+> CREATE SINK snk7 FROM src_materialized
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITHOUT SNAPSHOT
 
-> CREATE SINK snk8 FROM dynamic_src
+> CREATE SINK snk8 FROM src_materialized
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk8'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH SNAPSHOT
 
-$ file-append path=test.csv
+$ kafka-ingest topic=test format=bytes
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk7
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 3}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_offset": 3}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 3}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_offset": 3}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_offset": 2}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_offset": 1}}}
 
 # Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
 # empty upper frontier
