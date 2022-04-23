@@ -228,7 +228,7 @@ async fn main() {
         }
     };
 
-    println!(
+    eprintln!(
         "Configuration parameters:
     Kafka address: {}
     Schema registry URL: {}
@@ -240,7 +240,7 @@ async fn main() {
         args.max_errors
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
-        println!("    Shard: {}/{}", shard + 1, shard_count);
+        eprintln!("    Shard: {}/{}", shard + 1, shard_count);
     }
 
     let mut arg_vars = BTreeMap::new();
@@ -250,7 +250,7 @@ async fn main() {
         let val = match parts.next() {
             Some(val) => val,
             None => {
-                println!("No =VALUE for --var {}", name);
+                eprintln!("No =VALUE for --var {}", name);
                 process::exit(1)
             }
         };
@@ -395,9 +395,9 @@ async fn main() {
         }
     }
 
-    print!("+++ ");
+    eprint!("+++ ");
     if error_count == 0 {
-        println!("testdrive completed successfully.");
+        eprintln!("testdrive completed successfully.");
     } else {
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);

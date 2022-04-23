@@ -47,7 +47,7 @@ impl Error {
             ColorChoice::Never
         };
         let mut stderr = StandardStream::stderr(color_choice);
-        println!("^^^ +++");
+        eprintln!("^^^ +++");
         match &self.location {
             Some(location) => {
                 let mut color_spec = ColorSpec::new();
