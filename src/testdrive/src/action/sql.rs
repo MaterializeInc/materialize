@@ -140,7 +140,7 @@ impl Action for SqlAction {
         };
 
         let state = &state;
-        match should_retry {
+        let res = match should_retry {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
@@ -172,14 +172,16 @@ impl Action for SqlAction {
                             print!(" {:.0?}", backoff);
                             io::stdout().flush().unwrap();
                         }
-                    } else {
-                        println!();
                     }
                     Err(e)
                 }
             }
         })
-        .await?;
+        .await;
+        if let Err(e) = res {
+            println!();
+            return Err(e);
+        }
 
         if let Some(path) = &state.materialized_data_path {
             match self.stmt {

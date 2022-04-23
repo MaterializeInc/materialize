@@ -485,11 +485,14 @@ class Composition:
         start_time = time.time()
         try:
             yield
-            ui.header(f"Test case {name} succeeded")
+            ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             error = str(e)
-            traceback.print_exc()
-            ui.header(f"Test case {name} failed")
+            if isinstance(e, UIError):
+                print(f"mzcompose: test case {name} failed: {e}", file=sys.stderr)
+            else:
+                print(f"mzcompose: test case {name} failed:", file=sys.stderr)
+                traceback.print_exc()
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)
 
