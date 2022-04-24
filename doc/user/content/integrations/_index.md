@@ -183,8 +183,8 @@ Client libraries and ORM frameworks tend to run complex introspection queries th
 
 | Framework | Support level | Notes |  |
 | --- | --- | --- | --- |
-| Ruby on Rails | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. The Rails Active-Record ORM executes many PostgreSQL configuration queries and queries to `pg_catalog` endpoints that are not yet implemented in Materialize. | [](#notify) |
-| Prisma | {{< supportLevel researching >}} | Prisma executes configuration queries and queries to `pg_catalog` endpoints that are not yet implemented in Materialize. | [](#notify) |
+| Rails ActiveRecord | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| Prisma | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
 
 👋 _Is there another client library or ORM framework you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
