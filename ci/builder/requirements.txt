@@ -8,7 +8,7 @@ click==8.1.2
 colored==1.4.3
 humanize==4.0.0
 junit-xml==1.9
-pg8000==1.25.0
+pg8000==1.26.1
 prettytable==3.2.0
 PyMySQL==1.0.2
 pyyaml==6.0
