@@ -620,12 +620,14 @@ pre {
     }
 }
 
-.default_button {
+.notify_button {
     padding: 7px 5px 6px 5px;
     border: none;
     color: $dark-black-v2;
+    font-family: 'Encode Sans Expanded';
+    font-size: 0.8rem;
     background-color: $grey-light;
-    height: 28px;
+    height: 26px;
     padding: 0 12px;
     cursor: pointer;
     border-radius: $border-radius;
@@ -636,7 +638,8 @@ pre {
     }
 
     &.success {
-        background-color: $light-purple-v2;
+        opacity:0.8;
+        background-color: #70F2A3;
     }
 }
 td > .default_button {
@@ -658,6 +661,8 @@ td > .default_button {
         display: flex;
 
         input[type="email"] {
+            font-family: 'Encode Sans Expanded';
+            font-size: 0.8rem;
             padding: 7px 5px 6px 5px;
             border-radius: $border-radius;
             border: none;
@@ -665,8 +670,10 @@ td > .default_button {
         }
 
         input[type="submit"] {
+            line-height: 0.5;
             background-color: $white-v2;
             padding: 7px 18px 6px 18px;
+            margin-top: 1px;
         }
     }
 
@@ -690,8 +697,8 @@ td > .default_button {
 
 .level-of-support {
     display: inline-block;
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
     position: relative;
     top: 5px;
 

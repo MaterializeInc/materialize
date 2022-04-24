@@ -240,7 +240,7 @@ The level of support for these tools will improve as we extend the coverage of `
 <div id="subscribe_dialog">
   <form name="notify">
     <input name="email" type="email" placeholder="Email Address" required="required"/>
-    <input type="submit" class="default_button" value="Confirm" />
+    <input type="submit" class="notify_button" value="Confirm" />
   </form>
   <div class="disclaimer">
     <em>Subscribe to receive an email when support status is upgraded. No spam!</em>
@@ -254,7 +254,7 @@ The level of support for these tools will improve as we extend the coverage of `
 <script>
 $(function() {
     analytics.on('page', function() {
-        $('a[href="#notify"]').replaceWith('<button class="default_button" data-js="subscribe_open" title="Get notified when support is upgraded.">Notify Me</button>')
+        $('a[href="#notify"]').replaceWith('<button class="notify_button" data-js="subscribe_open" title="Get notified when support is upgraded.">Notify Me</button>')
 
         var removeForms = function() {
             $('.subscribe_dialog_active').removeClass('subscribe_dialog_active');
