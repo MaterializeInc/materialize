@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:focal-20220404 AS crosstool
+FROM ubuntu:focal-20220415 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -59,7 +59,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:focal-20220404
+FROM ubuntu:focal-20220415
 ARG ARCH_GCC
 ARG ARCH_GO
 
