@@ -195,3 +195,11 @@ DROP CLUSTER foo
 
 statement ok
 CREATE CLUSTER foo REMOTE r1 ('localhost:1234'), INTROSPECTION GRANULARITY '1s'
+
+# Test that bad cluster sizes don't cause a crash
+
+statement ok
+DROP CLUSTER foo
+
+statement error unknown cluster size
+CREATE CLUSTER foo SIZE 'lol'
