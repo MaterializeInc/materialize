@@ -24,8 +24,8 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_postgres_util::TableInfo;
 use mz_repr::adt::interval::Interval;
-use mz_sql_parser::ast::WithOptionValue;
 use mz_sql_parser::ast::{CreateConnector, CreateConnectorStatement};
+use mz_sql_parser::ast::{CsrConnector, WithOptionValue};
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -1328,12 +1328,16 @@ fn get_encoding_inner(
                 AvroSchema::Csr {
                     csr_connector:
                         CsrConnectorAvro {
-                            url,
+                            connector,
                             seed,
                             with_options: ccsr_options,
                         },
                 } => {
                     let mut ccsr_with_options = normalize::options(&ccsr_options);
+                    let url = match connector {
+                        mz_sql_parser::ast::CsrConnector::Inline { uri } => uri,
+                        mz_sql_parser::ast::CsrConnector::Reference { .. } => "",
+                    };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         url.parse()?,
                         &kafka_util::extract_config(&mut normalize::options(with_options))?,
@@ -1381,7 +1385,7 @@ fn get_encoding_inner(
             ProtobufSchema::Csr {
                 csr_connector:
                     CsrConnectorProto {
-                        url,
+                        connector,
                         seed,
                         with_options: ccsr_options,
                     },
@@ -1390,7 +1394,10 @@ fn get_encoding_inner(
                     seed
                 {
                     let mut ccsr_with_options = normalize::options(&ccsr_options);
-
+                    let url = match connector {
+                        mz_sql_parser::ast::CsrConnector::Inline { uri } => uri,
+                        mz_sql_parser::ast::CsrConnector::Reference { .. } => "",
+                    };
                     // We validate here instead of in purification, to match the behavior of avro
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         url.parse()?,
@@ -1903,7 +1910,7 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
                 CsrConnectorAvro {
-                    url,
+                    connector: CsrConnector::Inline { uri },
                     seed,
                     with_options,
                 },
@@ -1913,7 +1920,7 @@ fn kafka_sink_builder(
             }
             let mut ccsr_with_options = normalize::options(&with_options);
 
-            let schema_registry_url = url.parse::<Url>()?;
+            let schema_registry_url = uri.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
                 &config_options,
@@ -2079,7 +2086,7 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
                     CsrConnectorAvro {
-                        url,
+                        connector: CsrConnector::Inline { uri },
                         seed,
                         with_options,
                     },
@@ -2087,7 +2094,7 @@ fn get_kafka_sink_consistency_config(
                 if seed.is_some() {
                     bail!("SEED option does not make sense with sinks");
                 }
-                let schema_registry_url = url.parse::<Url>()?;
+                let schema_registry_url = uri.parse::<Url>()?;
                 let mut ccsr_with_options = normalize::options(&with_options);
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),

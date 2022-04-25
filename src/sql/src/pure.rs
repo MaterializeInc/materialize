@@ -20,7 +20,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
-use mz_sql_parser::ast::{KafkaConnector, KafkaSourceConnector};
+use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -382,13 +382,16 @@ async fn purify_csr_connector_proto(
     };
 
     let CsrConnectorProto {
-        url,
+        connector,
         seed,
         with_options: ccsr_options,
     } = csr_connector;
     match seed {
         None => {
-            let url: Url = url.parse()?;
+            let url: Url = match connector {
+                CsrConnector::Inline { uri } => uri.parse()?,
+                CsrConnector::Reference { .. } => "".parse()?,
+            };
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
@@ -434,12 +437,15 @@ async fn purify_csr_connector_avro(
     };
 
     let CsrConnectorAvro {
-        url,
+        connector,
         seed,
         with_options: ccsr_options,
     } = csr_connector;
     if seed.is_none() {
-        let url = url.parse()?;
+        let url = match connector {
+            CsrConnector::Inline { uri } => uri.parse()?,
+            CsrConnector::Reference { .. } => "".parse()?,
+        };
 
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(

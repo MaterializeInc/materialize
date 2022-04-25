@@ -121,22 +121,37 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrConnector {
+    Inline { uri: String },
+    Reference { connector: UnresolvedObjectName },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
-    pub url: String,
+    pub connector: CsrConnector,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
-        f.write_node(&display::escape_single_quote_string(&self.url));
-        f.write_str("'");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        match &self.connector {
+            CsrConnector::Inline { uri, .. } => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(uri));
+                f.write_str("'");
+            }
+            CsrConnector::Reference { connector } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
         }
-        if !self.with_options.is_empty() {
+        if !&self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
@@ -147,21 +162,32 @@ impl_display_t!(CsrConnectorAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorProto<T: AstInfo> {
-    pub url: String,
+    pub connector: CsrConnector,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
-        f.write_node(&display::escape_single_quote_string(&self.url));
-        f.write_str("'");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        match &self.connector {
+            CsrConnector::Inline { uri, .. } => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(uri));
+                f.write_str("'");
+            }
+            CsrConnector::Reference { connector } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
+
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
         }
-        if !self.with_options.is_empty() {
+
+        if !&self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
