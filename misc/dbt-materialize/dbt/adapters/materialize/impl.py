@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional, List, Any
+from typing import Any, List, Optional
 
 from dbt.adapters.base.meta import available
 from dbt.adapters.materialize import MaterializeConnectionManager
@@ -23,14 +23,15 @@ from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.postgres.impl import PostgresIndexConfig
 
+
 @dataclass
 class MaterializeIndexConfig(PostgresIndexConfig):
-     columns: List[str]
-     type: Optional[str] = None
-     name: Optional[str] = None
+    columns: List[str]
+    type: Optional[str] = None
+    name: Optional[str] = None
 
-     @classmethod
-     def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
+    @classmethod
+    def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
         if raw_index is None:
             return None
         try:
