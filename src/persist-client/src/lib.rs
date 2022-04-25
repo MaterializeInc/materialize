@@ -171,7 +171,7 @@ impl ShardId {
 
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [Location].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
@@ -226,7 +226,7 @@ impl Client {
     {
         trace!("Client::open timeout={:?} shard_id={:?}", timeout, shard_id);
         let deadline = Instant::now() + timeout;
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus));
+        let mut machine = Machine::new(deadline, shard_id, Arc::clone(&self.consensus)).await?;
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
         let (write_cap, read_cap) = machine.register(deadline, &writer_id, &reader_id).await?;
         let writer = WriteHandle {
@@ -254,7 +254,10 @@ mod tests {
     use std::str::FromStr;
 
     use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+    use mz_persist::workload::DataGenerator;
     use timely::progress::Antichain;
+    use timely::PartialOrder;
+    use tokio::task::JoinHandle;
 
     use crate::read::ListenEvent;
 
@@ -507,5 +510,73 @@ mod tests {
                 "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid length: expected one of [36, 32], found 39"
             )))
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrency() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let data = DataGenerator::small();
+
+        const NUM_WRITERS: usize = 2;
+        let id = ShardId::new();
+        let client = new_test_client().await?;
+        let mut handles = Vec::<JoinHandle<Result<(), anyhow::Error>>>::new();
+        for idx in 0..NUM_WRITERS {
+            let (data, client) = (data.clone(), client.clone());
+            let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
+                let (mut write, _) = client
+                    .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
+                    .await?;
+                for batch in data.batches() {
+                    let new_upper = match batch.get(batch.len() - 1) {
+                        Some((_, max_ts, _)) => Antichain::from_elem(max_ts + 1),
+                        None => continue,
+                    };
+                    // Because we (intentionally) call open inside the task,
+                    // some other writer may have raced ahead and already
+                    // appended some data before this one was registered. As a
+                    // result, this writer may not be starting with an upper of
+                    // the initial empty antichain. This is nice because it
+                    // mimics how a real HA source would work, but it means we
+                    // have to skip any batches that have already been committed
+                    // (otherwise our new_upper would be before our upper).
+                    //
+                    // Note however, that unlike a real source, our
+                    // DataGenerator-derived batches are guaranteed to be
+                    // chunked along the same boundaries. This means we don't
+                    // have to consider partial batches when generating the
+                    // updates below.
+                    if PartialOrder::less_equal(&new_upper, write.upper()) {
+                        continue;
+                    }
+                    let updates = batch
+                        .iter()
+                        .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
+                        .collect::<Vec<_>>();
+                    let updates = updates.iter().map(|((k, v), t, d)| ((k, v), t, d));
+                    write.append(NO_TIMEOUT, updates, new_upper).await??;
+                }
+                Ok(())
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let () = handle.await??;
+        }
+
+        let expected = data
+            .records()
+            .map(|((k, v), t, d)| ((Ok(k), Ok(v)), t, d))
+            .collect::<Vec<_>>();
+        let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
+        let (_, read) = client
+            .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+        let actual = read.snapshot_one(max_ts).await??.read_all().await?;
+        assert_eq!(actual, expected);
+
+        Ok(())
     }
 }
