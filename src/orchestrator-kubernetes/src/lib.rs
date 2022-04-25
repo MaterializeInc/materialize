@@ -155,7 +155,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             ports: ports_in,
             memory_limit,
             cpu_limit,
-            processes,
+            scale,
             labels: labels_in,
             availability_zone,
         }: ServiceConfig<'_>,
@@ -304,7 +304,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: name.clone(),
-                replicas: Some(processes.get().try_into()?),
+                replicas: Some(scale.get().try_into()?),
                 template: pod_template_spec,
                 ..Default::default()
             }),
@@ -328,7 +328,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..processes.get() {
+        for pod_id in 0..scale.get() {
             let pod_name = format!("{}-{}", &name, pod_id);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
@@ -349,7 +349,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        let hosts = (0..processes.get())
+        let hosts = (0..scale.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",
