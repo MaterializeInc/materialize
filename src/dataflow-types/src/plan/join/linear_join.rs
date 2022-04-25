@@ -22,6 +22,7 @@ use mz_expr::MirScalarExpr;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use super::ProtoLinearJoinPlan;
@@ -32,7 +33,7 @@ use super::ProtoMirScalarVec;
 ///
 /// A linear join is a sequence of stages, each of which introduces
 /// a new collection. Each stage is represented by a [LinearStagePlan].
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
@@ -108,7 +109,7 @@ impl From<&LinearJoinPlan> for ProtoLinearJoinPlan {
 /// Each stage is a binary join between the current accumulated
 /// join results, and a new collection. The former is referred to
 /// as the "stream" and the latter the "lookup".
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct LinearStagePlan {
     /// The relation index into which we will look up.
     pub lookup_relation: usize,

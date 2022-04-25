@@ -33,6 +33,7 @@ pub mod linear_join;
 use std::collections::HashMap;
 
 use mz_repr::proto::TryFromProtoError;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
@@ -85,7 +86,7 @@ impl From<&JoinPlan> for ProtoJoinPlan {
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: mz_expr::SafeMfpPlan,
@@ -408,5 +409,21 @@ impl JoinBuildState {
             permutation,
             thinned_arity_with_key,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+       #[test]
+        fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }
