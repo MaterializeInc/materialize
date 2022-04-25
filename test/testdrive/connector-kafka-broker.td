@@ -12,9 +12,13 @@
 ###
 # Test core functionality by creating, introspecting and dropping a connector
 ###
+$ kafka-create-topic topic=connector_test partitions=1
+$ kafka-ingest format=bytes topic=connector_test
+1,2
+2,3
+
 > CREATE CONNECTOR testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
-  WITH (security_protocol = 'PLAINTEXT')
 
 > SELECT name, connector_type from mz_connectors
 name  connector_type
@@ -24,33 +28,27 @@ testconn   kafka
 > SHOW CREATE CONNECTOR testconn
 Connector   "Create Connector"
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTOR \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}' WITH (\"security_protocol\" = 'PLAINTEXT')"
+materialize.public.testconn   "CREATE CONNECTOR \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}'"
 
 
 > DROP CONNECTOR testconn
-
-$ kafka-create-topic topic=connector_test partitions=1
-$ kafka-ingest format=bytes topic=connector_test
-1,2
-2,3
 
 ###
 # Test that connectors work in creating a source
 ###
 > CREATE CONNECTOR testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
-  WITH (security_protocol = 'PLAINTEXT')
 
 > CREATE MATERIALIZED SOURCE connector_source (first, second)
   FROM KAFKA CONNECTOR testconn
-  TOPIC 'connector_test-${testdrive.seed}'
+  TOPIC 'testdrive-connector_test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
 
-# For some reason this does not work in testdrive, ignoring for now so it can prove drop semantics work correctly
 > SELECT * FROM connector_source
 first second mz_offset
 ----------------------
-2     3      1
+1     2      1
+2     3      2
 
 # Confirm we cannot drop the connector while a source depends upon it
 ! DROP CONNECTOR testconn;

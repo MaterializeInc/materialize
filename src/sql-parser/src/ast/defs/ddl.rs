@@ -474,9 +474,12 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
             } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("' WITH (");
-                f.write_node(&display::comma_separated(&with_options));
-                f.write_str(")");
+                f.write_str("'");
+                if with_options.len() > 0 {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_str(")");
+                }
             }
         }
     }

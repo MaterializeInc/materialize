@@ -339,13 +339,7 @@ pub fn create_statement(
                 if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
                     if ident_ref(&opt.key) == "tx_metadata" {
                         // Use the catalog to resolve to a fully qualified name
-                        *object_name = unresolve(
-                            scx.catalog.resolve_full_name(
-                                scx.catalog
-                                    .resolve_item(&unresolved_object_name(object_name.clone())?)?
-                                    .name(),
-                            ),
-                        );
+                        *object_name = allocate_name(object_name)?;
                     }
                 }
             }
@@ -354,13 +348,7 @@ pub fn create_statement(
                 ..
             }) = connector
             {
-                *connector = unresolve(
-                    scx.catalog.resolve_full_name(
-                        &scx.catalog
-                            .resolve_item(&unresolved_object_name(connector.clone())?)?
-                            .name(),
-                    ),
-                );
+                *connector = allocate_name(connector)?;
             };
         }
 
