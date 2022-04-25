@@ -62,9 +62,9 @@ pub struct OrchestratorConfig {
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ClusterReplicaSizeConfig {
-    memory_limit: Option<MemoryLimit>,
-    cpu_limit: Option<CpuLimit>,
-    processes: NonZeroUsize,
+    pub memory_limit: Option<MemoryLimit>,
+    pub cpu_limit: Option<CpuLimit>,
+    pub processes: NonZeroUsize,
 }
 
 #[derive(Clone, Debug, Deserialize)]

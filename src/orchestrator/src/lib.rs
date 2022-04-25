@@ -141,7 +141,7 @@ impl Serialize for MemoryLimit {
 }
 
 /// Describes a limit on CPU resources.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct CpuLimit {
     millicpus: usize,
 }

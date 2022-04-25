@@ -292,8 +292,18 @@ impl ConcreteComputeInstanceConfig {
                 introspection,
             } => {
                 let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
-                    let mut expected = replica_sizes.0.keys().cloned().collect::<Vec<_>>();
-                    expected.sort();
+                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            ClusterReplicaSizeConfig {
+                                processes,
+                                cpu_limit,
+                                ..
+                            },
+                        )| (*processes, *cpu_limit),
+                    );
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
                     CoordError::InvalidReplicaSize { size, expected }
                 })?;
                 ConcreteComputeInstanceConfig::Managed {
