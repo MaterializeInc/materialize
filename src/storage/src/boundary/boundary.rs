@@ -6,7 +6,9 @@
 //! Traits and types for capturing and replaying collections of data.
 use std::any::Any;
 use std::cell::RefCell;
+use std::marker::{Send, Sync};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -22,7 +24,7 @@ pub trait StorageCapture {
         id: GlobalId,
         ok: Collection<G, Row, Diff>,
         err: Collection<G, DataflowError, Diff>,
-        token: Rc<dyn Any>,
+        token: Arc<dyn Any + Send + Sync>,
         name: &str,
         dataflow_id: uuid::Uuid,
     );
@@ -53,7 +55,7 @@ impl<SC: StorageCapture> StorageCapture for Rc<RefCell<SC>> {
         id: GlobalId,
         ok: Collection<G, Row, Diff>,
         err: Collection<G, DataflowError, Diff>,
-        token: Rc<dyn Any>,
+        token: Arc<dyn Any + Send + Sync>,
         name: &str,
         dataflow_id: uuid::Uuid,
     ) {
@@ -101,7 +103,7 @@ impl StorageCapture for DummyBoundary {
         _id: GlobalId,
         _ok: Collection<G, Row, Diff>,
         _err: Collection<G, DataflowError, Diff>,
-        _token: Rc<dyn Any>,
+        _token: Arc<dyn Any + Send + Sync>,
         _name: &str,
         _dataflow_id: uuid::Uuid,
     ) {

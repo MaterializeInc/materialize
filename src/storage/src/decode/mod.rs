@@ -7,7 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::VecDeque,
+    marker::{Send, Sync},
+    rc::Rc,
+    time::Duration,
+};
 
 use ::regex::Regex;
 use chrono::NaiveDateTime;
@@ -51,7 +58,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     schema: &str,
     registry: Option<mz_ccsr::ClientConfig>,
     confluent_wire_format: bool,
-) -> (Collection<G, Row, Diff>, Box<dyn Any>) {
+) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
     // We will have already checked validity of the schema by now, so this can't fail.
     let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
     let channel = Rc::new(RefCell::new(VecDeque::new()));
@@ -105,6 +112,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             self.0.borrow_mut().pop_front()
         }
     }
+    // this operator returns a thread-safe drop-token
     let (token, stream) =
         differential_dataflow::capture::source::build(stream.scope(), move |ac| {
             *activator.borrow_mut() = Some(ac);
@@ -338,7 +346,7 @@ pub fn render_decode_delimited<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
+) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope,
 {
@@ -438,7 +446,7 @@ pub fn render_decode<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
+) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {

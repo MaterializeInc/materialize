@@ -26,7 +26,7 @@ pub mod server {
     use futures::{SinkExt, TryStreamExt};
     use std::any::Any;
     use std::collections::{HashMap, HashSet};
-    use std::rc::Rc;
+    use std::marker::{Send, Sync};
     use std::sync::{Arc, Weak};
     use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
     use timely::dataflow::operators::Capture;
@@ -76,7 +76,7 @@ pub mod server {
         /// Client, once it registered
         client_id: Option<ClientId>,
         /// Tokens to drop to terminate source.
-        token: Option<Arc<()>>,
+        token: Option<Arc<dyn Any + Send + Sync>>,
     }
 
     /// Response from Timely workers to network handler.
@@ -85,7 +85,7 @@ pub mod server {
         /// Announce the presence of a captured source.
         Announce {
             subscription_id: SubscriptionId,
-            token: Arc<()>,
+            token: Arc<dyn Any + Send + Sync>,
         },
         /// Data from a source
         Response(Response),
@@ -279,26 +279,24 @@ pub mod server {
             id: mz_repr::GlobalId,
             ok: Collection<G, Row, Diff>,
             err: Collection<G, DataflowError, Diff>,
-            token: Rc<dyn Any>,
+            token: Arc<dyn Any + Send + Sync>,
             _name: &str,
             dataflow_id: uuid::Uuid,
         ) {
             let subscription_id = ((dataflow_id, id), ok.inner.scope().index());
-            let client_token = Arc::new(());
 
             // Announce that we're capturing data, with the source ID and a token. Once the token
             // is dropped, we drop the `token` to terminate the source.
             self.worker_tx
                 .send(WorkerResponse::Announce {
                     subscription_id,
-                    token: Arc::clone(&client_token),
+                    token: Arc::clone(&token),
                 })
                 .unwrap();
 
             ok.inner.capture_into(UnboundedEventPusher::new(
                 self.worker_tx.clone(),
-                Rc::clone(&token),
-                &client_token,
+                &token,
                 move |event| {
                     WorkerResponse::Response(Response {
                         subscription_id,
@@ -308,8 +306,7 @@ pub mod server {
             ));
             err.inner.capture_into(UnboundedEventPusher::new(
                 self.worker_tx.clone(),
-                token,
-                &client_token,
+                &token,
                 move |event| {
                     WorkerResponse::Response(Response {
                         subscription_id,
@@ -326,41 +323,32 @@ pub mod server {
         sender: UnboundedSender<R>,
         /// A function to convert the input data into something the sender can transport.
         convert: F,
-        /// A token that's dropped once `client_token` is dropped.
-        token: Option<Rc<dyn Any>>,
         /// A weak reference to a token that e.g. the network layer can drop.
-        client_token: Weak<()>,
+        client_token: Weak<dyn Any + Send + Sync>,
     }
 
     impl<R, F> UnboundedEventPusher<R, F> {
         /// Construct a new pusher. It'll retain a weak reference to `client_token`.
         fn new(
             sender: UnboundedSender<R>,
-            token: Rc<dyn Any>,
-            client_token: &Arc<()>,
+            client_token: &Arc<dyn Any + Send + Sync>,
             convert: F,
         ) -> Self {
             Self {
                 sender,
                 client_token: Arc::downgrade(client_token),
                 convert,
-                token: Some(token),
             }
         }
     }
 
     impl<T, D, R, F: Fn(EventCore<T, D>) -> R> EventPusherCore<T, D> for UnboundedEventPusher<R, F> {
         fn push(&mut self, event: EventCore<T, D>) {
-            if self.client_token.upgrade().is_none() {
-                self.token.take();
-            }
-            if self.token.is_some() {
-                match self.sender.send((self.convert)(event)) {
-                    Err(_) => {
-                        self.token.take();
-                    }
-                    _ => {}
-                }
+            if self.client_token.upgrade().is_some() {
+                // Loss of the receiving end means we need to do nothing,
+                // so we ignore errors
+                // TODO(guswynn): can we handle failure better here?
+                let _ = self.sender.send((self.convert)(event));
             }
         }
     }
