@@ -16,6 +16,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::builtin::BuiltinLog;
+use crate::coord::ConcreteComputeInstanceConfig;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -25,7 +26,6 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql::plan::ComputeInstanceConfig;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -129,7 +129,7 @@ const MIGRATIONS: &[&dyn Migration] = &[
          (4, NULL, 'mz_internal'),
          (5, NULL, 'information_schema');
      INSERT INTO roles VALUES (1, 'materialize');
-     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size\":\"1\",\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
+     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"processes\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -362,14 +362,14 @@ impl Connection {
 
     pub fn load_compute_instances(
         &self,
-    ) -> Result<Vec<(i64, String, ComputeInstanceConfig)>, Error> {
+    ) -> Result<Vec<(i64, String, ConcreteComputeInstanceConfig)>, Error> {
         self.inner
             .prepare("SELECT id, name, config FROM compute_instances")?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
-                let config: ComputeInstanceConfig = match config {
+                let config: ConcreteComputeInstanceConfig = match config {
                     None => {
                         return Err(Error::new(ErrorKind::Unstructured(
                             "migrating catalog from materialized to platform is not supported"
@@ -605,7 +605,7 @@ impl Transaction<'_> {
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
-        config: &ComputeInstanceConfig,
+        config: &ConcreteComputeInstanceConfig,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
@@ -643,7 +643,7 @@ impl Transaction<'_> {
     pub fn update_compute_instance_config(
         &mut self,
         id: ComputeInstanceId,
-        config: &ComputeInstanceConfig,
+        config: &ConcreteComputeInstanceConfig,
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;

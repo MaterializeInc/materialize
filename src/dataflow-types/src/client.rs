@@ -37,6 +37,8 @@ use mz_repr::{GlobalId, Row};
 pub mod controller;
 pub use controller::Controller;
 
+use self::controller::ClusterReplicaSizeConfig;
+
 pub mod partitioned;
 pub mod replicated;
 
@@ -60,7 +62,7 @@ pub enum InstanceConfig {
     /// A remote but managed instance.
     Managed {
         /// The size of the cluster.
-        size: String,
+        size_config: ClusterReplicaSizeConfig,
     },
 }
 

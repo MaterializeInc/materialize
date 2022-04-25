@@ -349,11 +349,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_client,
         config.data_directory,
     );
-    let dataflow_controller = mz_dataflow_types::client::Controller::new(
-        orchestrator,
-        storage_controller,
-        config.replica_sizes,
-    );
+    let dataflow_controller =
+        mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
@@ -369,6 +366,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
+        replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
     })
     .await?;
