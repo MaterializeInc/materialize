@@ -29,6 +29,7 @@ use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_secrets_kubernetes::SECRET_NAME;
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -221,12 +222,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
 
         let volume_name = "secrets-mount".to_string();
-        let secret_name = "dataflowd-secret".to_string();
 
         let secrets_volume = Volume {
             name: volume_name.clone(),
             secret: Some(SecretVolumeSource {
-                secret_name: Some(secret_name),
+                secret_name: Some(SECRET_NAME.to_string()),
                 ..Default::default()
             }),
             ..Default::default()

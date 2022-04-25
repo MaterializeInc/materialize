@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use tracing::{error, info};
 
 const FIELD_MANAGER: &str = "materialized";
-const HARDCODED_NAME: &str = "dataflowd-secret";
+pub const SECRET_NAME: &str = "user-managed-secrets";
 
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
@@ -29,14 +29,11 @@ pub struct KubernetesSecretsController {
 impl KubernetesSecretsController {
     fn make_secret_with_name(name: String) -> Secret {
         Secret {
-            data: None,
-            immutable: None,
             metadata: ObjectMeta {
                 name: Some(name),
                 ..Default::default()
             },
-            string_data: None,
-            type_: None,
+            ..Default::default()
         }
     }
 
@@ -58,13 +55,11 @@ impl KubernetesSecretsController {
         let client = Client::try_from(kubeconfig)?;
         let secret_api: Api<Secret> = Api::default_namespaced(client);
 
-        let name: String = format!("{}", HARDCODED_NAME);
-
-        let secret = KubernetesSecretsController::make_secret_with_name(name.clone());
+        let secret = KubernetesSecretsController::make_secret_with_name(SECRET_NAME.to_string());
         match secret_api.create(&PostParams::default(), &secret).await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(e)) if e.code == 409 => {
-                info!("Secret {} already exists", name);
+                info!("Secret {} already exists", SECRET_NAME.to_string());
                 Ok(())
             }
             Err(e) => {
@@ -80,9 +75,7 @@ impl KubernetesSecretsController {
 #[async_trait]
 impl SecretsController for KubernetesSecretsController {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
-        let name: String = format!("{}", HARDCODED_NAME);
-
-        let mut secret: Secret = self.secret_api.get(&*name).await?;
+        let mut secret: Secret = self.secret_api.get(&*SECRET_NAME.to_string()).await?;
 
         let mut data = secret.data.map_or_else(BTreeMap::new, |m| m);
 
@@ -107,7 +100,7 @@ impl SecretsController for KubernetesSecretsController {
 
         self.secret_api
             .patch(
-                &name,
+                &SECRET_NAME,
                 &PatchParams::apply(FIELD_MANAGER).force(),
                 &Patch::Apply(secret),
             )
