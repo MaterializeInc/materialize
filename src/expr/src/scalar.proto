@@ -14,6 +14,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 import "repr/src/adt/array.proto";
 import "repr/src/strconv.proto";
+import "expr/src/relation/func.proto";
 
 package mz_expr.scalar;
 
@@ -121,4 +122,10 @@ message ProtoEvalError {
 
 message ProtoMirScalarExpr {
     //TODO: fill me
+}
+
+message ProtoAggregateExpr {
+    mz_expr.relation.func.ProtoAggregateFunc func = 1;
+    ProtoMirScalarExpr expr = 2;
+    bool distinct = 3;
 }
