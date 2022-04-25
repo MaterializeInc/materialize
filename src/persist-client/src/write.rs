@@ -90,12 +90,16 @@ where
         &self.upper
     }
 
-    /// Fetches and returns the shard-global `upper`.
+    /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
+    /// linearized with other write operations.
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
-    pub async fn fetch_upper(&mut self, timeout: Duration) -> Result<Antichain<T>, ExternalError> {
-        trace!("WriteHandle::fetch_upper timeout={:?}", timeout,);
+    pub async fn fetch_recent_upper(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Antichain<T>, ExternalError> {
+        trace!("WriteHandle::fetch_recent_upper timeout={:?}", timeout,);
         let deadline = Instant::now() + timeout;
         let upper = self.machine.upper(deadline).await?;
 

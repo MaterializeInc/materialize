@@ -405,14 +405,14 @@ mod tests {
         let res = write1.append_slice(&data[..], 3).await?;
         assert_eq!(res, Ok(()));
 
-        let write2_upper = write2.upper().clone();
-        let global_upper = write2.fetch_upper(NO_TIMEOUT).await?;
+        // The shard-global upper does advance, even if this writer didn't advance its local upper.
+        assert_eq!(
+            write2.fetch_recent_upper(NO_TIMEOUT).await?,
+            Antichain::from_elem(3)
+        );
 
-        // The writer upper should not advance if another writer advances.
-        assert_eq!(write2_upper, Antichain::from_elem(0));
-
-        // The shard-global upper does advance.
-        assert_eq!(global_upper, Antichain::from_elem(3));
+        // The writer-local upper should not advance if another writer advances the frontier.
+        assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
 
         Ok(())
     }
