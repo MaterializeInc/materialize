@@ -4,5 +4,5 @@ description: "Use lateral joins as a streaming-efficient stand-in for many windo
 draft: true
 menu:
   main:
-    parent: 'sql-spellbook'
+    parent: 'sql-patterns'
 ---

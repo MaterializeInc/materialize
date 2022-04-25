@@ -4,5 +4,5 @@ description: "Use Materialize more efficiently by creating non-materialized view
 draft: true
 menu:
   main:
-    parent: 'sql-spellbook'
+    parent: 'sql-patterns'
 ---

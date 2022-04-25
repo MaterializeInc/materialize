@@ -116,9 +116,9 @@ weight = 100
 name = "SQL Commands"
 
 [[menu.main]]
-name = "SQL Spellbook 🪄"
+name = "SQL Patterns 🪄"
 parent = 'reference'
-identifier = 'sql-spellbook'
+identifier = 'sql-patterns'
 weight = 85
 
 [[menu.main]]
