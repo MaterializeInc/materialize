@@ -261,11 +261,44 @@ where
 
         Ok(())
     }
+
+    /// Removes a replica from an instance, including its service in the
+    /// orchestrator.
+    pub async fn drop_replica(
+        &mut self,
+        instance: ComputeInstanceId,
+        name: &str,
+        config: ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), anyhow::Error> {
+        let replica_name = Self::generate_replica_name(instance, name);
+        if let ConcreteComputeInstanceReplicaConfig::Managed {
+            size_config: _size_config,
+        } = config
+        {
+            let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;
+            orchestrator
+                .namespace("compute")
+                .drop_service(&replica_name)
+                .await?;
+        }
+        let mut compute = self.compute_mut(instance).unwrap();
+        compute.remove_replica(&replica_name);
+        Ok(())
+    }
+
+    /// Removes an instance from the orchestrator.
+    ///
+    /// # Panics
+    /// - If the identified `instance` still has active replicas.
     pub async fn drop_instance(
         &mut self,
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
+            assert!(
+                compute.client.get_replica_identifiers().next().is_none(),
+                "cannot drop instances with provisioned replicas; call `drop_replica` first"
+            );
             self.orchestrator
                 .orchestrator
                 .namespace("compute")

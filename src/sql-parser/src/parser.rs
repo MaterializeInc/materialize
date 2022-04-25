@@ -2573,7 +2573,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.next_token();
         let name = self.parse_identifier()?;
 
         let replicas = if self.peek_keyword(REPLICA) {
@@ -2598,7 +2597,7 @@ impl<'a> Parser<'a> {
     fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
         self.expect_keyword(REPLICA)?;
         let name = self.parse_identifier()?;
-        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        let options = vec![self.parse_replica_option()?];
         Ok(ReplicaDefinition { name, options })
     }
 
@@ -2750,17 +2749,11 @@ impl<'a> Parser<'a> {
                 }));
             }
             Some(CLUSTER) => {
-                let if_exists = self.parse_if_exists()?;
-                let names = self.parse_comma_separated(Parser::parse_object_name)?;
-                let cascade = matches!(
-                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-                    Some(CASCADE),
-                );
-                return Ok(Statement::DropClusters(DropClustersStatement {
-                    if_exists,
-                    names,
-                    cascade,
-                }));
+                return if self.peek_keyword(REPLICAS) {
+                    self.parse_drop_cluster_replicas()
+                } else {
+                    self.parse_drop_clusters()
+                };
             }
             Some(INDEX) => ObjectType::Index,
             Some(SINK) => ObjectType::Sink,
@@ -2793,6 +2786,35 @@ impl<'a> Parser<'a> {
             names,
             cascade,
         }))
+    }
+
+    fn parse_drop_clusters(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
+        return Ok(Statement::DropClusters(DropClustersStatement {
+            if_exists,
+            names,
+            cascade,
+        }));
+    }
+
+    fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(REPLICA).unwrap();
+        let if_exists = self.parse_if_exists()?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
+        self.expect_keyword(FROM)?;
+        let cluster = self.parse_object_name()?;
+        Ok(Statement::DropClusterReplicas(
+            DropClusterReplicasStatement {
+                if_exists,
+                names,
+                cluster,
+            },
+        ))
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -3290,6 +3290,7 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
+ "itertools",
  "maplit",
  "mz-ccsr",
  "mz-expr",

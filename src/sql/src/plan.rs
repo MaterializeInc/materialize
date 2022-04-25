@@ -92,6 +92,7 @@ pub enum Plan {
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
     DropComputeInstances(DropComputeInstancesPlan),
+    DropComputeInstanceReplica(DropComputeInstanceReplicaPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -263,6 +264,12 @@ pub struct DropRolesPlan {
 #[derive(Debug)]
 pub struct DropComputeInstancesPlan {
     pub names: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct DropComputeInstanceReplicaPlan {
+    pub names: Vec<String>,
+    pub cluster: Option<String>,
 }
 
 #[derive(Debug)]

@@ -490,6 +490,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedSchema
                 | ExecuteResponse::DroppedRole
                 | ExecuteResponse::DroppedComputeInstance
+                | ExecuteResponse::DroppedComputeInstanceReplicas
                 | ExecuteResponse::DroppedSource
                 | ExecuteResponse::DroppedIndex
                 | ExecuteResponse::DroppedSink

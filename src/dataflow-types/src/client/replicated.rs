@@ -81,6 +81,10 @@ where
         self.hydrate_replica(&identifier).await;
     }
 
+    pub fn get_replica_identifiers(&self) -> impl Iterator<Item = &String> {
+        self.replicas.keys()
+    }
+
     /// Remove a replica by its identifier.
     pub fn remove_replica(&mut self, id: &str) {
         self.replicas.remove(id);

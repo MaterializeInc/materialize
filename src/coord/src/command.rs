@@ -243,6 +243,8 @@ pub enum ExecuteResponse {
     DroppedConnector,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
+    /// The requested compute instance replicas were dropped.
+    DroppedComputeInstanceReplicas,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.

@@ -128,6 +128,9 @@ pub fn describe(
         Statement::DropObjects(stmt) => Some(ddl::describe_drop_objects(&scx, stmt)?),
         Statement::DropRoles(stmt) => Some(ddl::describe_drop_role(&scx, stmt)?),
         Statement::DropClusters(stmt) => Some(ddl::describe_drop_cluster(&scx, stmt)?),
+        Statement::DropClusterReplicas(stmt) => {
+            Some(ddl::describe_drop_cluster_replica(&scx, stmt)?)
+        }
         Statement::AlterObjectRename(stmt) => Some(ddl::describe_alter_object_rename(&scx, stmt)?),
         Statement::AlterIndex(stmt) => Some(ddl::describe_alter_index_options(&scx, stmt)?),
         Statement::AlterSecret(stmt) => Some(ddl::describe_alter_secret_options(&scx, stmt)?),
@@ -340,6 +343,10 @@ pub fn plan(
         stmt @ Statement::DropClusters(_) => {
             let (stmt, _) = resolve_stmt!(Statement::DropClusters, scx, stmt);
             ddl::plan_drop_cluster(scx, stmt)
+        }
+        stmt @ Statement::DropClusterReplicas(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::DropClusterReplicas, scx, stmt);
+            ddl::plan_drop_cluster_replica(scx, stmt)
         }
         stmt @ Statement::AlterIndex(_) => {
             let (stmt, _) = resolve_stmt!(Statement::AlterIndex, scx, stmt);

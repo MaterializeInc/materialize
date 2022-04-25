@@ -135,12 +135,12 @@ use mz_sql::plan::{
     AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
     CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind,
-    OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ReplicaConfig, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom,
-    TailPlan, View,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
+    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -1374,6 +1374,7 @@ impl Coordinator {
                     | Statement::DropObjects(_)
                     | Statement::DropRoles(_)
                     | Statement::DropClusters(_)
+                    | Statement::DropClusterReplicas(_)
                     | Statement::Insert(_)
                     | Statement::Update(_) => {
                         return tx.send(
@@ -1653,6 +1654,12 @@ impl Coordinator {
             }
             Plan::DropComputeInstances(plan) => {
                 tx.send(self.sequence_drop_compute_instances(plan).await, session);
+            }
+            Plan::DropComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_drop_compute_instance_replica(plan).await,
+                    session,
+                );
             }
             Plan::DropItems(plan) => {
                 tx.send(self.sequence_drop_items(plan).await, session);
@@ -2646,20 +2653,62 @@ impl Coordinator {
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
-        let mut instance_ids = Vec::new();
+        let mut instance_replica_drop_sets = HashMap::new();
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
-            instance_ids.push(instance.id);
+            instance_replica_drop_sets.insert(instance.id, instance.replicas.clone());
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
-        for id in instance_ids {
-            self.dataflow_client.drop_instance(id).await.unwrap();
+        for (instance_id, replicas) in instance_replica_drop_sets.drain() {
+            for (name, config) in replicas {
+                self.dataflow_client
+                    .drop_replica(instance_id, &name, config)
+                    .await
+                    .unwrap();
+            }
+            self.dataflow_client
+                .drop_instance(instance_id)
+                .await
+                .unwrap();
         }
+
         Ok(ExecuteResponse::DroppedComputeInstance)
+    }
+
+    async fn sequence_drop_compute_instance_replica(
+        &mut self,
+        DropComputeInstanceReplicaPlan { names, cluster }: DropComputeInstanceReplicaPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        if names.is_empty() {
+            return Ok(ExecuteResponse::DroppedComputeInstanceReplicas);
+        }
+
+        let instance = self.catalog.resolve_compute_instance(&cluster.unwrap())?;
+        let compute_id = instance.id;
+        let mut ops = Vec::with_capacity(names.len());
+        let mut replicas_to_drop = Vec::with_capacity(names.len());
+        for name in names {
+            ops.push(catalog::Op::DropComputeInstanceReplica {
+                name: name.clone(),
+                compute_id,
+            });
+            replicas_to_drop.push((compute_id, name.clone(), instance.replicas[&name].clone()));
+        }
+
+        self.catalog_transact(ops, |_| Ok(())).await?;
+
+        for (compute_id, name, config) in replicas_to_drop {
+            self.dataflow_client
+                .drop_replica(compute_id, &name, config)
+                .await
+                .unwrap();
+        }
+
+        Ok(ExecuteResponse::DroppedComputeInstanceReplicas)
     }
 
     async fn sequence_drop_items(

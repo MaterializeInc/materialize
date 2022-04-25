@@ -67,13 +67,13 @@ use crate::ast::{
     CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
     CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto,
-    CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, Op,
-    ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr, SourceIncludeMetadata,
-    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption,
+    CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClusterReplicasStatement,
+    DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
+    DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
+    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::connectors::populate_connectors;
@@ -94,9 +94,9 @@ use crate::plan::{
     Connector, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, Index, IndexOption, IndexOptionName, Params, Plan, ReplicaConfig, Secret, Sink,
-    Source, Table, Type, View,
+    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, IndexOptionName, Params,
+    Plan, ReplicaConfig, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -3238,8 +3238,10 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
-                if !instance.indexes().is_empty() && !cascade {
-                    bail!("cannot drop cluster with active indexes or sinks");
+                if !(instance.indexes().is_empty() || instance.replica_names().is_empty())
+                    && !cascade
+                {
+                    bail!("cannot drop cluster with active indexes, sinks, or replicas");
                 }
                 out.push(name.into_string());
             }
@@ -3253,6 +3255,68 @@ pub fn plan_drop_cluster(
     Ok(Plan::DropComputeInstances(DropComputeInstancesPlan {
         names: out,
     }))
+}
+
+pub fn describe_drop_cluster_replica(
+    _: &StatementContext,
+    _: &DropClusterReplicasStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_cluster_replica(
+    scx: &StatementContext,
+    DropClusterReplicasStatement {
+        if_exists,
+        names,
+        cluster,
+    }: DropClusterReplicasStatement,
+) -> Result<Plan, anyhow::Error> {
+    let cluster = if cluster.0.len() == 1 {
+        cluster.0.into_element().to_string()
+    } else {
+        bail!("invalid cluster name {}", cluster.to_string().quoted())
+    };
+
+    let (names, cluster) = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
+        Ok(instance) => {
+            let mut names_out = Vec::with_capacity(names.len());
+            for name in names {
+                // Check name validity.
+                let name = if name.0.len() == 1 {
+                    name.0.into_element().to_string()
+                } else {
+                    bail!("invalid replica name {}", name.to_string().quoted())
+                };
+
+                // Check to see if name exists
+                if instance.replica_names().contains(&name) {
+                    names_out.push(name)
+                } else {
+                    // If "IF EXISTS" supplied, names allowed to be missing,
+                    // otherwise error.
+                    if !if_exists {
+                        // TODO(benesch): generate a notice indicating that the
+                        // replica does not exist.
+                        bail!("CLUSTER {} has no CLUSTER REPLICA named {}", cluster, name)
+                    }
+                }
+            }
+
+            (names_out, Some(cluster))
+        }
+        // Apply "IF EXISTS" to cluster name.
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating that the
+            // cluster does not exist.
+            (vec![], None)
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    Ok(Plan::DropComputeInstanceReplica(
+        DropComputeInstanceReplicaPlan { names, cluster },
+    ))
 }
 
 pub fn plan_drop_items(

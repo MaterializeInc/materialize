@@ -60,6 +60,7 @@ pub enum Statement<T: AstInfo> {
     DropObjects(DropObjectsStatement<T>),
     DropRoles(DropRolesStatement),
     DropClusters(DropClustersStatement),
+    DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
     ShowDatabases(ShowDatabasesStatement<T>),
     ShowSchemas(ShowSchemasStatement<T>),
@@ -119,6 +120,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropRoles(stmt) => f.write_node(stmt),
             Statement::DropClusters(stmt) => f.write_node(stmt),
+            Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ShowDatabases(stmt) => f.write_node(stmt),
             Statement::ShowSchemas(stmt) => f.write_node(stmt),
@@ -1239,6 +1241,29 @@ impl AstDisplay for DropClustersStatement {
     }
 }
 impl_display!(DropClustersStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropClusterReplicasStatement {
+    /// An optional `IF EXISTS` clause. (Non-standard.)
+    pub if_exists: bool,
+    /// One or more objects to drop. (ANSI SQL requires exactly one.)
+    pub names: Vec<UnresolvedObjectName>,
+    /// The cluster from which to drop the replicas.
+    pub cluster: UnresolvedObjectName,
+}
+
+impl AstDisplay for DropClusterReplicasStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP CLUSTER REPLICAS ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&display::comma_separated(&self.names));
+        f.write_str(" FROM ");
+        f.write_node(&self.cluster);
+    }
+}
+impl_display!(DropClusterReplicasStatement);
 
 /// `SET <variable>`
 ///

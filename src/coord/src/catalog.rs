@@ -2256,6 +2256,10 @@ impl Catalog {
             DropComputeInstance {
                 name: String,
             },
+            DropComputeInstanceReplica {
+                name: String,
+                compute_id: ComputeInstanceId,
+            },
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
@@ -2456,6 +2460,11 @@ impl Catalog {
                         builtin_table_updates.extend(self.state.pack_item_update(id, -1));
                     }
                     vec![Action::DropComputeInstance { name }]
+                }
+                Op::DropComputeInstanceReplica { name, compute_id } => {
+                    tx.remove_compute_instance_replica(&name, compute_id)?;
+                    // builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
+                    vec![Action::DropComputeInstanceReplica { name, compute_id }]
                 }
                 Op::DropItem(id) => {
                     if !self.get_entry(&id).item().is_temporary() {
@@ -2714,6 +2723,14 @@ impl Catalog {
                         instance.indexes.is_empty(),
                         "not all items dropped before compute instance"
                     );
+                }
+
+                Action::DropComputeInstanceReplica { name, compute_id } => {
+                    let instance = state
+                        .compute_instances_by_id
+                        .get_mut(&compute_id)
+                        .expect("can only drop replicas from known instances");
+                    assert!(instance.replicas.remove(&name).is_some());
                 }
 
                 Action::DropItem(id) => {
@@ -3041,6 +3058,10 @@ pub enum Op {
     },
     DropComputeInstance {
         name: String,
+    },
+    DropComputeInstanceReplica {
+        name: String,
+        compute_id: ComputeInstanceId,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
@@ -3408,7 +3429,7 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 }
 
-impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
+impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
     fn name(&self) -> &str {
         &self.name
     }
@@ -3419,6 +3440,10 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
 
     fn indexes(&self) -> &HashSet<GlobalId> {
         &self.indexes
+    }
+
+    fn replica_names(&self) -> HashSet<&String> {
+        self.replicas.keys().collect::<HashSet<_>>()
     }
 }
 
