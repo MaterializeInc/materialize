@@ -34,6 +34,7 @@
 
 #![warn(missing_docs)]
 
+use libc::FD_CLOEXEC;
 use std::ffi::{CString, NulError};
 use std::fmt;
 use std::fs::Permissions;
@@ -48,6 +49,7 @@ use mz_ore::option::OptionExt;
 #[allow(non_camel_case_types)]
 #[repr(C)]
 struct pidfh {
+    pf_fd: libc::c_int,
     private: [u8; 0],
 }
 
@@ -100,6 +102,11 @@ impl PidFile {
             .expect("file permissions not valid libc::mode_t");
         let f = unsafe { pidfile_open(path_cstring.as_ptr(), mode, &mut old_pid) };
         if !f.is_null() {
+            let r = unsafe { libc::fcntl((*f).pf_fd, libc::F_SETFD, FD_CLOEXEC) };
+            if r != 0 {
+                return Err(Error::Io(io::Error::last_os_error()));
+            }
+
             let r = unsafe { pidfile_write(f) };
             if r == 0 {
                 Ok(PidFile(f))
