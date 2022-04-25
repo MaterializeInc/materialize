@@ -347,16 +347,14 @@ pub fn plan_create_source(
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            let (broker, topic, options) = match &kafka.connector {
-                mz_sql_parser::ast::KafkaConnector::Inline { broker } => {
-                    (broker.to_owned(), &kafka.topic, None)
-                }
+            let (broker, options) = match &kafka.connector {
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
                 mz_sql_parser::ast::KafkaConnector::Reference { connector } => {
                     let connector_name = normalize::unresolved_object_name(connector.clone())?;
                     let item = scx.catalog.resolve_item(&connector_name)?;
                     let connector = item.catalog_connector()?;
                     depends_on.push(item.id());
-                    (connector.uri(), &kafka.topic, Some(connector.options()))
+                    (connector.uri(), Some(connector.options()))
                 }
             };
 
@@ -403,7 +401,7 @@ pub fn plan_create_source(
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
-                topic: topic.clone(),
+                topic: kafka.topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,
