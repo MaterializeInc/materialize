@@ -84,7 +84,7 @@ prost-build = { version = "0.10.1", features = ["vendored"] }
 
 [features]
 default = ["jemalloc"]
-jemalloc = ["dep:tikv-jemallocator", "mz-prof/jemalloc"]
+jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
