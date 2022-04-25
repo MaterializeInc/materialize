@@ -119,6 +119,7 @@ pub fn purify_create_source(
                             broker,
                             config_options,
                         } => (broker.to_string(), Some(config_options)),
+                        _ => bail!("connector is of wrong type"),
                     },
                     KafkaConnector::Inline { broker } => (broker.to_string(), None),
                 };
@@ -389,8 +390,8 @@ async fn purify_csr_connector_proto(
     match seed {
         None => {
             let url: Url = match connector {
-                CsrConnector::Inline { uri } => uri.parse()?,
-                CsrConnector::Reference { .. } => "".parse()?,
+                CsrConnector::Inline { url: uri } => uri.parse()?,
+                CsrConnector::Reference { .. } => "http://localhost:8081".parse()?,
             };
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -443,8 +444,8 @@ async fn purify_csr_connector_avro(
     } = csr_connector;
     if seed.is_none() {
         let url = match connector {
-            CsrConnector::Inline { uri } => uri.parse()?,
-            CsrConnector::Reference { .. } => "".parse()?,
+            CsrConnector::Inline { url: uri } => uri.parse()?,
+            CsrConnector::Reference { .. } => "http://localhost:8081".parse()?,
         };
 
         let ccsr_config = task::block_in_place(|| {
@@ -471,6 +472,85 @@ async fn purify_csr_connector_avro(
     }
 
     Ok(())
+}
+
+fn purify_csr_connector_avro_new<'a>(
+    connector: &'a mut CreateSourceConnector,
+    csr_connector: &'a mut CsrConnectorAvro<Raw>,
+    envelope: &'a Envelope,
+    connector_options: &'a BTreeMap<String, String>,
+    catalog: &'a dyn SessionCatalog,
+) -> impl Future<Output = Result<(), anyhow::Error>> + 'a {
+    let resolved_connector = if let CsrConnectorAvro {
+        connector: CsrConnector::Reference { connector },
+        ..
+    } = csr_connector
+    {
+        normalize::unresolved_object_name(connector.clone())
+            .map_err(anyhow::Error::new)
+            .and_then(|name| catalog.resolve_item(&name).map_err(anyhow::Error::new))
+            .and_then(|item| {
+                let connector = item.catalog_connector()?;
+                Ok(ConnectorInner::CSR {
+                    registry: connector.uri(),
+                    with_options: connector.options(),
+                })
+            })
+    } else {
+        Err(anyhow!(
+            "SQL statement does not contain a valid connector reference"
+        ))
+    };
+    async move {
+        let topic =
+            if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector {
+                topic
+            } else {
+                bail!("Confluent Schema Registry is only supported with Kafka sources")
+            };
+
+        let CsrConnectorAvro {
+            connector,
+            seed,
+            with_options: ccsr_options,
+        } = csr_connector;
+        if seed.is_none() {
+            let (url, ctr_options) = match connector {
+                CsrConnector::Inline { url: uri } => Ok((uri.parse()?, None)),
+                CsrConnector::Reference { .. } => match resolved_connector? {
+                    ConnectorInner::CSR {
+                        registry,
+                        with_options,
+                    } => Ok((registry.parse()?, Some(with_options.clone()))),
+                    _ => Err(anyhow!("wrong connector type")),
+                },
+            }?;
+
+            let ccsr_config = task::block_in_place(|| {
+                kafka_util::generate_ccsr_client_config(
+                    url,
+                    &connector_options.clone(),
+                    &mut normalize::options(ccsr_options),
+                )
+            })?;
+
+            let Schema {
+                key_schema,
+                value_schema,
+                ..
+            } = get_remote_csr_schema(ccsr_config, topic.clone()).await?;
+            if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key_schema.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            }
+
+            *seed = Some(CsrSeed {
+                key_schema,
+                value_schema,
+            })
+        }
+
+        Ok(())
+    }
 }
 
 pub async fn purify_csv(

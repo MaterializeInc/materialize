@@ -1155,12 +1155,17 @@ pub mod sources {
             broker: KafkaAddrs,
             config_options: BTreeMap<String, String>,
         },
+        CSR {
+            registry: String,
+            with_options: BTreeMap<String, String>,
+        },
     }
 
     impl ConnectorInner {
         pub fn uri(&self) -> String {
             match self {
                 ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+                ConnectorInner::CSR { registry, .. } => registry.to_owned(),
             }
         }
     }

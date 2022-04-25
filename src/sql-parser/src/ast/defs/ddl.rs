@@ -122,7 +122,7 @@ impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsrConnector {
-    Inline { uri: String },
+    Inline { url: String },
     Reference { connector: UnresolvedObjectName },
 }
 
@@ -137,7 +137,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
         match &self.connector {
-            CsrConnector::Inline { uri, .. } => {
+            CsrConnector::Inline { url: uri, .. } => {
                 f.write_str("'");
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
@@ -171,7 +171,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
         match &self.connector {
-            CsrConnector::Inline { uri, .. } => {
+            CsrConnector::Inline { url: uri, .. } => {
                 f.write_str("'");
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
@@ -495,6 +495,10 @@ pub enum CreateConnector<T: AstInfo> {
         broker: String,
         with_options: Vec<WithOption<T>>,
     },
+    CSR {
+        registry: String,
+        with_options: Vec<WithOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateConnector<T> {
@@ -506,6 +510,19 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
             } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+                if with_options.len() > 0 {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_str(")");
+                }
+            }
+            Self::CSR {
+                registry,
+                with_options,
+            } => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY '");
+                f.write_node(&display::escape_single_quote_string(registry));
                 f.write_str("'");
                 if with_options.len() > 0 {
                     f.write_str(" WITH (");

@@ -1335,7 +1335,7 @@ fn get_encoding_inner(
                 } => {
                     let mut ccsr_with_options = normalize::options(&ccsr_options);
                     let url = match connector {
-                        mz_sql_parser::ast::CsrConnector::Inline { uri } => uri,
+                        mz_sql_parser::ast::CsrConnector::Inline { url: uri } => uri,
                         mz_sql_parser::ast::CsrConnector::Reference { .. } => "",
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -1395,7 +1395,7 @@ fn get_encoding_inner(
                 {
                     let mut ccsr_with_options = normalize::options(&ccsr_options);
                     let url = match connector {
-                        mz_sql_parser::ast::CsrConnector::Inline { uri } => uri,
+                        mz_sql_parser::ast::CsrConnector::Inline { url: uri } => uri,
                         mz_sql_parser::ast::CsrConnector::Reference { .. } => "",
                     };
                     // We validate here instead of in purification, to match the behavior of avro
@@ -1910,7 +1910,7 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
                 CsrConnectorAvro {
-                    connector: CsrConnector::Inline { uri },
+                    connector: CsrConnector::Inline { url: uri },
                     seed,
                     with_options,
                 },
@@ -2086,7 +2086,7 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
                     CsrConnectorAvro {
-                        connector: CsrConnector::Inline { uri },
+                        connector: CsrConnector::Inline { url: uri },
                         seed,
                         with_options,
                     },
@@ -2934,6 +2934,19 @@ pub fn plan_create_connector(
             ConnectorInner::Kafka {
                 broker: broker.parse()?,
                 config_options: kafka_util::extract_config(&mut with_options)?,
+            }
+        }
+        CreateConnector::CSR {
+            registry,
+            with_options,
+        } => {
+            let with_options = normalize::options(&with_options);
+            ConnectorInner::CSR {
+                registry,
+                with_options: with_options
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_string()))
+                    .collect::<BTreeMap<String, String>>(),
             }
         }
     };
