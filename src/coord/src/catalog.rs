@@ -1045,6 +1045,13 @@ impl CatalogEntry {
         }
     }
 
+    pub fn catalog_connector(&self) -> Result<&Connector, SqlCatalogError> {
+        match self.item() {
+            CatalogItem::Connector(connector) => Ok(connector),
+            _ => Err(SqlCatalogError::UnknownConnector(self.name().to_string())),
+        }
+    }
+
     /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
@@ -3352,12 +3359,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn catalog_connector(&self) -> Result<&dyn CatalogConnector, SqlCatalogError> {
-        match self.item() {
-            CatalogItem::Connector(conn) => Ok(conn),
-            _ => Err(SqlCatalogError::UnknownConnector(
-                "Item is not a connector".to_string(),
-            )),
-        }
+        Ok(self.catalog_connector()?)
     }
 
     fn create_sql(&self) -> &str {
