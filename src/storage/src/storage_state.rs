@@ -7,7 +7,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
@@ -60,6 +61,7 @@ pub struct StorageState {
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to external sources, keyed by ID.
+    // TODO(guswynn): determine if this field is needed
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,

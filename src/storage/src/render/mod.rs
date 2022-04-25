@@ -100,8 +100,11 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::marker::{Send, Sync};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
@@ -166,7 +169,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                     // TODO: remove this code when storage has a better holistic take on source progress.
                     // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
                     let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
-                    let weak_token = Rc::downgrade(&token);
+                    let weak_token = std::sync::Arc::downgrade(&token);
                     use timely::dataflow::operators::Operator;
                     ok.inner.sink(
                         timely::dataflow::channels::pact::Pipeline,
@@ -201,24 +204,44 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
 
                     let mut tokens = Vec::new();
                     let ok = source(region, "InvalidSource", |cap, info| {
-                        tokens.push(ActivateCapability::new(
+                        let mut act_cap = Some(ActivateCapability::new(
                             cap,
                             &info.address,
                             region.activations(),
                         ));
-                        |_handle| {}
+
+                        let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+                        let drop_activator_weak = Arc::downgrade(&drop_activator);
+
+                        tokens.push(drop_activator);
+
+                        move |_handle| {
+                            if drop_activator_weak.upgrade().is_some() {
+                                act_cap.take();
+                            }
+                        }
                     })
                     .as_collection();
                     let err = source(region, "InvalidSource", |cap, info| {
-                        tokens.push(ActivateCapability::new(
+                        let mut act_cap = Some(ActivateCapability::new(
                             cap,
                             &info.address,
                             region.activations(),
                         ));
-                        |_handle| {}
+
+                        let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+                        let drop_activator_weak = Arc::downgrade(&drop_activator);
+
+                        tokens.push(drop_activator);
+
+                        move |_handle| {
+                            if drop_activator_weak.upgrade().is_some() {
+                                act_cap.take();
+                            }
+                        }
                     })
                     .as_collection();
-                    ((ok, err), Rc::new(tokens) as Rc<dyn std::any::Any>)
+                    ((ok, err), Arc::new(tokens) as Arc<dyn Any + Send + Sync>)
                 };
 
                 boundary.capture(*src_id, ok, err, token, &debug_name, dataflow_id);

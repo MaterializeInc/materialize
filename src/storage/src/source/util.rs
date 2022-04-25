@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -73,26 +72,31 @@ where
         let data_capability = capabilities.pop().unwrap();
         let durability_capability = CapabilitySet::from_elem(data_capability.clone());
 
-        let capabilities_rc = Rc::new(RefCell::new(Some((data_capability, durability_capability))));
+        let mut capabilities = Some((data_capability, durability_capability));
+
+        let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
+        let drop_activator_weak = Arc::downgrade(&drop_activator);
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
-            capabilities: Rc::clone(&capabilities_rc),
-            activator: scope.activator_for(&operator_info.address[..]),
+            activator: drop_activator,
         });
 
         let mut tick = construct(operator_info);
 
         move |_frontier| {
-            let mut caps = capabilities_rc.borrow_mut();
-            if let Some((data_cap, durability_capability)) = &mut *caps {
+            // Drop all capabilities if the thread-safe `SourceToken` is dropped.
+            if drop_activator_weak.upgrade().is_none() {
+                capabilities = None;
+            }
+            if let Some((data_cap, durability_capability)) = &mut capabilities {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
                 if let SourceStatus::Done =
                     tick(data_cap, durability_capability, &mut data_output.activate())
                 {
                     // The inner source is finished. Drop our capability.
-                    *caps = None;
+                    capabilities = None;
                 }
             }
         }
