@@ -27,8 +27,9 @@
 //! output column reckoning", as is what we use when reasoning about
 //! work still available to be done on the partial join results.
 
-// TODO: This is necessary because the generated prost types lack documentation
+// https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
+
 pub mod delta_join;
 pub mod linear_join;
 
