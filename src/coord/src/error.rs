@@ -269,6 +269,9 @@ impl CoordError {
                     doc_page
                 ))
             }
+            CoordError::InvalidReplicaSize { expected, size: _ } => {
+                Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
+            }
             _ => None,
         }
     }
@@ -329,12 +332,8 @@ impl fmt::Display for CoordError {
                 value.quoted(),
                 reason,
             ),
-            CoordError::InvalidReplicaSize { size, expected } => {
-                write!(
-                    f,
-                    "unknown cluster size {size}. Expected one of: {}.",
-                    expected.join(", ")
-                )
+            CoordError::InvalidReplicaSize { size, expected: _ } => {
+                write!(f, "unknown cluster size {size}",)
             }
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
