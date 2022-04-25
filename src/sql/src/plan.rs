@@ -175,7 +175,7 @@ impl ComputeInstanceConfig {
 }
 
 /// Configuration of introspection for a compute instance.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,

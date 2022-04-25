@@ -28,7 +28,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
@@ -60,7 +60,7 @@ pub struct OrchestratorConfig {
     pub linger: bool,
 }
 
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ClusterReplicaSizeConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
@@ -103,7 +103,6 @@ pub struct Controller<T = mz_repr::Timestamp> {
     orchestrator: OrchestratorConfig,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
-    replica_sizes: ClusterReplicaSizeMap,
 }
 
 impl<T> Controller<T>
@@ -132,7 +131,7 @@ where
                     compute_instance.add_replica(name, client).await;
                 }
             }
-            InstanceConfig::Managed { size } => {
+            InstanceConfig::Managed { size_config } => {
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,
@@ -141,10 +140,6 @@ where
                 } = &self.orchestrator;
 
                 let default_listen_host = orchestrator.listen_host();
-
-                let size_config = self.replica_sizes.0.get(&size).ok_or_else(|| {
-                    anyhow::anyhow!("Size {size} not specified in allowed cluster sizes map")
-                })?;
 
                 let service = orchestrator
                     .namespace("compute")
@@ -333,13 +328,11 @@ impl<T> Controller<T> {
     pub fn new<S: StorageController<Timestamp = T> + 'static>(
         orchestrator: OrchestratorConfig,
         storage_controller: S,
-        replica_sizes: ClusterReplicaSizeMap,
     ) -> Self {
         Self {
             orchestrator,
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
-            replica_sizes,
         }
     }
 }

@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use derivative::Derivative;
 use serde::de::Unexpected;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// An orchestrator manages services.
 ///
@@ -112,7 +112,7 @@ pub struct ServicePort {
     pub port_hint: i32,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
 impl<'de> Deserialize<'de> for MemoryLimit {
@@ -128,6 +128,15 @@ impl<'de> Deserialize<'de> for MemoryLimit {
                 })
             })
             .map(MemoryLimit)
+    }
+}
+
+impl Serialize for MemoryLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <String as Serialize>::serialize(&self.0.to_string(), serializer)
     }
 }
 
@@ -168,5 +177,14 @@ impl<'de> Deserialize<'de> for CpuLimit {
                 millicpus: millicpus as usize,
             })
         }
+    }
+}
+
+impl Serialize for CpuLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
     }
 }

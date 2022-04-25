@@ -48,9 +48,8 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
-    StatementDesc,
+    CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -60,6 +59,7 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+use crate::coord::ConcreteComputeInstanceConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -375,18 +375,18 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let (config, introspection) = match config {
-            ComputeInstanceConfig::Remote {
+            ConcreteComputeInstanceConfig::Remote {
                 replicas,
                 introspection,
             } => (InstanceConfig::Remote { replicas }, introspection),
-            ComputeInstanceConfig::Managed {
-                size,
+            ConcreteComputeInstanceConfig::Managed {
+                size_config,
                 introspection,
-            } => (InstanceConfig::Managed { size }, introspection),
+            } => (InstanceConfig::Managed { size_config }, introspection),
         };
         let logging = match introspection {
             None => None,
@@ -2142,7 +2142,7 @@ impl Catalog {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
-                config: ComputeInstanceConfig,
+                config: ConcreteComputeInstanceConfig,
                 introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateItem {
@@ -2464,14 +2464,14 @@ impl Catalog {
                 Op::UpdateComputeInstanceConfig { id, config } => {
                     tx.update_compute_instance_config(id, &config)?;
                     let config = match config {
-                        ComputeInstanceConfig::Remote {
+                        ConcreteComputeInstanceConfig::Remote {
                             replicas,
                             introspection: _,
                         } => InstanceConfig::Remote { replicas },
-                        ComputeInstanceConfig::Managed {
-                            size,
+                        ConcreteComputeInstanceConfig::Managed {
+                            size_config,
                             introspection: _,
-                        } => InstanceConfig::Managed { size },
+                        } => InstanceConfig::Managed { size_config },
                     };
                     vec![Action::UpdateComputeInstanceConfig { id, config }]
                 }
@@ -2902,7 +2902,7 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateItem {
@@ -2939,7 +2939,7 @@ pub enum Op {
     },
     UpdateComputeInstanceConfig {
         id: ComputeInstanceId,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
     },
 }
 
