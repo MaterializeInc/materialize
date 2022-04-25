@@ -29,7 +29,7 @@ For listed tools that are not yet production-ready, you can register your intere
 | {{< supportLevel production >}} <a name="production"></a> | We are committed to prioritizing bugs in the interaction between these tools and Materialize. |
 | {{< supportLevel beta >}} <a name="beta"></a> | There may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. We can't guarantee  [bug reports or feature requests](https://github.com/MaterializeInc/materialize/issues/new) will be prioritized. |
 | {{< supportLevel alpha >}} <a name="alpha"></a> | Some of our community members have made this integration work, but we haven’t tested it internally and can’t vouch for its stability. |
-| {{< supportLevel in-development >}} <a name="in-development"></a> | **There are known issues** preventing the integration from working, but we are actively developing features that unblock the integration. |
+| {{< supportLevel in-progress >}} <a name="in-progress"></a> | **There are known issues** preventing the integration from working, but we are actively developing features that unblock the integration. |
 | {{< supportLevel researching >}} <a name="researching"></a> | **There are known issues** preventing the integration from working, and we are gathering user feedback and gauging interest in supporting these integrations. |
 
 ## Message brokers
@@ -78,7 +78,7 @@ Materialize can efficiently maintain real-time materialized views on top of **Ch
 
 ### PostgreSQL
 
-Postgres is supported as a [**source**](/overview/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/third-party/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+Postgres is supported as a [**source**](/overview/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
 
 | Service | Support level| Notes |  |
 | --- | --- | --- | --- |
@@ -146,15 +146,15 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
 | dbt Core | {{< supportLevel beta >}} | See the [dbt documentation](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile) for more details, and the [dbt + Materialize guide](/integrations/dbt/) for a step-by-step breakdown of the integration. | [](#notify) |
-| dbt Cloud | {{< supportLevel in-development >}} | Not supported yet. We are working with the dbt community to bring native Materialize support to dbt Cloud soon. | [](#notify) |
+| dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. We are working with the dbt community to bring native Materialize support to dbt Cloud soon. | [](#notify) |
 
 ### SQL clients
 
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
 | DBeaver | {{< supportLevel production >}} | Connect using the [PostgreSQL database driver](https://hevodata.com/learn/dbeaver-postgresql/#a5). |  |
-| DataGrip IDE | {{< supportLevel in-development >}} | Not supported yet {{% gh 9720 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
-| pgAdmin | {{< supportLevel in-development >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| DataGrip IDE | {{< supportLevel in-progress >}} | Not supported yet {{% gh 9720 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| pgAdmin | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | TablePlus | {{< supportLevel alpha >}} | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html). | [](#notify) |
 
 👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
@@ -227,7 +227,7 @@ The level of support for these tools will improve as we extend the coverage of `
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
 | Census | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
-| Hightouch | {{< supportLevel in-development >}} | Connect using a [PostgreSQL source](https://hightouch.io/docs/sources/postgresql/). | [](#notify) |
+| Hightouch | {{< supportLevel in-progress >}} | Connect using a [PostgreSQL source](https://hightouch.io/docs/sources/postgresql/). | [](#notify) |
 
 ### Data collaboration
 
