@@ -168,7 +168,7 @@ Applications can use any common language-specific PostgreSQL drivers and Postgre
 Client libraries and ORM frameworks tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if PostgreSQL is supported, it's **not guaranteed** that the same integration will work out-of-the-box.
 {{</ note >}}
 
-### Client libraries
+### Client libraries {#libraries-and-drivers}
 
 | Language | Support level | Tested drivers | Notes |
 | --- | --- | --- | --- |
