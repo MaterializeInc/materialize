@@ -329,7 +329,7 @@ impl fmt::Display for CoordError {
                 reason,
             ),
             CoordError::InvalidReplicaSize { size } => {
-                write!(f, "Size {size} not specified in allowed cluster sizes map")
+                write!(f, "unknown cluster size {size}")
             }
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
