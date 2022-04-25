@@ -980,7 +980,8 @@ impl MapFilterProject {
         // Inline expressions per `should_inline`.
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
-            expr[0].visit_mut_post(&mut |e| {
+            #[allow(deprecated)]
+            expr[0].visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = prior[*i - input_arity].clone();
@@ -990,7 +991,8 @@ impl MapFilterProject {
         }
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
-            pred.visit_mut_post(&mut |e| {
+            #[allow(deprecated)]
+            pred.visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = expressions[*i - input_arity].clone();
@@ -1112,7 +1114,8 @@ pub fn memoize_expr(
     memoized_parts: &mut Vec<MirScalarExpr>,
     input_arity: usize,
 ) {
-    expr.visit_mut_pre_post(
+    #[allow(deprecated)]
+    expr.visit_mut_pre_post_nolimit(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.

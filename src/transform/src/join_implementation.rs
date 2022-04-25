@@ -508,7 +508,8 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
-                    expr.visit_mut_pre_post(
+                    #[allow(deprecated)]
+                    expr.visit_mut_pre_post_nolimit(
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {
                                 if *c >= mfp.input_arity {

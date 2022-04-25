@@ -393,7 +393,8 @@ pub fn optimize(
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
 
-    expr.visit_mut_pre_post(
+    #[allow(deprecated)]
+    expr.visit_mut_pre_post_nolimit(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.

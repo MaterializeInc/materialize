@@ -127,7 +127,8 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
-        self.visit_mut_post(&mut |e| {
+        #[allow(deprecated)]
+        self.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[*old_i];
             }
@@ -140,7 +141,8 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
-        self.visit_mut_post(&mut |e| {
+        #[allow(deprecated)]
+        self.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
@@ -149,7 +151,8 @@ impl MirScalarExpr {
 
     pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit_post(&mut |e| {
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -246,7 +249,8 @@ impl MirScalarExpr {
         let mut old_self = MirScalarExpr::column(0);
         while old_self != *self {
             old_self = self.clone();
-            self.visit_mut_pre_post(
+            #[allow(deprecated)]
+            self.visit_mut_pre_post_nolimit(
                 &mut |e| {
                     match e {
                         // 1a) Decompose IsNull expressions into a disjunction
@@ -677,7 +681,8 @@ impl MirScalarExpr {
             );
         }
 
-        self.visit_mut_pre_post(
+        #[allow(deprecated)]
+        self.visit_mut_pre_post_nolimit(
             &mut |e| {
                 match e {
                     // 2) Push down not expressions
@@ -995,7 +1000,8 @@ impl MirScalarExpr {
     /// `UnmaterializableFunc::MzLogicalTimestamp`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        self.visit_post(&mut |e| {
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzLogicalTimestamp) = e
             {
                 contains = true;
@@ -1007,7 +1013,8 @@ impl MirScalarExpr {
     /// True iff the expression contains an `UnmaterializableFunc`.
     pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
-        self.visit_post(&mut |e| {
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(_) = e {
                 contains = true;
             }

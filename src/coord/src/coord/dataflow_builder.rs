@@ -335,7 +335,8 @@ pub fn prep_scalar_expr(
             session,
         } => {
             let mut res = Ok(());
-            expr.visit_mut_post(&mut |e| {
+            #[allow(deprecated)]
+            expr.visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
                     match eval_unmaterializable_func(state, f, logical_time, session) {
                         Ok(evaled) => *e = evaled,
@@ -349,7 +350,8 @@ pub fn prep_scalar_expr(
         // Reject the query if it contains any unmaterializable function calls.
         ExprPrepStyle::Index => {
             let mut last_observed_unmaterializable_func = None;
-            expr.visit_mut_post(&mut |e| {
+            #[allow(deprecated)]
+            expr.visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
                     last_observed_unmaterializable_func = Some(f.clone());
                 }

@@ -340,7 +340,8 @@ impl ProjectionPushdown {
         relation: &mut MirRelationExpr,
         applied_projections: &HashMap<Id, Vec<usize>>,
     ) {
-        relation.visit_mut_pre(&mut |e| {
+        #[allow(deprecated)]
+        relation.visit_mut_pre_nolimit(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
                 if let MirRelationExpr::Get { id: inner_id, .. } = &**input {
                     if let Some(new_projection) = applied_projections.get(inner_id) {

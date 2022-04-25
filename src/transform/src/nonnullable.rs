@@ -81,7 +81,8 @@ impl NonNullable {
 /// True if the expression contains a "is null" test.
 fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
-    expr.visit_post(&mut |e| {
+    #[allow(deprecated)]
+    expr.visit_post_nolimit(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             ..
@@ -96,7 +97,8 @@ fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
 /// Transformations to scalar functions, based on nonnullability of columns.
 fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    expr.visit_mut_post(&mut |e| {
+    #[allow(deprecated)]
+    expr.visit_mut_post_nolimit(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             expr,
