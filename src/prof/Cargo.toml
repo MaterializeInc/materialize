@@ -41,4 +41,4 @@ mz-npm = { path = "../npm" }
 # access to the file system.
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["dep:tikv-jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl"]

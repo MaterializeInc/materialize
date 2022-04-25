@@ -34,4 +34,4 @@ tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unpr
 
 [features]
 default = ["jemalloc"]
-jemalloc = ["dep:tikv-jemallocator", "mz-prof/jemalloc"]
+jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]

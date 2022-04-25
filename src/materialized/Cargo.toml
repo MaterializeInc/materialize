@@ -154,7 +154,7 @@ default = ["jemalloc"]
 # access to the file system.
 dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
-jemalloc = ["mz-prof/jemalloc", "dep:tikv-jemallocator"]
+jemalloc = ["mz-prof/jemalloc", "tikv-jemallocator"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.
