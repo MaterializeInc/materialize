@@ -13,9 +13,14 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
+use proptest::prop_compose;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+
+use crate::proto::{ProtoRepr, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
 /// A hashable, comparable, and serializable regular expression type.
 ///
@@ -79,5 +84,68 @@ impl Deref for Regex {
 
     fn deref(&self) -> &regex::Regex {
         &self.0
+    }
+}
+
+impl ProtoRepr for regex::Regex {
+    type Repr = String;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self.as_str().to_string()
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        Ok(regex::Regex::new(&repr).map_err(|e| TryFromProtoError::RegexError(e))?)
+    }
+}
+
+impl From<&Regex> for ProtoRegex {
+    fn from(x: &Regex) -> Self {
+        ProtoRegex {
+            regex: x.0.as_str().to_string(),
+        }
+    }
+}
+
+impl TryFrom<ProtoRegex> for Regex {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRegex) -> Result<Self, Self::Error> {
+        Ok(Regex(regex::Regex::from_proto(x.regex)?))
+    }
+}
+
+// TODO: generate more sophisticated regexes:
+// * Support groups.
+// * Support a greater range of characters and character classes.
+const BEGINNING_SYMBOLS: &str = r"((\\A)|\^)?";
+const CHARACTERS: &str = r"[\.x]{1}";
+const REPETITIONS: &str = r"((\*|\+|\?|(\{[1-9],?\}))\??)?";
+const END_SYMBOLS: &str = r"(\$|(\\z))?";
+
+prop_compose! {
+    pub fn any_regex()
+                (b in BEGINNING_SYMBOLS, c in CHARACTERS,
+                 r in REPETITIONS, e in END_SYMBOLS)
+                -> Regex {
+        let string = format!("{}{}{}{}", b, c, r, e);
+        Regex(regex::Regex::new(&string).unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+
+    proptest! {
+        #[test]
+        fn regex_protobuf_roundtrip( expect in any_regex() ) {
+            let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }
