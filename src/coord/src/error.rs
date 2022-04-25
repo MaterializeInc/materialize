@@ -73,6 +73,7 @@ pub enum CoordError {
     /// No such cluster replica size has been configured.
     InvalidReplicaSize {
         size: String,
+        expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
@@ -328,8 +329,12 @@ impl fmt::Display for CoordError {
                 value.quoted(),
                 reason,
             ),
-            CoordError::InvalidReplicaSize { size } => {
-                write!(f, "unknown cluster size {size}")
+            CoordError::InvalidReplicaSize { size, expected } => {
+                write!(
+                    f,
+                    "unknown cluster size {size}. Expected one of: {}.",
+                    expected.join(", ")
+                )
             }
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")

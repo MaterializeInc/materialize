@@ -291,10 +291,11 @@ impl ConcreteComputeInstanceConfig {
                 size,
                 introspection,
             } => {
-                let size_config = replica_sizes
-                    .0
-                    .get(&size)
-                    .ok_or(CoordError::InvalidReplicaSize { size })?;
+                let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
+                    let mut expected = replica_sizes.0.keys().cloned().collect::<Vec<_>>();
+                    expected.sort();
+                    CoordError::InvalidReplicaSize { size, expected }
+                })?;
                 ConcreteComputeInstanceConfig::Managed {
                     size_config: *size_config,
                     introspection,
