@@ -102,3 +102,8 @@ class Scenario(RootScenario):
 # Used for scenarios that need to be explicitly run from the command line using --root-scenario ScenarioBig
 class ScenarioBig(RootScenario):
     pass
+
+
+# Used for disabled scenarios
+class ScenarioDisabled(RootScenario):
+    pass

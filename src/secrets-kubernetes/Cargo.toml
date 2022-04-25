@@ -10,4 +10,4 @@ publish = false
 anyhow = "1.0.56"
 mz-secrets = { path = "../secrets" }
 k8s-openapi = { version = "0.14.0", features = ["v1_22"] }
-kube = { version = "0.70.0", features = ["ws"] }
+kube = { version = "0.71.0", features = ["ws"] }

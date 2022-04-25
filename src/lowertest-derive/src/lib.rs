@@ -192,6 +192,9 @@ fn get_type_as_string(t: &syn::Type) -> String {
 /// in [EXTERNAL_TYPES].
 fn extract_reflected_type(t: &syn::Type) -> Vec<&syn::Type> {
     match t {
+        syn::Type::Group(tg) => {
+            return extract_reflected_type(&tg.elem);
+        }
         syn::Type::Path(tp) => {
             let last_segment = tp.path.segments.last().unwrap();
             let type_name = last_segment.ident.to_string();

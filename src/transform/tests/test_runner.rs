@@ -20,13 +20,14 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use mz_expr::{GlobalId, Id, MirRelationExpr};
+    use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
         build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
         TestCatalog, RTI,
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::str::separated;
+    use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;

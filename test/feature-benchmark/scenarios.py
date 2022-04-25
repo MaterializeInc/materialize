@@ -23,6 +23,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -595,7 +596,7 @@ class Kafka(Scenario):
     pass
 
 
-class KafkaRaw(Kafka):
+class KafkaRaw(ScenarioDisabled):
     def shared(self) -> Action:
         return TdAction(
             self.schema()
@@ -1091,12 +1092,16 @@ class QueryLatency(Coordinator):
 
 
 class ConnectionLatency(Coordinator):
-    SCALE = 3
     """Measure the time it takes to establish connections to Mz"""
+
+    SCALE = 2  # Many connections * many measurements = TCP port exhaustion
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
+            f"""
+$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialized-addr}}
+SELECT 1;
+"""
             for i in range(0, self.n())
         )
 

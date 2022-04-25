@@ -12,18 +12,16 @@ use std::iter;
 use std::vec;
 
 use anyhow::bail;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 
+use crate::proto::{TryFromProtoError, TryIntoIfSome};
 use crate::{Datum, ScalarType};
 
-// The `Arbitrary` impls are only used during testing and we gate them
-// behind `cfg(feature = "test-utils")`, so `proptest` can remain a dev-dependency.
-// See https://github.com/MaterializeInc/materialize/pull/11717.
-#[cfg(feature = "test-utils")]
-use proptest_derive::Arbitrary;
+pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -63,16 +61,16 @@ impl ColumnType {
             (
                 ScalarType::Record {
                     fields,
-                    custom_oid,
+                    custom_id,
                     custom_name,
                 },
                 ScalarType::Record {
                     fields: other_fields,
-                    custom_oid: other_custom_oid,
+                    custom_id: other_custom_id,
                     custom_name: other_custom_name,
                 },
             ) => {
-                if custom_oid != other_custom_oid || custom_name != other_custom_name {
+                if custom_id != other_custom_id || custom_name != other_custom_name {
                     bail!(
                         "Can't union types: {:?} and {:?}",
                         self.scalar_type,
@@ -97,7 +95,7 @@ impl ColumnType {
                 Ok(ColumnType {
                     scalar_type: ScalarType::Record {
                         fields: union_fields,
-                        custom_oid,
+                        custom_id,
                         custom_name,
                     },
                     nullable: self.nullable || other.nullable,
@@ -116,6 +114,28 @@ impl ColumnType {
     pub fn nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
         self
+    }
+}
+
+impl From<&ColumnType> for ProtoColumnType {
+    fn from(x: &ColumnType) -> Self {
+        ProtoColumnType {
+            nullable: x.nullable,
+            scalar_type: Some((&x.scalar_type).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoColumnType> for ColumnType {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoColumnType) -> Result<Self, Self::Error> {
+        Ok(ColumnType {
+            nullable: x.nullable,
+            scalar_type: x
+                .scalar_type
+                .try_into_if_some("ProtoColumnType::scalar_type")?,
+        })
     }
 }
 
@@ -190,8 +210,9 @@ impl RelationType {
 }
 
 /// The name of a column in a [`RelationDesc`].
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
-#[cfg_attr(feature = "test-utils", derive(Arbitrary))]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ColumnName(pub(crate) String);
 
 impl ColumnName {
@@ -227,6 +248,24 @@ impl From<&str> for ColumnName {
 impl From<&ColumnName> for ColumnName {
     fn from(n: &ColumnName) -> ColumnName {
         n.clone()
+    }
+}
+
+impl From<&ColumnName> for ProtoColumnName {
+    fn from(x: &ColumnName) -> Self {
+        ProtoColumnName {
+            value: Some(x.0.clone()),
+        }
+    }
+}
+
+impl TryFrom<ProtoColumnName> for ColumnName {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
+        Ok(ColumnName(x.value.ok_or_else(|| {
+            TryFromProtoError::MissingField("ProtoColumnName::value".into())
+        })?))
     }
 }
 

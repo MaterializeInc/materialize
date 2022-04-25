@@ -60,16 +60,17 @@ See the [secret design doc](../design/20220303_secrets.md).
 
 ## Binaries
 
-There are presently two binaries involved in Materialize Platform:
+There are presently three binaries involved in Materialize Platform:
 
   * `materialized`, which hosts the controller
-  * `dataflowd`, which hosts either a storage runtime or a compute runtime
-    depending on the `--runtime` option
+  * `storaged`, which hosts a storage runtime
+  * `computed`, which hosts a compute runtime
 
 There are three separate network protocols:
 
   * The **controller** protocol, which is how `materialized` communicates with
-    `dataflowd`. This protocol is conventionally hosted on port 2100.
+    `storaged` and `computed`. This protocol is conventionally hosted on port
+    2100.
 
   * The **storage** protocol, which is how the compute runtime communicates with
     the storage runtime. This protocol is conventionally hosted on port 2101.

@@ -7,15 +7,6 @@ ignore = [
     # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
     # so we're just ignoring the advisory for now.
     "RUSTSEC-2020-0159",
-
-    # flatbuffers exposes pub methods that are unsafe but not marked as unsafe.
-    # These methods are not part of the "true" public API but are intended to be
-    # used only by flatbuffers generated code. This is a transitive dependency
-    # of ours and the issue has been mitigated by the arrow2 direct dependency
-    # with additional miri testing.
-    #
-    # https://github.com/jorgecarleitao/arrow2/blob/v0.8.1/.github/workflows/security.yml
-    "RUSTSEC-2021-0122",
 ]
 
 [bans]
@@ -142,9 +133,6 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
 
-    # Waiting on https://github.com/tokio-rs/prost/pull/576.
-    "https://github.com/MaterializeInc/prost.git",
-
     # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
     "https://github.com/MaterializeInc/criterion.rs.git",
 
@@ -153,6 +141,9 @@ allow-git = [
 
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
+
+    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783.
+    "https://github.com/MaterializeInc/opentelemetry-rust.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.

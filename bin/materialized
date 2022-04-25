@@ -9,15 +9,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# materialized — build and run materialized and its constituent services.
+# {materialized,sqllogictest} — build and run $0 and its constituent services.
 
 set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+bin=$(basename "$0")
 release=false
 build_flags=()
-run_flags=(--orchestrator=process)
 
 if [[ "${1:-}" = --release ]]; then
     shift
@@ -25,11 +25,9 @@ if [[ "${1:-}" = --release ]]; then
     build_flags+=(--release)
 fi
 
-run_flags+=("$@")
-
-cargo build "${build_flags[@]}" --bin materialized --bin dataflowd
+cargo build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
 if $release; then
-    target/release/materialized "${run_flags[@]}"
+    target/release/"$bin" "$@"
 else
-    target/debug/materialized --dev "${run_flags[@]}"
+    target/debug/"$bin" "$@"
 fi

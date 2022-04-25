@@ -46,8 +46,6 @@ For example, `SELECT offset` is invalid, because it looks like a mistyping of
 We recommend that you avoid using keywords as identifiers whenever possible, as
 the syntax errors that result are not always obvious.
 
-The keywords known to the latest [unstable build](/versions/#unstable-builds)
-of Materialize are listed below. Note that new keywords may be added in any
-release.
+The current keywords are listed below.
 
 {{< kwlist >}}

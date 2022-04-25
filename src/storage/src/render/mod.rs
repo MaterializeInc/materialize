@@ -110,14 +110,13 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::*;
-use mz_expr::GlobalId;
 use mz_ore::collections::CollectionExt as IteratorExt;
+use mz_repr::GlobalId;
 
 use crate::boundary::StorageCapture;
 use crate::storage_state::StorageState;
 
 mod debezium;
-mod envelope_none;
 pub mod sources;
 mod upsert;
 
@@ -136,7 +135,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
-    let storage_logging = timely_worker.log_register().get("materialize/storage");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -161,7 +159,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                         source.clone(),
                         storage_state,
                         region,
-                        storage_logging.clone(),
                         src_id.clone(),
                     );
 

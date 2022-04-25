@@ -19,6 +19,39 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Tasks
 
+### (Temporary) Updating LTS Docs
+
+As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches:
+
+* `lts-docs`: capturing the state of the docs at `v0.26 LTS`, deploying to `https://materialize.com/docs/`
+* `main`: ongoing development branch, deploying to `https://materialize.com/docs/unstable/`
+
+#### Shipping updates to Unstable Docs
+
+PR's to materialize/main will trigger new builds of materialize.com/docs/unstable/. Deploy docs updates to unstable if:
+
+1. The change applies to both LTS and Unstable _(e.g. if you're correcting a typo on the postgres source page)_
+2. The change only applies to Unstable
+
+#### Shipping updates to LTS Docs
+
+To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branch (typically, following a PR to `main`) to backport the changes, in which case the process is:
+
+1. Create a new branch on your fork that references `lts-docs`.
+   ```
+   git checkout -b my-branch-name lts-docs
+   ```
+2. Cherry-pick the commit from `main` with the changes you need, or just make the necessary changes as you would normally.
+   ```
+   git cherry-pick COMMIT-SHA-FROM-MAIN
+   ```
+4. Push your branch.
+   ```
+   git push
+   ```
+5. Open a PR - if this was a cherry-picked commit that has already been reviewed, approved and merged to `main`, you can just merge it once CI turns green. If it has conflicts or it is a unique PR for `lts-docs`, then you'll need a review.
+
+
 ### Updating CSS
 
 No CSS is shared with the marketing website to keep the docs CSS maintainable.

@@ -11,9 +11,11 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
-    jq
+    jq \
+    psmisc
 
 COPY tests /tests/
+COPY storaged computed /
 COPY run-tests /usr/local/bin
 
 # Install the Protobuf compiler from protobuf-src for use by mz_protoc's tests.

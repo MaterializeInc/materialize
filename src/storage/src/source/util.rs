@@ -32,10 +32,6 @@ use super::{SourceStatus, SourceToken};
 /// whenever it can see that a timestamp is "closed", according to whatever
 /// logic makes sense for the source.
 ///
-/// The `tick` function is also given a secondary output handle and capability
-/// that can be used to emit a stream of data that is separate from the main
-/// "data" output. This can, for example, be used to emit and persist the timestamp bindings.
-///
 /// If `tick` realizes it will never produce data again, it should indicate that
 /// fact by returning [`SourceStatus::Done`], which will immediately drop the
 /// capability and guarantee that `tick` is never called again.
@@ -53,22 +49,15 @@ use super::{SourceStatus, SourceToken};
 ///
 /// When the source token is dropped, the timestamping_flag is set to false
 /// to terminate any spawned threads in the source operator
-pub fn source<G, D, D2, B, L>(
-    scope: &G,
-    name: String,
-    construct: B,
-) -> (Stream<G, D>, Stream<G, D2>, SourceToken)
+pub fn source<G, D, B, L>(scope: &G, name: String, construct: B) -> (Stream<G, D>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
-    D2: Data,
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut Capability<Timestamp>,
-            &mut Capability<Timestamp>,
             &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
-            &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
         ) -> SourceStatus
         + 'static,
 {
@@ -78,20 +67,13 @@ where
     let operator_info = builder.operator_info();
 
     let (mut data_output, data_stream) = builder.new_output();
-    let (mut secondary_output, secondary_stream) = builder.new_output();
     builder.set_notify(false);
 
     builder.build(|mut capabilities| {
-        // `capabilities` should be a two-element vector.
-        let secondary_capability = capabilities.pop().unwrap();
         let data_capability = capabilities.pop().unwrap();
         let durability_capability = CapabilitySet::from_elem(data_capability.clone());
 
-        let capabilities_rc = Rc::new(RefCell::new(Some((
-            data_capability,
-            secondary_capability,
-            durability_capability,
-        ))));
+        let capabilities_rc = Rc::new(RefCell::new(Some((data_capability, durability_capability))));
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
@@ -103,16 +85,12 @@ where
 
         move |_frontier| {
             let mut caps = capabilities_rc.borrow_mut();
-            if let Some((data_cap, secondary_cap, durability_capability)) = &mut *caps {
+            if let Some((data_cap, durability_capability)) = &mut *caps {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done = tick(
-                    data_cap,
-                    secondary_cap,
-                    durability_capability,
-                    &mut data_output.activate(),
-                    &mut secondary_output.activate(),
-                ) {
+                if let SourceStatus::Done =
+                    tick(data_cap, durability_capability, &mut data_output.activate())
+                {
                     // The inner source is finished. Drop our capability.
                     *caps = None;
                 }
@@ -122,5 +100,5 @@ where
 
     // `build()` promises to call the provided closure before returning,
     // so we are guaranteed that `token` is non-None.
-    (data_stream, secondary_stream, token.unwrap())
+    (data_stream, token.unwrap())
 }

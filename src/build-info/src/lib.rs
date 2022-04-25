@@ -21,8 +21,6 @@ pub struct BuildInfo {
     pub sha: &'static str,
     /// The time of the build in UTC as an ISO 8601-compliant string.
     pub time: &'static str,
-    /// The target triple of the platform.
-    pub target_triple: &'static str,
 }
 
 /// Dummy build information.
@@ -33,8 +31,10 @@ pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
     time: "",
-    target_triple: "",
 };
+
+/// The target triple of the platform.
+pub const TARGET_TRIPLE: &str = env!("TARGET_TRIPLE");
 
 impl BuildInfo {
     /// Constructs a human-readable version string.
@@ -57,4 +57,43 @@ impl BuildInfo {
             .parse()
             .expect("build version is not valid semver")
     }
+}
+
+/// Generates an appropriate [`BuildInfo`] instance.
+///
+/// This macro should be invoked at the leaf of the crate graph, usually in the
+/// final binary, and the resulting `BuildInfo` struct plumbed into whatever
+/// libraries require it. Invoking the macro in intermediate crates may result
+/// in a build info with stale, cached values for the build SHA and time.
+#[macro_export]
+macro_rules! build_info {
+    () => {
+        $crate::BuildInfo {
+            version: env!("CARGO_PKG_VERSION"),
+            sha: $crate::private::run_command_str!(
+                "sh",
+                "-c",
+                r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
+                       echo "$MZ_DEV_BUILD_SHA"
+                   else
+                       # Unfortunately we need to suppress error messages from `git`, as
+                       # run_command_str will display no error message at all if we print
+                       # more than one line of output to stderr.
+                       git rev-parse --verify HEAD 2>/dev/null || {
+                           printf "error: unable to determine Git SHA; " >&2
+                           printf "either build from working Git clone " >&2
+                           printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
+                           printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
+                           exit 1
+                       }
+                   fi"#
+            ),
+            time: $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub mod private {
+    pub use compile_time_run::run_command_str;
 }

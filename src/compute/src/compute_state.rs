@@ -27,8 +27,7 @@ use tokio::sync::mpsc;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
-use mz_expr::GlobalId;
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::boundary::ComputeReplay;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
@@ -236,8 +235,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), granularity_ms);
         let c_linked = std::rc::Rc::new(EventLink::new());
         let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), granularity_ms);
-        let s_linked = std::rc::Rc::new(EventLink::new());
-        let mut s_logger = BatchLogger::new(Rc::clone(&s_linked), granularity_ms);
 
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
@@ -275,7 +272,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 &mut self.timely_worker,
                 logging,
                 Rc::clone(&c_linked),
-                Rc::clone(&s_linked),
                 m_activator.clone(),
             ));
         }
@@ -374,20 +370,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
             ),
         );
 
-        let activator = m_activator.clone();
-        self.timely_worker.log_register().insert_logger(
-            "materialize/storage",
-            Logger::new(
-                now,
-                start_offset,
-                self.timely_worker.index(),
-                move |time, data| {
-                    s_logger.publish_batch(time, data);
-                    activator.activate();
-                },
-            ),
-        );
-
         let errs = self
             .timely_worker
             .dataflow_named("Dataflow: logging", |scope| {
@@ -427,7 +409,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 &mut self.timely_worker,
                 logging,
                 c_linked,
-                s_linked,
                 m_activator,
             ));
         }

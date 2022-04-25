@@ -336,11 +336,11 @@ impl<C> UnreliableConsensus<C> {
 impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
     async fn head(
         &self,
-        key: &str,
         deadline: Instant,
+        key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         if self.should_happen().await {
-            let res = self.consensus.head(key, deadline).await;
+            let res = self.consensus.head(deadline, key).await;
             if !self.should_timeout().await {
                 return res;
             }
@@ -350,15 +350,15 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
 
     async fn compare_and_set(
         &self,
-        key: &str,
         deadline: Instant,
+        key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         if self.should_happen().await {
             let res = self
                 .consensus
-                .compare_and_set(key, deadline, expected, new)
+                .compare_and_set(deadline, key, expected, new)
                 .await;
             if !self.should_timeout().await {
                 return res;

@@ -10,9 +10,8 @@ menu:
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
-our [backwards compatibility](/versions/#backwards-compatibility) guarantee. The
-syntax and output of `EXPLAIN` may change arbitrarily in future versions of
-Materialize.
+our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
+change arbitrarily in future versions of Materialize.
 {{< /warning >}}
 
 ## Conceptual framework

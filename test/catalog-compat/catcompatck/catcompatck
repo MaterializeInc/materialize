@@ -25,7 +25,7 @@ run_sql() {
 launch_materialized() {
     name=$1
     shift
-    "materialized-$name" -w1 "$@" &
+    "materialized-$name" "$@" &
     materialized_pid=$?
     wait-for-it --timeout=30 -q localhost:6875
     run_sql "SELECT 1" > /dev/null

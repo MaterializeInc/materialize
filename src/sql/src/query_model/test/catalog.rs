@@ -23,10 +23,10 @@ use chrono::MIN_DATETIME;
 use lazy_static::lazy_static;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
-use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -280,10 +280,6 @@ impl SessionCatalog for TestCatalog {
     }
 
     fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
         unimplemented!();
     }
 

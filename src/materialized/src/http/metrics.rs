@@ -9,53 +9,19 @@
 
 //! Metrics HTTP endpoints.
 
-use askama::Template;
-use hyper::{Body, Request, Response};
+use axum::response::IntoResponse;
+use axum::TypedHeader;
+use headers::ContentType;
+use http::StatusCode;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 
-use crate::http::util;
-use crate::{Metrics, BUILD_INFO};
-
-#[derive(Template)]
-#[template(path = "http/templates/status.html")]
-struct StatusTemplate<'a> {
-    version: &'a str,
-    query_count: u64,
-    uptime_seconds: f64,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum MetricsVariant {
-    Regular,
-    ThirdPartyVisible,
-}
-
 /// Serves metrics from the selected metrics registry variant.
-pub fn handle_prometheus(
-    _: Request<Body>,
-    registry: &MetricsRegistry,
-    variant: MetricsVariant,
-) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = match variant {
-        MetricsVariant::Regular => registry.gather(),
-        MetricsVariant::ThirdPartyVisible => registry.gather_third_party_visible(),
-    };
+pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
     let mut buffer = Vec::new();
     let encoder = prometheus::TextEncoder::new();
-    encoder.encode(&metric_families, &mut buffer)?;
-    Ok(Response::new(Body::from(buffer)))
-}
-
-pub fn handle_status(
-    _: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-    global_metrics: &Metrics,
-    pgwire_metrics: &mz_pgwire::Metrics,
-) -> Result<Response<Body>, anyhow::Error> {
-    Ok(util::template_response(StatusTemplate {
-        version: BUILD_INFO.version,
-        query_count: pgwire_metrics.query_count.get(),
-        uptime_seconds: global_metrics.uptime.get(),
-    }))
+    encoder
+        .encode(&registry.gather(), &mut buffer)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
 }

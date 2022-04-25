@@ -9,15 +9,16 @@
 
 //! Catalog introspection HTTP endpoints.
 
-use hyper::{header, Body, Request, Response};
+use axum::response::IntoResponse;
+use axum::TypedHeader;
+use headers::ContentType;
+use http::StatusCode;
 
-pub async fn handle_internal_catalog(
-    _: Request<Body>,
-    coord_client: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    let dump = coord_client.dump_catalog().await?;
-    Ok(Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(dump))
-        .unwrap())
+use crate::http::AuthedClient;
+
+pub async fn handle_internal_catalog(AuthedClient(mut client): AuthedClient) -> impl IntoResponse {
+    match client.dump_catalog().await {
+        Ok(res) => Ok((TypedHeader(ContentType::json()), res)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }

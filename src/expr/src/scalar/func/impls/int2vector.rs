@@ -9,15 +9,18 @@
 
 use std::fmt;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
-use crate::scalar::func::LazyUnaryFunc;
+use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CastInt2VectorToArray;
 
 // This could be simplified to an EagerUnaryFunc once we have
@@ -56,5 +59,47 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
 impl fmt::Display for CastInt2VectorToArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("int2vectortoarray")
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct CastInt2VectorToString;
+
+impl LazyUnaryFunc for CastInt2VectorToString {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let mut buf = String::new();
+        stringify_datum(&mut buf, a, &ScalarType::Int2Vector)?;
+        Ok(Datum::String(temp_storage.push_string(buf)))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastInt2VectorToString {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("int2vectortostr")
     }
 }

@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MirRelationExpr, MirScalarExpr};
 use mz_repr::{Datum, Row};
+
+use crate::visit::Visit;
+use crate::{MirRelationExpr, MirScalarExpr};
 
 /// A compound operator that can be applied row-by-row.
 ///

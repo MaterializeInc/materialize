@@ -9,6 +9,6 @@
 
 MZFROM ubuntu-base
 
-COPY sqllogictest /usr/local/bin
+COPY storaged computed sqllogictest /usr/local/bin/
 
 WORKDIR /workdir

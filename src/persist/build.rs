@@ -9,6 +9,6 @@
 
 fn main() {
     prost_build::Config::new()
-        .compile_protos(&["persist.proto"], &["src"])
+        .compile_protos(&["persist/src/persist.proto"], &[".."])
         .unwrap();
 }

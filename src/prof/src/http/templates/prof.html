@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Profiling{% endblock %}
+
+{% block content %}
+<h2>Memory Profiling</h2>
+{% match mem_prof %}
+{% when crate::http::MemProfilingStatus::Enabled with (start_time) %}
+  {% match start_time %}
+  {% when Some with (time) %}
+    {% match time %}
+    {% when ProfStartTime::TimeImmemorial %}
+      <p>Jemalloc profiling active since server start</p>
+    {% when ProfStartTime::Instant with (when) %}
+      <p>Jemalloc profiling active for {{ when.elapsed()|fmt("{:?}") }}</p>
+    {% endmatch %}
+    <form method="post">
+      <button name="action" value="deactivate">Deactivate</button>
+      <button name="action" value="dump_file">Download heap profile</button>
+      <button name="action" value="dump_symbolicated_file">Download symbolicated heap profile</button>
+      <button name="action" value="mem_fg">Visualize heap profile (flamegraph)</button>
+    </form>
+  {% when None %}
+      <p>Jemalloc profiling enabled but inactive.</p>
+      <form method="post">
+        <button type="submit" name="action" value="activate">Activate</button>
+      </form>
+  {% endmatch %}
+  <a href="prof?action=dump_stats">Download stats</a>
+{% when crate::http::MemProfilingStatus::Disabled %}
+    <p>Jemalloc profiling is not available.</p>
+    {% if std::env::consts::OS == "macos" %}
+    <p>
+      <strong>Hint.</strong> Jemalloc profiling is not available on macOS.
+      Use Linux instead.
+    </p>
+    {% endif %}
+
+    <p>
+      <strong>Hint.</strong> Restart <code>{{executable}}</code> with the following
+      environment variable: <code>MALLOC_CONF=prof:true</code>.
+    </p>
+{% endmatch %}
+<h2>CPU Profiling</h2>
+<form method="post">
+  <div>
+    <input type="checkbox" id="mergeThreads" name="threads" value="merge" />
+    <label for="mergeThreads">Merge threads</label>
+  </div>
+  <div>
+    <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
+{% match mem_prof %}
+{% when crate::http::MemProfilingStatus::Enabled with (start_time) %}
+  {% match start_time %}
+  {% when Some with (_) %}
+    <strong>Note.</strong> Will deactivate memory profiling.
+  {% when None %}
+  {% endmatch %}
+{% when crate::http::MemProfilingStatus::Disabled %}
+{% endmatch %}
+  </div>
+</form>
+{% endblock %}

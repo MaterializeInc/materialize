@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 use timely::progress::{frontier::MutableAntichain, Antichain};
 
 use crate::client::Peek;
-use mz_expr::GlobalId;
+use mz_repr::GlobalId;
 
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};

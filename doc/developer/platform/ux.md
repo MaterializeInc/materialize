@@ -34,7 +34,9 @@ aws:us-east-1). The region boundary is strong: besides users and billing,
 nothing is shared between regions in the same account.
 
 A [*cluster*](#cluster) is the user-facing name for a [COMPUTE
-INSTANCE](architecture-db.md#COMPUTE). A region can contain any number of clusters.
+INSTANCE](architecture-db.md#COMPUTE). A region can contain any number of
+clusters. A cluster may be replicated for fault tolerance; each redundant copy
+is called a [*cluster replica*](#cluster-replica).
 
 A region contains a standard SQL catalog, which contains
 [*databases*](#database), which each contain [*schemas*](#schema), which each
@@ -454,52 +456,32 @@ by Materialize Cloud:
 Clusters are created within a region via a new `CREATE CLUSTER` SQL statement:
 
 ```sql
-CREATE CLUSTER <name> SIZE {xs|s|m|l|xl} [, REPLICATION FACTOR <n>];
+CREATE CLUSTER <name>
+    [REPLICA <replica> SIZE {xs|s|m|l|xl} ...]
 ```
 
-Creating a cluster allocates persistent compute resources (e.g., EC2 instances)
-and begins billing the account for those resources. The SQL statement returns
-successfully as soon as the request is received.
+A cluster consists of any number of [replicas](#cluster-replica). The initial
+replica set can be specified inline in the `CREATE CLUSTER` statement for
+convenience. After cluster creation, the replica set can be managed via
+the `CREATE CLUSTER REPLICA` and `DROP CLUSTER REPLICA` commands described in
+the next section.
 
-A cluster may be horizontally scaled across multiple machines. The scaling is
-deliberately hidden from users behind the opaque notion of "size".
+In the (far) future, we plan to build "autoscaling", in which replicas are
+automatically managed. Users would specify a desired replication factor and a
+minimum and maximum size for their replicas, and Materialize Platform would
+automatically shrink or grow the cluster's replicas within those limits in
+response to observed resource utilization.
 
-Specifying a replication factor greater than one will run multiple identical
-replicas of the cluster for redundancy. Any requests to the cluster will be
-transparently routed to any live replica, so the cluster can tolerate failures
-of `n - 1` replicas before it becomes unavailable.
+The list of clusters can be observed via the new `SHOW CLUSTERS` statement or
+the new `mz_clusters` system catalog table.
 
-All machines in a replica run in the same availability zone (AZ). If a cluster
-is configured with multiple replicas, replicas are distributed across AZs as
-evenly as possible to ensure availability in the event of an AZ outage.
-
-In the future, we may allow users to explicitly specify the desired
-availability zones for a cluster's replicas.
-
-The list of clusters and the status of each can be observed via the new `SHOW
-CLUSTERS` statement or the new `mz_clusters` system catalog table. The exact
-output of these commands is TODO, but they will include the provisioning status
-of the EC2 instances.
+Any requests to the cluster will be transparently routed to any live replica, so
+the cluster can tolerate failures of `n - 1` replicas before it becomes
+unavailable.
 
 It is possible to create indexes in a cluster before it is provisioned, but
-attempts to `SELECT` from these indexes will fail until the cluster is
+attempts to `SELECT` from these indexes will block until the cluster is
 provisioned.
-
-The size and replication factor of an existing cluster can be changed via the new
-`ALTER CLUSTER` SQL statement:
-
-```sql
-ALTER CLUSTER <name> [SIZE {xs|s|m|l|xl}] [, REPLICATION FACTOR <n>];
-```
-
-Changing either of these properties is a zero-downtime operation that happens
-asynchronously. As with creating a cluster, users can monitor the status of an
-`ALTER CLUSTER` operation via the `SHOW CLUSTERS` statement.
-
-In the (far) future, we plan to build "autoscaling", in which users would
-specify a minimum and maximum size for their cluster, and Materialize Platform
-would automatically shrink or grow the cluster's size within those limits in
-response to observed resource utilization.
 
 Clusters are dropped via a new `DROP CLUSTER` SQL statement:
 
@@ -524,6 +506,39 @@ Access to a cluster is gated by SQL permission grants. Users cannot execute
 queries on a cluster on which they do not have `USAGE` privileges. Users cannot
 create clusters if they do not have the `CREATE CLUSTER` privilege in the
 region.
+
+### Cluster replica
+
+A cluster replica is created via a new `CREATE CLUSTER REPLICA` SQL statement:
+
+```sql
+CREATE CLUSTER REPLICA <name>
+    FOR <cluster>
+    SIZE {xs|s|m|l|xl},
+    AVAILABILITY ZONE '<az>'
+```
+
+Creating a replica allocates persistent compute resources (e.g., EC2 instances)
+and begins billing the account for those resources. The SQL statement returns
+successfully as soon as the request is received.
+
+A replica may be horizontally scaled across multiple machines. The scaling is
+deliberately hidden from users behind the opaque notion of "size".
+
+All machines in a replica run in the specified availability zone (AZ).  For
+fault tolerance, users should distribute a cluster's replicas across AZs as
+evenly as possible to ensure availability in the event of an AZ outage.
+
+The list of clusters and the status of each can be observed via the new `SHOW
+CLUSTER REPLICAS` statement or the new `mz_cluster_replicas` system catalog
+table. The exact output of these commands is TODO, but they will include the
+provisioning status of the EC2 instances.
+
+Replicas are dropped via a new `DROP CLUSTER REPLICA` SQL statement:
+
+```sql
+DROP CLUSTER REPLICA <name>;
+```
 
 ### Database
 
@@ -771,6 +786,35 @@ What processes' logs would we even display? Details about what processes are
 running will be hidden from users. Any log messages in `materialized` today that
 are meant for end-users will need to instead make their messages available via
 tables or sources in the system catalog.
+
+### Correctness
+
+Materialize maintains three correctness guarantees.
+
+1. *Transactions in Materialize are strictly serializable with
+   respect to the operations that occur inside of Materialize.*
+   Operations include:
+    * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
+    * Materialize initiated acknowledgements of upstream sources (*e.g., the
+      commit of an offset by a Kafka source, the acknowledge of an LSN by a
+      PostgresSQL source, etcetera*)
+2. *Materialize respects the explicit or implied event order of its sources.
+   This includes partial orders.*  In practice this means Materialize assigns
+   new timestamps to events in sources.  This assignment of new timestamps is called
+   reclocking. Once reclocking occurs, it defines a permanent order of events within
+   Materialize. For sources without transactional semantics (basic Kafka streams)
+   Maerialize reclocks the events to reflect the order in which the source emits
+   each event. For sources that do have transactional semantics (Postgres, Debezium)
+   Materialize reclocks events to respect the transactional boundaries.  For partially
+   ordered events x and y:
+    1.  if *x < y* in the source, then *x ≤ y* in Materialize
+    2.  if *x = y* in the source, then *x = y* in Materialize
+3. *Materialize provides real time recency guarantees.* This means any write
+   committed by an upstream source is reflected in future queries against
+   Materialize. Guaranteeing real time recency means that Materialize
+   must block on a query until it has complete certainty about the events.
+   Blocking may not be desirable in practice, so Materialize makes the behavior
+   optional. Non-blocking behavior comes with no guarantees of recency.
 
 ## Discussion
 

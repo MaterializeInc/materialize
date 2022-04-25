@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use askama::Template;
-use hyper::{Body, Request, Response};
+use axum::response::IntoResponse;
 
-use crate::http::util;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
@@ -19,13 +18,10 @@ struct MemoryTemplate<'a> {
     version: &'a str,
 }
 
-pub fn handle_memory(
-    _: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    Ok(util::template_response(MemoryTemplate {
+pub async fn handle_memory() -> impl IntoResponse {
+    mz_http_util::template_response(MemoryTemplate {
         version: BUILD_INFO.version,
-    }))
+    })
 }
 
 #[derive(Template)]
@@ -34,11 +30,8 @@ struct HierarchicalMemoryTemplate<'a> {
     version: &'a str,
 }
 
-pub fn handle_hierarchical_memory(
-    _: Request<Body>,
-    _: &mut mz_coord::SessionClient,
-) -> Result<Response<Body>, anyhow::Error> {
-    Ok(util::template_response(HierarchicalMemoryTemplate {
+pub async fn handle_hierarchical_memory() -> impl IntoResponse {
+    mz_http_util::template_response(HierarchicalMemoryTemplate {
         version: BUILD_INFO.version,
-    }))
+    })
 }

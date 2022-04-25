@@ -14,20 +14,18 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::HashMap;
-use std::env;
-use std::fs;
 use std::fs::Permissions;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{env, fs};
 
-use ::http::header::HeaderValue;
 use anyhow::{anyhow, Context};
-use compile_time_run::run_command_str;
 use futures::StreamExt;
-use mz_coord::PersistConfig;
+use mz_build_info::{build_info, BuildInfo};
+use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -38,9 +36,8 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::{AnyOr, Origin};
 
-use mz_build_info::BuildInfo;
-use mz_coord::LoggingConfig;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -52,50 +49,16 @@ use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::KubernetesSecretsController;
 
 use crate::mux::Mux;
-use crate::server_metrics::Metrics;
 
 pub mod http;
 pub mod mux;
-pub mod server_metrics;
-pub mod telemetry;
 
-pub const BUILD_INFO: BuildInfo = BuildInfo {
-    version: env!("CARGO_PKG_VERSION"),
-    sha: run_command_str!(
-        "sh",
-        "-c",
-        r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
-            echo "$MZ_DEV_BUILD_SHA"
-        else
-            # Unfortunately we need to suppress error messages from `git`, as
-            # run_command_str will display no error message at all if we print
-            # more than one line of output to stderr.
-            git rev-parse --verify HEAD 2>/dev/null || {
-                printf "error: unable to determine Git SHA; " >&2
-                printf "either build from working Git clone " >&2
-                printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
-                printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
-                exit 1
-            }
-        fi"#
-    ),
-    time: run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
-    target_triple: env!("TARGET_TRIPLE"),
-};
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// Configuration for a `materialized` server.
 #[derive(Debug, Clone)]
 pub struct Config {
-    // === Timely and Differential worker options. ===
-    /// The number of Timely worker threads that this process should host.
-    pub workers: usize,
-    /// The Timely worker configuration.
-    pub timely_worker: timely::WorkerConfig,
-
     // === Performance tuning options. ===
-    pub logging: Option<LoggingConfig>,
-    /// The frequency at which to update introspection.
-    pub introspection_frequency: Duration,
     /// The historical window in which distinctions are maintained for
     /// arrangements.
     ///
@@ -114,25 +77,25 @@ pub struct Config {
     // === Connection options. ===
     /// The IP address and port to listen on.
     pub listen_addr: SocketAddr,
-    /// The IP address and port to serve the "third party" metrics registry from.
-    pub third_party_metrics_listen_addr: Option<SocketAddr>,
+    /// The IP address and port to serve the metrics registry from.
+    pub metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
     /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
     pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
-    pub cors_allowed_origins: Vec<HeaderValue>,
+    pub cors_allowed_origin: AnyOr<Origin>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
-    /// The configuration of the storage layer.
-    pub storage: StorageConfig,
+    /// Where the persist library should store its data.
+    pub persist_location: mz_persist_client::Location,
 
     // === Platform options. ===
-    /// Optional configuration for a service orchestrator.
-    pub orchestrator: Option<OrchestratorConfig>,
+    /// Configuration of service orchestration.
+    pub orchestrator: OrchestratorConfig,
 
     // === Secrets Storage options. ===
     /// Optional configuration for a secrets controller.
@@ -151,14 +114,12 @@ pub struct Config {
     pub disable_user_indexes: bool,
     /// Whether to run in safe mode.
     pub safe_mode: bool,
-    /// Telemetry configuration.
-    pub telemetry: Option<TelemetryConfig>,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration of the persistence runtime and features.
-    pub persist: PersistConfig,
     /// Now generation function.
     pub now: NowFn,
+    /// Map of strings to corresponding compute replica sizes.
+    pub replica_sizes: ClusterReplicaSizeMap,
 }
 
 /// Configures TLS encryption for connections.
@@ -193,22 +154,18 @@ pub enum TlsMode {
     },
 }
 
-/// Telemetry configuration.
-#[derive(Debug, Clone)]
-pub struct TelemetryConfig {
-    /// The domain hosting the telemetry server.
-    pub domain: String,
-    /// The interval at which to report telemetry data.
-    pub interval: Duration,
-}
-
 /// Configuration for the service orchestrator.
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
     /// Which orchestrator backend to use.
     pub backend: OrchestratorBackend,
-    /// The dataflowd image reference to use.
-    pub dataflowd_image: String,
+    /// The storaged image reference to use.
+    pub storaged_image: String,
+    /// The computed image reference to use.
+    pub computed_image: String,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    pub linger: bool,
 }
 
 /// The orchestrator itself.
@@ -232,28 +189,8 @@ pub enum SecretsControllerConfig {
     },
 }
 
-/// Configuration of the storage layer.
-#[derive(Debug, Clone)]
-pub enum StorageConfig {
-    /// Run a local storage instance.
-    Local,
-    /// Use a remote storage instance.
-    Remote(RemoteStorageConfig),
-}
-
-/// Configuration of a remote storage instance.
-#[derive(Debug, Clone)]
-pub struct RemoteStorageConfig {
-    /// The address that compute instances should connect to.
-    pub compute_addr: String,
-    /// The address that the controller should connect to.
-    pub controller_addr: String,
-}
-
 /// Start a `materialized` server.
-pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
-    let workers = config.workers;
-
+pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -317,86 +254,67 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         Some(config.experimental_mode),
     )?;
 
-    // Initialize persistence runtime.
-    let persister = config
-        .persist
-        .init(
-            // Safe to use the cluster ID as the reentrance ID because
-            // `materialized` can only run as a single node.
-            coord_storage.cluster_id(),
-            BUILD_INFO,
-            &config.metrics_registry,
+    // Initialize orchestrator.
+    let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
+        OrchestratorBackend::Kubernetes(config) => Box::new(
+            KubernetesOrchestrator::new(config)
+                .await
+                .context("connecting to kubernetes")?,
+        ),
+        OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
+    };
+    let default_listen_host = orchestrator.listen_host();
+    let storage_service = orchestrator
+        .namespace("storage")
+        .ensure_service(
+            "runtime",
+            ServiceConfig {
+                image: config.orchestrator.storaged_image.clone(),
+                args: &|ports| {
+                    let mut storage_opts = vec![
+                        format!("--workers=1"),
+                        format!(
+                            "--storage-addr={}:{}",
+                            default_listen_host, ports["compute"]
+                        ),
+                        format!(
+                            "--listen-addr={}:{}",
+                            default_listen_host, ports["controller"]
+                        ),
+                        format!("--persist-blob-url={}", config.persist_location.blob_uri),
+                        format!(
+                            "--persist-consensus-url={}",
+                            config.persist_location.consensus_uri
+                        ),
+                    ];
+                    if config.orchestrator.linger {
+                        storage_opts.push(format!("--linger"))
+                    }
+                    storage_opts
+                },
+                ports: vec![
+                    ServicePort {
+                        name: "controller".into(),
+                        port_hint: 2100,
+                    },
+                    ServicePort {
+                        name: "compute".into(),
+                        port_hint: 2101,
+                    },
+                ],
+                // TODO: limits?
+                cpu_limit: None,
+                memory_limit: None,
+                processes: NonZeroUsize::new(1).unwrap(),
+                labels: HashMap::new(),
+            },
         )
         .await?;
-
-    // Initialize orchestrator.
-    let orchestrator = match config.orchestrator {
-        None => None,
-        Some(OrchestratorConfig {
-            backend,
-            dataflowd_image,
-        }) => {
-            let orchestrator: Box<dyn Orchestrator> = match backend {
-                OrchestratorBackend::Kubernetes(config) => Box::new(
-                    KubernetesOrchestrator::new(config)
-                        .await
-                        .context("connecting to kubernetes")?,
-                ),
-                OrchestratorBackend::Process(config) => {
-                    Box::new(ProcessOrchestrator::new(config).await?)
-                }
-            };
-
-            if let StorageConfig::Local = &config.storage {
-                let storage_workers = 1;
-                let service = orchestrator
-                    .namespace("storage")
-                    .ensure_service(
-                        "runtime",
-                        ServiceConfig {
-                            image: dataflowd_image.clone(),
-                            args: &|ports| {
-                                vec![
-                                    "--runtime=storage".into(),
-                                    format!("--workers={storage_workers}"),
-                                    format!("--storage-addr=0.0.0.0:{}", ports["storage"]),
-                                ]
-                            },
-                            ports: vec![
-                                ServicePort {
-                                    name: "controller".into(),
-                                    port_hint: 2100,
-                                },
-                                ServicePort {
-                                    name: "storage".into(),
-                                    port_hint: 2101,
-                                },
-                            ],
-                            // TODO: limits?
-                            cpu_limit: None,
-                            memory_limit: None,
-                            processes: 1,
-                            labels: HashMap::new(),
-                        },
-                    )
-                    .await?;
-                config.storage = StorageConfig::Remote(RemoteStorageConfig {
-                    compute_addr: service.addresses("storage").into_element(),
-                    controller_addr: service.addresses("controller").into_element(),
-                });
-            }
-
-            let remote_storage_config = match &config.storage {
-                StorageConfig::Local => unreachable!("storage config forced to be remote above"),
-                StorageConfig::Remote(c) => c,
-            };
-
-            Some(mz_dataflow_types::client::controller::OrchestratorConfig {
-                orchestrator,
-                dataflowd_image,
-                storage_addr: remote_storage_config.compute_addr.clone(),
-            })
-        }
+    let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
+        orchestrator,
+        computed_image: config.orchestrator.computed_image,
+        storage_addr: storage_service.addresses("compute").into_element(),
+        linger: config.orchestrator.linger,
     };
 
     // Initialize secrets controller.
@@ -417,74 +335,26 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         ),
     };
 
-    // Initialize dataflow server.
-    let dataflow_config = mz_dataflow::Config {
-        workers,
-        timely_config: timely::Config {
-            communication: timely::CommunicationConfig::Process(workers),
-            worker: config.timely_worker,
-        },
-        experimental_mode: config.experimental_mode,
-        now: config.now.clone(),
-        metrics_registry: config.metrics_registry.clone(),
-        persister: persister.runtime.clone(),
-        aws_external_id: config.aws_external_id.clone(),
-    };
-    let (dataflow_server, dataflow_controller) = match &config.storage {
-        StorageConfig::Local => {
-            let (dataflow_server, storage_client, local_compute_client) =
-                mz_dataflow::serve(dataflow_config)?;
-            let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(
-                    Box::new(storage_client),
-                    config.data_directory,
-                );
-            let dataflow_controller = mz_dataflow_types::client::Controller::new(
-                orchestrator,
-                storage_controller,
-                Box::new(local_compute_client),
-            );
-            (dataflow_server, dataflow_controller)
-        }
-        StorageConfig::Remote(RemoteStorageConfig {
-            compute_addr,
-            controller_addr,
-        }) => {
-            let (storage_compute_client, _thread) =
-                mz_dataflow::tcp_boundary::client::connect(compute_addr, config.workers).await?;
-            let boundary = (0..config.workers)
-                .into_iter()
-                .map(|_| Some((mz_dataflow::DummyBoundary, storage_compute_client.clone())))
-                .collect::<Vec<_>>();
-            let boundary = Arc::new(Mutex::new(boundary));
-            let workers = config.workers;
-            let (compute_server, _inactive_storage_client, local_compute_client) =
-                mz_dataflow::serve_boundary(dataflow_config, move |index| {
-                    boundary.lock().unwrap()[index % workers].take().unwrap()
-                })?;
-            let storage_client = Box::new({
-                let mut client = RemoteClient::new(&[controller_addr]);
-                client.connect().await;
-                client
-            });
-            let storage_controller =
-                mz_dataflow_types::client::controller::storage::Controller::new(
-                    storage_client,
-                    config.data_directory,
-                );
-            let dataflow_controller = mz_dataflow_types::client::Controller::new(
-                orchestrator,
-                storage_controller,
-                Box::new(local_compute_client),
-            );
-            (compute_server, dataflow_controller)
-        }
-    };
+    // Initialize dataflow controller.
+    let storage_client = Box::new({
+        let mut client =
+            RemoteClient::new(&[storage_service.addresses("controller").into_element()]);
+        client.connect().await;
+        client
+    });
+    let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
+        storage_client,
+        config.data_directory,
+    );
+    let dataflow_controller = mz_dataflow_types::client::Controller::new(
+        orchestrator,
+        storage_controller,
+        config.replica_sizes,
+    );
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: dataflow_controller,
-        logging: config.logging,
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
@@ -494,23 +364,18 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         build_info: &BUILD_INFO,
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
-        persister,
         now: config.now,
         secrets_controller,
     })
     .await?;
 
-    // Register metrics.
-    let mut metrics_registry = config.metrics_registry;
-    let metrics =
-        Metrics::register_with(&mut metrics_registry, workers, coord_handle.start_instant());
-
     // Listen on the third-party metrics port if we are configured for it.
-    if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
+    if let Some(addr) = config.metrics_listen_addr {
+        let metrics_registry = config.metrics_registry.clone();
         task::spawn(|| "metrics_server", {
-            let server = http::ThirdPartyServer::new(metrics_registry.clone());
+            let server = http::MetricsServer::new(metrics_registry);
             async move {
-                server.serve(third_party_addr).await;
+                server.serve(addr).await;
             }
         });
     }
@@ -527,17 +392,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
-            metrics_registry: &metrics_registry,
+            metrics_registry: &config.metrics_registry,
             frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
             frontegg: config.frontegg,
-            coord_client: coord_client.clone(),
-            metrics_registry,
-            global_metrics: metrics,
-            pgwire_metrics: pgwire_server.metrics(),
-            allowed_origins: config.cors_allowed_origins,
+            coord_client,
+            allowed_origin: config.cors_allowed_origin,
         });
         let mut mux = Mux::new();
         mux.add_handler(pgwire_server);
@@ -551,26 +413,11 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    // Start telemetry reporting loop.
-    if let Some(telemetry) = config.telemetry {
-        let config = telemetry::Config {
-            domain: telemetry.domain,
-            interval: telemetry.interval,
-            cluster_id: coord_handle.cluster_id(),
-            workers,
-            coord_client,
-        };
-        task::spawn(|| "telemetry_loop", async move {
-            telemetry::report_loop(config).await
-        });
-    }
-
     Ok(Server {
         local_addr,
         _pid_file: pid_file,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
-        _dataflow_server: dataflow_server,
     })
 }
 
@@ -581,7 +428,6 @@ pub struct Server {
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
     _coord_handle: mz_coord::Handle,
-    _dataflow_server: mz_dataflow::Server,
 }
 
 impl Server {

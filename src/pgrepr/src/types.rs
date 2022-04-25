@@ -568,7 +568,13 @@ impl Type {
         }
     }
 
-    /// Returns the name that PostgreSQL uses for this type.
+    /// Returns the item's name in a way that guarantees it's resolvable in the
+    /// catalog.
+    pub fn catalog_name(&self) -> &'static str {
+        self.inner().name()
+    }
+
+    /// Returns the user-friendly name that PostgreSQL uses for this type.
     pub fn name(&self) -> &'static str {
         // postgres_types' `name()` uses the pg_catalog name, and not the pretty
         // SQL standard name.
@@ -760,11 +766,11 @@ impl TryFrom<&Type> for ScalarType {
             Type::Jsonb => Ok(ScalarType::Jsonb),
             Type::List(t) => Ok(ScalarType::List {
                 element_type: Box::new(TryFrom::try_from(&**t)?),
-                custom_oid: Some(t.oid()),
+                custom_id: None,
             }),
             Type::Map { value_type } => Ok(ScalarType::Map {
                 value_type: Box::new(TryFrom::try_from(&**value_type)?),
-                custom_oid: Some(value_type.oid()),
+                custom_id: None,
             }),
             Type::Numeric { constraints } => {
                 let max_scale = match constraints {
@@ -790,7 +796,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::Oid => Ok(ScalarType::Oid),
             Type::Record(_) => Ok(ScalarType::Record {
                 fields: vec![],
-                custom_oid: None,
+                custom_id: None,
                 custom_name: None,
             }),
             Type::Text => Ok(ScalarType::String),

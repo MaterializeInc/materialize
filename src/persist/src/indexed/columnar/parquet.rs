@@ -11,13 +11,11 @@
 
 use std::io::{Read, Seek, Write};
 
-use arrow2::io::parquet::read::FileReader;
-use arrow2::io::parquet::write::{FileWriter, RowGroupIterator, Version, WriteOptions};
+use arrow2::io::parquet::read::{read_metadata, FileReader};
+use arrow2::io::parquet::write::{
+    Compression, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
+};
 use differential_dataflow::trace::Description;
-use parquet2::compression::Compression;
-use parquet2::encoding::Encoding;
-use parquet2::metadata::KeyValue;
-use parquet2::read::read_metadata;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;

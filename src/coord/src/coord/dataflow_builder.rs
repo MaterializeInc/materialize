@@ -18,25 +18,25 @@ use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_expr::visit::Visit;
 use mz_expr::{
-    CollectionPlan, GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, UnmaterializableFunc,
+    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    UnmaterializableFunc,
 };
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::{CoordError, PersisterWithConfig};
+use crate::CoordError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
     pub catalog: &'a CatalogState,
-    pub persister: &'a PersisterWithConfig,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
@@ -66,7 +66,6 @@ impl Coordinator {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
-            persister: &self.persister,
             compute,
         }
     }
@@ -81,7 +80,6 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         let compute = self.dataflow_client.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
-            persister: &self.persister,
             compute,
         }
     }
@@ -137,8 +135,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 match entry.item() {
                     CatalogItem::Table(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
-                        let persist_details = None;
-                        dataflow.import_source(*id, source_description, persist_details);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::Source(source) => {
                         if source.requires_single_materialization() {
@@ -167,12 +164,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                         let source_description = self.catalog.source_description_for(*id).unwrap();
 
-                        let persist_desc = self
-                            .persister
-                            .load_source_persist_desc(&source)
-                            .map_err(CoordError::Persistence)?;
-
-                        dataflow.import_source(*id, source_description, persist_desc);
+                        dataflow.import_source(*id, source_description);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
@@ -451,7 +443,7 @@ fn eval_unmaterializable_func(
                 "PostgreSQL {}.{} on {} (materialized {})",
                 SERVER_MAJOR_VERSION,
                 SERVER_MINOR_VERSION,
-                build_info.target_triple,
+                mz_build_info::TARGET_TRIPLE,
                 build_info.version,
             );
             pack(Datum::from(&*version))

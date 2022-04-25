@@ -9,4 +9,15 @@
 
 name: ci-cargo-test
 pre-image:
+  - type: cargo-build
+    bin: testdrive
+    extract:
+      protobuf-src:
+        install: protobuf-install
+  - type: cargo-build
+    bin: storaged
+  - type: cargo-build
+    bin: computed
+  - type: cargo-build
+    bin: materialized
   - type: cargo-test

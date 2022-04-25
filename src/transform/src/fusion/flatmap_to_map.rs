@@ -11,6 +11,7 @@
 //!
 
 use crate::TransformArgs;
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, TableFunc};
 
 /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.

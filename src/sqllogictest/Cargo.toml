@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.56"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.1.8", features = ["derive"] }
+clap = { version = "3.1.9", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 junit-report = "0.7.0"
@@ -21,6 +21,8 @@ mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["task"] }
+mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
@@ -32,5 +34,6 @@ time = "0.3.9"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.17.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
+tower-http = { version = "0.2.5", features = ["cors"] }
 uuid = "0.8.2"
 walkdir = "2.3.2"

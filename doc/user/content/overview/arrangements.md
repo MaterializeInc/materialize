@@ -51,7 +51,7 @@ The amount of memory that the arrangement requires is then further reduced by ba
 
 ## Analyzing arrangements
 
-Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/), [Monitoring](/ops/monitoring/), and [`EXPLAIN`](/sql/explain/) for more details.
+Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/) and [`EXPLAIN`](/sql/explain/) for more details.
 
 ## Reducing memory usage
 

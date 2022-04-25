@@ -27,14 +27,12 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_expr::{GlobalId, PartitionId};
+use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist::client::RuntimeClient;
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::boundary::StorageCapture;
 use crate::decode::metrics::DecodeMetrics;
-use crate::render::sources::PersistedSourceManager;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
@@ -65,14 +63,8 @@ pub struct StorageState {
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Handles that allow setting the compaction frontier for a persisted source. There can only
-    /// ever be one running (rendered) source of a persisted source, and if there is one, this map
-    /// will contain a handle to it.
-    pub persisted_sources: PersistedSourceManager,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the last time we sent binding durability info over `response_tx`.
@@ -237,8 +229,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
 
                         // Drop table-related state.
                         self.storage_state.table_state.remove(&id);
-                        // Clean up potentially left over persisted source state.
-                        self.storage_state.persisted_sources.del_source(&id);
                         // Clean up per-source state.
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
@@ -253,87 +243,69 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
                             table_state.since = frontier.clone();
                         }
-
-                        self.storage_state
-                            .persisted_sources
-                            .allow_compaction(id, frontier);
                     }
                 }
             }
 
-            StorageCommand::AdvanceAllLocalInputs { advance_to } => {
-                let new_frontier = Antichain::from_elem(advance_to);
-                for (id, table_state) in &mut self.storage_state.table_state {
-                    for local_input in &mut table_state.inputs {
-                        if let Some(capability) = local_input.capability.upgrade() {
-                            capability.borrow_mut().downgrade(&advance_to);
+            StorageCommand::Append(appends) => {
+                for (id, updates, upper) in appends {
+                    let table_state = match self.storage_state.table_state.get_mut(&id) {
+                        Some(table_state) => table_state,
+                        None => panic!(
+                            "table state {} missing for insert at worker {}",
+                            id,
+                            self.timely_worker.index()
+                        ),
+                    };
+
+                    // Add the new updates to all existing renders of the table.
+                    for input in &mut table_state.inputs {
+                        if let Some(capability) = input.capability.upgrade() {
+                            let mut capability = capability.borrow_mut();
+                            let mut session = input.handle.session(capability.clone());
+                            for update in &updates {
+                                assert!(update.timestamp >= *capability.time());
+                                session.give((update.row.clone(), update.timestamp, update.diff));
+                            }
+                            capability.downgrade(&upper);
                         }
                     }
+
+                    assert!(upper >= table_state.upper);
+                    table_state.upper = upper;
+                    // Announce the table updates as durably recorded. This is not correct,
+                    // but it also hasn't been correct afaict.
+                    // TODO(petrosagg): correct this once STORAGE owns table durability.
+                    let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
+                    let mut joined_frontier = Antichain::new();
+                    for time1 in borrow.iter() {
+                        joined_frontier.insert(time1.join(&upper));
+                    }
+                    *borrow = joined_frontier;
+
                     // Discard entries that are no longer active.
                     table_state
                         .inputs
                         .retain(|input| input.capability.upgrade().is_some());
 
-                    assert!(advance_to >= table_state.upper);
-                    table_state.upper = advance_to;
+                    // Stash the data for use by future renders of the table.
+                    for update in updates {
+                        table_state
+                            .data
+                            .push((update.row, update.timestamp, update.diff));
+                    }
 
-                    // Announce the table updates as durably recorded. This is not correct,
-                    // but it also hasn't been correct afaict.
-                    // TODO(petrosagg): correct this once STORAGE owns table durability.
-                    let mut borrow = self.storage_state.source_uppers[id].borrow_mut();
-                    let mut joined_frontier = Antichain::new();
-                    for time1 in borrow.iter() {
-                        for time2 in new_frontier.iter() {
-                            joined_frontier.insert(time1.join(time2));
+                    // Consolidate the data in the table if it's doubled in size
+                    // since the last consolidation.
+                    if table_state.data.len() > table_state.last_consolidated_size * 2 {
+                        for (_data, time, _diff) in &mut table_state.data {
+                            time.advance_by(table_state.since.borrow());
                         }
+                        differential_dataflow::consolidation::consolidate_updates(
+                            &mut table_state.data,
+                        );
+                        table_state.last_consolidated_size = table_state.data.len();
                     }
-                    *borrow = joined_frontier;
-                }
-            }
-
-            StorageCommand::Insert { id, updates } => {
-                let table_state = match self.storage_state.table_state.get_mut(&id) {
-                    Some(table_state) => table_state,
-                    None => panic!(
-                        "table state {} missing for insert at worker {}",
-                        id,
-                        self.timely_worker.index()
-                    ),
-                };
-
-                // Add the new updates to all existing renders of the table.
-                for input in &mut table_state.inputs {
-                    if let Some(capability) = input.capability.upgrade() {
-                        let capability = capability.borrow_mut();
-                        let mut session = input.handle.session(capability.clone());
-                        for update in &updates {
-                            assert!(update.timestamp >= *capability.time());
-                            session.give((update.row.clone(), update.timestamp, update.diff));
-                        }
-                    }
-                }
-                // Discard entries that are no longer active.
-                table_state
-                    .inputs
-                    .retain(|input| input.capability.upgrade().is_some());
-
-                // Stash the data for use by future renders of the table.
-                for update in updates {
-                    table_state
-                        .data
-                        .push((update.row, update.timestamp, update.diff));
-                }
-
-                // Consolidate the data in the table if it's doubled in size
-                // since the last consolidation.
-                if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                    for (_data, time, _diff) in &mut table_state.data {
-                        time.advance_by(table_state.since.borrow());
-                    }
-                    differential_dataflow::consolidation::consolidate_updates(
-                        &mut table_state.data,
-                    );
-                    table_state.last_consolidated_size = table_state.data.len();
                 }
             }
 

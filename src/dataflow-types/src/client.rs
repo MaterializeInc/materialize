@@ -31,23 +31,14 @@ use crate::{
     sources::{MzOffset, SourceDesc},
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
-use mz_expr::{GlobalId, PartitionId, RowSetFinishing};
-use mz_repr::Row;
+use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::{GlobalId, Row};
 
 pub mod controller;
 pub use controller::Controller;
 
 pub mod partitioned;
 pub mod replicated;
-
-/// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Command<T = mz_repr::Timestamp> {
-    /// A compute command.
-    Compute(ComputeCommand<T>),
-    /// A storage command.
-    Storage(StorageCommand<T>),
-}
 
 /// An abstraction allowing us to name difference compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
@@ -61,8 +52,6 @@ pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 /// Instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum InstanceConfig {
-    /// In-process instance.
-    Local,
     /// Out-of-process named instance
     Remote {
         /// A map from replica name to hostnames.
@@ -163,7 +152,7 @@ pub struct RenderSourcesCommand<T> {
     /// An optional frontier to which the input should be advanced.
     pub as_of: Option<Antichain<T>>,
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<T>>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
 }
 
 /// Commands related to the ingress and egress of collections.
@@ -178,25 +167,18 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-
-    /// Insert `updates` into the local input named `id`.
-    Insert {
-        /// Identifier of the local input.
-        id: GlobalId,
-        /// A list of updates to be introduced to the input.
-        updates: Vec<Update<T>>,
-    },
+    /// Append data and advance the frontier of the enumerated collections
+    ///
+    /// Each entry in the vector names a collection and provides a list of updates to insert and a
+    /// frontier that the collection must be advanced to. The times of the updates not be beyond
+    /// the given frontier.
+    Append(Vec<(GlobalId, Vec<Update<T>>, T)>),
     /// Update durability information for sources.
     ///
     /// Each entry names a source and provides a frontier before which the source can
     /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
     /// all the same data)
     DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
-    /// Advance all local inputs to the given timestamp.
-    AdvanceAllLocalInputs {
-        /// The timestamp to advance to.
-        advance_to: T,
-    },
 }
 
 impl<T> ComputeCommand<T> {
@@ -405,13 +387,17 @@ pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
 }
 
-/// Responses that the worker/dataflow can provide back to the coordinator.
+/// Responses that the controller can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response<T = mz_repr::Timestamp> {
-    /// A compute response.
-    Compute(ComputeResponse<T>),
-    /// A storage response.
-    Storage(StorageResponse<T>),
+pub enum ControllerResponse<T = mz_repr::Timestamp> {
+    /// The worker's response to a specified (by connection id) peek.
+    PeekResponse(Uuid, PeekResponse),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse<T>),
+    /// Data about timestamp bindings, sent to the coordinator, in service
+    /// of a specific "linearized" read request.
+    // TODO(benesch,gus): update language to avoid the term "linearizability".
+    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
@@ -522,32 +508,6 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-/// An generic command sender.
-pub struct Sender<C> {
-    inner: Box<dyn FnMut(C) + Send>,
-}
-
-impl<C> Sender<C> {
-    /// Construct a new command sender from a function.
-    pub fn new<F>(f: F) -> Sender<C>
-    where
-        F: FnMut(C) + Send + 'static,
-    {
-        Sender { inner: Box::new(f) }
-    }
-
-    /// Sends a command to the destination.
-    pub fn send(&mut self, command: C) {
-        (self.inner)(command)
-    }
-}
-
-impl<C> fmt::Debug for Sender<C> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Sender").finish()
-    }
-}
-
 /// A convenience type for compatibility.
 #[derive(Debug)]
 pub struct LocalClient<C, R>
@@ -567,7 +527,7 @@ where
 {
     pub fn new(
         feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<R>>,
-        worker_txs: Vec<Sender<C>>,
+        worker_txs: Vec<crossbeam_channel::Sender<C>>,
         worker_threads: Vec<std::thread::Thread>,
     ) -> Self {
         assert_eq!(feedback_rxs.len(), worker_threads.len());
@@ -668,13 +628,13 @@ pub mod process_local {
 
     use async_trait::async_trait;
 
-    use super::{GenericClient, Sender};
+    use super::GenericClient;
 
     /// A client to a dataflow server running in the current process.
     #[derive(Debug)]
     pub struct ProcessLocal<C, R> {
         feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-        worker_tx: Sender<C>,
+        worker_tx: crossbeam_channel::Sender<C>,
         worker_thread: std::thread::Thread,
     }
 
@@ -685,7 +645,9 @@ pub mod process_local {
         R: fmt::Debug + Send,
     {
         async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            self.worker_tx.send(cmd);
+            self.worker_tx
+                .send(cmd)
+                .expect("worker command receiver should not drop first");
             self.worker_thread.unpark();
             Ok(())
         }
@@ -699,7 +661,7 @@ pub mod process_local {
         /// Create a new instance of [ProcessLocal] from its parts.
         pub fn new(
             feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-            worker_tx: Sender<C>,
+            worker_tx: crossbeam_channel::Sender<C>,
             worker_thread: std::thread::Thread,
         ) -> Self {
             Self {
@@ -714,7 +676,8 @@ pub mod process_local {
     impl<C, R> Drop for ProcessLocal<C, R> {
         fn drop(&mut self) {
             // Drop the worker handle.
-            self.worker_tx = Sender::new(|_| ());
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            self.worker_tx = tx;
             // Unpark the thread once the handle is dropped, so that it can observe the emptiness.
             self.worker_thread.unpark();
         }
@@ -723,6 +686,7 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use std::cmp;
     use std::fmt;
     use std::future::Future;
     use std::pin::Pin;
@@ -763,6 +727,7 @@ pub mod tcp {
     #[derive(Debug)]
     pub struct TcpClient<C, R> {
         connection: TcpConn<C, R>,
+        backoff: Duration,
         addr: String,
     }
 
@@ -773,6 +738,7 @@ pub mod tcp {
         pub fn new(addr: String) -> TcpClient<C, R> {
             Self {
                 connection: TcpConn::Disconnected,
+                backoff: Duration::from_millis(10),
                 addr,
             }
         }
@@ -798,10 +764,12 @@ pub mod tcp {
                         }
                         Err(e) => {
                             tracing::warn!(
-                                "Error connecting to {}: {e}; reconnecting in 1s",
-                                self.addr
+                                "Error connecting to {}: {e}; reconnecting in {:?}",
+                                self.addr,
+                                self.backoff,
                             );
-                            let deadline = Instant::now() + Duration::from_secs(1);
+                            let deadline = Instant::now() + self.backoff;
+                            self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
                             self.connection = TcpConn::Backoff(deadline);
                         }
                     },
@@ -809,7 +777,10 @@ pub mod tcp {
                         time::sleep_until(*deadline).await;
                         self.connection = TcpConn::Disconnected;
                     }
-                    TcpConn::Connected(_) => break,
+                    TcpConn::Connected(_) => {
+                        self.backoff = Duration::from_millis(10);
+                        break;
+                    }
                 }
             }
         }

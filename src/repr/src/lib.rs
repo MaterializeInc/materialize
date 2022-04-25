@@ -24,21 +24,27 @@
 
 mod datum_vec;
 mod relation;
+mod relation_and_scalar;
 mod row;
 mod scalar;
 
 pub mod adt;
+pub mod chrono;
+pub mod global_id;
+pub mod proto;
 pub mod strconv;
 pub mod util;
 
 pub use datum_vec::{DatumVec, DatumVecBorrow};
-pub mod proto;
-pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
+pub use global_id::GlobalId;
+pub use relation::{
+    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, RelationDesc, RelationType,
+};
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
     RowPacker, RowRef,
 };
-pub use scalar::{AsColumnType, Datum, DatumType, ScalarBaseType, ScalarType};
+pub use scalar::{AsColumnType, Datum, DatumType, ProtoScalarType, ScalarBaseType, ScalarType};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.

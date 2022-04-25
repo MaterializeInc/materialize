@@ -32,4 +32,4 @@ tokio = "1.17.0"
 tokio-openssl = "0.6.3"
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.7.1", features = ["codec"] }
-tracing = "0.1.33"
+tracing = "0.1.34"

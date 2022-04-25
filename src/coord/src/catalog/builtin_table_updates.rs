@@ -10,24 +10,25 @@
 use std::os::unix::ffi::OsStringExt;
 
 use mz_dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
-use mz_expr::{GlobalId, MirScalarExpr};
+use mz_dataflow_types::sources::ConnectorInner;
+use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogDatabase, CatalogType};
+use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_DATABASES,
-    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_CONNECTORS,
+    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
-    Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
+    Source, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -121,9 +122,7 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
-            CatalogItem::Table(table) => {
-                self.pack_table_update(id, oid, schema_id, name, table, diff)
-            }
+            CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
                 self.pack_source_update(id, oid, schema_id, name, source, diff)
             }
@@ -132,6 +131,9 @@ impl CatalogState {
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
+            CatalogItem::Connector(connector) => {
+                self.pack_connector_update(id, oid, schema_id, name, connector, diff)
+            }
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
@@ -171,7 +173,6 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        table: &Table,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -181,7 +182,6 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
-                Datum::from(table.persist_name.as_deref()),
             ]),
             diff,
         }]
@@ -196,10 +196,6 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persist_name = source
-            .persist_details
-            .as_ref()
-            .map(|persist| &*persist.primary_stream);
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
@@ -209,7 +205,30 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
-                Datum::from(persist_name),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_connector_update(
+        &self,
+        id: GlobalId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        connector: &Connector,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CONNECTORS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::Int64(schema_id.into()),
+                Datum::String(name),
+                Datum::String(match connector.connector {
+                    ConnectorInner::Kafka { .. } => "kafka",
+                }),
             ]),
             diff,
         }]
@@ -400,6 +419,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
+                Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
             ]),
             diff,
         };
@@ -453,29 +473,22 @@ impl CatalogState {
         let mut updates = vec![];
         for func_impl_details in func.inner.func_impls() {
             let arg_ids = func_impl_details
-                .arg_oids
+                .arg_typs
                 .iter()
-                .map(|oid| self.get_entry_by_oid(oid).id().to_string())
+                .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
                 .collect::<Vec<_>>();
+
             let mut row = Row::default();
             row.packer()
                 .push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
-                        length: arg_ids.len(),
+                        length: func_impl_details.arg_typs.len(),
                     }],
                     arg_ids.iter().map(|id| Datum::String(&id)),
                 )
                 .unwrap();
             let arg_ids = row.unpack_first();
-
-            let variadic_id = func_impl_details
-                .variadic_oid
-                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
-
-            let ret_id = func_impl_details
-                .return_oid
-                .map(|oid| self.get_entry_by_oid(&oid).id().to_string());
 
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_FUNCTIONS),
@@ -485,8 +498,18 @@ impl CatalogState {
                     Datum::Int64(schema_id.into()),
                     Datum::String(name),
                     arg_ids,
-                    Datum::from(variadic_id.as_deref()),
-                    Datum::from(ret_id.as_deref()),
+                    Datum::from(
+                        func_impl_details
+                            .variadic_typ
+                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .as_deref(),
+                    ),
+                    Datum::from(
+                        func_impl_details
+                            .return_typ
+                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .as_deref(),
+                    ),
                     func_impl_details.return_is_set.into(),
                 ]),
                 diff,

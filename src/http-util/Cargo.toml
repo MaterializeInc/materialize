@@ -1,0 +1,11 @@
+[package]
+name = "mz-http-util"
+description = "Utilities for running HTTP servers in Materialize."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.60.0"
+publish = false
+
+[dependencies]
+askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
+axum = { version = "0.5.1", features = ["headers"] }

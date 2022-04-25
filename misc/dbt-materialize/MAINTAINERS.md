@@ -30,7 +30,7 @@
 
    ```
    brew install materialize/materialize/materialized
-   materialized -w1
+   materialized
    ```
 
 6. Run tests:
@@ -54,7 +54,7 @@ If you want to test dbt-materialize against the latest changes to
 `materialized`, build `materialized` from source:
 
 ```shell
-cargo run --bin materialized
+bin/materialized
 ```
 
 Run only the tests matching a filter:

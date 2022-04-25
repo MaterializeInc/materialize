@@ -42,7 +42,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use mz_expr::{func as expr_func, GlobalId, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -50,7 +50,8 @@ use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
+    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
+    ScalarType,
 };
 
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -59,6 +60,7 @@ use mz_sql_parser::ast::{
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
     TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -69,7 +71,8 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
@@ -2451,12 +2454,7 @@ fn invent_column_name(
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
-                _ => {
-                    let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
-                    let pgrepr_type = mz_pgrepr::Type::from(&ty);
-                    let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
-                    Some((entry.name().item.clone().into(), NameQuality::Low))
-                }
+                _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
             Expr::Case { else_result, .. } => {
                 match else_result
@@ -2483,6 +2481,7 @@ fn invent_column_name(
                     .first()
                     .map(|name| (name.column_name.clone(), NameQuality::High))
             }
+            Expr::Row { .. } => Some(("row".into(), NameQuality::High)),
             _ => None,
         }
     }
@@ -3054,7 +3053,9 @@ fn plan_field_access(
             field,
             ecx.humanize_scalar_type(&ty)
         ),
-        Some(i) => Ok(expr.call_unary(UnaryFunc::RecordGet(i)).into()),
+        Some(i) => Ok(expr
+            .call_unary(UnaryFunc::RecordGet(expr_func::RecordGet(i)))
+            .into()),
     }
 }
 
@@ -3375,7 +3376,7 @@ fn plan_list_subquery(
                 Datum::empty_list(),
                 ScalarType::List {
                     element_type: Box::new(elem_type),
-                    custom_oid: None,
+                    custom_id: None,
                 },
             )
         },
@@ -3955,7 +3956,7 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    Function {
+    f @ Function {
         name,
         args,
         filter,
@@ -3981,50 +3982,7 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
-            if !ecx.allow_windows {
-                sql_bail!("window functions are not allowed in {}", ecx.name);
-            }
-
-            // Various things are duplicated here and below, but done this way to improve
-            // error messages.
-
-            if *distinct {
-                sql_bail!(
-                    "DISTINCT specified, but {} is not an aggregate function",
-                    name
-                );
-            }
-
-            if filter.is_some() {
-                bail_unsupported!("FILTER in window functions");
-            }
-
-            let window_spec = match over.as_ref() {
-                Some(over) => over,
-                None => sql_bail!("window function {} requires an OVER clause", name),
-            };
-            if window_spec.window_frame.is_some() {
-                bail_unsupported!("window frames");
-            }
-            let mut partition = Vec::new();
-            for expr in &window_spec.partition_by {
-                partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
-            }
-
-            let scalar_args = match &args {
-                FunctionArgs::Star => {
-                    sql_bail!("* argument is invalid with non-aggregate function {}", name)
-                }
-                FunctionArgs::Args { args, order_by } => {
-                    if !order_by.is_empty() {
-                        sql_bail!(
-                            "ORDER BY specified, but {} is not an aggregate function",
-                            name
-                        );
-                    }
-                    plan_exprs(ecx, args)?
-                }
-            };
+            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
 
             let func = func::select_impl(
                 ecx,
@@ -4039,6 +3997,29 @@ fn plan_function<'a>(
             return Ok(HirScalarExpr::Windowing(WindowExpr {
                 func: WindowExprType::Scalar(ScalarWindowExpr {
                     func,
+                    order_by: col_orders,
+                }),
+                partition,
+                order_by,
+            }));
+        }
+        Func::ValueWindow(impls) => {
+            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
+
+            let (expr, func) = func::select_impl(
+                ecx,
+                FuncSpec::Func(&unresolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+
+            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
+
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Value(ValueWindowExpr {
+                    func,
+                    expr: Box::new(expr),
                     order_by: col_orders,
                 }),
                 partition,
@@ -4255,6 +4236,70 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
     Ok(expr.into())
 }
 
+fn validate_window_function_plan<'a>(
+    ecx: &ExprContext,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &'a Function<Aug>,
+) -> Result<
+    (
+        &'a WindowSpec<Aug>,
+        Vec<CoercibleScalarExpr>,
+        Vec<HirScalarExpr>,
+    ),
+    PlanError,
+> {
+    if !ecx.allow_windows {
+        sql_bail!("window functions are not allowed in {}", ecx.name);
+    }
+
+    // Various things are duplicated here and in `plan_function` to improve error messages.
+
+    if *distinct {
+        sql_bail!(
+            "DISTINCT specified, but {} is not an aggregate function",
+            name
+        );
+    }
+
+    if filter.is_some() {
+        bail_unsupported!("FILTER in non-aggregate window functions");
+    }
+
+    let window_spec = match over.as_ref() {
+        Some(over) => over,
+        None => sql_bail!("window function {} requires an OVER clause", name),
+    };
+    if window_spec.window_frame.is_some() {
+        bail_unsupported!("window frames");
+    }
+    let mut partition = Vec::new();
+    for expr in &window_spec.partition_by {
+        partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
+    }
+
+    let scalar_args = match &args {
+        FunctionArgs::Star => {
+            sql_bail!("* argument is invalid with non-aggregate function {}", name)
+        }
+        FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                sql_bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, args)?
+        }
+    };
+
+    Ok((window_spec, scalar_args, partition))
+}
+
 // Implement these as two identical enums without From/Into impls so that they
 // have no cross-package dependencies, leaving that work up to this crate.
 fn parser_datetimefield_to_adt(
@@ -4288,7 +4333,7 @@ pub fn scalar_type_from_sql(
             }
             Ok(ScalarType::List {
                 element_type: Box::new(elem_type),
-                custom_oid: None,
+                custom_id: None,
             })
         }
         ResolvedDataType::AnonymousMap {
@@ -4305,7 +4350,7 @@ pub fn scalar_type_from_sql(
             }
             Ok(ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
-                custom_oid: None,
+                custom_id: None,
             })
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
@@ -4404,14 +4449,14 @@ fn scalar_type_from_catalog(
                     element_reference: element_id,
                 } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Map {
                     key_reference: _,
                     value_reference: value_id,
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
-                    custom_oid: Some(scx.catalog.get_item(&id).oid()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
@@ -4427,11 +4472,10 @@ fn scalar_type_from_catalog(
                             ))
                         })
                         .collect::<Result<Vec<_>, PlanError>>()?;
-                    let catalog_item = scx.catalog.get_item(&id);
                     Ok(ScalarType::Record {
                         fields: scalars,
                         custom_name: None,
-                        custom_oid: Some(catalog_item.oid()),
+                        custom_id: Some(id),
                     })
                 }
                 CatalogType::Bool => Ok(ScalarType::Bool),

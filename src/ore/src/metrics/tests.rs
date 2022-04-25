@@ -29,40 +29,16 @@ fn metrics_registry() {
 }
 
 #[test]
-fn anon_metrics_registry() {
-    let reg = MetricsRegistry::new();
-    let counter_anon: ThirdPartyMetric<IntCounter> = reg.register_third_party_visible(metric!(
-        name: "test_counter_third_party",
-        help: "an third_party counter for testing"
-    ));
-    let counter_reg: IntCounter = reg.register(metric!(
-        name: "test_counter_normal",
-        help: "a regular counter for testing"
-    ));
-    counter_anon.inc();
-    counter_reg.inc();
-
-    let readings = reg.gather();
-    assert_eq!(readings.len(), 2);
-
-    let readings_anon = reg.gather_third_party_visible();
-    assert_eq!(readings_anon.len(), 1);
-    assert_eq!(readings_anon[0].get_name(), "test_counter_third_party");
-}
-
-#[test]
 fn thirdparty_metric_vecs() {
     let reg = MetricsRegistry::new();
-    let cv: ThirdPartyMetric<raw::IntCounterVec> = reg.register_third_party_visible(metric!(
+    let cv: raw::IntCounterVec = reg.register(metric!(
         name: "test_counter_third_party",
         help: "an third_party counter for testing",
         var_labels: ["label"],
     ));
-    let counter = cv
-        .get_third_party_metric_with_label_values(&["testing"])
-        .unwrap();
+    let counter = cv.with_label_values(&["testing"]);
     counter.inc();
-    let readings = reg.gather_third_party_visible();
+    let readings = reg.gather();
     assert_eq!(readings.len(), 1);
     assert_eq!(readings[0].get_name(), "test_counter_third_party");
     let metrics = readings[0].get_metric();

@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -31,8 +31,12 @@ pub struct ProcessOrchestratorConfig {
     /// The directory in which the orchestrator should look for executable
     /// images.
     pub image_dir: PathBuf,
-    /// The range of ports to allocate.
-    pub port_range: RangeInclusive<i32>,
+    /// The ports to allocate.
+    pub port_allocator: Arc<IdAllocator<i32>>,
+    /// Whether to supress output from spawned subprocesses.
+    pub suppress_output: bool,
+    /// The host spawned subprocesses bind to.
+    pub process_listen_host: Option<String>,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -44,26 +48,37 @@ pub struct ProcessOrchestratorConfig {
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<IdAllocator<i32>>,
+    suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
+    process_listen_host: String,
 }
 
 impl ProcessOrchestrator {
+    const DEFAULT_LISTEN_HOST: &'static str = "127.0.0.1";
     /// Creates a new process orchestrator from the provided configuration.
     pub async fn new(
         ProcessOrchestratorConfig {
             image_dir,
-            port_range,
+            port_allocator,
+            suppress_output,
+            process_listen_host,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir)?,
-            port_allocator: Arc::new(IdAllocator::new(*port_range.start(), *port_range.end())),
+            port_allocator,
+            suppress_output,
             namespaces: Mutex::new(HashMap::new()),
+            process_listen_host: process_listen_host
+                .unwrap_or_else(|| ProcessOrchestrator::DEFAULT_LISTEN_HOST.to_string()),
         })
     }
 }
 
 impl Orchestrator for ProcessOrchestrator {
+    fn listen_host(&self) -> &str {
+        &self.process_listen_host
+    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
@@ -71,6 +86,7 @@ impl Orchestrator for ProcessOrchestrator {
                 namespace: namespace.into(),
                 image_dir: self.image_dir.clone(),
                 port_allocator: Arc::clone(&self.port_allocator),
+                suppress_output: self.suppress_output,
                 supervisors: Mutex::new(HashMap::new()),
             })
         }))
@@ -82,7 +98,8 @@ struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
     port_allocator: Arc<IdAllocator<i32>>,
-    supervisors: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
+    suppress_output: bool,
+    supervisors: Mutex<HashMap<String, Vec<AbortOnDrop<()>>>>,
 }
 
 #[async_trait]
@@ -108,7 +125,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let path = self.image_dir.join(image);
         let mut processes = vec![];
         let mut handles = vec![];
-        for _ in 0..processes_in {
+        for _ in 0..(processes_in.get()) {
             let mut ports = HashMap::new();
             for port in &ports_in {
                 let p = self
@@ -119,7 +136,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             }
             let args = args(&ports);
             processes.push(ports.clone());
-            handles.push(mz_ore::task::spawn(
+            handles.push(AbortOnDrop(mz_ore::task::spawn(
                 || format!("service-supervisor: {full_id}"),
                 supervise(
                     full_id.clone(),
@@ -127,8 +144,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     args.clone(),
                     Arc::clone(&self.port_allocator),
                     ports.values().cloned().collect(),
+                    self.suppress_output,
                 ),
-            ))
+            )));
         }
         supervisors.insert(id.into(), handles);
         Ok(Box::new(ProcessService { processes }))
@@ -136,11 +154,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         let mut supervisors = self.supervisors.lock().expect("lock poisoned");
-        if let Some(handles) = supervisors.remove(id) {
-            for handle in handles {
-                handle.abort();
-            }
-        }
+        supervisors.remove(id);
         Ok(())
     }
 
@@ -156,6 +170,7 @@ async fn supervise(
     args: Vec<String>,
     port_allocator: Arc<IdAllocator<i32>>,
     ports: Vec<i32>,
+    suppress_output: bool,
 ) {
     defer! {
         for port in ports {
@@ -169,7 +184,13 @@ async fn supervise(
             path.display(),
             args.iter().join(" ")
         );
-        match Command::new(&path).args(&args).spawn() {
+        let mut cmd = Command::new(&path);
+        cmd.args(&args);
+        if suppress_output {
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::null());
+        }
+        match cmd.spawn() {
             Ok(process) => {
                 let status = KillOnDropChild(process).0.wait().await;
                 error!("{} exited: {:?}; relaunching in 5s", full_id, status);
@@ -187,6 +208,15 @@ struct KillOnDropChild(Child);
 impl Drop for KillOnDropChild {
     fn drop(&mut self) {
         let _ = self.0.start_kill();
+    }
+}
+
+#[derive(Debug)]
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

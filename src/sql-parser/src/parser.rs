@@ -1578,6 +1578,8 @@ impl<'a> Parser<'a> {
             self.parse_create_table()
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
+        } else if self.peek_keyword(CONNECTOR) {
+            self.parse_create_connector()
         } else {
             let index = self.index;
 
@@ -1741,7 +1743,7 @@ impl<'a> Parser<'a> {
         // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
         // accept `WITH (...)` here.
         let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_sql_options()?
+            self.parse_opt_with_options()?
         } else {
             vec![]
         };
@@ -1802,7 +1804,7 @@ impl<'a> Parser<'a> {
         // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
         // accept `WITH (...)` here.
         let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_sql_options()?
+            self.parse_opt_with_options()?
         } else {
             vec![]
         };
@@ -1859,6 +1861,31 @@ impl<'a> Parser<'a> {
         Ok(compression)
     }
 
+    fn parse_create_connector(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTOR)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+        self.expect_keyword(FOR)?;
+        let connector = match self.expect_one_of_keywords(&[KAFKA])? {
+            Keyword::Kafka => {
+                self.expect_keyword(BROKER)?;
+                let broker = self.parse_literal_string()?;
+                self.expect_keyword(WITH)?;
+                let with_options = self.parse_with_options(true)?;
+                CreateConnector::Kafka {
+                    broker,
+                    with_options,
+                }
+            }
+            _ => unreachable!(),
+        };
+        Ok(Statement::CreateConnector(CreateConnectorStatement {
+            name,
+            connector,
+            if_not_exists,
+        }))
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCE)?;
@@ -1867,7 +1894,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_create_source_connector()?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = self.parse_opt_with_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
         let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
@@ -1976,7 +2003,7 @@ impl<'a> Parser<'a> {
             if let Some(Token::LParen) = self.next_token() {
                 self.prev_token();
                 self.prev_token();
-                with_options = self.parse_opt_with_sql_options()?;
+                with_options = self.parse_opt_with_options()?;
             }
         }
         let format = if self.parse_keyword(FORMAT) {
@@ -2248,7 +2275,7 @@ impl<'a> Parser<'a> {
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
         let name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = self.parse_opt_with_options()?;
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
@@ -2453,12 +2480,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
+    fn parse_data_type_option(&mut self) -> Result<WithOption<Raw>, ParserError> {
+        let key = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
-        Ok(SqlOption::DataType {
-            name,
-            data_type: self.parse_data_type()?,
+        Ok(WithOption {
+            key,
+            value: Some(WithOptionValue::DataType(self.parse_data_type()?)),
         })
     }
 
@@ -2479,7 +2506,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption, ParserError> {
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[REMOTE, SIZE, INTROSPECTION])? {
             REMOTE => {
                 let name = self.parse_identifier()?;
@@ -2570,6 +2597,7 @@ impl<'a> Parser<'a> {
 
         let object_type = match self.parse_one_of_keywords(&[
             DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            CONNECTOR,
         ]) {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
@@ -2625,6 +2653,7 @@ impl<'a> Parser<'a> {
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
             Some(SECRET) => ObjectType::Secret,
+            Some(CONNECTOR) => ObjectType::Connector,
             _ => {
                 return self.expected(
                     self.peek_pos(),
@@ -2657,7 +2686,7 @@ impl<'a> Parser<'a> {
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns(Mandatory)?;
-        let with_options = self.parse_opt_with_sql_options()?;
+        let with_options = self.parse_opt_with_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
@@ -2830,39 +2859,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
-        if self.parse_keyword(WITH) {
-            self.parse_options()
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    fn parse_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
-        self.expect_token(&Token::LParen)?;
-        let options = self.parse_comma_separated(Parser::parse_sql_option)?;
-        self.expect_token(&Token::RParen)?;
-        Ok(options)
-    }
-
-    fn parse_sql_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
-        self.expect_token(&Token::Eq)?;
-        let token = self.peek_token();
-        let option = if let Ok(value) = self.parse_value() {
-            SqlOption::Value { name, value }
-        } else {
-            self.prev_token();
-            if let Ok(object_name) = self.parse_object_name() {
-                SqlOption::ObjectName { name, object_name }
-            } else {
-                self.expected(self.peek_pos(), "option value", token)?
-            }
-        };
-        Ok(option)
-    }
-
-    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption>, ParserError> {
+    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_with_options(true)
         } else {
@@ -2870,7 +2867,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_with_options(&mut self, require_equals: bool) -> Result<Vec<WithOption>, ParserError> {
+    fn parse_with_options(
+        &mut self,
+        require_equals: bool,
+    ) -> Result<Vec<WithOption<Raw>>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let options =
             self.parse_comma_separated(|parser| parser.parse_with_option(require_equals))?;
@@ -2880,7 +2880,7 @@ impl<'a> Parser<'a> {
 
     /// If require_equals is true, parse options of the form `KEY = VALUE` or just
     /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
-    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption, ParserError> {
+    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
         let key = self.parse_identifier()?;
         let has_eq = self.consume_token(&Token::Eq);
         // No = was encountered and require_equals is false, so the next token might be
@@ -2899,7 +2899,7 @@ impl<'a> Parser<'a> {
         Ok(WithOption { key, value })
     }
 
-    fn parse_with_option_value(&mut self) -> Result<WithOptionValue, ParserError> {
+    fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
@@ -2992,7 +2992,7 @@ impl<'a> Parser<'a> {
             AS => {
                 let value = self.parse_expr()?;
                 Statement::AlterSecret(AlterSecretStatement {
-                    secret_name: name,
+                    name,
                     if_exists,
                     value,
                 })
@@ -3485,7 +3485,16 @@ impl<'a> Parser<'a> {
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
     fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.consume_identifier() {
-            Some(id) => Ok(id),
+            Some(id) => {
+                if id.as_str().is_empty() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "zero-length delimited identifier",
+                    );
+                }
+                Ok(id)
+            }
             None => self.expected(self.peek_pos(), "identifier", self.peek_token()),
         }
     }
@@ -3894,7 +3903,7 @@ impl<'a> Parser<'a> {
         };
 
         let options = if self.parse_keyword(OPTION) {
-            self.parse_options()?
+            self.parse_with_options(true)?
         } else {
             vec![]
         };
@@ -3972,7 +3981,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                COLUMNS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
+                COLUMNS, CONNECTORS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
             ])?;
             self.prev_token();
         }
@@ -3984,6 +3993,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_one_of_keywords(&[
                     COLUMNS,
+                    CONNECTORS,
                     MATERIALIZED,
                     OBJECTS,
                     ROLES,
@@ -4020,6 +4030,7 @@ impl<'a> Parser<'a> {
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
             OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
+            CONNECTORS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
@@ -4031,6 +4042,7 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
                 SECRETS => ObjectType::Secret,
+                CONNECTORS => ObjectType::Connector,
                 _ => unreachable!(),
             };
 
@@ -4120,6 +4132,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, CONNECTOR]) {
+            Ok(Statement::ShowCreateConnector(
+                ShowCreateConnectorStatement {
+                    connector_name: self.parse_raw_name()?,
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 Ident::new("transaction_isolation")

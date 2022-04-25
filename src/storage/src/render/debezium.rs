@@ -25,7 +25,7 @@ use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
 };
-use mz_expr::{EvalError, GlobalId};
+use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::DecodeResult;
@@ -124,7 +124,6 @@ where
 }
 
 pub(crate) fn render_tx<G: Scope>(
-    data_id: GlobalId,
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
     tx_ok: Collection<G, Row, Diff>,
@@ -137,7 +136,6 @@ where
     G: ScopeParent<Timestamp = Timestamp>,
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
-    let hashed_id = data_id.hashed();
 
     let (transaction_idx, tx_metadata_description) = match envelope {
         DebeziumEnvelope {
@@ -159,13 +157,56 @@ where
         } => panic!("render_tx should be called with a dedup mode"),
     };
 
-    // TODO(#11666): Should we try to avoid moving everything to one worker?
+    let DebeziumTransactionMetadata {
+        tx_data_collections_idx,
+        tx_data_collections_data_collection_idx,
+        tx_data_collection_name,
+        tx_data_collections_event_count_idx,
+        tx_status_idx,
+        tx_transaction_id_idx,
+        data_transaction_id_idx,
+        tx_metadata_global_id: _,
+    } = tx_metadata_description;
+
+    let tx_dist = move |&(ref row, time, _diff): &(Row, Timestamp, Diff)| match row
+        .iter()
+        .nth(tx_transaction_id_idx)
+    {
+        Some(Datum::String(s)) => s.hashed(),
+        // If there's no transaction_id then we won't be able to use this row so aim to distribute evenly
+        _ => time.hashed(),
+    };
+
+    let data_dist = move |result: &DecodeResult| {
+        // If we can't pull out the transaction_id, it doesn't matter which worker we end up on.  Use
+        // value as that's how we distribute decoding dbz messages.
+        let default_hash = result.value.hashed();
+
+        // The logic below mirrors inline decoding of the data.  The shape of the value is validated
+        // when constructing the source.
+        let value = match result.value.as_ref() {
+            Some(Ok(v)) => v,
+            _ => return default_hash,
+        };
+        let transaction = match value.iter().nth(transaction_idx) {
+            Some(Datum::List(l)) => l,
+            Some(Datum::Null) => return default_hash,
+            _ => panic!("Previously validated to be nullable list"),
+        };
+        transaction
+            .iter()
+            .nth(data_transaction_id_idx)
+            .unwrap()
+            .unwrap_str()
+            .hashed()
+    };
+
     tx_ok
         .inner
         .binary_frontier(
             &input,
-            Exchange::new(move |_| hashed_id),
-            Exchange::new(move |_| hashed_id),
+            Exchange::new(tx_dist),
+            Exchange::new(data_dist),
             "envelope-debezium-tx",
             {
                 let envelope = envelope.clone();
@@ -184,17 +225,6 @@ where
                 // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
                 // matched data rows.  This will be dropped when we've matched the indicated number of events.
                 let mut tx_cap_event_count: HashMap<String, (Capability<_>, i64)> = HashMap::new();
-
-                let DebeziumTransactionMetadata {
-                    tx_data_collections_idx,
-                    tx_data_collections_data_collection_idx,
-                    tx_data_collection_name,
-                    tx_data_collections_event_count_idx,
-                    tx_status_idx,
-                    tx_transaction_id_idx,
-                    data_transaction_id_idx,
-                    tx_metadata_global_id: _,
-                } = tx_metadata_description;
                 move |_, _| {
                     // TODO(#11669) Revisit error handling strategy to do something optimized than just emitting
                     // everything we can and holding back the frontier to the first data error.

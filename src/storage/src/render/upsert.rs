@@ -14,18 +14,16 @@ use differential_dataflow::lattice::Lattice;
 
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
+use timely::dataflow::operators::{Concat, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
     sources::{UpsertEnvelope, UpsertStyle},
-    DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails,
+    DataflowError, LinearOperator,
 };
-use mz_expr::{EvalError, MirScalarExpr, SourceInstanceId};
+use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
-use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
@@ -51,21 +49,12 @@ struct UpsertSourceData {
 /// the rendering pipeline in that their input is a stream
 /// with two components instead of one, and the second component
 /// can be null or empty.
-///
-/// When `persist_config` is `Some` this will write upsert state to the configured persistent
-/// collection and restore state from it. This does now, however, seal the backing collection. It
-/// is the responsibility of the caller to ensure that the collection is sealed up.
 pub(crate) fn upsert<G>(
-    source_name: &str,
-    source_id: SourceInstanceId,
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
     // Full arity, including the key columns
     source_arity: usize,
-    persist_config: Option<
-        PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
-    >,
     upsert_envelope: UpsertEnvelope,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -152,95 +141,14 @@ where
         None
     };
 
-    let (upsert_output, upsert_persist_errs) = match persist_config {
-        None => {
-            let upsert_output = upsert_core(
-                stream,
-                predicates,
-                position_or,
-                as_of_frontier,
-                source_arity,
-                upsert_envelope,
-            );
-
-            let upsert_errs = operator::empty(&stream.scope());
-
-            (upsert_output, upsert_errs)
-        }
-        Some(upsert_persist_config) => {
-            // This is slightly awkward: We don't want to persist full DataflowErrors,so we unpack
-            // only DecodeError, which we are more willing to persist. We have to translate to
-            // DataflowError again afterwards, such that the returned Streams have the same error
-            // type.
-            //
-            // This also means that we cannot push MFPs into the upsert operator, as that would
-            // mean persisting EvalErrors, which, also icky.
-            let mut row_buf = Row::default();
-            let stream = stream.flat_map(move |decode_result| {
-                if decode_result.key.is_none() {
-                    // This is the same behaviour as regular upsert. It's not pretty, though.
-                    error!("Encountered empty key in: {:?}", decode_result);
-                    return None;
-                }
-                let offset = decode_result.position;
-
-                // Fold metadata into the value if there is in fact a valid value.
-                let value = if let Some(Ok(value)) = decode_result.value {
-                    let mut row_packer = row_buf.packer();
-                    row_packer.extend(value.iter());
-                    row_packer.extend(decode_result.metadata.iter());
-                    Some(Ok(row_buf.clone()))
-                } else {
-                    decode_result.value
-                };
-                Some((decode_result.key.unwrap(), value, offset))
-            });
-
-            let mut row_buf = Row::default();
-
-            let (upsert_output, upsert_persist_errs) =
-                stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
-
-            // Apply Map-Filter-Project and also map back from DecodeError to DataflowError because
-            // that's what downstream code expects.
-            let mapped_upsert_ok = upsert_output.flat_map(move |((key, value), ts, diff)| {
-                match key {
-                    Ok(key) => {
-                        let result = value
-                            .map_err(DataflowError::from)
-                            .and_then(|value| {
-                                let mut datums = Vec::with_capacity(source_arity);
-                                datums.extend(key.iter());
-                                datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_buf)
-                                    .map_err(DataflowError::from)
-                            })
-                            .transpose();
-                        result.map(|result| (result, ts, diff))
-                    }
-                    Err(err) => {
-                        // This can never be retracted! But at least it's better to put the source in a
-                        // permanently errored state than to keep on trucking with wrong results.
-                        Some((Err(DataflowError::DecodeError(err)), ts, diff))
-                    }
-                }
-            });
-
-            // TODO: It is not ideal that persistence errors end up in the same differential error
-            // collection as other errors because they are transient/indefinite errors that we
-            // should be treating differently. We do not, however, at the current time have to
-            // infrastructure for treating these errors differently, so we're adding them to the
-            // same error collections.
-            let upsert_persist_errs = upsert_persist_errs.map(move |(err, ts, diff)| {
-                let source_error =
-                    SourceError::new(source_id, SourceErrorDetails::Persistence(err));
-                (source_error.into(), ts, diff)
-            });
-
-            (mapped_upsert_ok, upsert_persist_errs)
-        }
-    };
-
+    let upsert_output = upsert_core(
+        stream,
+        predicates,
+        position_or,
+        as_of_frontier,
+        source_arity,
+        upsert_envelope,
+    );
     let (mut oks, mut errs) = upsert_output.ok_err(|(data, time, diff)| match data {
         Ok(data) => Ok((data, time, diff)),
         Err(err) => Err((err, time, diff)),
@@ -261,8 +169,6 @@ where
         oks = oks2;
         errs = errs.concat(&errs2);
     }
-
-    let errs = errs.concat(&upsert_persist_errs);
 
     (oks, errs)
 }

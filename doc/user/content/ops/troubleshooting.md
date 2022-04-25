@@ -6,7 +6,7 @@ menu:
     parent: ops
     weight: 80
 aliases:
-  - /ops/diagnosing-using-sql
+    - /ops/diagnosing-using-sql
 ---
 
 You can use the queries below for spot debugging, but it may also be
@@ -30,6 +30,7 @@ This logging source indicates the upper frontier of materializations.
 
 This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
+
 ```sql
 -- For each materialization, the next timestamp to be added.
 select * from mz_materialization_frontiers;
@@ -133,9 +134,12 @@ order by sum(mas.records) desc;
 We've also bundled a [memory usage visualization tool](/ops/monitoring/#memory-usage-visualization)
 to aid in debugging. The SQL queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
-only user-created arrangements, grouped by dataflow. The amount of
-memory used by Materialize should correlate with the number of arrangement
-records that are displayed by either the visual interface or the SQL queries.
+only user-created arrangements, grouped by dataflow. The amount of memory used
+by Materialize should correlate with the number of arrangement records that are
+displayed by either the visual interface or the SQL queries.
+
+The memory usage visualization is available at `http://<materialized
+host>:6875/memory`.
 
 ### Is work distributed equally across workers?
 
@@ -143,9 +147,9 @@ Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
 with very few or no keys. Example situations include:
 
-* Views that maintain order by/limit/offset
-* Cross joins
-* Joins where the join columns have very few unique values
+-   Views that maintain order by/limit/offset
+-   Cross joins
+-   Joins where the join columns have very few unique values
 
 Additionally, the operators that implement data sources may demonstrate skew, as
 they (currently) have a granularity determined by the source itself. For
@@ -192,9 +196,11 @@ value `x` at position `n`, then it is part of the `x` subregion of the region
 defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
+
 ```sql
-select * from mz_dataflow_operator_addresses where id=515 and worker=0;
+SELECT * FROM mz_dataflow_operator_addresses WHERE id=515 AND worker=0;
 ```
+
 ```
  id  | worker | address
 -----+--------+----------
@@ -244,7 +250,7 @@ To see how much disk space a Materialize installation is using, open a terminal 
 ```nofmt
 $ du -h -d 1 /path/to/materialize/mzdata
 ```
-`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its [log file](../monitoring/#logging) and the [system catalog](/sql/system-catalog).
+`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its log file and the [system catalog](/sql/system-catalog).
 
 The response lists the disk space for the data directory and any subdirectories:
 
@@ -254,3 +260,18 @@ The response lists the disk space for the data directory and any subdirectories:
 ```
 
 The `mzdata` directory is typically less than 10MB in size.
+
+### How many `TAIL` processes are running?
+
+You can get the number of active `TAIL` processes in Materialize using the statement below, or another `TAIL` statement.
+Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is created.
+
+```sql
+-- Report the number of tails running
+SELECT count(1) FROM (
+    SELECT id
+    FROM mz_dataflow_names
+    WHERE substring(name, 0, 15) = 'Dataflow: tail'
+    GROUP BY id
+);
+```

@@ -26,7 +26,7 @@ use timely::scheduling::SyncActivator;
 use mz_dataflow_types::{
     sources::{
         encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
-        IncludedColumnSource, SourceEnvelope,
+        IncludedColumnSource,
     },
     DecodeError, LinearOperator,
 };
@@ -341,7 +341,6 @@ pub fn render_decode_delimited<G>(
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
-    envelope: &SourceEnvelope,
     metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
@@ -366,10 +365,8 @@ where
 
     let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
-    let dist: fn(&SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>) -> _ = match envelope {
-        SourceEnvelope::Debezium(_) => |x| x.partition.hashed(),
-        _ => |x| x.position.hashed(),
-    };
+    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| x.value.hashed();
+
     let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
         move |input, output| {
             let mut n_errors = 0;

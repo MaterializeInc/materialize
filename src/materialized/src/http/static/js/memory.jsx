@@ -12,12 +12,10 @@
 const hpccWasm = window['@hpcc-js/wasm'];
 
 async function query(sql) {
-  const body = new URLSearchParams();
-  body.append('sql', sql);
-  const response = await fetch('/sql', {
+  const response = await fetch('/api/sql', {
     method: 'POST',
-    body: body,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: JSON.stringify({sql: sql}),
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) {
     const text = await response.text();

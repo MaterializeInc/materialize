@@ -33,9 +33,10 @@ use std::fmt;
 use crate::{DataflowDescription, LinearOperator};
 
 use mz_expr::explain::{Indices, ViewExplanation};
-use mz_expr::{ExprHumanizer, GlobalId, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
+use mz_repr::GlobalId;
 
 pub trait ViewFormatter<ViewExpr> {
     fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result;

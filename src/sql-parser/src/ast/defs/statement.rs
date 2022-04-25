@@ -22,9 +22,10 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceConnector,
+    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -36,6 +37,7 @@ pub enum Statement<T: AstInfo> {
     Copy(CopyStatement<T>),
     Update(UpdateStatement<T>),
     Delete(DeleteStatement<T>),
+    CreateConnector(CreateConnectorStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
@@ -46,12 +48,12 @@ pub enum Statement<T: AstInfo> {
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
-    CreateCluster(CreateClusterStatement),
+    CreateCluster(CreateClusterStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
-    AlterCluster(AlterClusterStatement),
+    AlterCluster(AlterClusterStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement<T>),
     DropSchema(DropSchemaStatement<T>),
@@ -69,6 +71,7 @@ pub enum Statement<T: AstInfo> {
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateConnector(ShowCreateConnectorStatement<T>),
     ShowVariable(ShowVariableStatement),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
@@ -77,7 +80,7 @@ pub enum Statement<T: AstInfo> {
     Tail(TailStatement<T>),
     Explain(ExplainStatement<T>),
     Declare(DeclareStatement<T>),
-    Fetch(FetchStatement),
+    Fetch(FetchStatement<T>),
     Close(CloseStatement),
     Prepare(PrepareStatement<T>),
     Execute(ExecuteStatement<T>),
@@ -93,6 +96,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Copy(stmt) => f.write_node(stmt),
             Statement::Update(stmt) => f.write_node(stmt),
             Statement::Delete(stmt) => f.write_node(stmt),
+            Statement::CreateConnector(stmt) => f.write_node(stmt),
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
@@ -126,6 +130,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
             Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            Statement::ShowCreateConnector(stmt) => f.write_node(stmt),
             Statement::ShowVariable(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
@@ -241,7 +246,7 @@ pub struct CopyStatement<T: AstInfo> {
     // TARGET
     pub target: CopyTarget,
     // OPTIONS
-    pub options: Vec<WithOption>,
+    pub options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CopyStatement<T> {
@@ -376,13 +381,34 @@ impl AstDisplay for CreateSchemaStatement {
 }
 impl_display!(CreateSchemaStatement);
 
+/// `CREATE CONNECTOR`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateConnectorStatement<T: AstInfo> {
+    pub name: UnresolvedObjectName,
+    pub connector: CreateConnector<T>,
+    pub if_not_exists: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CONNECTOR ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" FOR ");
+        self.connector.fmt(f)
+    }
+}
+impl_display_t!(CreateConnectorStatement);
+
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connector: CreateSourceConnector,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
     pub envelope: Envelope,
@@ -447,7 +473,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub in_cluster: Option<T::ClusterName>,
     pub from: T::ObjectName,
     pub connector: CreateSinkConnector<T>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
@@ -502,7 +528,7 @@ pub struct ViewDefinition<T: AstInfo> {
     /// View name
     pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub query: Query<T>,
 }
 
@@ -656,7 +682,7 @@ pub struct CreateTableStatement<T: AstInfo> {
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
-    pub with_options: Vec<SqlOption<T>>,
+    pub with_options: Vec<WithOption<T>>,
     pub if_not_exists: bool,
     pub temporary: bool,
 }
@@ -700,7 +726,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
-    pub with_options: Vec<WithOption>,
+    pub with_options: Vec<WithOption<T>>,
     pub if_not_exists: bool,
 }
 
@@ -850,16 +876,16 @@ impl_display_t!(CreateTypeStatement);
 
 /// `CREATE CLUSTER ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateClusterStatement {
+pub struct CreateClusterStatement<T: AstInfo> {
     /// Name of the created cluster.
     pub name: Ident,
     /// Whether the `IF NOT EXISTS` clause was specified.
     pub if_not_exists: bool,
     /// The comma-separated options.
-    pub options: Vec<ClusterOption>,
+    pub options: Vec<ClusterOption<T>>,
 }
 
-impl AstDisplay for CreateClusterStatement {
+impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
         if self.if_not_exists {
@@ -872,27 +898,27 @@ impl AstDisplay for CreateClusterStatement {
         }
     }
 }
-impl_display!(CreateClusterStatement);
+impl_display_t!(CreateClusterStatement);
 
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ClusterOption {
+pub enum ClusterOption<T: AstInfo> {
     /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
     Remote {
         /// The name.
         name: Ident,
         /// The hosts.
-        hosts: Vec<WithOptionValue>,
+        hosts: Vec<WithOptionValue<T>>,
     },
     /// The `SIZE [[=] <size>]` option.
-    Size(WithOptionValue),
+    Size(WithOptionValue<T>),
     /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
-    IntrospectionGranularity(WithOptionValue),
+    IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
-    IntrospectionDebugging(WithOptionValue),
+    IntrospectionDebugging(WithOptionValue<T>),
 }
 
-impl AstDisplay for ClusterOption {
+impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterOption::Remote { name, hosts } => {
@@ -921,8 +947,8 @@ impl AstDisplay for ClusterOption {
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateTypeAs<T: AstInfo> {
-    List { with_options: Vec<SqlOption<T>> },
-    Map { with_options: Vec<SqlOption<T>> },
+    List { with_options: Vec<WithOption<T>> },
+    Map { with_options: Vec<WithOption<T>> },
     Record { column_defs: Vec<ColumnDef<T>> },
 }
 
@@ -962,8 +988,8 @@ impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
 impl_display_t!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AlterIndexAction {
-    SetOptions(Vec<WithOption>),
+pub enum AlterIndexAction<T: AstInfo> {
+    SetOptions(Vec<WithOption<T>>),
     ResetOptions(Vec<Ident>),
     Enable,
 }
@@ -973,7 +999,7 @@ pub enum AlterIndexAction {
 pub struct AlterIndexStatement<T: AstInfo> {
     pub index_name: T::ObjectName,
     pub if_exists: bool,
-    pub action: AlterIndexAction,
+    pub action: AlterIndexAction<T>,
 }
 
 impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
@@ -1006,7 +1032,7 @@ impl_display_t!(AlterIndexStatement);
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
-    pub secret_name: T::ObjectName,
+    pub name: T::ObjectName,
     pub if_exists: bool,
     pub value: Expr<T>,
 }
@@ -1017,7 +1043,7 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
         if self.if_exists {
             f.write_str("IF EXISTS ");
         }
-        f.write_node(&self.secret_name);
+        f.write_node(&self.name);
         f.write_str(" AS ");
         f.write_node(&self.value);
     }
@@ -1027,16 +1053,16 @@ impl_display_t!(AlterSecretStatement);
 
 /// `ALTER CLUSTER ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterStatement {
+pub struct AlterClusterStatement<T: AstInfo> {
     /// Name of the cluster to alter.
     pub name: Ident,
     /// Whether the `IF EXISTS` clause was specified.
     pub if_exists: bool,
     /// The comma-separated options.
-    pub options: Vec<ClusterOption>,
+    pub options: Vec<ClusterOption<T>>,
 }
 
-impl AstDisplay for AlterClusterStatement {
+impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER CLUSTER ");
         if self.if_exists {
@@ -1050,7 +1076,7 @@ impl AstDisplay for AlterClusterStatement {
     }
 }
 
-impl_display!(AlterClusterStatement);
+impl_display_t!(AlterClusterStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -1332,6 +1358,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::Cluster => "CLUSTERS",
             ObjectType::Object => "OBJECTS",
             ObjectType::Secret => "SECRETS",
+            ObjectType::Connector => "CONNECTORS",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -1478,6 +1505,18 @@ impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
 }
 impl_display_t!(ShowCreateIndexStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateConnectorStatement<T: AstInfo> {
+    pub connector_name: T::ObjectName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateConnectorStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE CONNECTOR ");
+        f.write_node(&self.connector_name);
+    }
+}
+
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StartTransactionStatement {
@@ -1548,7 +1587,7 @@ impl_display!(RollbackStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement<T: AstInfo> {
     pub relation: TailRelation<T>,
-    pub options: Vec<WithOption>,
+    pub options: Vec<WithOption<T>>,
     pub as_of: Option<Expr<T>>,
 }
 
@@ -1643,6 +1682,7 @@ pub enum ObjectType {
     Cluster,
     Object,
     Secret,
+    Connector,
 }
 
 impl AstDisplay for ObjectType {
@@ -1658,6 +1698,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Cluster => "CLUSTER",
             ObjectType::Object => "OBJECT",
             ObjectType::Secret => "SECRET",
+            ObjectType::Connector => "CONNECTOR",
         })
     }
 }
@@ -1688,61 +1729,12 @@ impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
 impl_display_t!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SqlOption<T: AstInfo> {
-    Value {
-        name: Ident,
-        value: Value,
-    },
-    ObjectName {
-        name: Ident,
-        object_name: UnresolvedObjectName,
-    },
-    DataType {
-        name: Ident,
-        data_type: T::DataType,
-    },
-}
-
-impl<T: AstInfo> SqlOption<T> {
-    pub fn name(&self) -> &Ident {
-        match self {
-            SqlOption::Value { name, .. } => name,
-            SqlOption::ObjectName { name, .. } => name,
-            SqlOption::DataType { name, .. } => name,
-        }
-    }
-}
-
-impl<T: AstInfo> AstDisplay for SqlOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            SqlOption::Value { name, value } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(value);
-            }
-            SqlOption::ObjectName { name, object_name } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(object_name);
-            }
-            SqlOption::DataType { name, data_type } => {
-                f.write_node(name);
-                f.write_str(" = ");
-                f.write_node(data_type);
-            }
-        }
-    }
-}
-impl_display_t!(SqlOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WithOption {
+pub struct WithOption<T: AstInfo> {
     pub key: Ident,
-    pub value: Option<WithOptionValue>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
-impl AstDisplay for WithOption {
+impl<T: AstInfo> AstDisplay for WithOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.key);
         if let Some(opt) = &self.value {
@@ -1751,23 +1743,25 @@ impl AstDisplay for WithOption {
         }
     }
 }
-impl_display!(WithOption);
+impl_display_t!(WithOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WithOptionValue {
+pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     ObjectName(UnresolvedObjectName),
+    DataType(T::DataType),
 }
 
-impl AstDisplay for WithOptionValue {
+impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             WithOptionValue::Value(value) => f.write_node(value),
             WithOptionValue::ObjectName(name) => f.write_node(name),
+            WithOptionValue::DataType(typ) => f.write_node(typ),
         }
     }
 }
-impl_display!(WithOptionValue);
+impl_display_t!(WithOptionValue);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {
@@ -1959,13 +1953,13 @@ impl_display!(CloseStatement);
 
 /// `FETCH ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FetchStatement {
+pub struct FetchStatement<T: AstInfo> {
     pub name: Ident,
     pub count: Option<FetchDirection>,
-    pub options: Vec<WithOption>,
+    pub options: Vec<WithOption<T>>,
 }
 
-impl AstDisplay for FetchStatement {
+impl<T: AstInfo> AstDisplay for FetchStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("FETCH ");
         if let Some(ref count) = self.count {
@@ -1979,7 +1973,7 @@ impl AstDisplay for FetchStatement {
         }
     }
 }
-impl_display!(FetchStatement);
+impl_display_t!(FetchStatement);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FetchDirection {

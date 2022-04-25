@@ -33,7 +33,6 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
 
 use crate::source::{NextMessage, SourceMessage, SourceReader};
-use crate::{Logger, StorageEvent};
 
 use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -60,12 +59,8 @@ pub struct KafkaSourceReader {
     last_offsets: HashMap<i32, i64>,
     /// Map from partition -> offset to start reading at
     start_offsets: HashMap<i32, i64>,
-    /// Timely worker logger for source events
-    logger: Option<Logger>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
-    // The last statistics JSON blob received.
-    last_stats: Option<Jsonb>,
     /// The last partition we received
     partition_info: Arc<Mutex<Option<Vec<i32>>>>,
     /// A handle to the spawned metadata thread
@@ -93,7 +88,6 @@ impl SourceReader for KafkaSourceReader {
         _: AwsExternalId,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
-        logger: Option<Logger>,
         base_metrics: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
@@ -186,9 +180,7 @@ impl SourceReader for KafkaSourceReader {
             worker_count,
             last_offsets: HashMap::new(),
             start_offsets,
-            logger,
             stats_rx,
-            last_stats: None,
             partition_info,
             include_headers: kc.include_headers.is_some(),
             _metadata_thread_handle: metadata_thread_handle,
@@ -402,15 +394,6 @@ impl KafkaSourceReader {
     /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
     fn update_stats(&mut self) {
         while let Ok(stats) = self.stats_rx.try_recv() {
-            if let Some(logger) = self.logger.as_mut() {
-                logger.log(StorageEvent::KafkaSourceStatistics {
-                    source_id: self.id,
-                    old: self.last_stats.take(),
-                    new: Some(stats.clone()),
-                });
-                self.last_stats = Some(stats.clone());
-            }
-
             match serde_json::from_str::<Statistics>(&stats.to_string()) {
                 Ok(statistics) => {
                     let topic = statistics.topics.get(&self.topic_name);
@@ -517,19 +500,6 @@ impl KafkaSourceReader {
         } else {
             *last_offset_ref = offset;
             NextMessage::Ready(message)
-        }
-    }
-}
-
-impl Drop for KafkaSourceReader {
-    fn drop(&mut self) {
-        // Retract any metrics logged for this source.
-        if let Some(logger) = self.logger.as_mut() {
-            logger.log(StorageEvent::KafkaSourceStatistics {
-                source_id: self.id,
-                old: self.last_stats.take(),
-                new: None,
-            });
         }
     }
 }

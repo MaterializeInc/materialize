@@ -14,8 +14,9 @@
 //!
 //! The storage controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
 //! use an identifier before it has been "created" with `create_source()`. Once created, the controller holds
-//! a read capability for each source, which is manipulated with `allow_compaction()`. Eventually, the source
-//! is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+//! a read capability for each source, which is manipulated with `update_read_capabilities()`.
+//! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
+//! empty frontier.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -31,7 +32,8 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use mz_expr::{GlobalId, PartitionId};
+use mz_expr::PartitionId;
+use mz_repr::GlobalId;
 use mz_stash::{self, Stash, StashError};
 
 use crate::client::controller::ReadPolicy;
@@ -72,20 +74,16 @@ pub trait StorageController: Debug + Send {
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
-    async fn table_insert(
+    /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
+    async fn append(
         &mut self,
-        id: GlobalId,
-        updates: Vec<Update<Self::Timestamp>>,
+        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError>;
 
     async fn update_durability_frontiers(
         &mut self,
         updates: Vec<(GlobalId, Antichain<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
-    async fn advance_all_table_timestamps(
-        &mut self,
-        advance_to: Self::Timestamp,
     ) -> Result<(), StorageError>;
 
     /// Persist timestamp bindings updates received from ingestion workers
@@ -311,14 +309,13 @@ where
         Ok(())
     }
 
-    async fn table_insert(
+    async fn append(
         &mut self,
-        id: GlobalId,
-        updates: Vec<Update<T>>,
+        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
         self.state
             .client
-            .send(StorageCommand::Insert { id, updates })
+            .send(StorageCommand::Append(commands))
             .await
             .map_err(StorageError::from)
     }
@@ -330,14 +327,6 @@ where
         self.state
             .client
             .send(StorageCommand::DurabilityFrontierUpdates(updates))
-            .await
-            .map_err(StorageError::from)
-    }
-
-    async fn advance_all_table_timestamps(&mut self, advance_to: T) -> Result<(), StorageError> {
-        self.state
-            .client
-            .send(StorageCommand::AdvanceAllLocalInputs { advance_to })
             .await
             .map_err(StorageError::from)
     }
@@ -455,6 +444,12 @@ where
             }
             durability_updates.push((*id, write_frontier));
         }
+
+        // Note: this seal is not performed in a transaction with the above `update_many`.
+        // This is fine/correct, but subtle. If we crash in between these 2 writes, the
+        // updates will be read in their entirety, and future updates past the old upper will
+        // still be accepted. Later seals will never erroneously seal times for ts bindings
+        // that were recorded, because we always record bindings before seal-ing here.
         self.state.stash.seal_batch(&seals)?;
 
         self.update_durability_frontiers(durability_updates).await?;

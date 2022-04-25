@@ -32,7 +32,6 @@ use mz_dataflow_types::sources::{
 use mz_expr::{PartitionId, SourceInstanceId};
 
 use crate::source::{NextMessage, SourceMessage, SourceReader};
-use crate::Logger;
 
 use super::metrics::SourceBaseMetrics;
 
@@ -76,7 +75,6 @@ impl SourceReader for FileSourceReader {
         _: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
-        _: Option<Logger>,
         _: SourceBaseMetrics,
     ) -> Result<Self, anyhow::Error> {
         let receiver = match connector {

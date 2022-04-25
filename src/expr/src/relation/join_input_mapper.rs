@@ -12,10 +12,10 @@ use std::ops::Range;
 
 use itertools::Itertools;
 
-use crate::MirRelationExpr;
-use crate::MirScalarExpr;
-
 use mz_repr::RelationType;
+
+use crate::visit::Visit;
+use crate::{MirRelationExpr, MirScalarExpr};
 
 /// Any column in a join expression exists in two contexts:
 /// 1) It has a position relative to the result of the join (global)

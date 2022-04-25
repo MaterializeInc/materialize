@@ -172,7 +172,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
 
         mz::create_proto_source(
             &client,
-            &gen::FILE_DESCRIPTOR_SET_DATA,
+            &include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.pb"))[..],
             &config.kafka_url,
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,

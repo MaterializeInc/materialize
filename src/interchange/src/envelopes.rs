@@ -120,7 +120,7 @@ pub fn dbz_desc(desc: RelationDesc) -> RelationDesc {
         nullable: true,
         scalar_type: ScalarType::Record {
             fields: cols.into_iter().collect(),
-            custom_oid: None,
+            custom_id: None,
             custom_name: Some("row".to_owned()),
         },
     };

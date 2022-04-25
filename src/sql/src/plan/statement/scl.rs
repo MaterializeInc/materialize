@@ -128,7 +128,7 @@ with_options! {
 
 pub fn describe_fetch(
     _: &StatementContext,
-    _: &FetchStatement,
+    _: &FetchStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -139,7 +139,7 @@ pub fn plan_fetch(
         name,
         count,
         options,
-    }: FetchStatement,
+    }: FetchStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let options = FetchOptions::try_from(options)?;
     let timeout = match options.timeout {

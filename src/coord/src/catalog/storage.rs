@@ -7,28 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
 
 use crate::catalog::builtin::BuiltinLog;
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sources::MzOffset;
-use mz_expr::{GlobalId, PartitionId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
 use mz_sql::plan::ComputeInstanceConfig;
-use mz_stash::Stash;
 use uuid::Uuid;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -60,8 +57,12 @@ const MIGRATIONS: &[&dyn Migration] = &[
     // Creates initial schema.
     //
     // Introduced for v0.1.0.
-    &"CREATE TABLE gid_alloc (
+    &"CREATE TABLE user_gid_alloc (
          next_gid integer NOT NULL
+     );
+
+     CREATE TABLE system_gid_alloc (
+        next_gid integer NOT NULL
      );
 
      CREATE TABLE databases (
@@ -84,337 +85,51 @@ const MIGRATIONS: &[&dyn Migration] = &[
          UNIQUE (schema_id, name)
      );
 
-     CREATE TABLE timestamps (
-         sid blob NOT NULL,
-         vid blob NOT NULL,
-         timestamp integer NOT NULL,
-         offset blob NOT NULL,
-         PRIMARY KEY (sid, vid, timestamp)
-     );
-
-     INSERT INTO gid_alloc VALUES (1);
-     INSERT INTO databases VALUES (1, 'materialize');
-     INSERT INTO schemas VALUES
-         (1, NULL, 'mz_catalog'),
-         (2, NULL, 'pg_catalog'),
-         (3, 1, 'public');",
-    // Adjusts timestamp table to support multi-partition Kafka topics.
-    //
-    // Introduced for v0.1.4.
-    //
-    // ATTENTION: this migration blows away data and must not be used as a model
-    // for future migrations! It is only acceptable now because we have not yet
-    // made any consistency promises to users.
-    &"DROP TABLE timestamps;
-     CREATE TABLE timestamps (
-        sid blob NOT NULL,
-        vid blob NOT NULL,
-        pcount blob NOT NULL,
-        pid blob NOT NULL,
-        timestamp integer NOT NULL,
-        offset blob NOT NULL,
-        PRIMARY KEY (sid, vid, pid, timestamp)
-    );",
-    // Introduces settings table to support persistent node settings.
-    //
-    // Introduced in v0.4.0.
-    &"CREATE TABLE settings (
+     CREATE TABLE settings (
         name TEXT PRIMARY KEY,
         value TEXT
-    );",
-    // Creates the roles table and a default "materialize" user.
-    //
-    // Introduced in v0.7.0.
-    &"CREATE TABLE roles (
+     );
+
+     CREATE TABLE roles (
         id   integer PRIMARY KEY,
         name text NOT NULL UNIQUE
-    );
-    INSERT INTO roles VALUES (1, 'materialize');",
-    // Makes the mz_internal schema literal so it can store functions.
-    //
-    // Introduced in v0.7.0.
-    &"INSERT INTO schemas (database_id, name) VALUES
-        (NULL, 'mz_internal');",
-    // Adjusts timestamp table to support replayable source timestamp bindings.
-    //
-    // Introduced for v0.7.4
-    //
-    // ATTENTION: this migration blows away data and must not be used as a model
-    // for future migrations! It is only acceptable now because we have not yet
-    // made any consistency promises to users.
-    &"DROP TABLE timestamps;
-     CREATE TABLE timestamps (
-        sid blob NOT NULL,
-        pid blob NOT NULL,
-        timestamp integer NOT NULL,
-        offset blob NOT NULL,
-        PRIMARY KEY (sid, pid, timestamp, offset)
-    );",
-    // Makes the information_schema schema literal so it can store functions.
-    //
-    // Introduced in v0.9.12.
-    &"INSERT INTO schemas (database_id, name) VALUES
-        (NULL, 'information_schema');",
-    // Adds index to timestamp table to more efficiently compact timestamps.
-    //
-    // Introduced in v0.12.0.
-    &"CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
-    // Adds table to track users' compute instances.
-    //
-    // Introduced in v0.22.0.
-    &"CREATE TABLE compute_instances (
+     );
+
+     CREATE TABLE compute_instances (
         id   integer PRIMARY KEY,
-        name text NOT NULL UNIQUE
-    );
-    INSERT INTO compute_instances VALUES (1, 'default');",
-    // Introduced in v0.24.0.
-    &"ALTER TABLE compute_instances ADD COLUMN config text",
-    // Migrates timestamp bindings from the coordinator's catalog to STORAGE's internal state
-    // Introduced in v0.26.0.
-    &|data_dir_path: &Path, tx: &rusqlite::Transaction| {
-        let source_ids = tx
-            .prepare("SELECT DISTINCT sid FROM timestamps")?
-            .query_and_then([], |row| Ok(row.get::<_, SqlVal<GlobalId>>(0)?.0))?
-            .collect::<Result<Vec<_>, Error>>()?;
+        name text NOT NULL UNIQUE,
+        config text
+     );
 
-        let stash = mz_stash::Sqlite::open(&data_dir_path.join("storage"))
-            .expect("unable to open STORAGE stash");
-
-        let mut statement = tx.prepare(
-            "SELECT pid, timestamp, offset FROM timestamps WHERE sid = ? ORDER BY pid, timestamp",
-        )?;
-        for source_id in source_ids {
-            let bindings = statement
-                .query_and_then(params![SqlVal(&source_id)], |row| {
-                    let partition: PartitionId = row
-                        .get::<_, String>(0)
-                        .unwrap()
-                        .parse()
-                        .expect("parsing partition id from string cannot fail");
-                    let timestamp: i64 = row.get(1)?;
-                    let offset = MzOffset {
-                        offset: row.get(2)?,
-                    };
-
-                    Ok((partition, timestamp, offset))
-                })?
-                .collect::<Result<Vec<_>, Error>>()?;
-
-            let ts_binding_stash = stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{source_id}"))
-                .expect("failed to read timestamp bindings");
-
-            // See
-            // [mz_dataflow_types::client::controller::StorageControllerMut::persist_timestamp_bindings]
-            // for an explanation of the logic
-            let mut last_reported_ts_bindings: HashMap<_, MzOffset> = HashMap::new();
-            let seal_ts = bindings.iter().map(|(_, ts, _)| *ts).max();
-            stash
-                .update_many(
-                    ts_binding_stash,
-                    bindings.into_iter().map(|(pid, ts, offset)| {
-                        let prev_offset = last_reported_ts_bindings.entry(pid.clone()).or_default();
-                        let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
-                        prev_offset.offset = offset.offset;
-                        update
-                    }),
-                )
-                .expect("failed to write timestamp bindings");
-
-            stash
-                .seal(ts_binding_stash, Antichain::from_iter(seal_ts).borrow())
-                .expect("failed to write timestamp bindings");
-        }
-
-        tx.execute_batch("DROP TABLE timestamps;")?;
-
-        Ok(())
-    },
-    // Allows us to dynamically assign system IDs to all objects but funcs. Also allows us to
-    // track built-in object name to ID mapping.
-    //
-    // Introduced in v0.26.0
-    &"ALTER TABLE gid_alloc RENAME TO user_gid_alloc;
-
-    CREATE TABLE system_gid_alloc (
-        next_gid integer NOT NULL
-    );
-
-    -- Higher than all previous statically assigned IDs
-    INSERT INTO system_gid_alloc VALUES (5044);
-
-    CREATE TABLE system_gid_mapping (
+     CREATE TABLE system_gid_mapping (
         schema_name text NOT NULL,
         object_name text NOT NULL,
         id integer NOT NULL,
         fingerprint integer NOT NULL,
         PRIMARY KEY (schema_name, object_name)
-    );
+     );
 
-    -- We need to insert previous static IDs in the mapping so user can successfully upgrade
-    INSERT INTO system_gid_mapping (schema_name, object_name, id, fingerprint) VALUES
-        -- Types
-        ('pg_catalog', 'bool', 1000, 0),
-        ('pg_catalog', 'bytea', 1001, 0),
-        ('pg_catalog', 'int8', 1002, 0),
-        ('pg_catalog', 'int4', 1003, 0),
-        ('pg_catalog', 'text', 1004, 0),
-        ('pg_catalog', 'oid', 1005, 0),
-        ('pg_catalog', 'float4', 1006, 0),
-        ('pg_catalog', 'float8', 1007, 0),
-        ('pg_catalog', '_bool', 1008, 0),
-        ('pg_catalog', '_bytea', 1009, 0),
-        ('pg_catalog', '_int4', 1010, 0),
-        ('pg_catalog', '_text', 1011, 0),
-        ('pg_catalog', '_int8', 1012, 0),
-        ('pg_catalog', '_float4', 1013, 0),
-        ('pg_catalog', '_float8', 1014, 0),
-        ('pg_catalog', '_oid', 1015, 0),
-        ('pg_catalog', 'date', 1016, 0),
-        ('pg_catalog', 'time', 1017, 0),
-        ('pg_catalog', 'timestamp', 1018, 0),
-        ('pg_catalog', '_timestamp', 1019, 0),
-        ('pg_catalog', '_date', 1020, 0),
-        ('pg_catalog', '_time', 1021, 0),
-        ('pg_catalog', 'timestamptz', 1022, 0),
-        ('pg_catalog', '_timestamptz', 1023, 0),
-        ('pg_catalog', 'interval', 1024, 0),
-        ('pg_catalog', '_interval', 1025, 0),
-        ('pg_catalog', 'numeric', 1026, 0),
-        ('pg_catalog', '_numeric', 1027, 0),
-        ('pg_catalog', 'record', 1028, 0),
-        ('pg_catalog', '_record', 1029, 0),
-        ('pg_catalog', 'uuid', 1030, 0),
-        ('pg_catalog', '_uuid', 1031, 0),
-        ('pg_catalog', 'jsonb', 1032, 0),
-        ('pg_catalog', '_jsonb', 1033, 0),
-        ('pg_catalog', 'any', 1034, 0),
-        ('pg_catalog', 'anyarray', 1035, 0),
-        ('pg_catalog', 'anyelement', 1036, 0),
-        ('pg_catalog', 'anynonarray', 1037, 0),
-        ('pg_catalog', 'char', 1038, 0),
-        ('pg_catalog', 'varchar', 1039, 0),
-        ('pg_catalog', 'int2', 1040, 0),
-        ('pg_catalog', '_int2', 1041, 0),
-        ('pg_catalog', 'bpchar', 1042, 0),
-        ('pg_catalog', '_char', 1043, 0),
-        ('pg_catalog', '_varchar', 1044, 0),
-        ('pg_catalog', '_bpchar', 1045, 0),
-        ('pg_catalog', 'regproc', 1046, 0),
-        ('pg_catalog', '_regproc', 1047, 0),
-        ('pg_catalog', 'regtype', 1048, 0),
-        ('pg_catalog', '_regtype', 1049, 0),
-        ('pg_catalog', 'regclass', 1050, 0),
-        ('pg_catalog', '_regclass', 1051, 0),
-        ('pg_catalog', 'int2vector', 1052, 0),
-        ('pg_catalog', '_int2vector', 1053, 0),
-        ('pg_catalog', 'anycompatible', 1054, 0),
-        ('pg_catalog', 'anycompatiblearray', 1055, 0),
-        ('pg_catalog', 'anycompatiblenonarray', 1056, 0),
-        ('pg_catalog', 'list', 1998, 0),
-        ('pg_catalog', 'map', 1999, 0),
-        ('pg_catalog', 'anycompatiblelist', 1997, 0),
-        ('pg_catalog', 'anycompatiblemap', 1996, 0),
-        -- Logs
-        ('mz_catalog', 'mz_dataflow_operators', 3000, 0),
-        ('mz_catalog', 'mz_dataflow_operator_addresses', 3002, 0),
-        ('mz_catalog', 'mz_dataflow_channels', 3004, 0),
-        ('mz_catalog', 'mz_scheduling_elapsed_internal', 3006, 0),
-        ('mz_catalog', 'mz_scheduling_histogram_internal', 3008, 0),
-        ('mz_catalog', 'mz_scheduling_parks_internal', 3010, 0),
-        ('mz_catalog', 'mz_arrangement_batches_internal', 3012, 0),
-        ('mz_catalog', 'mz_arrangement_sharing_internal', 3014, 0),
-        ('mz_catalog', 'mz_materializations', 3016, 0),
-        ('mz_catalog', 'mz_materialization_dependencies', 3018, 0),
-        ('mz_catalog', 'mz_worker_materialization_frontiers', 3020, 0),
-        ('mz_catalog', 'mz_peek_active', 3022, 0),
-        ('mz_catalog', 'mz_peek_durations', 3024, 0),
-        ('mz_catalog', 'mz_source_info', 3026, 0),
-        ('mz_catalog', 'mz_message_counts_received_internal', 3028, 0),
-        ('mz_catalog', 'mz_message_counts_sent_internal', 3036, 0),
-        ('mz_catalog', 'mz_dataflow_operator_reachability_internal', 3034, 0),
-        ('mz_catalog', 'mz_arrangement_records_internal', 3038, 0),
-        ('mz_catalog', 'mz_kafka_source_statistics', 3040, 0),
-         -- Tables
-        ('mz_catalog', 'mz_view_keys', 4001, 0),
-        ('mz_catalog', 'mz_view_foreign_keys', 4003, 0),
-        ('mz_catalog', 'mz_kafka_sinks', 4005, 0),
-        ('mz_catalog', 'mz_avro_ocf_sinks', 4007, 0),
-        ('mz_catalog', 'mz_databases', 4009, 0),
-        ('mz_catalog', 'mz_schemas', 4011, 0),
-        ('mz_catalog', 'mz_columns', 4013, 0),
-        ('mz_catalog', 'mz_indexes', 4015, 0),
-        ('mz_catalog', 'mz_index_columns', 4017, 0),
-        ('mz_catalog', 'mz_tables', 4019, 0),
-        ('mz_catalog', 'mz_sources', 4021, 0),
-        ('mz_catalog', 'mz_sinks', 4023, 0),
-        ('mz_catalog', 'mz_views', 4025, 0),
-        ('mz_catalog', 'mz_types', 4027, 0),
-        ('mz_catalog', 'mz_array_types', 4029, 0),
-        ('mz_catalog', 'mz_base_types', 4031, 0),
-        ('mz_catalog', 'mz_list_types', 4033, 0),
-        ('mz_catalog', 'mz_map_types', 4035, 0),
-        ('mz_catalog', 'mz_roles', 4037, 0),
-        ('mz_catalog', 'mz_pseudo_types', 4039, 0),
-        ('mz_catalog', 'mz_functions', 4041, 0),
-        ('mz_catalog', 'mz_metrics', 4043, 0),
-        ('mz_catalog', 'mz_metrics_meta', 4045, 0),
-        ('mz_catalog', 'mz_metric_histograms', 4047, 0),
-        ('mz_catalog', 'mz_clusters', 4049, 0),
-        ('mz_catalog', 'mz_secrets', 4050, 0),
-        -- Views
-        ('mz_catalog', 'mz_relations', 5000, 0),
-        ('mz_catalog', 'mz_objects', 5001, 0),
-        ('mz_catalog', 'mz_catalog_names', 5002, 0),
-        ('mz_catalog', 'mz_dataflow_names', 5003, 0),
-        ('mz_catalog', 'mz_dataflow_operator_dataflows', 5004, 0),
-        ('mz_catalog', 'mz_materialization_frontiers', 5005, 0),
-        ('mz_catalog', 'mz_records_per_dataflow_operator', 5006, 0),
-        ('mz_catalog', 'mz_records_per_dataflow', 5007, 0),
-        ('mz_catalog', 'mz_records_per_dataflow_global', 5008, 0),
-        ('mz_catalog', 'mz_perf_arrangement_records', 5009, 0),
-        ('mz_catalog', 'mz_perf_peek_durations_core', 5010, 0),
-        ('mz_catalog', 'mz_perf_peek_durations_bucket', 5011, 0),
-        ('mz_catalog', 'mz_perf_peek_durations_aggregates', 5012, 0),
-        ('mz_catalog', 'mz_perf_dependency_frontiers', 5013, 0),
-        ('pg_catalog', 'pg_namespace', 5014, 0),
-        ('pg_catalog', 'pg_class', 5015, 0),
-        ('pg_catalog', 'pg_database', 5016, 0),
-        ('pg_catalog', 'pg_index', 5017, 0),
-        ('pg_catalog', 'pg_description', 5018, 0),
-        ('pg_catalog', 'pg_type', 5019, 0),
-        ('pg_catalog', 'pg_attribute', 5020, 0),
-        ('pg_catalog', 'pg_proc', 5021, 0),
-        ('pg_catalog', 'pg_range', 5022, 0),
-        ('pg_catalog', 'pg_enum', 5023, 0),
-        ('pg_catalog', 'pg_attrdef', 5025, 0),
-        ('pg_catalog', 'pg_settings', 5026, 0),
-        ('mz_catalog', 'mz_scheduling_elapsed', 5027, 0),
-        ('mz_catalog', 'mz_scheduling_histogram', 5028, 0),
-        ('mz_catalog', 'mz_scheduling_parks', 5029, 0),
-        ('mz_catalog', 'mz_message_counts', 5030, 0),
-        ('mz_catalog', 'mz_dataflow_operator_reachability', 5031, 0),
-        ('mz_catalog', 'mz_arrangement_sizes', 5032, 0),
-        ('mz_catalog', 'mz_arrangement_sharing', 5033, 0),
-        ('pg_catalog', 'pg_constraint', 5034, 0),
-        ('pg_catalog', 'pg_tables', 5035, 0),
-        ('pg_catalog', 'pg_am', 5036, 0),
-        ('pg_catalog', 'pg_roles', 5037, 0),
-        ('pg_catalog', 'pg_views', 5038, 0),
-        ('information_schema', 'columns', 5039, 0),
-        ('information_schema', 'tables', 5040, 0),
-        ('pg_catalog', 'pg_collation', 5041, 0),
-        ('pg_catalog', 'pg_policy', 5042, 0),
-        ('pg_catalog', 'pg_inherits', 5043, 0);
-
-    CREATE TABLE compute_introspection_source_indexes (
-        compute_id integer NOT NULL,
+     CREATE TABLE compute_introspection_source_indexes (
+        compute_id integer NOT NULL REFERENCES compute_instances (id) ON DELETE CASCADE,
         name text NOT NULL,
-        index_id integer NOT NULL,
+        index_id integer NOT NULL UNIQUE,
         PRIMARY KEY (compute_id, name)
-    );
-    CREATE INDEX compute_introspection_source_indexes_ind
-        ON compute_introspection_source_indexes(compute_id);",
+     );
+
+     CREATE INDEX compute_introspection_source_indexes_ind
+        ON compute_introspection_source_indexes(compute_id);
+
+     INSERT INTO user_gid_alloc VALUES (1);
+     INSERT INTO system_gid_alloc VALUES (1);
+     INSERT INTO databases VALUES (1, 'materialize');
+     INSERT INTO schemas VALUES
+         (1, NULL, 'mz_catalog'),
+         (2, NULL, 'pg_catalog'),
+         (3, 1, 'public'),
+         (4, NULL, 'mz_internal'),
+         (5, NULL, 'information_schema');
+     INSERT INTO roles VALUES (1, 'materialize');
+     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size\":\"1\",\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -655,7 +370,12 @@ impl Connection {
                 let name: String = row.get(1)?;
                 let config: Option<String> = row.get(2)?;
                 let config: ComputeInstanceConfig = match config {
-                    None => ComputeInstanceConfig::Local,
+                    None => {
+                        return Err(Error::new(ErrorKind::Unstructured(
+                            "migrating catalog from materialized to platform is not supported"
+                                .into(),
+                        )))
+                    }
                     Some(config) => serde_json::from_str(&config)
                         .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
                 };
@@ -685,7 +405,7 @@ impl Connection {
 
     pub fn load_introspection_source_index_gids(
         &self,
-        compute_id: i64,
+        compute_id: ComputeInstanceId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
         self.inner
             .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
@@ -729,7 +449,7 @@ impl Connection {
     /// Panics if provided id is not a system id
     pub fn set_introspection_source_index_gids(
         &mut self,
-        mappings: Vec<(i64, &str, GlobalId)>,
+        mappings: Vec<(ComputeInstanceId, &str, GlobalId)>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
@@ -887,7 +607,7 @@ impl Transaction<'_> {
         cluster_name: &str,
         config: &ComputeInstanceConfig,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<i64, Error> {
+    ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         let id = match self

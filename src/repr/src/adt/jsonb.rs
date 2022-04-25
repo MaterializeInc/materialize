@@ -129,6 +129,14 @@ impl Jsonb {
         }
     }
 
+    /// Constructs a `Jsonb` from a [`Row`] containing a single [`Datum`].
+    ///
+    /// Note that `row` is not checked for validity. Not all `Datum`s are
+    /// valid JSON.
+    pub fn from_row(row: Row) -> Jsonb {
+        Jsonb { row }
+    }
+
     /// Consumes this `Jsonb` and returns the underlying [`Row`].
     pub fn into_row(self) -> Row {
         self.row
@@ -159,13 +167,18 @@ pub struct JsonbRef<'a> {
     datum: Datum<'a>,
 }
 
-impl JsonbRef<'_> {
+impl<'a> JsonbRef<'a> {
     /// Constructs a `JsonbRef` from a [`Datum`].
     ///
     /// Note that `datum` is not checked for validity. Not all `Datum`s are
     /// valid JSON.
     pub fn from_datum(datum: Datum) -> JsonbRef {
         JsonbRef { datum }
+    }
+
+    /// Unwrapps a `JsonbRef` and returns the inner [`Datum`].
+    pub fn into_datum(self) -> Datum<'a> {
+        self.datum
     }
 
     /// Constructs an owned [`Jsonb`] from this `JsonbRef`.

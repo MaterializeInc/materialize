@@ -12,8 +12,6 @@ services:
   catalog-compat:
     mzbuild: catcompatck
     depends_on: [zookeeper, kafka]
-    environment:
-    - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:

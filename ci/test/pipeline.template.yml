@@ -20,12 +20,16 @@ steps:
     command: bin/ci-builder run stable ci/test/lint-docs.sh
     inputs: [doc/user]
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
 
   - id: preview-docs
     label: Preview docs
     command: bin/ci-builder run stable ci/test/preview-docs.sh
     inputs: [doc/user]
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
 
   - wait: ~
 

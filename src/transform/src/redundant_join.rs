@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 

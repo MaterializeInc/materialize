@@ -12,9 +12,8 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
+#[cfg(any(feature = "kinesis", feature = "sqs", feature = "s3", feature = "sts"))]
 mod util;
-
-pub mod config;
 
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "kinesis")))]
 #[cfg(feature = "kinesis")]

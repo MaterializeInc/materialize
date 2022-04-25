@@ -20,7 +20,6 @@
 use std::cmp;
 use std::env;
 use std::ffi::CStr;
-use std::fmt;
 use std::fs;
 use std::net::SocketAddr;
 use std::panic;
@@ -35,25 +34,26 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
-use chrono::Utc;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
+use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use sysinfo::{ProcessorExt, SystemExt};
+use tower_http::cors::{self, Origin};
+use url::Url;
 use uuid::Uuid;
 
 use materialized::{
-    OrchestratorBackend, OrchestratorConfig, RemoteStorageConfig, SecretsControllerConfig,
-    StorageConfig, TlsConfig, TlsMode,
+    OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
-use mz_orchestrator_kubernetes::KubernetesOrchestratorConfig;
+use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -92,10 +92,6 @@ pub struct Args {
     /// dependencies.
     #[clap(short, long, parse(from_occurrences))]
     version: usize,
-    /// Allow running this dev (unoptimized) build.
-    #[cfg(debug_assertions)]
-    #[clap(long, env = "MZ_DEV")]
-    dev: bool,
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
@@ -112,75 +108,23 @@ pub struct Args {
     #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
     disable_user_indexes: bool,
 
-    /// The address on which metrics visible to "third parties" get exposed.
+    /// The address on which Prometheus metrics get exposed.
     ///
-    /// These metrics are structured to allow an infrastructure provider to monitor an installation
-    /// without needing access to more sensitive data, like names of sources/sinks.
-    ///
-    /// This address is never served TLS-encrypted or authenticated, and while only "non-sensitive"
-    /// metrics are served from it, care should be taken to not expose the listen address to the
-    /// public internet or other unauthorized parties.
+    /// This address is never served TLS-encrypted or authenticated so care
+    /// should be taken to not expose the listen address to the public internet
+    /// or other unauthorized parties.
     #[clap(
         long,
         hide = true,
         value_name = "HOST:PORT",
         env = "MZ_THIRD_PARTY_METRICS_ADDR"
     )]
-    third_party_metrics_listen_addr: Option<SocketAddr>,
-
-    /// Enable persistent user tables. Has to be used with --experimental.
-    #[clap(long, hide = true)]
-    persistent_user_tables: bool,
-
-    /// Disable persistence of all system tables.
-    ///
-    /// This is a test of the upcoming persistence system. The data is stored on
-    /// the filesystem in a sub-directory of the Materialize data_directory.
-    /// This test is enabled by default to allow us to collect data from a
-    /// variety of deployments, but setting this flag to true to opt out of the
-    /// test is always safe.
-    #[clap(long)]
-    disable_persistent_system_tables_test: Option<bool>,
-
-    /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
-    ///
-    /// The `<path>` is a prefix prepended to all S3 object keys used for
-    /// persistence and allowed to be empty.
-    ///
-    /// Additional configuration can be specified by appending url-like query
-    /// parameters: `?<key1>=<val1>&<key2>=<val2>...`
-    ///
-    /// Supported additional configurations are:
-    ///
-    /// - `aws_role_arn=arn:aws:...`
-    ///
-    /// Ignored if persistence is disabled. Ignored if --persist_storage_enabled
-    /// is false.
-    ///
-    /// If unset, files stored under `--data-directory/-D` are used instead. If
-    /// set, S3 credentials and region must be available in the process or
-    /// environment: for details see
-    /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
-    #[clap(long, hide = true, default_value_t)]
-    persist_storage: String,
-
-    /// Enable the --persist_storage flag. Has to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persist_storage_enabled: bool,
-
-    /// Enable persistent Kafka source. Has to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persistent_kafka_sources: bool,
-
-    /// Maximum allowed size of the in-memory persist storage cache, in bytes. Has
-    /// to be used with --experimental.
-    #[structopt(long, hide = true)]
-    persist_cache_size_limit: Option<usize>,
+    metrics_listen_addr: Option<SocketAddr>,
 
     // === Platform options. ===
-    /// The service orchestrator implementation to use, if any.
-    #[structopt(long, hide = true, arg_enum)]
-    orchestrator: Option<Orchestrator>,
+    /// The service orchestrator implementation to use.
+    #[structopt(long, default_value = "process", arg_enum)]
+    orchestrator: Orchestrator,
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
     ///
@@ -193,59 +137,51 @@ pub struct Args {
     /// production cluster that happens to be the active Kubernetes context.)
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
-    /// The dataflowd image reference to use.
+    /// The storaged image reference to use.
     #[structopt(
         long,
         hide = true,
         required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("dataflowd"))
+        default_value_if("orchestrator", Some("process"), Some("storaged"))
     )]
-    dataflowd_image: Option<String>,
+    storaged_image: Option<String>,
+    /// The computed image reference to use.
+    #[structopt(
+        long,
+        hide = true,
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("computed"))
+    )]
+    computed_image: Option<String>,
+    /// The host on which processes spawned by the process orchestrator listen
+    /// for connections.
+    #[structopt(long, hide = true)]
+    process_listen_host: Option<String>,
+    /// The image pull policy to use for services created by the Kubernetes
+    /// orchestrator.
+    #[structopt(long, default_value = "always", arg_enum)]
+    kubernetes_image_pull_policy: KubernetesImagePullPolicy,
+    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
+    /// ADAPTER is lost.
+    #[clap(long, possible_values = &["true", "false"])]
+    orchestrator_linger: Option<bool>,
 
-    // === Secrets Controller options. ===
+    // === Secrets controller options. ===
     /// The secrets controller implementation to use
     #[structopt(long, hide = true, arg_enum)]
     secrets_controller: Option<SecretsController>,
 
     // === Timely worker configuration. ===
-    /// Number of dataflow worker threads.
-    #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
-    workers: WorkerCount,
-    /// Address of a storage process that compute instances should connect to.
-    #[clap(
-        long,
-        env = "MZ_STORAGE_COMPUTE_ADDR",
-        value_name = "N",
-        requires = "storage-controller-addr",
-        hide = true
-    )]
-    storage_compute_addr: Option<String>,
     /// Address of a storage process that the controller should connect to.
     #[clap(
         long,
         env = "MZ_STORAGE_CONTROLLER_ADDR",
-        value_name = "N",
-        requires = "storage-controller-addr",
-        hide = true
+        value_name = "HOST:ADDR",
+        conflicts_with = "orchestrator"
     )]
     storage_controller_addr: Option<String>,
-    /// Log Timely logging itself.
-    #[clap(long, hide = true)]
-    debug_introspection: bool,
-    /// Retain prometheus metrics for this amount of time.
-    #[clap(short, long, hide = true, parse(try_from_str = mz_repr::util::parse_duration), default_value = "5min")]
-    retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
-    /// The frequency at which to update introspection sources.
-    ///
-    /// The introspection sources are the built-in sources in the mz_catalog
-    /// schema, like mz_scheduling_elapsed, that reflect the internal state of
-    /// Materialize's dataflow engine.
-    ///
-    /// Set to "off" to disable introspection.
-    #[clap(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
-    introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
@@ -254,16 +190,6 @@ pub struct Args {
     /// Default frequency with which to advance timestamps
     #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
-    /// Default frequency with which to scrape prometheus metrics
-    #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
-    metrics_scraping_interval: OptionalDuration,
-
-    /// [ADVANCED] Timely progress tracking mode.
-    #[clap(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
-    timely_progress_mode: timely::worker::ProgressMode,
-    /// [ADVANCED] Amount of compaction to perform when idle.
-    #[clap(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
-    differential_idle_merge_effort: Option<isize>,
 
     // === Logging options. ===
     /// Where to emit log messages.
@@ -420,6 +346,17 @@ pub struct Args {
         default_value = "mzdata"
     )]
     data_directory: PathBuf,
+    /// Where the persist library should store its blob data.
+    ///
+    /// Defaults to the `persist/blob` in the data directory.
+    #[clap(long, env = "MZ_PERSIST_BLOB_URL")]
+    persist_blob_url: Option<Url>,
+    /// Where the persist library should perform consensus.
+    ///
+    /// Defaults to the `persist/consensus` SQLite database in the data
+    /// directory.
+    #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Option<Url>,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -427,21 +364,6 @@ pub struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
-
-    // === Telemetry options. ===
-    /// Disable telemetry reporting.
-    #[clap(
-        long,
-        conflicts_with_all = &["telemetry-domain", "telemetry-interval"],
-        env = "MZ_DISABLE_TELEMETRY",
-    )]
-    disable_telemetry: bool,
-    /// The domain hosting the telemetry server.
-    #[clap(long, env = "MZ_TELEMETRY_DOMAIN", hide = true)]
-    telemetry_domain: Option<String>,
-    /// The interval at which to report telemetry data.
-    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = mz_repr::util::parse_duration), hide = true)]
-    telemetry_interval: Option<Duration>,
 
     /// The endpoint to send opentelemetry traces to.
     /// If not provided, tracing is not sent.
@@ -463,6 +385,9 @@ pub struct Args {
     )]
     opentelemetry_headers: Option<String>,
 
+    #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
+    cluster_replica_sizes: Option<String>,
+
     #[cfg(feature = "tokio-console")]
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
@@ -473,6 +398,22 @@ pub struct Args {
 enum Orchestrator {
     Kubernetes,
     Process,
+}
+
+impl Orchestrator {
+    /// Default linger value for orchestrator type.
+    ///
+    /// Locally it is convenient for all the processes to be cleaned up when materialized dies
+    /// which is why `Process` defaults to false.
+    ///
+    /// In production we want COMPUTE and STORAGE nodes to be resilient to ADAPTER failures which
+    /// is why `Kubernetes` defaults to true.
+    pub fn default_linger_value(&self) -> bool {
+        match self {
+            Self::Kubernetes => true,
+            Self::Process => false,
+        }
+    }
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -499,40 +440,6 @@ impl FromStr for OrchestratorLabel {
             key: key.into(),
             value: value.into(),
         })
-    }
-}
-
-/// This type is a hack to allow a dynamic default for the `--workers` argument,
-/// which depends on the number of available CPUs. Ideally clap would
-/// expose a `default_fn` rather than accepting only string literals.
-#[derive(Debug)]
-struct WorkerCount(usize);
-
-impl Default for WorkerCount {
-    fn default() -> Self {
-        WorkerCount(cmp::max(
-            1,
-            // When inside a cgroup with a cpu limit,
-            // the logical cpus can be lower than the physical cpus.
-            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
-        ))
-    }
-}
-
-impl FromStr for WorkerCount {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<WorkerCount, anyhow::Error> {
-        let n = s.parse()?;
-        if n == 0 {
-            bail!("must be greater than zero");
-        }
-        Ok(WorkerCount(n))
-    }
-}
-
-impl fmt::Display for WorkerCount {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
     }
 }
 
@@ -592,34 +499,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
-    // Prevent accidental usage of development builds.
-    #[cfg(debug_assertions)]
-    if !args.dev {
-        bail!(
-            "refusing to run dev (unoptimized) binary without explicit opt-in\n\
-             hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\
-             hint: Or perhaps you meant to use a release binary?"
-        );
-    }
-
-    // Configure Timely and Differential workers.
-    let log_logging = args.debug_introspection;
-    let retain_readings_for = args.retain_prometheus_metrics;
-    let metrics_scraping_interval = args.metrics_scraping_interval;
-    let logging = args
-        .introspection_frequency
-        .map(|granularity| mz_coord::LoggingConfig {
-            granularity,
-            log_logging,
-            retain_readings_for,
-            metrics_scraping_interval,
-        });
-    if log_logging && logging.is_none() {
-        bail!(
-            "cannot specify --debug-introspection and --introspection-frequency=off simultaneously"
-        );
-    }
-
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
         if args.tls_ca.is_some() {
@@ -652,56 +531,82 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         let key = args.tls_key.unwrap();
         Some(TlsConfig { mode, cert, key })
     };
-    let frontegg = args
-        .frontegg_tenant
-        .map(|tenant_id| {
-            FronteggAuthentication::new(FronteggConfig {
-                admin_api_token_url: args.frontegg_api_token_url.unwrap(),
-                jwk_rsa_pem: args.frontegg_jwk.unwrap().as_bytes(),
+    let frontegg = match (
+        args.frontegg_tenant,
+        args.frontegg_api_token_url,
+        args.frontegg_jwk,
+    ) {
+        (None, None, None) => None,
+        (Some(tenant_id), Some(admin_api_token_url), Some(jwk)) => {
+            Some(FronteggAuthentication::new(FronteggConfig {
+                admin_api_token_url,
+                decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
-            })
-        })
-        .transpose()?;
+            }))
+        }
+        _ => unreachable!("clap enforced"),
+    };
+
+    // Configure CORS.
+    let cors_allowed_origin = if args
+        .cors_allowed_origin
+        .iter()
+        .any(|val| val.as_bytes() == b"*")
+    {
+        cors::Any.into()
+    } else if !args.cors_allowed_origin.is_empty() {
+        Origin::list(args.cors_allowed_origin).into()
+    } else {
+        let port = args.listen_addr.port();
+        Origin::list([
+            HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+            HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+        ])
+        .into()
+    };
 
     // Configure orchestrator.
-    let orchestrator = match args.orchestrator {
-        None => {
-            if !args.orchestrator_service_label.is_empty() {
-                bail!("--orchestrator-label is only valid with --orchestrator");
+    let orchestrator = OrchestratorConfig {
+        backend: match args.orchestrator {
+            Orchestrator::Kubernetes => {
+                OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
+                    context: args.kubernetes_context.clone(),
+                    service_labels: args
+                        .orchestrator_service_label
+                        .into_iter()
+                        .map(|l| (l.key, l.value))
+                        .collect(),
+                    image_pull_policy: args.kubernetes_image_pull_policy,
+                })
             }
-            None
-        }
-        Some(backend) => Some(OrchestratorConfig {
-            backend: match backend {
-                Orchestrator::Kubernetes => {
-                    OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
-                        context: args.kubernetes_context.clone(),
-                        service_labels: args
-                            .orchestrator_service_label
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                    })
-                }
-                Orchestrator::Process => {
-                    OrchestratorBackend::Process(ProcessOrchestratorConfig {
-                        // Look for binaries in the same directory as the
-                        // running binary. When running via `cargo run`, this
-                        // means that debug binaries look for other debug
-                        // binaries and release binaries look for other release
-                        // binaries.
-                        image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                        // Chosen arbitrarily to be a relatively unused port
-                        // range. Could be made configurable via CLI flags if
-                        // necessary.
-                        port_range: 2100..=2200,
-                    })
-                }
-            },
-            dataflowd_image: args.dataflowd_image.expect("clap enforced"),
-        }),
+            Orchestrator::Process => {
+                OrchestratorBackend::Process(ProcessOrchestratorConfig {
+                    // Look for binaries in the same directory as the
+                    // running binary. When running via `cargo run`, this
+                    // means that debug binaries look for other debug
+                    // binaries and release binaries look for other release
+                    // binaries.
+                    image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                    // Chosen arbitrarily to be a relatively unused port
+                    // range. Could be made configurable via CLI flags if
+                    // necessary.
+                    port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
+                    suppress_output: false,
+                    process_listen_host: args.process_listen_host,
+                })
+            }
+        },
+        storaged_image: args.storaged_image.expect("clap enforced"),
+        computed_image: args.computed_image.expect("clap enforced"),
+        linger: args
+            .orchestrator_linger
+            .unwrap_or_else(|| args.orchestrator.default_linger_value()),
     };
 
     // Configure secrets controller.
@@ -717,37 +622,26 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
-
-    let storage = match (args.storage_compute_addr, args.storage_controller_addr) {
-        (None, None) => StorageConfig::Local,
-        (Some(compute_addr), Some(controller_addr)) => StorageConfig::Remote(RemoteStorageConfig {
-            compute_addr,
-            controller_addr,
-        }),
-        _ => unreachable!("clap enforced"),
-    };
-
-    // If --disable-telemetry is present, disable telemetry. Otherwise, if a
-    // custom telemetry domain or interval is provided, enable telemetry as
-    // specified. Otherwise (the defaults), enable the production server for
-    // release mode and disable telemetry in debug mode. This should allow for
-    // good defaults (on in release, off in debug), but also easy development
-    // during testing of this feature via the command-line flags.
-    let telemetry = if args.disable_telemetry
-        || (cfg!(debug_assertions)
-            && args.telemetry_domain.is_none()
-            && args.telemetry_interval.is_none())
-    {
-        None
-    } else {
-        Some(materialized::TelemetryConfig {
-            domain: args
-                .telemetry_domain
-                .unwrap_or_else(|| "cloud.materialize.com".into()),
-            interval: args
-                .telemetry_interval
-                .unwrap_or_else(|| Duration::from_secs(3600)),
-        })
+    let cwd = env::current_dir().context("retrieving current working directory")?;
+    let persist_location = mz_persist_client::Location {
+        blob_uri: match args.persist_blob_url {
+            // TODO: need to handle non-UTF-8 paths here.
+            None => format!(
+                "file://{}/{}/persist/blob",
+                cwd.display(),
+                data_directory.display()
+            ),
+            Some(blob_url) => blob_url.to_string(),
+        },
+        consensus_uri: match args.persist_consensus_url {
+            // TODO: need to handle non-UTF-8 paths here.
+            None => format!(
+                "sqlite://{}/{}/persist/consensus",
+                cwd.display(),
+                data_directory.display()
+            ),
+            Some(consensus_url) => consensus_url.to_string(),
+        },
     };
 
     // When inside a cgroup with a cpu limit,
@@ -782,7 +676,6 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-dataflow workers: {workers}
 max log level: {max_log_level}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
@@ -816,125 +709,38 @@ max log level: {max_log_level}",
         swap_total = system.total_swap(),
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
-        workers = args.workers.0,
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
     )?;
 
     sys::adjust_rlimits();
 
-    // Build Timely worker configuration.
-    let mut timely_worker =
-        timely::WorkerConfig::default().progress_mode(args.timely_progress_mode);
-    differential_dataflow::configure(
-        &mut timely_worker,
-        &differential_dataflow::Config {
-            idle_merge_effort: args.differential_idle_merge_effort,
-        },
-    );
-
-    // Configure persistence core.
-    let persist_config = {
-        let user_table_enabled = if args.experimental && args.persistent_user_tables {
-            true
-        } else if args.persistent_user_tables {
-            bail!("cannot specify --persistent-user-tables without --experimental");
-        } else {
-            false
-        };
-        let system_table_disabled = args.disable_persistent_system_tables_test.unwrap_or(true);
-        let mut system_table_enabled = !system_table_disabled;
-        if system_table_enabled && args.logical_compaction_window.is_none() {
-            ::tracing::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
-            system_table_enabled = false;
-        }
-
-        let storage = if args.persist_storage_enabled {
-            if args.persist_storage.is_empty() {
-                bail!("--persist-storage must be specified with --persist-storage-enabled");
-            } else if !args.experimental {
-                bail!("cannot specify --persist-storage-enabled without --experimental");
-            } else {
-                PersistStorage::try_from(args.persist_storage)?
-            }
-        } else {
-            PersistStorage::File(PersistFileStorage {
-                blob_path: data_directory.join("persist").join("blob"),
-            })
-        };
-
-        let persistent_kafka_sources_enabled = if args.experimental && args.persistent_kafka_sources
-        {
-            true
-        } else if args.persistent_kafka_sources {
-            bail!("cannot specify --persistent-kafka-sources without --experimental");
-        } else {
-            false
-        };
-
-        let cache_size_limit = {
-            if args.persist_cache_size_limit.is_some() && !args.experimental {
-                bail!("cannot specify --persist-cache-size-limit without --experimental");
-            }
-
-            args.persist_cache_size_limit
-        };
-
-        let lock_info = format!(
-            "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
-            mz_version = materialized::BUILD_INFO.human_version(),
-            os = os_info::get(),
-            start_time = Utc::now(),
-            num_workers = args.workers.0,
-        );
-
-        // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
-        // As persist gets more sophisticated over time, we'll no longer need this knob,
-        // but in the meantime we need it to make tests reasonably performant.
-        // The --timestamp-frequency flag similarly gives testing a control over
-        // latency vs resource usage, so for simplicity we reuse it here."
-        let min_step_interval = args.timestamp_frequency;
-
-        PersistConfig {
-            async_runtime: Some(Arc::clone(&runtime)),
-            storage,
-            user_table_enabled,
-            system_table_enabled,
-            kafka_sources_enabled: persistent_kafka_sources_enabled,
-            lock_info,
-            min_step_interval,
-            cache_size_limit,
-        }
+    let replica_sizes = match args.cluster_replica_sizes {
+        None => Default::default(),
+        Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
     let server = runtime.block_on(materialized::serve(materialized::Config {
-        workers: args.workers.0,
-        timely_worker,
-        logging,
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
         listen_addr: args.listen_addr,
-        third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
+        metrics_listen_addr: args.metrics_listen_addr,
         tls,
         frontegg,
-        cors_allowed_origins: args.cors_allowed_origin,
+        cors_allowed_origin,
         data_directory,
+        persist_location,
         orchestrator,
         secrets_controller,
-        storage,
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
-        telemetry,
         aws_external_id: args
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
-        introspection_frequency: args
-            .introspection_frequency
-            .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
-        persist: persist_config,
         now: SYSTEM_TIME.clone(),
+        replica_sizes,
     }))?;
 
     eprintln!(

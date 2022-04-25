@@ -43,7 +43,7 @@ CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
 CREATE TABLE t (c int4) WITH (foo = 'bar', a = 123)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [Value { name: Ident("foo"), value: String("bar") }, Value { name: Ident("a"), value: Number("123") }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [WithOption { key: Ident("foo"), value: Some(Value(String("bar"))) }, WithOption { key: Ident("a"), value: Some(Value(Number("123"))) }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE types_table (char_col char, bpchar_col bpchar, text_col text, bool_col boolean, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col double precision);
@@ -323,7 +323,7 @@ CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 ----
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], with_options: [Value { name: Ident("foo"), value: String("bar") }, Value { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], with_options: [WithOption { key: Ident("foo"), value: Some(Value(String("bar"))) }, WithOption { key: Ident("a"), value: Some(Value(Number("123"))) }], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE VIEW v (has, cols) AS SELECT 1, 2
@@ -395,7 +395,7 @@ FORMAT BYTES
 ----
 CREATE SOURCE foo FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "bar" }, topic: "baz", key: None }), with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "bar" }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }, WithOption { key: Ident("ssl_certificate_file"), value: Some(Value(String("/Path/to/file"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE
@@ -410,35 +410,35 @@ CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' WITH (tail = true) FORMAT REGEX 
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' COMPRESSION NONE WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], include_metadata: [], format: Bare(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(true))) }], include_metadata: [], format: Bare(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 ----
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' COMPRESSION NONE WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], include_metadata: [], format: Bare(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(true))) }], include_metadata: [], format: Bare(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE WITH (tail = false) FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], include_metadata: [], format: Bare(Csv { columns: Header { names: [] }, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(false))) }], include_metadata: [], format: Bare(Csv { columns: Header { names: [] }, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER (a, b, c)
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE WITH (tail = false) FORMAT CSV WITH HEADER (a, b, c)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], include_metadata: [], format: Bare(Csv { columns: Header { names: [Ident("a"), Ident("b"), Ident("c")] }, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(false))) }], include_metadata: [], format: Bare(Csv { columns: Header { names: [Ident("a"), Ident("b"), Ident("c")] }, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], include_metadata: [], format: Bare(Csv { columns: Count(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(false))) }], include_metadata: [], format: Bare(Csv { columns: Count(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
@@ -452,7 +452,7 @@ CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS D
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], include_metadata: [], format: Bare(Csv { columns: Count(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [WithOption { key: Ident("tail"), value: Some(Value(Boolean(true))) }], include_metadata: [], format: Bare(Csv { columns: Count(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
@@ -501,7 +501,7 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] } })), envelope: Debezium(Plain), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [WithOption { key: Ident("a"), value: Some(Value(String("b"))) }] } })), envelope: Debezium(Plain), if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
@@ -592,28 +592,28 @@ CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [Value { name: Ident("start_offset"), value: Number("2") }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Number("2"))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [Value { name: Ident("start_offset"), value: Array([]) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2"), Number("40000000")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
@@ -718,7 +718,7 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }, Value { name: Ident("retention_ms"), value: Number("10000") }, Value { name: Ident("retention_bytes"), value: Number("10000000000") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [WithOption { key: Ident("replication_factor"), value: Some(Value(Number("7"))) }, WithOption { key: Ident("retention_ms"), value: Some(Value(Number("10000"))) }, WithOption { key: Ident("retention_bytes"), value: Some(Value(Number("10000000000"))) }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
@@ -767,7 +767,7 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSIS
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [ObjectName { name: Ident("username"), object_name: UnresolvedObjectName([Ident("user")]) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: None, with_options: [WithOption { key: Ident("username"), value: Some(ObjectName(UnresolvedObjectName([Ident("user")]))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
@@ -1129,7 +1129,7 @@ CREATE TABLE public.customer (
 ----
 CREATE TABLE public.customer (customer_id int4 DEFAULT nextval(public.customer_customer_id_seq), store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) NOT NULL, email varchar(50), address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::text NOT NULL, last_update timestamp DEFAULT now() NOT NULL, last_update_tz timestamptz, active int4 NOT NULL) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("nextval")]), args: Args { args: [Identifier([Ident("public"), Ident("customer_customer_id_seq")])], order_by: [] }, filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: Some(UnresolvedObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [50] }, collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [Value { name: Ident("fillfactor"), value: Number("20") }, Value { name: Ident("user_catalog_table"), value: Boolean(true) }, Value { name: Ident("autovacuum_vacuum_threshold"), value: Number("100") }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("nextval")]), args: Args { args: [Identifier([Ident("public"), Ident("customer_customer_id_seq")])], order_by: [] }, filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: Some(UnresolvedObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [50] }, collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [WithOption { key: Ident("fillfactor"), value: Some(Value(Number("20"))) }, WithOption { key: Ident("user_catalog_table"), value: Some(Value(Boolean(true))) }, WithOption { key: Ident("autovacuum_vacuum_threshold"), value: Some(Value(Number("100"))) }], if_not_exists: false, temporary: false })
 
 parse-statement roundtrip
 CREATE TABLE public.customer (
@@ -1413,4 +1413,19 @@ ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { secret_name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+
+
+parse-statement
+CREATE CONNECTOR conn1 FOR KAFKA BROKER 'kafka:1234' WITH (security_protocol = 'SASL_SSL', sasl_mechanisms = 'PLAIN')
+----
+CREATE CONNECTOR conn1 FOR KAFKA BROKER 'kafka:1234' WITH (security_protocol = 'SASL_SSL', sasl_mechanisms = 'PLAIN')
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: Kafka { broker: "kafka:1234", with_options: [WithOption { key: Ident("security_protocol"), value: Some(Value(String("SASL_SSL"))) }, WithOption { key: Ident("sasl_mechanisms"), value: Some(Value(String("PLAIN"))) }] }, if_not_exists: false })
+
+parse-statement
+DROP CONNECTOR conn1
+----
+DROP CONNECTOR conn1
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: false })

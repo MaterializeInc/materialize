@@ -31,7 +31,7 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use mz_ore::metric;
-use mz_ore::metrics::{MetricsRegistry, ThirdPartyMetric};
+use mz_ore::metrics::MetricsRegistry;
 
 use crate::Args;
 
@@ -76,7 +76,7 @@ where
         ));
 
         // TODO(guswynn): investigate if this should be non-lazy
-        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector())?;
+        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector());
         let otlp_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_channel(channel);
@@ -137,12 +137,11 @@ pub async fn configure(
         // otherwise.
         .with_target("panic", LevelFilter::ERROR);
 
-    let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
-        .register_third_party_visible(metric!(
-            name: "mz_log_message_total",
-            help: "The number of log messages produced by this materialized instance",
-            var_labels: ["severity"],
-        ));
+    let log_message_counter: IntCounterVec = metrics_registry.register(metric!(
+        name: "mz_log_message_total",
+        help: "The number of log messages produced by this materialized instance",
+        var_labels: ["severity"],
+    ));
 
     let stream: Box<dyn Write> = match args.log_file.as_deref() {
         Some("stderr") => {
@@ -231,13 +230,13 @@ pub async fn configure(
 /// for log messages, incrementing a counter for the severity of messages
 /// reported.
 pub struct MetricsRecorderLayer<S> {
-    counter: ThirdPartyMetric<IntCounterVec>,
+    counter: IntCounterVec,
     _inner: PhantomData<S>,
 }
 
 impl<S> MetricsRecorderLayer<S> {
     /// Construct a metrics-recording layer.
-    pub fn new(counter: ThirdPartyMetric<IntCounterVec>) -> Self {
+    pub fn new(counter: IntCounterVec) -> Self {
         Self {
             counter,
             _inner: PhantomData,
@@ -252,7 +251,7 @@ where
     fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
         let metadata = ev.metadata();
         self.counter
-            .third_party_metric_with_label_values(&[&metadata.level().to_string()])
+            .with_label_values(&[&metadata.level().to_string()])
             .inc();
     }
 }
@@ -264,7 +263,7 @@ mod test {
     use super::MetricsRecorderLayer;
     use mz_ore::metric;
     use mz_ore::metrics::raw::IntCounterVec;
-    use mz_ore::metrics::{MetricsRegistry, ThirdPartyMetric};
+    use mz_ore::metrics::MetricsRegistry;
     use tracing::{error, info, warn};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -272,7 +271,7 @@ mod test {
     #[test]
     fn increments_per_sev_counter() {
         let r = MetricsRegistry::new();
-        let counter: ThirdPartyMetric<IntCounterVec> = r.register_third_party_visible(metric!(
+        let counter: IntCounterVec = r.register(metric!(
             name: "test_counter",
             help: "a test counter",
             var_labels: ["severity"],

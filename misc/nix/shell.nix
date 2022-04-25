@@ -31,7 +31,6 @@ stdenv.mkDerivation rec {
 
   hardeningDisable = [ "fortify" ];
 
-  MZ_DEV = 1;
   RUSTFLAGS = "-C linker=clang -C link-arg=--ld-path=${pkgs.mold}/bin/mold -C link-arg=-Wl,--warn-unresolved-symbols -C debuginfo=1";
   shellHook = ''
     export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${lib.makeLibraryPath buildInputs}"

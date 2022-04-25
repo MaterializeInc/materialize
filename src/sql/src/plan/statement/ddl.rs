@@ -24,6 +24,9 @@ use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_postgres_util::TableInfo;
+use mz_repr::adt::interval::Interval;
+use mz_sql_parser::ast::WithOptionValue;
+use mz_sql_parser::ast::{CreateConnector, CreateConnectorStatement};
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -39,24 +42,24 @@ use mz_dataflow_types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding,
 };
 use mz_dataflow_types::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
+    provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
+    DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
     KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
-use mz_expr::{CollectionPlan, GlobalId};
+use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
     AlterClusterStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AstInfo, AvroSchema, ClusterOption, ColumnOption, Compression,
+    AlterSecretStatement, AvroSchema, ClusterOption, ColumnOption, Compression,
     CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
     CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
@@ -66,7 +69,7 @@ use crate::ast::{
     DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
     DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption, Statement, SubscriptPosition,
+    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
     TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
     Value, ViewDefinition, WithOption,
 };
@@ -84,12 +87,13 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, ComputeInstanceConfig,
-    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    Index, IndexOption, IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan,
+    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, Connector,
+    CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
+    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -633,10 +637,7 @@ pub fn plan_create_source(
                 DbzMode::Plain => {
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let tx_metadata = match with_option_objects.remove("tx_metadata") {
-                        Some(SqlOption::ObjectName {
-                            name: _,
-                            object_name: tx_metadata,
-                        }) => {
+                        Some(WithOptionValue::ObjectName(tx_metadata)) => {
                             scx.require_experimental_mode("DEBEZIUM TX_METADATA")?;
                             // `with_option_objects` and `with_options` should correspond.  We want
                             // to keep the `ObjectName` information but we also need to remove the
@@ -1175,10 +1176,10 @@ fn typecheck_debezium_transaction_metadata(
     })
 }
 
-fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
-    format: &CreateSourceFormat<T>,
+fn get_encoding(
+    format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
-    with_options: &Vec<SqlOption<T>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
@@ -1208,9 +1209,9 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
     Ok(encoding)
 }
 
-fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
-    format: &Format<T>,
-    with_options: &Vec<SqlOption<T>>,
+fn get_encoding_inner(
+    format: &Format<Aug>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -2553,7 +2554,7 @@ pub fn plan_create_type(
 
             for key in option_keys {
                 match with_options.remove(&key.to_string()) {
-                    Some(SqlOption::DataType { data_type, .. }) => {
+                    Some(WithOptionValue::DataType(data_type)) => {
                         ensure_valid_data_type(scx, &data_type, &as_type, key)?;
                         depends_on.extend(data_type.get_ids());
                     }
@@ -2673,20 +2674,19 @@ pub fn plan_create_role(
 
 pub fn describe_create_cluster(
     _: &StatementContext,
-    _: &CreateClusterStatement,
+    _: &CreateClusterStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_cluster(
-    scx: &StatementContext,
+    _: &StatementContext,
     CreateClusterStatement {
         name,
         if_not_exists,
         options,
-    }: CreateClusterStatement,
+    }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE CLUSTER")?;
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
         if_not_exists,
@@ -2694,8 +2694,14 @@ pub fn plan_create_cluster(
     }))
 }
 
+const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
+    micros: 1_000_000,
+    months: 0,
+    days: 0,
+};
+
 fn plan_cluster_options(
-    options: Vec<ClusterOption>,
+    options: Vec<ClusterOption<Aug>>,
 ) -> Result<ComputeInstanceConfig, anyhow::Error> {
     let mut remote_replicas = BTreeMap::new();
     let mut size = None;
@@ -2724,7 +2730,8 @@ fn plan_cluster_options(
                 if introspection_granularity.is_some() {
                     bail!("INTROSPECTION GRANULARITY specified more than once");
                 }
-                introspection_granularity = Some(with_option_type!(Some(interval), Interval));
+                introspection_granularity =
+                    Some(with_option_type!(Some(interval), OptionalInterval));
             }
             ClusterOption::Size(s) => {
                 if size.is_some() {
@@ -2734,6 +2741,9 @@ fn plan_cluster_options(
             }
         }
     }
+
+    let introspection_granularity =
+        introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
 
     let introspection = match (introspection_debugging, introspection_granularity) {
         (None | Some(false), None) => None,
@@ -2764,9 +2774,9 @@ fn plan_cluster_options(
     }
 }
 
-pub fn describe_create_secret<T: mz_sql_parser::ast::AstInfo>(
+pub fn describe_create_secret(
     _: &StatementContext,
-    _: &CreateSecretStatement<T>,
+    _: &CreateSecretStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2800,6 +2810,49 @@ pub fn plan_create_secret(
         full_name,
         if_not_exists: *if_not_exists,
     }))
+}
+
+pub fn describe_create_connector<T: mz_sql_parser::ast::AstInfo>(
+    _: &StatementContext,
+    _: &CreateConnectorStatement<T>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_connector(
+    scx: &StatementContext,
+    stmt: CreateConnectorStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("CREATE CONNECTOR")?;
+
+    let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
+    let CreateConnectorStatement {
+        name,
+        connector,
+        if_not_exists,
+    } = stmt;
+    let connector_inner = match connector {
+        CreateConnector::Kafka {
+            broker,
+            with_options,
+        } => {
+            let mut with_options = normalize::options(&with_options);
+            ConnectorInner::Kafka {
+                broker: broker.parse()?,
+                config_options: kafka_util::extract_config(&mut with_options)?,
+            }
+        }
+    };
+    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let plan = CreateConnectorPlan {
+        name,
+        if_not_exists,
+        connector: Connector {
+            create_sql,
+            connector: connector_inner,
+        },
+    };
+    Ok(Plan::CreateConnector(plan))
 }
 
 pub fn describe_drop_database(
@@ -2882,7 +2935,8 @@ pub fn plan_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
-        | ObjectType::Secret => plan_drop_items(scx, object_type, names, cascade),
+        | ObjectType::Secret
+        | ObjectType::Connector => plan_drop_items(scx, object_type, names, cascade),
         ObjectType::Role => unreachable!("DROP ROLE handled separately"),
         ObjectType::Cluster => unreachable!("DROP CLUSTER handled separately"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
@@ -2998,8 +3052,6 @@ pub fn plan_drop_cluster(
         cascade,
     }: DropClustersStatement,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("DROP CLUSTER")?;
-
     let mut out = vec![];
     for name in names {
         let name = if name.0.len() == 1 {
@@ -3029,7 +3081,7 @@ pub fn plan_drop_cluster(
 pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
-    names: Vec<<Aug as AstInfo>::ObjectName>,
+    names: Vec<ResolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     let items: Vec<_> = names
@@ -3065,7 +3117,7 @@ pub fn plan_drop_item(
         bail!(
             "{} is not of type {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
-            object_type
+            object_type,
         );
     }
     if !cascade {
@@ -3084,7 +3136,8 @@ pub fn plan_drop_item(
                     | CatalogItemType::View
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
-                    | CatalogItemType::Secret => {
+                    | CatalogItemType::Secret
+                    | CatalogItemType::Connector => {
                         bail!(
                             "cannot drop {}: still depended upon by catalog item '{}'",
                             scx.catalog.resolve_full_name(catalog_entry.name()),
@@ -3112,7 +3165,7 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
-fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, anyhow::Error> {
+fn plan_index_options(with_opts: Vec<WithOption<Aug>>) -> Result<Vec<IndexOption>, anyhow::Error> {
     let with_opts = IndexWithOptions::try_from(with_opts)?;
     let mut out = vec![];
 
@@ -3241,19 +3294,44 @@ pub fn describe_alter_secret_options(
 }
 
 pub fn plan_alter_secret(
-    _: &StatementContext,
-    AlterSecretStatement {
-        secret_name: _,
-        if_exists: _,
-        value: _,
-    }: AlterSecretStatement<Aug>,
+    scx: &StatementContext,
+    stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("ALTER SECRET")
+    scx.require_experimental_mode("ALTER SECRET")?;
+
+    let AlterSecretStatement {
+        name,
+        if_exists,
+        value,
+    } = &stmt;
+
+    let entry = match scx.get_item_by_resolved_name(&name) {
+        Ok(secret) => secret,
+        Err(_) if *if_exists => {
+            // TODO(benesch): generate a notice indicating this secret does not
+            // exist.
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Secret,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
+    if entry.item_type() != CatalogItemType::Secret {
+        bail!(
+            "{} is a {} not a SECRET",
+            name.full_name_str(),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+    let secret_as = query::plan_secret_as(scx, value.clone())?;
+
+    Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
 pub fn describe_alter_cluster(
     _: &StatementContext,
-    _: &AlterClusterStatement,
+    _: &AlterClusterStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3264,9 +3342,8 @@ pub fn plan_alter_cluster(
         name,
         if_exists,
         options,
-    }: AlterClusterStatement,
+    }: AlterClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("ALTER CLUSTER")?;
     let id = match scx.resolve_compute_instance(Some(&name)) {
         Ok(instance) => instance.id(),
         Err(_) if if_exists => {

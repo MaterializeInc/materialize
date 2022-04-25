@@ -32,23 +32,25 @@ tests=(
     test/sqllogictest/sqlite/test/evidence/slt_lang_reindex.test
     test/sqllogictest/sqlite/test/evidence/slt_lang_replace.test
     test/sqllogictest/sqlite/test/evidence/slt_lang_update.test
+    # TODO(benesch): renable a fast subset of the following when performance
+    # is restored.
     # test/sqllogictest/sqlite/test/index/between/1/slt_good_0.test
     # test/sqllogictest/sqlite/test/index/commute/10/slt_good_0.test
     # test/sqllogictest/sqlite/test/index/delete/1/slt_good_0.test
     # test/sqllogictest/sqlite/test/index/in/10/slt_good_0.test
     # test/sqllogictest/sqlite/test/index/orderby_nosort/10/slt_good_0.test
     # test/sqllogictest/sqlite/test/index/orderby/10/slt_good_0.test
-    test/sqllogictest/sqlite/test/index/random/10/slt_good_0.test
-    test/sqllogictest/sqlite/test/index/view/10/slt_good_0.test
-    test/sqllogictest/sqlite/test/random/aggregates/slt_good_0.test
-    test/sqllogictest/sqlite/test/random/expr/slt_good_0.test
-    test/sqllogictest/sqlite/test/random/groupby/slt_good_0.test
-    test/sqllogictest/sqlite/test/random/select/slt_good_0.test
+    # test/sqllogictest/sqlite/test/index/random/10/slt_good_0.test
+    # test/sqllogictest/sqlite/test/index/view/10/slt_good_0.test
+    # test/sqllogictest/sqlite/test/random/aggregates/slt_good_0.test
+    # test/sqllogictest/sqlite/test/random/expr/slt_good_0.test
+    # test/sqllogictest/sqlite/test/random/groupby/slt_good_0.test
+    # test/sqllogictest/sqlite/test/random/select/slt_good_0.test
     # test/sqllogictest/sqlite/test/select1.test
     # test/sqllogictest/sqlite/test/select2.test
     # test/sqllogictest/sqlite/test/select3.test
     # test/sqllogictest/sqlite/test/select4.test
-    test/sqllogictest/sqlite/test/select5.test
+    # test/sqllogictest/sqlite/test/select5.test
     test/sqllogictest/cockroach/aggregate.slt
     test/sqllogictest/cockroach/alias_types.slt
     test/sqllogictest/cockroach/alter_column_type.slt

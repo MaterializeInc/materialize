@@ -9,15 +9,15 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
 use reqwest::{blocking::Client, StatusCode, Url};
+use serde_json::json;
 use tempfile::NamedTempFile;
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::PostgresErrorExt;
 
 pub mod util;
 
@@ -215,47 +215,15 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
         .unwrap_db_error();
     assert_eq!(err.message(), "cannot create Avro OCF sink in safe mode");
 
-    // No Kerberos-authenticated Kafka sources or sinks.
-    let err = client
-        .batch_execute(
-            "CREATE SOURCE src
-            FROM KAFKA BROKER 'ignored' TOPIC 'ignored'
-            WITH (security_protocol = 'sasl_plaintext')",
-        )
-        .unwrap_db_error();
-    assert_eq!(
-        err.message(),
-        "cannot create Kerberos-authenticated Kafka source in safe mode"
-    );
-    let err = client
-        .batch_execute(
-            "CREATE SINK src FROM mz_sources
-            INTO KAFKA BROKER 'ignored' TOPIC 'ignored'
-            WITH (security_protocol = 'sasl_plaintext')",
-        )
-        .unwrap_db_error();
-    assert_eq!(
-        err.message(),
-        "cannot create Kerberos-authenticated Kafka sink in safe mode"
-    );
-
-    // Non-Kerberos Kafka sources are okay though.
-    client.batch_execute(&*format!(
-        "CREATE SOURCE src
-        FROM KAFKA BROKER '{}' TOPIC 'foo'
-        FORMAT BYTES",
-        &*KAFKA_ADDRS,
-    ))?;
-
     Ok(())
 }
 
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
     let server = util::start_server(util::Config::default())?;
-    let url = Url::parse(&format!("http://{}/sql", server.inner.local_addr()))?;
-    let mut params = HashMap::new();
+    let url = Url::parse(&format!("http://{}/api/sql", server.inner.local_addr()))?;
 
     struct TestCase {
         query: &'static str,
@@ -285,8 +253,10 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     ];
 
     for tc in tests {
-        params.insert("sql", tc.query);
-        let res = Client::new().post(url.clone()).form(&params).send()?;
+        let res = Client::new()
+            .post(url.clone())
+            .json(&json!({"sql": tc.query}))
+            .send()?;
         assert_eq!(res.status(), tc.status);
         assert_eq!(res.text()?, tc.body);
     }

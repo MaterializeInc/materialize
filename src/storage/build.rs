@@ -7,8 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
+use std::fs::File;
+use std::path::PathBuf;
+
 fn main() {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+
     prost_build::Config::new()
-        .compile_protos(&["source/source.proto"], &["src"])
+        .include_file("mod.rs")
+        .compile_protos(&["storage/src/source.proto"], &[".."])
         .unwrap();
+
+    // Work around a prost bug in which the module index expects to include a
+    // file for the well-known types.
+    File::create(out_dir.join("google.protobuf.rs")).unwrap();
 }

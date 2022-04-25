@@ -35,10 +35,10 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{GlobalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
+use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
-use mz_repr::{ColumnName, Diff, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
     ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
@@ -72,6 +72,7 @@ pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementD
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
+    CreateConnector(CreateConnectorPlan),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
@@ -111,6 +112,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterSecret(AlterSecretPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -153,7 +155,6 @@ pub struct CreateComputeInstancePlan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ComputeInstanceConfig {
-    Local,
     Remote {
         /// A map from replica name to hostnames.
         replicas: BTreeMap<String, BTreeSet<String>>,
@@ -168,7 +169,6 @@ pub enum ComputeInstanceConfig {
 impl ComputeInstanceConfig {
     pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
         match self {
-            Self::Local => &None,
             Self::Remote { introspection, .. } => introspection,
             Self::Managed { introspection, .. } => introspection,
         }
@@ -190,6 +190,13 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateConnectorPlan {
+    pub name: QualifiedObjectName,
+    pub if_not_exists: bool,
+    pub connector: Connector,
 }
 
 #[derive(Debug)]
@@ -392,6 +399,12 @@ pub struct AlterItemRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSecretPlan {
+    pub id: GlobalId,
+    pub secret_as: MirScalarExpr,
+}
+
+#[derive(Debug)]
 pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
@@ -447,6 +460,12 @@ pub struct Source {
     pub connector: SourceConnector,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Connector {
+    pub create_sql: String,
+    pub connector: ConnectorInner,
 }
 
 #[derive(Clone, Debug)]

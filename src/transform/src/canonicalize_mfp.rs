@@ -35,6 +35,7 @@
 
 use crate::TransformArgs;
 use mz_expr::canonicalize::canonicalize_predicates;
+use mz_expr::visit::VisitChildren;
 use mz_expr::MirRelationExpr;
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.

@@ -26,16 +26,15 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::persistence::{EnvelopePersistDesc, SourcePersistDesc};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ExternalSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
 };
-use mz_expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -49,9 +48,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, CreateIndexPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc,
+    ComputeInstanceConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
+    StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -61,7 +60,6 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::persistcfg::PersistConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -116,7 +114,6 @@ pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
     database_by_id: BTreeMap<DatabaseId, Database>,
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
-    entry_by_oid: HashMap<u32, GlobalId>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -148,7 +145,6 @@ impl CatalogState {
             CatalogItem::Table(table) => {
                 let connector = SourceConnector::Local {
                     timeline: table.timeline(),
-                    persisted_name: table.persist_name.clone(),
                 };
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connector,
@@ -195,7 +191,8 @@ impl CatalogState {
             | CatalogItem::Func(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
-            | CatalogItem::Secret(_) => false,
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => false,
         }
     }
 
@@ -232,11 +229,6 @@ impl CatalogState {
         &self.entry_by_id[id]
     }
 
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        let id = &self.entry_by_oid[oid];
-        &self.entry_by_id[id]
-    }
-
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
@@ -250,6 +242,32 @@ impl CatalogState {
         .items
         .get(&name.item)
         .and_then(|id| self.try_get_entry(id))
+    }
+
+    /// Gets an entry named `item` from exactly one of system schemas.
+    ///
+    /// # Panics
+    /// - If `item` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `item`.
+    fn get_entry_in_system_schemas(&self, item: &str) -> &CatalogEntry {
+        let mut res = None;
+        for system_schema in &[
+            PG_CATALOG_SCHEMA,
+            INFORMATION_SCHEMA,
+            MZ_CATALOG_SCHEMA,
+            MZ_INTERNAL_SCHEMA,
+        ] {
+            let schema_id = &self.ambient_schemas_by_name[*system_schema];
+            let schema = &self.ambient_schemas_by_id[schema_id];
+            if let Some(global_id) = schema.items.get(item) {
+                match res {
+                    None => res = Some(self.get_entry(global_id)),
+                    Some(_) => panic!("only call get_entry_in_system_schemas on objects uniquely identifiable in one system schema"),
+                }
+            }
+        }
+
+        res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
     pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
@@ -346,7 +364,6 @@ impl CatalogState {
             schema.items.insert(entry.name.item.clone(), entry.id);
         }
 
-        self.entry_by_oid.insert(oid, entry.id);
         self.entry_by_id.insert(entry.id, entry.clone());
     }
 
@@ -359,11 +376,9 @@ impl CatalogState {
         id: ComputeInstanceId,
         name: String,
         config: ComputeInstanceConfig,
-        local_compute_introspection: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let (config, introspection) = match config {
-            ComputeInstanceConfig::Local => (InstanceConfig::Local, local_compute_introspection),
             ComputeInstanceConfig::Remote {
                 replicas,
                 introspection,
@@ -599,11 +614,11 @@ impl CatalogState {
                     }
                 })
             }
-            // TODO: Persisted tables should be Nonvolatile.
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
             CatalogItem::Secret(_) => Nonvolatile,
+            CatalogItem::Connector(_) => Unknown,
         }
     }
 
@@ -686,6 +701,7 @@ pub enum CatalogItem {
     Type(Type),
     Func(Func),
     Secret(Secret),
+    Connector(Connector),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -696,7 +712,6 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
-    pub persist_name: Option<String>,
 }
 
 impl Table {
@@ -711,17 +726,13 @@ impl Table {
 pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
-    pub persist_details: Option<SerializedSourcePersistDetails>,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
 }
 
 impl Source {
     pub fn requires_single_materialization(&self) -> bool {
-        // Persisted sources must only be persisted once because we use the source ID to derive the
-        // names of the persistent collections that back it. If we allowed multiple instances,
-        // those would clash when trying to write to those collections.
-        self.connector.requires_single_materialization() || self.persist_details.is_some()
+        self.connector.requires_single_materialization()
     }
 }
 
@@ -786,6 +797,12 @@ pub struct Secret {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Connector {
+    pub create_sql: String,
+    pub connector: ConnectorInner,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum Volatility {
     Volatile,
     Nonvolatile,
@@ -814,6 +831,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
+            CatalogItem::Connector(_) => mz_sql::catalog::CatalogItemType::Connector,
         }
     }
 
@@ -826,7 +844,8 @@ impl CatalogItem {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
-            | CatalogItem::Secret(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -865,6 +884,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
             CatalogItem::Secret(_) => &[],
+            CatalogItem::Connector(_) => &[],
         }
     }
 
@@ -878,7 +898,8 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
-            | CatalogItem::Secret(_) => false,
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -898,6 +919,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => None,
             CatalogItem::Type(_) => None,
             CatalogItem::Func(_) => None,
+            CatalogItem::Connector(_) => None,
         }
     }
 
@@ -958,6 +980,11 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
+            }
+            CatalogItem::Connector(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Connector(i))
             }
         }
     }
@@ -1078,13 +1105,12 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub async fn open(mut config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub async fn open(config: Config<'_>) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
                 database_by_id: BTreeMap::new(),
                 entry_by_id: BTreeMap::new(),
-                entry_by_oid: HashMap::new(),
                 ambient_schemas_by_name: BTreeMap::new(),
                 ambient_schemas_by_id: BTreeMap::new(),
                 temporary_schemas: HashMap::new(),
@@ -1212,11 +1238,6 @@ impl Catalog {
                 },
                 item: builtin.name().into(),
             };
-            let full_name = FullObjectName {
-                database: RawDatabaseSpecifier::Ambient,
-                schema: builtin.schema().into(),
-                item: builtin.name().into(),
-            };
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
@@ -1228,9 +1249,7 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             connector: mz_dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
-                                persisted_name: None,
                             },
-                            persist_details: None,
                             desc: log.variant.desc(),
                             depends_on: vec![],
                         }),
@@ -1239,13 +1258,6 @@ impl Catalog {
 
                 Builtin::Table(table) => {
                     let oid = catalog.allocate_oid()?;
-                    let persist_name = if table.persistent {
-                        config
-                            .persister
-                            .new_table_persist_name(id, &full_name.to_string())
-                    } else {
-                        None
-                    };
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1256,21 +1268,16 @@ impl Catalog {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
-                            persist_name,
                         }),
                     );
                 }
 
                 Builtin::View(view) => {
-                    let table_persist_name = None;
-                    let source_persist_details = None;
                     let item = catalog
                         .parse_item(
                             id,
                             view.sql.into(),
                             None,
-                            table_persist_name,
-                            source_persist_details,
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -1316,18 +1323,7 @@ impl Catalog {
 
         let compute_instances = catalog.storage().load_compute_instances()?;
         for (id, name, conf) in compute_instances {
-            // Only one virtual compute instance can configure logging or
-            // else the virtual compute host will panic. We arbitrarily
-            // choose to attach the virtual compute host's logging to the
-            // first virtual cluster we see. If the user drops this cluster
-            // then they lose access to the logs. This is a bit silly, but
-            // it preserves the existing behavior of the binary without
-            // inventing a bunch of new concepts just to support virtual
-            // clusters.
-            let local_logging = config.local_compute_introspection.take();
-            let introspection_sources = if conf.introspection().is_some()
-                || matches!(conf, ComputeInstanceConfig::Local if local_logging.is_some())
-            {
+            let introspection_sources = if conf.introspection().is_some() {
                 let introspection_source_index_gids =
                     catalog.storage().load_introspection_source_index_gids(id)?;
 
@@ -1354,13 +1350,9 @@ impl Catalog {
             } else {
                 Vec::new()
             };
-            catalog.state.insert_compute_instance(
-                id,
-                name,
-                conf,
-                local_logging,
-                introspection_sources,
-            );
+            catalog
+                .state
+                .insert_compute_instance(id, name, conf, introspection_sources);
         }
 
         if !config.skip_migrations {
@@ -1624,10 +1616,6 @@ impl Catalog {
         let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
         let (catalog, _) = Self::open(Config {
             storage,
-            local_compute_introspection: Some(ComputeInstanceIntrospectionConfig {
-                granularity: Duration::from_secs(1),
-                debugging: false,
-            }),
             experimental_mode,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -1637,9 +1625,6 @@ impl Catalog {
             skip_migrations: true,
             metrics_registry,
             disable_user_indexes: false,
-            persister: &PersistConfig::disabled()
-                .init(Uuid::new_v4(), DUMMY_BUILD_INFO, metrics_registry)
-                .await?,
         })
         .await?;
         Ok(catalog)
@@ -1956,10 +1941,6 @@ impl Catalog {
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         self.state.get_entry(id)
-    }
-
-    pub fn get_entry_by_oid(&self, oid: &u32) -> &CatalogEntry {
-        self.state.get_entry_by_oid(oid)
     }
 
     pub fn get_schema(
@@ -2365,9 +2346,6 @@ impl Catalog {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
-                    if name == "default" {
-                        coord_bail!("cannot drop the default cluster");
-                    }
                     tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     vec![Action::DropComputeInstance { name }]
@@ -2486,29 +2464,14 @@ impl Catalog {
                 Op::UpdateComputeInstanceConfig { id, config } => {
                     tx.update_compute_instance_config(id, &config)?;
                     let config = match config {
-                        ComputeInstanceConfig::Local => InstanceConfig::Local,
                         ComputeInstanceConfig::Remote {
                             replicas,
-                            introspection,
-                        } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
-                            InstanceConfig::Remote { replicas }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Remote { replicas },
                         ComputeInstanceConfig::Managed {
                             size,
-                            introspection,
-                        } => {
-                            if introspection.is_some() {
-                                coord_bail!(
-                                    "cannot change introspection options on existing cluster"
-                                );
-                            }
-                            InstanceConfig::Managed { size }
-                        }
+                            introspection: _,
+                        } => InstanceConfig::Managed { size },
                     };
                     vec![Action::UpdateComputeInstanceConfig { id, config }]
                 }
@@ -2585,13 +2548,7 @@ impl Catalog {
                     introspection_sources,
                 } => {
                     info!("create cluster {}", name);
-                    state.insert_compute_instance(
-                        id,
-                        name.clone(),
-                        config,
-                        None,
-                        introspection_sources,
-                    );
+                    state.insert_compute_instance(id, name.clone(), config, introspection_sources);
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                 }
 
@@ -2742,44 +2699,34 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: table.persist_name.clone(),
-                source_persist_details: None,
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: source.persist_details.clone(),
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
             },
             CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
                 create_sql: secret.create_sql.clone(),
                 eval_env: None,
-                table_persist_name: None,
-                source_persist_details: None,
+            },
+            CatalogItem::Connector(connector) => SerializedCatalogItem::V1 {
+                create_sql: connector.create_sql.clone(),
+                eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
@@ -2790,60 +2737,33 @@ impl Catalog {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
-            table_persist_name,
-            source_persist_details,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(
-            id,
-            create_sql,
-            Some(&PlanContext::zero()),
-            table_persist_name,
-            source_persist_details,
-        )
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
     // Parses the given SQL string into a `CatalogItem`.
-    //
-    // The given `persist_details` are an optional description of the persisted streams that this
-    // source uses, if it is a persisted source.
     fn parse_item(
         &self,
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        table_persist_name: Option<String>,
-        source_persist_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                assert!(
-                    source_persist_details.is_none(),
-                    "got some source_persist_details while we didn't expect them for a table"
-                );
-                CatalogItem::Table(Table {
-                    create_sql: table.create_sql,
-                    desc: table.desc,
-                    defaults: table.defaults,
-                    conn_id: None,
-                    depends_on: table.depends_on,
-                    persist_name: table_persist_name,
-                })
-            }
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                assert!(
-                    table_persist_name.is_none(),
-                    "got some table_persist_name while we didn't expect them for a source"
-                );
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    connector: source.connector,
-                    persist_details: source_persist_details,
-                    desc: source.desc,
-                    depends_on: source.depends_on,
-                })
-            }
+            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
+                create_sql: table.create_sql,
+                desc: table.desc,
+                defaults: table.defaults,
+                conn_id: None,
+                depends_on: table.depends_on,
+            }),
+            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                connector: source.connector,
+                desc: source.desc,
+                depends_on: source.depends_on,
+            }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -2889,6 +2809,12 @@ impl Catalog {
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
+            Plan::CreateConnector(CreateConnectorPlan { connector, .. }) => {
+                CatalogItem::Connector(Connector {
+                    create_sql: connector.create_sql,
+                    connector: connector.connector,
+                })
+            }
             _ => bail!("catalog entry generated inappropriate plan"),
         })
     }
@@ -3023,53 +2949,7 @@ enum SerializedCatalogItem {
         create_sql: String,
         // The name "eval_env" is historical.
         eval_env: Option<SerializedPlanContext>,
-        // Previous versions used "persist_name" as the field name here.
-        #[serde(alias = "persist_name")]
-        table_persist_name: Option<String>,
-        source_persist_details: Option<SerializedSourcePersistDetails>,
     },
-}
-
-/// Serialized source persistence details. See `SourcePersistDesc` for an explanation of the
-/// fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SerializedSourcePersistDetails {
-    /// Name of the primary persisted stream of this source. This is what a consumer of the
-    /// persisted data would be interested in while the secondary stream(s) of the source are an
-    /// internal implementation detail.
-    pub primary_stream: String,
-
-    /// Persisted stream of timestamp bindings.
-    pub timestamp_bindings_stream: String,
-
-    /// Any additional details that we need to make the envelope logic stateful.
-    pub envelope_details: SerializedEnvelopePersistDetails,
-}
-
-/// See `EnvelopePersistDesc` for an explanation of the fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SerializedEnvelopePersistDetails {
-    Upsert,
-    None,
-}
-
-impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
-    fn from(source_persist_desc: SourcePersistDesc) -> Self {
-        SerializedSourcePersistDetails {
-            primary_stream: source_persist_desc.primary_stream,
-            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream,
-            envelope_details: source_persist_desc.envelope_desc.into(),
-        }
-    }
-}
-
-impl From<EnvelopePersistDesc> for SerializedEnvelopePersistDetails {
-    fn from(persist_desc: EnvelopePersistDesc) -> Self {
-        match persist_desc {
-            EnvelopePersistDesc::Upsert => SerializedEnvelopePersistDetails::Upsert,
-            EnvelopePersistDesc::None => SerializedEnvelopePersistDetails::None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3161,8 +3041,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
-            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
-                let item = self.get_item_by_oid(&custom_oid.unwrap());
+            List {
+                custom_id: Some(global_id),
+                ..
+            }
+            | Map {
+                custom_id: Some(global_id),
+                ..
+            } => {
+                let item = self.get_item(global_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -3174,10 +3061,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_oid: Some(oid),
+                custom_id: Some(id),
                 ..
             } => {
-                let item = self.get_item_by_oid(oid);
+                let item = self.get_item(id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record {
@@ -3196,6 +3083,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =
                     SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone());
+
                 let res = if self
                     .search_path
                     .iter()
@@ -3205,8 +3093,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 } else {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.
-                    let name = self.get_item_by_oid(&pgrepr_type.oid()).name();
-                    self.resolve_full_name(name).to_string()
+                    let name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: pg_catalog_schema,
+                        },
+                        item: pgrepr_type.name().to_string(),
+                    };
+                    self.resolve_full_name(&name).to_string()
                 };
                 res
             }
@@ -3341,11 +3235,6 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.catalog.get_entry(id)
     }
 
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn mz_sql::catalog::CatalogItem {
-        let id = self.catalog.state.entry_by_oid[oid];
-        self.catalog.get_entry(&id)
-    }
-
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {
         self.catalog.item_exists(name, self.conn_id)
     }
@@ -3457,6 +3346,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
+            CatalogItem::Connector(Connector { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
         }
     }

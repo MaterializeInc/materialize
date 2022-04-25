@@ -692,16 +692,16 @@ impl Default for MemConsensus {
 impl Consensus for MemConsensus {
     async fn head(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         Ok(self.data.lock().await.get(key).cloned())
     }
 
     async fn compare_and_set(
         &self,
-        key: &str,
         _deadline: Instant,
+        key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
@@ -711,6 +711,13 @@ impl Consensus for MemConsensus {
                         anyhow!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
                                  new.seqno, expected)));
             }
+        }
+
+        if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
+            return Err(ExternalError::from(anyhow!(
+                "sequence numbers must fit within [0, i64::MAX], received: {:?}",
+                new.seqno
+            )));
         }
         let mut store = self.data.lock().await;
 

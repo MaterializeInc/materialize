@@ -11,6 +11,7 @@
 
 use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
+use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out

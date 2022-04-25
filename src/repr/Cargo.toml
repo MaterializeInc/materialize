@@ -32,7 +32,7 @@ mz-persist-types = { path = "../persist-types" }
 num-traits = "0.2.14"
 num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
-prost = "0.9.0"
+prost = "0.10.1"
 regex = "1.5.4"
 ryu = "1.0.9"
 serde = { version = "1.0.136", features = ["derive"] }
@@ -40,16 +40,12 @@ serde_json = { version = "1.0.79", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.8.0", features = ["serde", "union"] }
 uuid = "0.8.2"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", optional = true }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
-mz-repr = { path = ".", features = ["test-utils"] }
 rand = "0.8.5"
 
 [build-dependencies]
-prost-build = "0.9.1"
-
-[features]
-test-utils = ["proptest", "proptest-derive"]
+prost-build = { version = "0.10.1", features = ["vendored"] }

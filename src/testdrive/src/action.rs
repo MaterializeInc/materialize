@@ -21,6 +21,8 @@ use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
+use aws_types::credentials::ProvideCredentials;
+use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -30,7 +32,6 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
-use mz_aws_util::config::AwsConfig;
 use mz_ore::display::DisplayExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -124,7 +125,7 @@ pub struct Config {
 
     // === AWS options. ===
     /// The configuration to use when connecting to AWS.
-    pub aws_config: AwsConfig,
+    pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
 }
@@ -163,7 +164,7 @@ pub struct State {
 
     // === AWS state. ===
     aws_account: String,
-    aws_config: AwsConfig,
+    aws_config: SdkConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
     s3_client: S3Client,
@@ -180,13 +181,20 @@ pub struct State {
 
 impl State {
     pub fn aws_endpoint(&self) -> String {
-        match self.aws_config.endpoint() {
-            None => String::new(),
-            Some(endpoint) => {
+        match (
+            self.aws_config.endpoint_resolver(),
+            self.aws_config.region(),
+        ) {
+            (Some(endpoint_resolver), Some(region)) => {
+                let endpoint = match endpoint_resolver.resolve_endpoint(region) {
+                    Ok(endpoint) => endpoint,
+                    Err(_) => return String::new(),
+                };
                 let mut uri = Uri::builder().build().unwrap();
                 endpoint.set_endpoint(&mut uri, None);
                 uri.to_string()
             }
+            _ => String::new(),
         }
     }
 
@@ -406,6 +414,8 @@ pub(crate) async fn build(
     {
         let aws_credentials = state
             .aws_config
+            .credentials_provider()
+            .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
             .provide_credentials()
             .await
             .context("fetching AWS credentials")?;

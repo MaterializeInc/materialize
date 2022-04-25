@@ -22,9 +22,8 @@ use tokio_stream::StreamMap;
 use tracing::debug;
 use uuid::Uuid;
 
-use mz_expr::GlobalId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
     ComputeCommand, ComputeResponse, GenericClient, PeekResponse, StorageCommand, StorageResponse,
@@ -193,15 +192,21 @@ where
         self.observe_command(&command);
 
         match command {
-            StorageCommand::Insert { id, updates } => {
-                let mut updates_parts = vec![Vec::new(); self.parts];
-                for update in updates {
-                    let part = usize::cast_from(update.row.hashed()) % self.parts;
-                    updates_parts[part].push(update);
+            StorageCommand::Append(appends) => {
+                let mut appends_parts = vec![Vec::with_capacity(appends.len()); self.parts];
+                for (id, updates, upper) in appends {
+                    let mut updates_parts = vec![Vec::new(); self.parts];
+                    for update in updates {
+                        let part = usize::cast_from(update.row.hashed()) % self.parts;
+                        updates_parts[part].push(update);
+                    }
+                    for (part, updates) in appends_parts.iter_mut().zip(updates_parts) {
+                        part.push((id, updates, upper.clone()));
+                    }
                 }
-                updates_parts
+                appends_parts
                     .into_iter()
-                    .map(|updates| StorageCommand::Insert { id, updates })
+                    .map(StorageCommand::Append)
                     .collect()
             }
             command => vec![command; self.parts],

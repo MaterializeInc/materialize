@@ -22,9 +22,9 @@ use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -165,11 +165,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
-
-    /// Gets an item by its OID.
-    ///
-    /// Panics if `oid` does not specify a valid item.
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &QualifiedObjectName) -> bool;
@@ -350,6 +345,8 @@ pub enum CatalogItemType {
     Func,
     /// A Secret.
     Secret,
+    /// A Connector.
+    Connector,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -363,6 +360,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
+            CatalogItemType::Connector => f.write_str("connector"),
         }
     }
 }
@@ -446,6 +444,72 @@ pub enum CatalogType<T: TypeReference> {
     Int2Vector,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Mirrored from [PostgreSQL's `typcategory`][typcategory].
+///
+/// Note that Materialize also uses a number of pseudotypes when planning, but
+/// we have yet to need to integrate them with `TypeCategory`.
+///
+/// [typcategory]:
+/// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
+pub enum TypeCategory {
+    /// Array type.
+    Array,
+    /// Bit string type.
+    BitString,
+    /// Boolean type.
+    Boolean,
+    /// Composite type.
+    Composite,
+    /// Date/time type.
+    DateTime,
+    /// Enum type.
+    Enum,
+    /// Geometric type.
+    Geometric,
+    /// List type. Materialize specific.
+    List,
+    /// Network address type.
+    NetworkAddress,
+    /// Numeric type.
+    Numeric,
+    /// Pseudo type.
+    Pseudo,
+    /// Range type.
+    Range,
+    /// String type.
+    String,
+    /// Timestamp type.
+    Timespan,
+    /// User-defined type.
+    UserDefined,
+    /// Unknown type.
+    Unknown,
+}
+
+impl fmt::Display for TypeCategory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            TypeCategory::Array => "array",
+            TypeCategory::BitString => "bit-string",
+            TypeCategory::Boolean => "boolean",
+            TypeCategory::Composite => "composite",
+            TypeCategory::DateTime => "date-time",
+            TypeCategory::Enum => "enum",
+            TypeCategory::Geometric => "geometric",
+            TypeCategory::List => "list",
+            TypeCategory::NetworkAddress => "network-address",
+            TypeCategory::Numeric => "numeric",
+            TypeCategory::Pseudo => "pseudo",
+            TypeCategory::Range => "range",
+            TypeCategory::String => "string",
+            TypeCategory::Timespan => "timespan",
+            TypeCategory::UserDefined => "user-defined",
+            TypeCategory::Unknown => "unknown",
+        })
+    }
+}
+
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
@@ -463,6 +527,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
+    /// Unknown connector.
+    UnknownConnector(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -478,6 +544,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
+            Self::UnknownConnector(name) => write!(f, "connector \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
@@ -592,10 +659,6 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
         unimplemented!();
     }
 
