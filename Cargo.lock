@@ -4153,6 +4153,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-compression",
+ "async-stream",
  "async-trait",
  "aws-sdk-kinesis",
  "aws-sdk-s3",
