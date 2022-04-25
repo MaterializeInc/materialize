@@ -3677,6 +3677,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
+ "mz-secrets-kubernetes",
  "serde_json",
  "sha2",
 ]

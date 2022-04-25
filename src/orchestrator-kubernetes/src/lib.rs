@@ -17,7 +17,7 @@ use clap::ArgEnum;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
-    Service as K8sService, ServicePort, ServiceSpec,
+    SecretVolumeSource, Service as K8sService, ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
@@ -29,6 +29,7 @@ use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_secrets_kubernetes::SECRET_NAME;
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -220,6 +221,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
+        let volume_name = "secrets-mount".to_string();
+
+        let secrets_volume = Volume {
+            name: volume_name.clone(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(SECRET_NAME.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
@@ -252,8 +264,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
+                    volume_mounts: Some(vec![VolumeMount {
+                        mount_path: "/secrets".to_string(),
+                        name: volume_name.clone(),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }],
+                volumes: Some(vec![secrets_volume]),
                 node_selector,
                 ..Default::default()
             }),
