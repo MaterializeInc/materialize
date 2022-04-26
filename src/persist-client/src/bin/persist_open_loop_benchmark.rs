@@ -466,7 +466,7 @@ mod raw_persist_benchmark {
             let mut count = 0;
             // TODO: setting a smaller deadline (of say 1 second), causes failures
             // sometimes.
-            let events = self.poll_next(Duration::from_millis(100_000)).await?;
+            let events = self.next(Duration::from_millis(100_000)).await?;
 
             for event in events {
                 if let ListenEvent::Progress(t) = event {
