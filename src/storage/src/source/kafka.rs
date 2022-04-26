@@ -172,7 +172,7 @@ impl SourceReader for KafkaSourceReader {
         let partition_ids = start_offsets.keys().copied().collect();
         Ok(KafkaSourceReader {
             topic_name: topic.clone(),
-            source_name: source_name.clone(),
+            source_name,
             id: source_id,
             partition_consumers: VecDeque::new(),
             consumer,
@@ -188,8 +188,8 @@ impl SourceReader for KafkaSourceReader {
                 base_metrics,
                 partition_ids,
                 topic,
-                source_name,
-                source_id,
+                source_id.source_id.to_string(),
+                source_id.dataflow_id.to_string(),
             ),
         })
     }
