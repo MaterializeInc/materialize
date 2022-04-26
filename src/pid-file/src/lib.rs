@@ -34,12 +34,11 @@
 
 #![warn(missing_docs)]
 
-use std::collections::HashMap;
 use std::ffi::{CString, NulError};
 use std::fmt;
 use std::fs::{OpenOptions, Permissions};
 use std::io;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -200,54 +199,3 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
-
-/// Handle to a file that contains metadata about a processes port mappings.
-///
-/// This is not meant to be used in production, it is to help orchestrate
-/// processes on local deployments, by accompanying a `PidFile`.
-#[derive(Debug)]
-pub struct PortMetadataFile<P: AsRef<Path>> {
-    path: P,
-}
-
-impl<P: AsRef<Path>> PortMetadataFile<P> {
-    /// Attempts to open and write the specified port metadata file.
-    pub fn open(
-        path: P,
-        port_metadata: &HashMap<String, i32>,
-    ) -> Result<PortMetadataFile<P>, Error> {
-        let port_metadata = serde_json::to_string(&port_metadata)
-            .unwrap_or_else(|_| panic!("failed to serialize {:?}", port_metadata));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(&path)?;
-        write!(file, "{port_metadata}")?;
-        Ok(PortMetadataFile { path })
-    }
-
-    /// Obtains handle to existing `PortMetadataFile`.
-    pub fn open_existing(path: P) -> PortMetadataFile<P> {
-        assert!(
-            path.as_ref().exists(),
-            "missing port metadata file: {}",
-            path.as_ref().as_os_str().to_str().unwrap()
-        );
-        PortMetadataFile { path }
-    }
-
-    /// Reads the contents of a `PortMetadataFile`
-    pub fn read(path: P) -> Result<HashMap<String, i32>, Error> {
-        let file = OpenOptions::new().read(true).open(path)?;
-        let reader = BufReader::new(file);
-        let port_metadata = reader.lines().next().expect("empty port metadata file")?;
-        Ok(serde_json::from_str(port_metadata.as_str()).expect("malformed port metadata"))
-    }
-}
-
-impl<P: AsRef<Path>> Drop for PortMetadataFile<P> {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}

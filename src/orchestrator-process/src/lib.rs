@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod port_metadata_file;
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
@@ -24,9 +26,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::{error, info};
 
+use crate::port_metadata_file::PortMetadataFile;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
 use mz_ore::id_gen::IdAllocator;
-use mz_pid_file::{PidFile, PortMetadataFile};
+use mz_pid_file::PidFile;
 
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
