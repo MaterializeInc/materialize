@@ -296,11 +296,9 @@ impl ConcreteComputeInstanceConfig {
                         |(
                             _name,
                             ClusterReplicaSizeConfig {
-                                processes,
-                                cpu_limit,
-                                ..
+                                scale, cpu_limit, ..
                             },
-                        )| (*processes, *cpu_limit),
+                        )| (*scale, *cpu_limit),
                     );
                     let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
                     CoordError::InvalidReplicaSize { size, expected }

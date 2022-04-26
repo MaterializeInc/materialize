@@ -113,7 +113,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             ports: ports_in,
             memory_limit: _,
             cpu_limit: _,
-            processes: processes_in,
+            scale: scale_in,
             labels: _,
             availability_zone: _,
         }: ServiceConfig<'_>,
@@ -126,7 +126,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let path = self.image_dir.join(image);
         let mut processes = vec![];
         let mut handles = vec![];
-        for _ in 0..(processes_in.get()) {
+        for _ in 0..(scale_in.get()) {
             let mut ports = HashMap::new();
             for port in &ports_in {
                 let p = self

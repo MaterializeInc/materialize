@@ -64,7 +64,7 @@ pub struct OrchestratorConfig {
 pub struct ClusterReplicaSizeConfig {
     pub memory_limit: Option<MemoryLimit>,
     pub cpu_limit: Option<CpuLimit>,
-    pub processes: NonZeroUsize,
+    pub scale: NonZeroUsize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -73,10 +73,10 @@ pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
         // {
-        //     "1": {"processes": 1},
-        //     "2": {"processes": 2},
+        //     "1": {"scale": 1},
+        //     "2": {"scale": 2},
         //     /// ...
-        //     "16": {"processes": 16}
+        //     "16": {"scale": 16}
         // }
         let inner = (1..=16)
             .map(|i| {
@@ -85,7 +85,7 @@ impl Default for ClusterReplicaSizeMap {
                     ClusterReplicaSizeConfig {
                         memory_limit: None,
                         cpu_limit: None,
-                        processes: NonZeroUsize::new(i).unwrap(),
+                        scale: NonZeroUsize::new(i).unwrap(),
                     },
                 )
             })
@@ -173,7 +173,7 @@ where
                             ],
                             cpu_limit: size_config.cpu_limit,
                             memory_limit: size_config.memory_limit,
-                            processes: size_config.processes,
+                            scale: size_config.scale,
                             labels: hashmap! {
                                 "cluster-id".into() => instance.to_string(),
                                 "type".into() => "cluster".into(),

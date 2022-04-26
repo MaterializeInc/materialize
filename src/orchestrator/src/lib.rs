@@ -87,8 +87,8 @@ pub struct ServiceConfig<'a> {
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
-    /// The number of processes to run.
-    pub processes: NonZeroUsize,
+    /// The number of copies of this service to run.
+    pub scale: NonZeroUsize,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///

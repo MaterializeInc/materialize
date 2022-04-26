@@ -86,7 +86,7 @@ properties of [`ServiceConfig`](https://dev.materialize.com/api/rust/mz_orchestr
 
   * Memory limit
   * CPU limit
-  * Processes
+  * Scale
 
 The mapping between replica size and the above property values will be
 determined by the new `--cluster-replica-sizes` comand line option, which
@@ -97,7 +97,7 @@ accepts a JSON object that can be deserialized into `ClusterReplicaSizeMap`:
 struct ClusterReplicaSizeConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
-    processes: usize,
+    scale: usize,
 }
 
 type ClusterReplicaSizeMap = HashMap<String, ClusterReplicaSizeMap>;
@@ -107,10 +107,10 @@ The default mapping if unspecified will be:
 
 ```jsonc
 {
-    "1": {"processes": 1},
-    "2": {"processes": 2},
+    "1": {"scale": 1},
+    "2": {"scale": 2},
     /// ...
-    "16": {"processes": 16}
+    "16": {"scale": 16}
 }
 ```
 
@@ -121,21 +121,24 @@ Materialize Cloud should use a mapping along the lines of the following:
 
 ```json
 {
-    "small": {"cpu_limit": 2, "memory_limit": 8, "processes": 1},
-    "medium": {"cpu_limit": 8, "memory_limit": 32, "processes": 1},
-    "large": {"cpu_limit": 32, "memory_limit": 128, "processes": 1},
-    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 1},
-    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 4},
-    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 16},
+    "small": {"cpu_limit": 2, "memory_limit": 8, "scale": 1},
+    "medium": {"cpu_limit": 8, "memory_limit": 32, "scale": 1},
+    "large": {"cpu_limit": 32, "memory_limit": 128, "scale": 1},
+    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 1},
+    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 4},
+    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 16},
 }
 ```
 
-The actual names and limits are strawmen. The key points are:
+The actual names and limits are strawmen. The key point is that the sizes have
+friendly names that abstract away the details.
 
-  * The sizes have friendly names that abstract away the details
-  * The number of processes doesn't scale until we've maxed out the amount of
-    resources available on a single VM. There is no reason to support horizontal
-    scalability until we've maxed out vertical scalability.
+Determining when to transition from scaling vertically to scaling horizontally
+is an open question that will need to be answered by running experiments on
+representative workloads. Prior work on benchmarking timely/differential in
+isolation showed performance improvements when switching to horizontal
+scalability before maxing out the resources on a single machine due to
+allocator overhead.
 
 #### Replica status
 

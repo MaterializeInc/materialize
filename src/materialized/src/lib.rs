@@ -307,7 +307,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 // TODO: limits?
                 cpu_limit: None,
                 memory_limit: None,
-                processes: NonZeroUsize::new(1).unwrap(),
+                scale: NonZeroUsize::new(1).unwrap(),
                 labels: HashMap::new(),
                 availability_zone: None,
             },
