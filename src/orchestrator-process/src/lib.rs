@@ -38,7 +38,7 @@ pub struct ProcessOrchestratorConfig {
     /// images.
     pub image_dir: PathBuf,
     /// The ports to allocate.
-    pub port_allocator: Arc<IdAllocator<i32>>,
+    pub port_allocator: Arc<IdAllocator<u16>>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The host spawned subprocesses bind to.
@@ -56,7 +56,7 @@ pub struct ProcessOrchestratorConfig {
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<i32>>,
+    port_allocator: Arc<IdAllocator<u16>>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     process_listen_host: String,
@@ -110,7 +110,7 @@ impl Orchestrator for ProcessOrchestrator {
 struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<i32>>,
+    port_allocator: Arc<IdAllocator<u16>>,
     suppress_output: bool,
     supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
     data_dir: PathBuf,
@@ -143,11 +143,18 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         let system = sysinfo::System::new_all();
 
+        // Decide on port mappings, and detect any non-dead processes that still exist.
+        // Any such processes will be left alone; any others will be (re-)created.
+        let mut processes_exist = vec![true; scale_in.get()];
+        let mut pid_file_locations = vec![None; scale_in.get()];
+        let mut port_metadata_file_locations = vec![None; scale_in.get()];
         for i in 0..(scale_in.get()) {
             let process_file_name = format!("{}-{}-{}", self.namespace, id, i);
             let pid_file_location = self.data_dir.join(format!("{}.pid", process_file_name));
+            pid_file_locations[i] = Some(pid_file_location.clone());
             let port_metadata_file_location =
                 self.data_dir.join(format!("{}.ports", process_file_name));
+            port_metadata_file_locations[i] = Some(port_metadata_file_location.clone());
 
             if pid_file_location.exists() && port_metadata_file_location.exists() {
                 let pid = PidFile::read(&pid_file_location)?;
@@ -173,6 +180,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     }
                 }
             }
+            // If we got here, we didn't find evidence of a live process, so we must (re-)create it later.
+            processes_exist[i] = false;
 
             let mut ports = HashMap::new();
             for port in &ports_in {
@@ -182,24 +191,36 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     .ok_or_else(|| anyhow!("port exhaustion"))?;
                 ports.insert(port.name.clone(), p);
             }
-            let mut args = args(&ports);
-            args.push(format!(
-                "--pid-file-location={}",
-                pid_file_location.display()
-            ));
             processes.push(ports.clone());
-            handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
-                || format!("service-supervisor: {full_id}"),
-                supervise(
-                    full_id.clone(),
-                    path.clone(),
-                    args.clone(),
-                    Arc::clone(&self.port_allocator),
-                    ports,
-                    self.suppress_output,
-                    port_metadata_file_location,
-                ),
-            ))));
+        }
+
+        // Now create all the processes that weren't detected as being still alive
+        // let hosts_ports = std::iter::from_fn(|| ("localhost".to_string(), ))
+        let hosts_ports = processes
+            .iter()
+            .map(|ports| ("localhost".to_string(), ports.clone()))
+            .collect::<Vec<_>>();
+        for i in 0..(scale_in.get()) {
+            if !processes_exist[i] {
+                let mut args = args(&hosts_ports, &processes[i], Some(i));
+                args.push(format!(
+                    "--pid-file-location={}",
+                    pid_file_locations[i].as_ref().unwrap().display()
+                ));
+
+                handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
+                    || format!("service-supervisor: {full_id}"),
+                    supervise(
+                        full_id.clone(),
+                        path.clone(),
+                        args.clone(),
+                        Arc::clone(&self.port_allocator),
+                        std::mem::take(&mut processes[i]),
+                        self.suppress_output,
+                        std::mem::take(port_metadata_file_locations[i].as_mut().unwrap()),
+                    ),
+                ))));
+            }
         }
         supervisors.insert(id.into(), handles);
         Ok(Box::new(ProcessService { processes }))
@@ -221,8 +242,8 @@ async fn supervise(
     full_id: String,
     path: PathBuf,
     args: Vec<String>,
-    port_allocator: Arc<IdAllocator<i32>>,
-    ports: HashMap<String, i32>,
+    port_allocator: Arc<IdAllocator<u16>>,
+    ports: HashMap<String, u16>,
     suppress_output: bool,
     port_metadata_file_location: PathBuf,
 ) {
@@ -315,7 +336,7 @@ impl Drop for AbortOnDrop {
 #[derive(Debug, Clone)]
 struct ProcessService {
     /// For each process in order, the allocated ports by name.
-    processes: Vec<HashMap<String, i32>>,
+    processes: Vec<HashMap<String, u16>>,
 }
 
 impl Service for ProcessService {

@@ -167,7 +167,7 @@ pub struct Args {
     orchestrator_linger: Option<bool>,
     /// Base port for spawning various services
     #[structopt(long, default_value = "2100")]
-    base_service_port: i32,
+    base_service_port: u16,
 
     // === Secrets controller options. ===
     /// The secrets controller implementation to use
