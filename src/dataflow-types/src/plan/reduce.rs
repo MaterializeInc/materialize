@@ -355,7 +355,6 @@ pub struct MonotonicPlan {
 impl From<&MonotonicPlan> for ProtoMonotonicPlan {
     fn from(x: &MonotonicPlan) -> Self {
         Self {
-            //aggr_funcs: x.aggr_funcs.into_iter().map(|x| (&x).into()).collect(),
             aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
             skips: x
                 .skips

@@ -104,7 +104,8 @@ impl From<&JoinClosure> for ProtoJoinClosure {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            before: None, // TODO: Implement me
+            // TODO(lluki): Implement me once #11970 is fixed
+            before: None,
         }
     }
 }
@@ -120,7 +121,7 @@ impl TryFrom<ProtoJoinClosure> for JoinClosure {
                 .map(TryFrom::try_from)
                 .collect::<Result<_, TryFromProtoError>>()?,
 
-            // TODO: Implement me
+            // TODO(lluki): Implement me once #11970 is fixed
             before: mz_expr::safe_mfp_stub(),
         })
     }
@@ -414,7 +415,7 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-        // TODO: This will only work once we have implemented MfpPlan
+        // TODO: This will only work once we have implemented MfpPlan #11970
         #[test]
         #[ignore]
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {

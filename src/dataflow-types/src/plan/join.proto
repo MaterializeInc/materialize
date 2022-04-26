@@ -32,7 +32,8 @@ message ProtoJoinClosureEquivalents {
 }
 message ProtoJoinClosure {
     repeated ProtoMirScalarVec ready_equivalences = 1;
-    // TODO: ProtoSafeMfpPlan before = 2;
+    // TODO(lluki): Uncomment when #11970 is fixed
+    // ProtoSafeMfpPlan before = 2;
     google.protobuf.Empty before = 2;
 }
 
@@ -49,7 +50,7 @@ message ProtoLinearJoinPlan {
     uint64 source_relation  = 1;
     // Can't inline this as it must be an Option
     ProtoMirScalarVec source_key = 2;
-    optional ProtoJoinClosure initial_closure = 3;
+    ProtoJoinClosure initial_closure = 3;
     repeated ProtoLinearStagePlan stage_plans = 4;
     optional ProtoJoinClosure final_closure = 5;
 }

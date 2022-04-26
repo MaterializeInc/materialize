@@ -24,7 +24,7 @@ mod linear;
 mod relation;
 mod scalar;
 
-// TODO: Remove me
+// TODO(lluki): Remove me once #11970 is implemented
 pub use linear::plan::safe_mfp_stub;
 
 pub mod explain;

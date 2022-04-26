@@ -1256,7 +1256,7 @@ pub mod plan {
         mfp: MapFilterProject,
     }
 
-    // TODO: Replace this function with some TryFrom<Proto..>
+    // TODO(lluki): Replace this function with some TryFrom<Proto..> once #11970 is fixed
     pub fn safe_mfp_stub() -> SafeMfpPlan {
         SafeMfpPlan {
             mfp: MapFilterProject {

@@ -55,11 +55,9 @@ impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
     type Error = TryFromProtoError;
 
     fn try_from(x: ProtoLinearJoinPlan) -> Result<Self, Self::Error> {
-        let sk: Option<Result<_, _>> = x.source_key.map(TryFrom::try_from);
-
         Ok(LinearJoinPlan {
             source_relation: ProtoRepr::from_proto(x.source_relation)?,
-            source_key: sk.transpose()?,
+            source_key: x.source_key.map(TryInto::try_into).transpose()?,
             initial_closure: x.initial_closure.map(|x| x.try_into()).transpose()?,
             stage_plans: x
                 .stage_plans

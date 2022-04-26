@@ -77,7 +77,7 @@ pub enum MirScalarExpr {
 }
 
 impl Arbitrary for MirScalarExpr {
-    // TODO: This is just a stub
+    // TODO: This is just a stub. #11740
     type Parameters = ();
     type Strategy = Just<MirScalarExpr>;
 
@@ -87,7 +87,7 @@ impl Arbitrary for MirScalarExpr {
 }
 
 impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
-    // TODO: This is just a stub
+    // TODO: This is just a stub. #11740
     type Error = TryFromProtoError;
 
     fn try_from(_value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
@@ -96,7 +96,7 @@ impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
 }
 
 impl From<&MirScalarExpr> for ProtoMirScalarExpr {
-    // TODO: This is just a stub
+    // TODO: This is just a stub. #11740
     fn from(_: &MirScalarExpr) -> Self {
         ProtoMirScalarExpr {}
     }
