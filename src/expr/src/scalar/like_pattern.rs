@@ -11,12 +11,16 @@ use std::mem;
 use std::str::FromStr;
 
 use derivative::Derivative;
+use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
+use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+
+include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
 /// The number of subpatterns after which using regexes would be more efficient.
 const MAX_SUBPATTERNS: usize = 5;
@@ -119,10 +123,67 @@ impl Matcher {
     }
 }
 
+impl From<&Matcher> for ProtoMatcher {
+    fn from(x: &Matcher) -> Self {
+        ProtoMatcher {
+            pattern: x.pattern.clone(),
+            case_insensitive: x.case_insensitive,
+            matcher_impl: Some((&x.matcher_impl).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoMatcher> for Matcher {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoMatcher) -> Result<Self, Self::Error> {
+        Ok(Matcher {
+            pattern: x.pattern,
+            case_insensitive: x.case_insensitive,
+            matcher_impl: x
+                .matcher_impl
+                .try_into_if_some("ProtoMatcher::matcher_impl")?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
 enum MatcherImpl {
     String(Vec<Subpattern>),
     Regex(#[serde(with = "serde_regex")] Regex),
+}
+
+impl From<&MatcherImpl> for ProtoMatcherImpl {
+    fn from(x: &MatcherImpl) -> Self {
+        use proto_matcher_impl::Kind::*;
+        use proto_matcher_impl::ProtoSubpatternVec;
+        ProtoMatcherImpl {
+            kind: Some(match x {
+                MatcherImpl::String(subpatterns) => String(ProtoSubpatternVec {
+                    vec: subpatterns.iter().map(Into::into).collect(),
+                }),
+                MatcherImpl::Regex(regex) => Regex(regex.clone().into_proto()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoMatcherImpl> for MatcherImpl {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoMatcherImpl) -> Result<Self, Self::Error> {
+        use proto_matcher_impl::Kind::*;
+        use proto_matcher_impl::ProtoSubpatternVec;
+        match x.kind {
+            Some(String(ProtoSubpatternVec { vec })) => Ok(MatcherImpl::String(
+                vec.into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex::Regex::from_proto(regex)?)),
+            None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
+        }
+    }
 }
 
 /// Builds a Matcher that matches a SQL LIKE pattern.
@@ -147,6 +208,14 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
         case_insensitive,
         matcher_impl,
     })
+}
+
+pub fn any_matcher() -> impl Strategy<Value = Matcher> {
+    (
+        r"(_|%)?(([[:alpha:]]|(\\_)|(\\%)|(\\\\)|华){1, 10}(_|%)?){0, 6}",
+        bool::arbitrary(),
+    )
+        .prop_map(|(pattern, case_insensitive)| compile(&pattern, case_insensitive).unwrap())
 }
 
 // The algorithm below is based on the observation that any LIKE pattern can be
@@ -209,6 +278,28 @@ impl Subpattern {
             }
         }
         regex_syntax::escape_into(&self.suffix, r);
+    }
+}
+
+impl From<&Subpattern> for ProtoSubpattern {
+    fn from(x: &Subpattern) -> Self {
+        ProtoSubpattern {
+            consume: x.consume.into_proto(),
+            many: x.many,
+            suffix: x.suffix.clone(),
+        }
+    }
+}
+
+impl TryFrom<ProtoSubpattern> for Subpattern {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoSubpattern) -> Result<Self, Self::Error> {
+        Ok(Subpattern {
+            consume: usize::from_proto(x.consume)?,
+            many: x.many,
+            suffix: x.suffix,
+        })
     }
 }
 
