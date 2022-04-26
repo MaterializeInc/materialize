@@ -1483,9 +1483,7 @@ impl Catalog {
         }
         for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
-            for (replica_name, _replica_config) in
-                &catalog.state.compute_instances_by_id[id].replicas
-            {
+            for replica_name in catalog.state.compute_instances_by_id[id].replicas.keys() {
                 builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
                     *id,
                     &replica_name,
@@ -2736,7 +2734,7 @@ impl Catalog {
                         .expect("can only drop known instances");
 
                     assert!(
-                        instance.indexes.is_empty(),
+                        instance.indexes.is_empty() && instance.replicas.is_empty(),
                         "not all items dropped before compute instance"
                     );
                 }

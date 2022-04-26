@@ -11,19 +11,21 @@
 
 mode cockroach
 
-# Creating a cluster without any options does not work.
-statement error one of REMOTE or SIZE must be specified
+statement ok
 CREATE CLUSTER foo
 
-# Creating a remote cluster works.
 statement ok
-CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
+DROP CLUSTER foo
+
+# Creating cluster w/ remote replica works.
+statement ok
+CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234')
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REMOTE r1 ('localhost:1234')
+CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234')
 
 statement ok
-CREATE CLUSTER bar REMOTE r1 ('localhost:1235'), REMOTE r2 ('localhost:1236')
+CREATE CLUSTER bar REPLICA r1 REMOTE ('localhost:1235'), REPLICA r2 REMOTE ('localhost:1236')
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -46,11 +48,11 @@ default
 
 # Test invalid option combinations.
 
-statement error SIZE specified more than once
+statement error Expected INTROSPECTION, found SIZE
 CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 
-statement error only one of REMOTE or SIZE may be specified
-CREATE CLUSTER baz REMOTE r1 ('localhost:1234'), SIZE 'small'
+statement error Expected REPLICA, found SIZE
+CREATE CLUSTER baz REPLICA r1 REMOTE ('localhost:1234'), SIZE 'small'
 
 # Test `cluster` session variable.
 
@@ -166,7 +168,7 @@ statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER baz REMOTE r1 ('localhost:1234')
+CREATE CLUSTER baz REPLICA r1 REMOTE ('localhost:1234')
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -183,7 +185,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REMOTE r1 ('localhost:1234'), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s'
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
@@ -197,27 +205,21 @@ statement ok
 DROP CLUSTER foo
 
 statement error unknown cluster size
-CREATE CLUSTER foo SIZE 'lol'
+CREATE CLUSTER foo REPLICA a SIZE 'lol'
 
 statement ok
-CREATE CLUSTER foo SIZE '1'
+CREATE CLUSTER foo REPLICA a SIZE '1'
 
 statement ok
-CREATE CLUSTER foo2 SIZE '32'
+CREATE CLUSTER foo2 SREPLICA a IZE '32'
 
 statement ok
-CREATE CLUSTER foo3 SIZE '2-2'
+CREATE CLUSTER foo3 REPLICA a SIZE '2-2'
+
+statement ok
+DROP CLUSTER foo, foo2, foo3 CASCADE
 
 # Test that introspection source indexes are created and dropped correctly
-
-statement ok
-DROP CLUSTER foo;
-
-statement ok
-DROP CLUSTER foo2;
-
-statement ok
-DROP CLUSTER foo3;
 
 # There are 17 introspection sources
 query I
@@ -245,3 +247,46 @@ query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
 17
+
+statement ok
+CREATE CLUSTER REPLICA size_1 FOR default SIZE '1';
+
+query TT
+SHOW CLUSTER REPLICAS
+----
+default default_replica
+default size_1
+
+statement ok
+CREATE CLUSTER foo REPLICA size_1 SIZE '1', REPLICA size_2 SIZE '2'
+
+query TT
+SHOW CLUSTER REPLICAS
+----
+default default_replica
+default size_1
+foo size_1
+foo size_2
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS bar FROM default
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS foo FROM bar
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS foo FROM default
+
+query error CLUSTER foo has no CLUSTER REPLICA named foo
+DROP CLUSTER REPLICA size_1, foo FROM foo
+
+statement ok
+DROP CLUSTER REPLICA size_1 FROM default
+
+statement ok
+DROP CLUSTER REPLICA size_1, size_2 FROM foo
+
+query TT
+SHOW CLUSTER REPLICAS
+----
+default default_replica

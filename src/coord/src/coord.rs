@@ -2653,17 +2653,23 @@ impl Coordinator {
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
-        let mut instance_replica_drop_sets = HashMap::new();
+        let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
-            instance_replica_drop_sets.insert(instance.id, instance.replicas.clone());
+            instance_replica_drop_sets.push((instance.id, instance.replicas.clone()));
+            for replica_name in instance.replicas.keys() {
+                ops.push(catalog::Op::DropComputeInstanceReplica {
+                    name: replica_name.to_string(),
+                    compute_id: instance.id,
+                });
+            }
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
-        for (instance_id, replicas) in instance_replica_drop_sets.drain() {
+        for (instance_id, replicas) in instance_replica_drop_sets {
             for (name, config) in replicas {
                 self.dataflow_client
                     .drop_replica(instance_id, &name, config)

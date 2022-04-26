@@ -1292,7 +1292,7 @@ CREATE CLUSTER cluster SIZE = 'small'
 parse-statement
 CREATE CLUSTER cluster REPLICA a REMOTE ('host1')
 ----
-CREATE CLUSTER cluster
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }] })
 
@@ -1302,6 +1302,13 @@ CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
 error: Expected REPLICA, found SIZE
 CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
                                                    ^
+
+parse-statement
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
+----
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] }] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ('host1')
@@ -1325,6 +1332,13 @@ CREATE CLUSTER REPLICA replica SIZE 'small', REMOTE ('host1')
                                ^
 
 parse-statement
+CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', REMOTE ('host1')
+----
+CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', REMOTE ('host1')
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small"))), Remote { hosts: [Value(String("host1"))] }] }, if_not_exists: false, for_cluster: Ident("cluster") })
+
+parse-statement
 DROP CLUSTER cluster
 ----
 DROP CLUSTER cluster
@@ -1346,18 +1360,18 @@ DROP CLUSTER IF EXISTS cluster
 DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
 
 parse-statement
-DROP CLUSTER REPLICA replica FROM cluster
+DROP CLUSTER REPLICA r1, r2 FROM cluster
 ----
-DROP CLUSTER REPLICA replica FROM cluster
+DROP CLUSTER REPLICA r1, r2 FROM cluster
 =>
-DropClusterReplica(DropClusterReplicaStatement { if_exists: false, name: UnresolvedObjectName([Ident("replica")]), cluster: UnresolvedObjectName([Ident("cluster")]) })
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: false, names: [UnresolvedObjectName([Ident("r1")]), UnresolvedObjectName([Ident("r2")])], cluster: UnresolvedObjectName([Ident("cluster")]) })
 
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS replica FROM cluster
 ----
 DROP CLUSTER REPLICA IF EXISTS replica FROM cluster
 =>
-DropClusterReplica(DropClusterReplicaStatement { if_exists: true, name: UnresolvedObjectName([Ident("replica")]), cluster: UnresolvedObjectName([Ident("cluster")]) })
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [UnresolvedObjectName([Ident("replica")])], cluster: UnresolvedObjectName([Ident("cluster")]) })
 
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS replica

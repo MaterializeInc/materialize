@@ -2597,7 +2597,13 @@ impl<'a> Parser<'a> {
     fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
         self.expect_keyword(REPLICA)?;
         let name = self.parse_identifier()?;
-        let options = vec![self.parse_replica_option()?];
+        let options = if self.consume_token(&Token::LParen) {
+            let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![self.parse_replica_option()?]
+        };
         Ok(ReplicaDefinition { name, options })
     }
 
@@ -2749,7 +2755,7 @@ impl<'a> Parser<'a> {
                 }));
             }
             Some(CLUSTER) => {
-                return if self.peek_keyword(REPLICAS) {
+                return if self.peek_keyword(REPLICA) {
                     self.parse_drop_cluster_replicas()
                 } else {
                     self.parse_drop_clusters()
@@ -4155,8 +4161,13 @@ impl<'a> Parser<'a> {
                 OBJECTS => ObjectType::Object,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTER => {
-                    self.expect_keyword(REPLICAS)?;
-                    ObjectType::ClusterReplica
+                    if self.parse_keyword(REPLICAS) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        return Ok(Statement::ShowVariable(ShowVariableStatement {
+                            variable: Ident::from("cluster"),
+                        }));
+                    }
                 }
                 CLUSTERS => ObjectType::Cluster,
                 SINKS => ObjectType::Sink,

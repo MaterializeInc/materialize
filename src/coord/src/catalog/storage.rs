@@ -150,8 +150,8 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     stash,
                     vec![
                         (
-                            ComputeInstanceReplicaKey{ compute_instance_id: 1, name: "default_instance".into() },
-                            ComputeInstanceReplicaValue{
+                            ComputeInstanceReplicaKey { compute_instance_id: 1, name: "default_replica".into() },
+                            ComputeInstanceReplicaValue {
                                 config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
                             }
                         )

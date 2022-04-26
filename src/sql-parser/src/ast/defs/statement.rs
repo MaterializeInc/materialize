@@ -892,6 +892,19 @@ impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
         f.write_node(&self.name);
+        if !self.replicas.is_empty() {
+            f.write_str(" ");
+            let replica_defs = self
+                .replicas
+                .iter()
+                .map(|ReplicaDefinition { name, options }| {
+                    let options =
+                        itertools::join(options.iter().map(|o| o.to_ast_string_stable()), ", ");
+                    format!("REPLICA {name} ({options})")
+                })
+                .collect::<Vec<_>>();
+            f.write_str(itertools::join(replica_defs, ", "));
+        }
         if !self.options.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.options));
@@ -971,8 +984,7 @@ impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ReplicaOption::Remote { hosts } => {
-                f.write_str("REMOTE ");
-                f.write_str(" (");
+                f.write_str("REMOTE (");
                 f.write_node(&display::comma_separated(hosts));
                 f.write_str(")");
             }
@@ -1254,7 +1266,7 @@ pub struct DropClusterReplicasStatement {
 
 impl AstDisplay for DropClusterReplicasStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP CLUSTER REPLICAS ");
+        f.write_str("DROP CLUSTER REPLICA ");
         if self.if_exists {
             f.write_str("IF EXISTS ");
         }
