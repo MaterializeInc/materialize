@@ -161,7 +161,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             process.kill();
                         } else {
                             // Existing non-dead process, so we don't create a new one
-                            processes.push(port_metadata);
+                            for port in port_metadata.values() {
+                                self.port_allocator.mark_allocated(*port);
+                            }
                             handles.push(AbortOnDrop(Box::new(ExternalProcess {
                                 pid,
                                 _port_metadata_file: PortMetadataFile::open_existing(

@@ -15,10 +15,11 @@
 
 //! ID generation utilities.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::AddAssign;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Manages the allocation of unique IDs.
 #[derive(Debug, Default)]
@@ -53,11 +54,12 @@ struct IdAllocatorInner<T> {
     next: T,
     max: T,
     free: VecDeque<T>,
+    allocated: HashSet<T>,
 }
 
 impl<T> IdAllocator<T>
 where
-    T: From<u8> + AddAssign + PartialOrd + Copy,
+    T: From<u8> + AddAssign + PartialOrd + Copy + Eq + Hash,
 {
     /// Creates a new `IdAllocator` that will assign IDs between `min` and
     /// `max`, both inclusive.
@@ -66,6 +68,7 @@ where
             next: min,
             max,
             free: VecDeque::new(),
+            allocated: HashSet::new(),
         }))
     }
 
@@ -74,6 +77,16 @@ where
     /// Returns `None` if the allocator is exhausted.
     pub fn alloc(&self) -> Option<T> {
         let mut inner = self.0.lock().expect("lock poisoned");
+        while let Some(id) = self.alloc_inner(&mut inner) {
+            if !inner.allocated.contains(&id) {
+                return Some(id);
+            }
+        }
+
+        None
+    }
+
+    fn alloc_inner(&self, inner: &mut MutexGuard<IdAllocatorInner<T>>) -> Option<T> {
         if let Some(id) = inner.free.pop_front() {
             Some(id)
         } else {
@@ -94,6 +107,14 @@ where
     pub fn free(&self, id: T) {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.free.push_back(id);
+        let _ = inner.allocated.remove(&id);
+    }
+
+    /// Marks an ID as allocated and prevents `IdAllocator` from allocating it
+    /// in the future.
+    pub fn mark_allocated(&self, id: T) {
+        let mut inner = self.0.lock().expect("lock poisoned");
+        inner.allocated.insert(id);
     }
 }
 
@@ -120,5 +141,23 @@ mod tests {
             ),
             None => (),
         }
+    }
+
+    #[test]
+    fn test_mark_allocated() {
+        let ida = IdAllocator::new(1, 10);
+        ida.mark_allocated(4);
+
+        while let Some(id) = ida.alloc() {
+            assert_ne!(4, id);
+        }
+
+        ida.free(3);
+        assert_eq!(3, ida.alloc().unwrap());
+        assert!(ida.alloc().is_none());
+
+        ida.free(4);
+        assert_eq!(4, ida.alloc().unwrap());
+        assert!(ida.alloc().is_none());
     }
 }
