@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +29,7 @@ use mz_dataflow_types::client::{GenericClient, StorageClient};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_pid_file::PidFile;
 use mz_storage::Server;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
@@ -98,6 +100,10 @@ struct Args {
     /// The address of the HTTP profiling UI.
     #[clap(long, value_name = "HOST:PORT")]
     http_console_addr: Option<String>,
+
+    /// Where to write a pid lock file. Should only be used for local process orchestrators.
+    #[clap(long, value_name = "PATH")]
+    pid_file_location: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -198,6 +204,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         boundary.lock().unwrap()[index % workers].take().unwrap()
     })?;
     let client: Box<dyn StorageClient> = Box::new(client);
+
+    let mut _pid_file = None;
+    if let Some(pid_file_location) = &args.pid_file_location {
+        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+    }
+
     serve(serve_config, server, client).await
 }
 

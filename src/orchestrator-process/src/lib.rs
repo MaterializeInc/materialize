@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+pub mod port_metadata_file;
+
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -17,13 +20,16 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use itertools::Itertools;
 use scopeguard::defer;
+use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::{error, info};
 
+use crate::port_metadata_file::PortMetadataFile;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
 use mz_ore::id_gen::IdAllocator;
+use mz_pid_file::PidFile;
 
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
@@ -37,6 +43,9 @@ pub struct ProcessOrchestratorConfig {
     pub suppress_output: bool,
     /// The host spawned subprocesses bind to.
     pub process_listen_host: Option<String>,
+    /// The directory in which the orchestrator should look for process
+    /// lock files.
+    pub data_dir: PathBuf,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -51,6 +60,7 @@ pub struct ProcessOrchestrator {
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     process_listen_host: String,
+    data_dir: PathBuf,
 }
 
 impl ProcessOrchestrator {
@@ -62,6 +72,7 @@ impl ProcessOrchestrator {
             port_allocator,
             suppress_output,
             process_listen_host,
+            data_dir,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         Ok(ProcessOrchestrator {
@@ -71,6 +82,7 @@ impl ProcessOrchestrator {
             namespaces: Mutex::new(HashMap::new()),
             process_listen_host: process_listen_host
                 .unwrap_or_else(|| ProcessOrchestrator::DEFAULT_LISTEN_HOST.to_string()),
+            data_dir: fs::canonicalize(data_dir)?,
         })
     }
 }
@@ -88,6 +100,7 @@ impl Orchestrator for ProcessOrchestrator {
                 port_allocator: Arc::clone(&self.port_allocator),
                 suppress_output: self.suppress_output,
                 supervisors: Mutex::new(HashMap::new()),
+                data_dir: self.data_dir.clone(),
             })
         }))
     }
@@ -99,7 +112,8 @@ struct NamespacedProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<IdAllocator<i32>>,
     suppress_output: bool,
-    supervisors: Mutex<HashMap<String, Vec<AbortOnDrop<()>>>>,
+    supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
+    data_dir: PathBuf,
 }
 
 #[async_trait]
@@ -126,7 +140,40 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let path = self.image_dir.join(image);
         let mut processes = vec![];
         let mut handles = vec![];
-        for _ in 0..(scale_in.get()) {
+
+        let system = sysinfo::System::new_all();
+
+        for i in 0..(scale_in.get()) {
+            let process_file_name = format!("{}-{}-{}", self.namespace, id, i);
+            let pid_file_location = self.data_dir.join(format!("{}.pid", process_file_name));
+            let port_metadata_file_location =
+                self.data_dir.join(format!("{}.ports", process_file_name));
+
+            if pid_file_location.exists() && port_metadata_file_location.exists() {
+                let pid = PidFile::read(&pid_file_location)?;
+                let port_metadata = PortMetadataFile::read(&port_metadata_file_location)?;
+                if let Some(process) = system.process(pid.into()) {
+                    if process.exe() == path {
+                        if process.status() == ProcessStatus::Dead
+                            || process.status() == ProcessStatus::Zombie
+                        {
+                            // Existing dead process, so we try and kill it and create a new one later
+                            process.kill();
+                        } else {
+                            // Existing non-dead process, so we don't create a new one
+                            processes.push(port_metadata);
+                            handles.push(AbortOnDrop(Box::new(ExternalProcess {
+                                pid,
+                                _port_metadata_file: PortMetadataFile::open_existing(
+                                    port_metadata_file_location,
+                                ),
+                            })));
+                            continue;
+                        }
+                    }
+                }
+            }
+
             let mut ports = HashMap::new();
             for port in &ports_in {
                 let p = self
@@ -135,19 +182,24 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     .ok_or_else(|| anyhow!("port exhaustion"))?;
                 ports.insert(port.name.clone(), p);
             }
-            let args = args(&ports);
+            let mut args = args(&ports);
+            args.push(format!(
+                "--pid-file-location={}",
+                pid_file_location.display()
+            ));
             processes.push(ports.clone());
-            handles.push(AbortOnDrop(mz_ore::task::spawn(
+            handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
                 || format!("service-supervisor: {full_id}"),
                 supervise(
                     full_id.clone(),
                     path.clone(),
                     args.clone(),
                     Arc::clone(&self.port_allocator),
-                    ports.values().cloned().collect(),
+                    ports,
                     self.suppress_output,
+                    port_metadata_file_location,
                 ),
-            )));
+            ))));
         }
         supervisors.insert(id.into(), handles);
         Ok(Box::new(ProcessService { processes }))
@@ -170,14 +222,22 @@ async fn supervise(
     path: PathBuf,
     args: Vec<String>,
     port_allocator: Arc<IdAllocator<i32>>,
-    ports: Vec<i32>,
+    ports: HashMap<String, i32>,
     suppress_output: bool,
+    port_metadata_file_location: PathBuf,
 ) {
     defer! {
-        for port in ports {
-            port_allocator.free(port);
+        for port in ports.values() {
+            port_allocator.free(*port);
         }
     }
+    let _port_metadata_file = PortMetadataFile::open(&port_metadata_file_location, &ports)
+        .unwrap_or_else(|_| {
+            panic!(
+                "unable to create port metadata file {}",
+                port_metadata_file_location.as_os_str().to_str().unwrap()
+            )
+        });
     loop {
         info!(
             "Launching {}: {} {}...",
@@ -212,12 +272,43 @@ impl Drop for KillOnDropChild {
     }
 }
 
-#[derive(Debug)]
-struct AbortOnDrop<T>(JoinHandle<T>);
+trait Abortable: Send + Sync + Debug {
+    fn abort_process(&self);
+}
 
-impl<T> Drop for AbortOnDrop<T> {
+impl<T: Send + Sync + Debug> Abortable for JoinHandle<T> {
+    fn abort_process(&self) {
+        self.abort();
+    }
+}
+
+#[derive(Debug)]
+struct ExternalProcess<P>
+where
+    P: AsRef<Path> + Debug,
+{
+    pid: i32,
+    _port_metadata_file: PortMetadataFile<P>,
+}
+
+impl<P> Abortable for ExternalProcess<P>
+where
+    P: AsRef<Path> + Debug + Send + Sync,
+{
+    fn abort_process(&self) {
+        let system = sysinfo::System::new_all();
+        if let Some(process) = system.process(self.pid.into()) {
+            process.kill();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AbortOnDrop(Box<dyn Abortable>);
+
+impl Drop for AbortOnDrop {
     fn drop(&mut self) {
-        self.0.abort();
+        self.0.abort_process();
     }
 }
 

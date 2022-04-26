@@ -26,6 +26,11 @@ fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
     let pid_file = PidFile::open(&path)?;
     assert!(path.exists());
 
+    // PID contents should be accurate
+    let pid = PidFile::read(&path)?;
+    assert!(pid > 0);
+    assert_eq!(std::process::id(), u32::try_from(pid).unwrap());
+
     // Attempting to open the PID file again should fail.
     match PidFile::open(&path) {
         Err(mz_pid_file::Error::AlreadyRunning { .. }) => (),

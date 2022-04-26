@@ -569,6 +569,7 @@ impl Runner {
                     port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
                     suppress_output: false,
                     process_listen_host: None,
+                    data_dir: temp_dir.path().to_path_buf(),
                 }),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),

@@ -15,6 +15,7 @@ mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-persist-client = { path = "../persist-client" }
+mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof", features = [ "jemalloc" ] }
 mz-storage = { path = "../storage", features = ["server"] }
 serde = "1.0.136"

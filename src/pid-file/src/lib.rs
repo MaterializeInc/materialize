@@ -37,8 +37,9 @@
 use libc::FD_CLOEXEC;
 use std::ffi::{CString, NulError};
 use std::fmt;
-use std::fs::Permissions;
+use std::fs::{OpenOptions, Permissions};
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -136,6 +137,23 @@ impl PidFile {
             Err(Error::Io(io::Error::last_os_error()))
         }
     }
+
+    /// Reads contents of PID file
+    pub fn read<P>(path: P) -> Result<i32, Error>
+    where
+        P: AsRef<Path>,
+    {
+        let file = OpenOptions::new().read(true).open(path)?;
+        let reader = BufReader::new(file);
+        let pid: i32 = reader
+            .lines()
+            .next()
+            .expect("empty pid file")?
+            .parse()
+            .expect("malformed pid");
+
+        Ok(pid)
+    }
 }
 
 impl Drop for PidFile {
@@ -164,6 +182,12 @@ pub enum Error {
 impl From<NulError> for Error {
     fn from(e: NulError) -> Error {
         Error::Nul(e)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
     }
 }
 
