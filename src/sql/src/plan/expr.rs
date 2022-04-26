@@ -35,7 +35,8 @@ use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
-    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
 
 use super::Explanation;
@@ -329,6 +330,7 @@ pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
     pub expr: Box<HirScalarExpr>,
     pub order_by: Vec<ColumnOrder>,
+    pub window_frame: WindowFrame,
 }
 
 impl ValueWindowExpr {
