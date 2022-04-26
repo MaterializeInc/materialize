@@ -716,13 +716,13 @@ where
 
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, Arbitrary)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum LagLeadType {
     Lag,
     Lead,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, Arbitrary)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -806,7 +806,7 @@ pub enum AggregateFunc {
 impl From<&Vec<ColumnOrder>> for proto_aggregate_func::ProtoColumnOrders {
     fn from(x: &Vec<ColumnOrder>) -> Self {
         proto_aggregate_func::ProtoColumnOrders {
-            orders: x.clone().into_iter().map(|x| (&x).into()).collect(),
+            orders: x.iter().map(Into::into).collect(),
         }
     }
 }
@@ -954,7 +954,6 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
                     Some(proto_aggregate_func::proto_lag_lead::LagLead::Lead(())) => {
                         LagLeadType::Lead
                     }
-
                     None => {
                         return Err(TryFromProtoError::MissingField(
                             "ProtoLagLead::lag_lead".into(),

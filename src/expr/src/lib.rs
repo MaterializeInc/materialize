@@ -22,7 +22,10 @@ use mz_repr::{ColumnType, GlobalId, ScalarType};
 mod id;
 mod linear;
 mod relation;
-pub mod scalar;
+mod scalar;
+
+// TODO: Remove me
+pub use linear::plan::safe_mfp_stub;
 
 pub mod explain;
 pub mod visit;
@@ -47,6 +50,7 @@ pub use relation::{
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
+pub use scalar::{ProtoAggregateExpr, ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

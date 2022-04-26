@@ -65,8 +65,8 @@ impl TryFrom<ProtoJoinPlan> for JoinPlan {
             .kind
             .ok_or_else(|| TryFromProtoError::MissingField("ProtoJoinPlan::kind".into()))?;
         Ok(match kind {
-            Kind::Linear(inner) => JoinPlan::Linear(LinearJoinPlan::try_from(inner)?),
-            Kind::Delta(inner) => JoinPlan::Delta(DeltaJoinPlan::try_from(inner)?),
+            Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
+            Kind::Delta(inner) => JoinPlan::Delta(inner.try_into()?),
         })
     }
 }
@@ -89,7 +89,7 @@ impl From<&JoinPlan> for ProtoJoinPlan {
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: mz_expr::SafeMfpPlan,
@@ -121,14 +121,7 @@ impl TryFrom<ProtoJoinClosure> for JoinClosure {
                 .collect::<Result<_, TryFromProtoError>>()?,
 
             // TODO: Implement me
-            before: mz_expr::SafeMfpPlan {
-                mfp: mz_expr::MapFilterProject {
-                    expressions: vec![],
-                    predicates: vec![],
-                    projection: vec![],
-                    input_arity: 0,
-                },
-            },
+            before: mz_expr::safe_mfp_stub(),
         })
     }
 }

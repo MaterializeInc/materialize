@@ -64,7 +64,7 @@ impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
             stage_plans: x
                 .stage_plans
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
             final_closure: x.final_closure.map(|x| x.try_into()).transpose()?,
         })
@@ -74,7 +74,7 @@ impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
 impl From<Vec<MirScalarExpr>> for ProtoMirScalarVec {
     fn from(x: Vec<MirScalarExpr>) -> Self {
         Self {
-            values: x.into_iter().map(|x| Into::into(&x)).collect(),
+            values: x.iter().map(Into::into).collect(),
         }
     }
 }
@@ -93,12 +93,7 @@ impl From<&LinearJoinPlan> for ProtoLinearJoinPlan {
             source_relation: x.source_relation.into_proto(),
             source_key: x.source_key.clone().map(Into::into),
             initial_closure: x.initial_closure.clone().map(|x| Into::into(&x)),
-            stage_plans: x
-                .stage_plans
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            stage_plans: x.stage_plans.iter().map(Into::into).collect(),
             final_closure: x.final_closure.clone().map(|x| Into::into(&x)),
         }
     }
@@ -134,24 +129,14 @@ impl From<&LinearStagePlan> for ProtoLinearStagePlan {
     fn from(x: &LinearStagePlan) -> Self {
         Self {
             lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x
-                .stream_key
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            stream_key: x.stream_key.iter().map(Into::into).collect(),
             stream_thinning: x
                 .stream_thinning
                 .clone()
                 .into_iter()
                 .map(|x| x.into_proto())
                 .collect(),
-            lookup_key: x
-                .lookup_key
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
             closure: Some(Into::into(&x.closure)),
         }
     }

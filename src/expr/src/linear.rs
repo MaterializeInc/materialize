@@ -1253,7 +1253,19 @@ pub mod plan {
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
-        pub mfp: MapFilterProject,
+        mfp: MapFilterProject,
+    }
+
+    // TODO: Replace this function with some TryFrom<Proto..>
+    pub fn safe_mfp_stub() -> SafeMfpPlan {
+        SafeMfpPlan {
+            mfp: MapFilterProject {
+                expressions: vec![],
+                predicates: vec![],
+                projection: vec![],
+                input_arity: 0,
+            },
+        }
     }
 
     impl SafeMfpPlan {
