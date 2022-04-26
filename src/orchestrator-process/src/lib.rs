@@ -149,7 +149,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             let port_metadata_file_location =
                 self.data_dir.join(format!("{}.ports", process_file_name));
 
-            if pid_file_location.exists() {
+            if pid_file_location.exists() && port_metadata_file_location.exists() {
                 let pid = PidFile::read(&pid_file_location)?;
                 let port_metadata = PortMetadataFile::read(&port_metadata_file_location)?;
                 if let Some(process) = system.process(pid.into()) {
