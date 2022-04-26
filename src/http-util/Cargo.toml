@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-axum = { version = "0.5.1", features = ["headers"] }
+axum = { version = "0.5.3", features = ["headers"] }
 include_dir = "0.7.2"
