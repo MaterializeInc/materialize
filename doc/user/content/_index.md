@@ -32,7 +32,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 - [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 - [dbt &amp; Materialize](/integrations/dbt/)
 - [Materialize &amp; Node.js](/integrations/node-js/)
-- [Time-windowed computation](/sql/spellbook/temporal-filters/)
+- [Time-windowed computation](/sql/patterns/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
 - [`CREATE SOURCE`](/sql/create-source/)

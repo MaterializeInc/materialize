@@ -152,7 +152,7 @@ necessary to address severe bugs and security vulnerabilities.
   refuse to create an index that directly or indirectly depends on a
   unmaterializable function. The one exception is [`mz_logical_timestamp`],
   which can be used in limited contexts in a materialized view as a [temporal
-  filter](/sql/spellbook/temporal-filters/).
+  filter](/sql/patterns/temporal-filters/).
 
   Previously `current_timestamp`, `mz_logical_timestamp`, and `mz_uptime` were
   incorrectly disallowed in unmaterialized views, while the remaining
@@ -1715,7 +1715,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
   - Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in
     joins. `LATERAL` subqueries can be used to express [Top-K by group
-    queries](/sql/spellbook/top-k/)
+    queries](/sql/patterns/top-k/)
 
   - Add the [regular expression matching operators](/sql/functions/#string) `~`,
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match
