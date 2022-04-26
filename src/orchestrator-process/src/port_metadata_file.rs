@@ -95,8 +95,8 @@ impl From<io::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Io(e) => write!(f, "unable to open PID file: {}", e),
-            Error::Nul(e) => write!(f, "PID file path contained null bytes: {}", e),
+            Error::Io(e) => write!(f, "unable to open port metadata file: {}", e),
+            Error::Nul(e) => write!(f, "port metadata file path contained null bytes: {}", e),
         }
     }
 }
