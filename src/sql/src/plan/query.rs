@@ -59,7 +59,7 @@ use mz_sql_parser::ast::{
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
     TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
-    WindowSpec,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -3983,7 +3983,7 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
-            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
+            let (window_spec, _, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
 
             let func = func::select_impl(
                 ecx,
@@ -4005,7 +4005,8 @@ fn plan_function<'a>(
             }));
         }
         Func::ValueWindow(impls) => {
-            let (window_spec, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
+            let (window_spec, window_frame, scalar_args, partition) =
+                validate_window_function_plan(ecx, f)?;
 
             let (expr, func) = func::select_impl(
                 ecx,
@@ -4022,6 +4023,7 @@ fn plan_function<'a>(
                     func,
                     expr: Box::new(expr),
                     order_by: col_orders,
+                    window_frame,
                 }),
                 partition,
                 order_by,
@@ -4249,6 +4251,7 @@ fn validate_window_function_plan<'a>(
 ) -> Result<
     (
         &'a WindowSpec<Aug>,
+        mz_expr::WindowFrame,
         Vec<CoercibleScalarExpr>,
         Vec<HirScalarExpr>,
     ),
@@ -4275,9 +4278,10 @@ fn validate_window_function_plan<'a>(
         Some(over) => over,
         None => sql_bail!("window function {} requires an OVER clause", name),
     };
-    if window_spec.window_frame.is_some() {
-        bail_unsupported!("window frames");
-    }
+    let window_frame = match window_spec.window_frame.as_ref() {
+        Some(frame) => plan_window_frame(frame)?,
+        None => mz_expr::WindowFrame::default(),
+    };
     let mut partition = Vec::new();
     for expr in &window_spec.partition_by {
         partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
@@ -4298,7 +4302,82 @@ fn validate_window_function_plan<'a>(
         }
     };
 
-    Ok((window_spec, scalar_args, partition))
+    Ok((window_spec, window_frame, scalar_args, partition))
+}
+
+fn plan_window_frame(
+    WindowFrame {
+        units,
+        start_bound,
+        end_bound,
+    }: &WindowFrame,
+) -> Result<mz_expr::WindowFrame, PlanError> {
+    use mz_expr::WindowFrameBound::*;
+    let units = window_frame_unit_ast_to_expr(units)?;
+    let start_bound = window_frame_bound_ast_to_expr(start_bound);
+    let end_bound = end_bound
+        .as_ref()
+        .map(window_frame_bound_ast_to_expr)
+        .unwrap_or(CurrentRow);
+
+    // Validate bounds according to Postgres rules
+    match (&start_bound, &end_bound) {
+        // Start bound can't be UNBOUNDED FOLLOWING
+        (UnboundedFollowing, _) => {
+            sql_bail!("frame start cannot be UNBOUNDED FOLLOWING")
+        }
+        // End bound can't be UNBOUNDED PRECEDING
+        (_, UnboundedPreceding) => {
+            sql_bail!("frame end cannot be UNBOUNDED PRECEDING")
+        }
+        // Start bound should come before end bound in the list of bound definitions
+        (CurrentRow, OffsetPreceding(_)) => {
+            sql_bail!("frame starting from current row cannot have preceding rows")
+        }
+        (OffsetFollowing(_), OffsetPreceding(_) | CurrentRow) => {
+            sql_bail!("frame starting from following row cannot have preceding rows")
+        }
+        // Other bounds are valid
+        (_, _) => (),
+    }
+
+    // RANGE is only supported in the default frame
+    if units == mz_expr::WindowFrameUnits::Range
+        && (start_bound != UnboundedPreceding || end_bound != CurrentRow)
+    {
+        bail_unsupported!("RANGE in non-default window frames")
+    }
+
+    let frame = mz_expr::WindowFrame {
+        units,
+        start_bound,
+        end_bound,
+    };
+    Ok(frame)
+}
+
+fn window_frame_unit_ast_to_expr(
+    unit: &WindowFrameUnits,
+) -> Result<mz_expr::WindowFrameUnits, PlanError> {
+    match unit {
+        WindowFrameUnits::Rows => Ok(mz_expr::WindowFrameUnits::Rows),
+        WindowFrameUnits::Range => Ok(mz_expr::WindowFrameUnits::Range),
+        WindowFrameUnits::Groups => bail_unsupported!("GROUPS in window frames"),
+    }
+}
+
+fn window_frame_bound_ast_to_expr(bound: &WindowFrameBound) -> mz_expr::WindowFrameBound {
+    match bound {
+        WindowFrameBound::CurrentRow => mz_expr::WindowFrameBound::CurrentRow,
+        WindowFrameBound::Preceding(None) => mz_expr::WindowFrameBound::UnboundedPreceding,
+        WindowFrameBound::Preceding(Some(offset)) => {
+            mz_expr::WindowFrameBound::OffsetPreceding(*offset)
+        }
+        WindowFrameBound::Following(None) => mz_expr::WindowFrameBound::UnboundedFollowing,
+        WindowFrameBound::Following(Some(offset)) => {
+            mz_expr::WindowFrameBound::OffsetFollowing(*offset)
+        }
+    }
 }
 
 // Implement these as two identical enums without From/Into impls so that they
