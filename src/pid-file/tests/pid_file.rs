@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use mz_pid_file::{DevelopmentPidFile, PidFile};
+use mz_pid_file::{PidFile, PortMetadataFile};
 
 #[test]
 fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
@@ -26,6 +26,11 @@ fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
     // Creating a PID file should create a file at the specified path.
     let pid_file = PidFile::open(&path)?;
     assert!(path.exists());
+
+    // PID contents should be accurate
+    let pid = PidFile::read(&path)?;
+    assert!(pid > 0);
+    assert_eq!(std::process::id(), u32::try_from(pid).unwrap());
 
     // Attempting to open the PID file again should fail.
     match PidFile::open(&path) {
@@ -48,20 +53,20 @@ fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_development_pid_file() -> Result<(), Box<dyn Error>> {
+fn test_port_metadata_file_basic() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("pidfile");
+    let path = dir.path().join("portfile");
 
-    let port_metadata: HashMap<&str, i32> = vec![("joe", 42), ("shmoe", 666)].into_iter().collect();
-    let port_metadata = serde_json::to_string(&port_metadata)?;
-    let _development_pid_file = DevelopmentPidFile::open(&path, port_metadata.as_str())?;
+    let port_metadata: HashMap<String, i32> =
+        vec![("joe".to_string(), 42), ("shmoe".to_string(), 666)]
+            .into_iter()
+            .collect();
+    let _port_metadata_file = PortMetadataFile::open(&path, &port_metadata)?;
     assert!(path.exists());
 
-    let pid_contents = DevelopmentPidFile::read(&path)?;
+    let port_metadata_file_contents = PortMetadataFile::read(&path)?;
 
-    assert_eq!(std::process::id(), pid_contents.pid);
-    assert_eq!(42, pid_contents.port_metadata["joe"]);
-    assert_eq!(666, pid_contents.port_metadata["shmoe"]);
+    assert_eq!(port_metadata, port_metadata_file_contents);
 
     Ok(())
 }

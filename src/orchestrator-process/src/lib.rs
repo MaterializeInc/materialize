@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use itertools::Itertools;
 use scopeguard::defer;
-use sysinfo::{Pid, PidExt, ProcessExt, ProcessStatus, SystemExt};
+use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
@@ -26,7 +26,7 @@ use tracing::{error, info};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
 use mz_ore::id_gen::IdAllocator;
-use mz_pid_file::{DevelopmentPidContents, DevelopmentPidFile};
+use mz_pid_file::{PidFile, PortMetadataFile};
 
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
@@ -141,14 +141,15 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let system = sysinfo::System::new_all();
 
         for i in 0..(scale_in.get()) {
-            let pid_file_location = self
-                .data_dir
-                .join(format!("{}-{}-{}.pid", self.namespace, id, i));
+            let process_file_name = format!("{}-{}-{}", self.namespace, id, i);
+            let pid_file_location = self.data_dir.join(format!("{}.pid", process_file_name));
+            let port_metadata_file_location =
+                self.data_dir.join(format!("{}.ports", process_file_name));
 
             if pid_file_location.exists() {
-                let DevelopmentPidContents { pid, port_metadata } =
-                    DevelopmentPidFile::read(&pid_file_location)?;
-                if let Some(process) = system.process(Pid::from_u32(pid)) {
+                let pid = PidFile::read(&pid_file_location)?;
+                let port_metadata = PortMetadataFile::read(&port_metadata_file_location)?;
+                if let Some(process) = system.process(pid.into()) {
                     if process.exe() == path {
                         if process.status() == ProcessStatus::Dead
                             || process.status() == ProcessStatus::Zombie
@@ -158,7 +159,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         } else {
                             // Existing non-dead process, so we don't create a new one
                             processes.push(port_metadata);
-                            handles.push(AbortOnDrop(Box::new(ExternalProcess { pid })));
+                            handles.push(AbortOnDrop(Box::new(ExternalProcess {
+                                pid,
+                                _port_metadata_file: PortMetadataFile::open_existing(
+                                    port_metadata_file_location,
+                                ),
+                            })));
                             continue;
                         }
                     }
@@ -178,10 +184,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 "--pid-file-location={}",
                 pid_file_location.display()
             ));
-            args.push(format!(
-                "--pid-port-metadata={}",
-                serde_json::to_string(&ports)?
-            ));
             processes.push(ports.clone());
             handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
                 || format!("service-supervisor: {full_id}"),
@@ -190,8 +192,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     path.clone(),
                     args.clone(),
                     Arc::clone(&self.port_allocator),
-                    ports.values().cloned().collect(),
+                    ports,
                     self.suppress_output,
+                    port_metadata_file_location,
                 ),
             ))));
         }
@@ -216,14 +219,22 @@ async fn supervise(
     path: PathBuf,
     args: Vec<String>,
     port_allocator: Arc<IdAllocator<i32>>,
-    ports: Vec<i32>,
+    ports: HashMap<String, i32>,
     suppress_output: bool,
+    port_metadata_file_location: PathBuf,
 ) {
     defer! {
-        for port in ports {
-            port_allocator.free(port);
+        for port in ports.values() {
+            port_allocator.free(*port);
         }
     }
+    let _port_metadata_file = PortMetadataFile::open(&port_metadata_file_location, &ports).expect(
+        format!(
+            "unable to create port metadata file {}",
+            port_metadata_file_location.as_os_str().to_str().unwrap()
+        )
+        .as_str(),
+    );
     loop {
         info!(
             "Launching {}: {} {}...",
@@ -269,14 +280,21 @@ impl<T: Send + Sync + Debug> Abortable for JoinHandle<T> {
 }
 
 #[derive(Debug)]
-struct ExternalProcess {
-    pid: u32,
+struct ExternalProcess<P>
+where
+    P: AsRef<Path> + Debug,
+{
+    pid: i32,
+    _port_metadata_file: PortMetadataFile<P>,
 }
 
-impl Abortable for ExternalProcess {
+impl<P> Abortable for ExternalProcess<P>
+where
+    P: AsRef<Path> + Debug + Send + Sync,
+{
     fn abort_process(&self) {
         let system = sysinfo::System::new_all();
-        if let Some(process) = system.process(Pid::from_u32(self.pid)) {
+        if let Some(process) = system.process(self.pid.into()) {
             process.kill();
         }
     }

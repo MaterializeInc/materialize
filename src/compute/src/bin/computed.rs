@@ -30,7 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
 use mz_compute::server::Server;
-use mz_pid_file::DevelopmentPidFile;
+use mz_pid_file::PidFile;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -112,11 +112,8 @@ struct Args {
     http_console_addr: Option<String>,
 
     /// Where to write a pid lock file. Should only be used for local process orchestrators.
-    #[clap(long, value_name = "PATH", requires = "pid-port-metadata")]
+    #[clap(long, value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
-    /// Process port mapping for pid lock file. Should only be used for local process orchestration.
-    #[clap(long, requires = "pid-file-location")]
-    pid_port_metadata: Option<String>,
 }
 
 #[tokio::main]
@@ -246,11 +243,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
-        let port_metadata = args
-            .pid_port_metadata
-            .as_ref()
-            .expect("empty pid port metadata");
-        _pid_file = Some(DevelopmentPidFile::open(&pid_file_location, port_metadata).unwrap());
+        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
     }
 
     serve(serve_config, server, client).await

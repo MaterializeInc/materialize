@@ -131,6 +131,23 @@ impl PidFile {
             Err(Error::Io(io::Error::last_os_error()))
         }
     }
+
+    /// Reads contents of PID file
+    pub fn read<P>(path: P) -> Result<i32, Error>
+    where
+        P: AsRef<Path>,
+    {
+        let file = OpenOptions::new().read(true).open(path)?;
+        let reader = BufReader::new(file);
+        let pid: i32 = reader
+            .lines()
+            .next()
+            .expect("empty pid file")?
+            .parse()
+            .expect("malformed pid");
+
+        Ok(pid)
+    }
 }
 
 impl Drop for PidFile {
@@ -184,47 +201,53 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// An extension of `PidFile` that also stores metadata about a process' ports
+/// Handle to a file that contains metadata about a processes port mappings.
 ///
 /// This is not meant to be used in production, it is to help orchestrate
-/// processes on local deployments.
-pub struct DevelopmentPidFile(PidFile);
-
-/// Contents of a `DevelopmentPidFile`
-pub struct DevelopmentPidContents {
-    /// Process PID
-    pub pid: u32,
-    /// Process port mappings
-    pub port_metadata: HashMap<String, i32>,
+/// processes on local deployments, by accompanying a `PidFile`.
+#[derive(Debug)]
+pub struct PortMetadataFile<P: AsRef<Path>> {
+    path: P,
 }
 
-impl DevelopmentPidFile {
-    /// Attempts to open and lock the specified PID file, as well as write metadata
-    /// to the file.
-    ///
-    /// If the file is already locked by another process, it returns
-    /// `Error::AlreadyRunning`.
-    pub fn open<P: AsRef<Path>>(path: P, port_metadata: &str) -> Result<DevelopmentPidFile, Error> {
-        let pid_file = PidFile::open(&path)?;
-        let mut file = OpenOptions::new().write(true).append(true).open(path)?;
-        write!(file, "\n{port_metadata}")?;
-        Ok(DevelopmentPidFile(pid_file))
+impl<P: AsRef<Path>> PortMetadataFile<P> {
+    /// Attempts to open and write the specified port metadata file.
+    pub fn open(
+        path: P,
+        port_metadata: &HashMap<String, i32>,
+    ) -> Result<PortMetadataFile<P>, Error> {
+        let port_metadata = serde_json::to_string(&port_metadata)
+            .expect(format!("failed to serialize {:?}", port_metadata).as_str());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&path)?;
+        write!(file, "{port_metadata}")?;
+        Ok(PortMetadataFile { path })
     }
 
-    /// Reads the contents of a `DevelopmentPidFile`
-    pub fn read<P: AsRef<Path>>(path: P) -> Result<DevelopmentPidContents, Error> {
+    /// Obtains handle to existing `PortMetadataFile`.
+    pub fn open_existing(path: P) -> PortMetadataFile<P> {
+        assert!(
+            path.as_ref().exists(),
+            "missing port metadata file: {}",
+            path.as_ref().as_os_str().to_str().unwrap()
+        );
+        PortMetadataFile { path }
+    }
+
+    /// Reads the contents of a `PortMetadataFile`
+    pub fn read(path: P) -> Result<HashMap<String, i32>, Error> {
         let file = OpenOptions::new().read(true).open(path)?;
         let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-        let pid: u32 = lines
-            .next()
-            .expect("empty pid file")?
-            .parse()
-            .expect("malformed pid");
-        let port_metadata = match lines.next() {
-            Some(line) => serde_json::from_str(line?.as_str()).expect("malformed port metadata"),
-            None => HashMap::new(),
-        };
-        Ok(DevelopmentPidContents { pid, port_metadata })
+        let port_metadata = reader.lines().next().expect("empty port metadata file")?;
+        Ok(serde_json::from_str(port_metadata.as_str()).expect("malformed port metadata"))
+    }
+}
+
+impl<P: AsRef<Path>> Drop for PortMetadataFile<P> {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).expect("failed to remove file");
     }
 }
