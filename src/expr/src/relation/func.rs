@@ -759,8 +759,7 @@ where
                 let start_offset = usize::cast_from(*offset);
                 let start_idx = idx.saturating_sub(start_offset);
                 if let WindowFrameBound::OffsetPreceding(end_offset) = &window_frame.end_bound {
-                    let end_offset = usize::try_from(*end_offset)
-                        .expect("Window frame offset does not fit in usize");
+                    let end_offset = usize::cast_from(*end_offset);
 
                     // If the frame is empty or ends before the first row, return null
                     if start_offset < end_offset || idx < end_offset {
@@ -773,8 +772,7 @@ where
                 }
             }
             WindowFrameBound::OffsetFollowing(offset) => {
-                let start_offset =
-                    usize::try_from(*offset).expect("Window frame offset does not fit in usize");
+                let start_offset = usize::cast_from(*offset);
                 let start_idx = idx.saturating_add(start_offset);
                 if let WindowFrameBound::OffsetFollowing(end_offset) = &window_frame.end_bound {
                     // If the frame is empty or starts after the last row, return null
