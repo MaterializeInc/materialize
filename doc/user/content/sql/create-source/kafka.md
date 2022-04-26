@@ -243,7 +243,7 @@ It's also possible to set a start offset based on Kafka timestamps, using the `k
 
 It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
 
-If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/spellbook/temporal-filters/) instead.
+If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/patterns/temporal-filters/) instead.
 
 #### `WITH` options
 

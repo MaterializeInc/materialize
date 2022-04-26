@@ -7,7 +7,7 @@ aliases:
   - /guides/top-k
 menu:
   main:
-    parent: 'sql-spellbook'
+    parent: 'sql-patterns'
 disable_toc: true
 ---
 

@@ -241,7 +241,7 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
 ### Temporal filters
 
-In Materialize, [temporal filters](/sql/spellbook/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
+In Materialize, [temporal filters](/sql/patterns/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
 
 1. If, instead of computing and maintaining the _overall_ count, we want to get the _moving_ count over the past minute:
 

@@ -5,7 +5,7 @@ aliases:
   - /guides/temporal-filters/
 menu:
   main:
-    parent: 'sql-spellbook'
+    parent: 'sql-patterns'
 ---
 
 Temporal filters allow you to implement several windowing idioms (tumbling, hopping, and sliding), in addition to more nuanced temporal queries.
