@@ -76,9 +76,9 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::TryFutureExt;
 use itertools::Itertools;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as _};
@@ -89,7 +89,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::controller::ReadPolicy;
+use mz_dataflow_types::client::controller::{
+    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ReadPolicy,
+};
 use mz_dataflow_types::client::{
     ComputeInstanceId, ControllerResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
     DEFAULT_COMPUTE_INSTANCE_ID,
@@ -130,14 +132,15 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
-    CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
-    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, ComputeInstanceConfig,
+    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
+    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
+    TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -243,6 +246,7 @@ pub struct Config {
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
     pub availability_zones: Vec<String>,
+    pub replica_sizes: ClusterReplicaSizeMap,
 }
 
 struct PendingPeek {
@@ -254,6 +258,66 @@ struct PendingPeek {
 pub struct CatalogTxn<'a, T> {
     dataflow_client: &'a mz_dataflow_types::client::Controller<T>,
     catalog: &'a CatalogState,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ConcreteComputeInstanceConfig {
+    Remote {
+        /// A map from replica name to hostnames.
+        replicas: BTreeMap<String, BTreeSet<String>>,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+    Managed {
+        size_config: ClusterReplicaSizeConfig,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
+    },
+}
+
+impl ConcreteComputeInstanceConfig {
+    pub fn from_plan(
+        plan: ComputeInstanceConfig,
+        replica_sizes: &ClusterReplicaSizeMap,
+    ) -> Result<Self, CoordError> {
+        let config = match plan {
+            mz_sql::plan::ComputeInstanceConfig::Remote {
+                replicas,
+                introspection,
+            } => ConcreteComputeInstanceConfig::Remote {
+                replicas,
+                introspection,
+            },
+            mz_sql::plan::ComputeInstanceConfig::Managed {
+                size,
+                introspection,
+            } => {
+                let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            ClusterReplicaSizeConfig {
+                                scale, cpu_limit, ..
+                            },
+                        )| (*scale, *cpu_limit),
+                    );
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+                    CoordError::InvalidReplicaSize { size, expected }
+                })?;
+                ConcreteComputeInstanceConfig::Managed {
+                    size_config: *size_config,
+                    introspection,
+                }
+            }
+        };
+        Ok(config)
+    }
+
+    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
+        match self {
+            Self::Remote { introspection, .. } => introspection,
+            Self::Managed { introspection, .. } => introspection,
+        }
+    }
 }
 
 /// Glues the external world to the Timely workers.
@@ -311,6 +375,8 @@ pub struct Coordinator {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
+    /// Map of strings to corresponding compute replica sizes.
+    replica_sizes: ClusterReplicaSizeMap,
 }
 
 /// Metadata about an active connection.
@@ -1340,13 +1406,15 @@ impl Coordinator {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
+                let catalog = self.catalog.for_session(&session);
                 let purify_fut = mz_sql::pure::purify_create_source(
                     self.now(),
                     self.catalog.config().aws_external_id.clone(),
                     stmt,
+                    &catalog,
                 );
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let result = purify_fut.err_into().await;
+                    let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
                         .send(Message::CreateSourceStatementReady(
                             CreateSourceStatementReady {
@@ -1867,9 +1935,11 @@ impl Coordinator {
         } else {
             Vec::new()
         };
+        let config =
+            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
         let op = catalog::Op::CreateComputeInstance {
             name: plan.name.clone(),
-            config: plan.config.clone(),
+            config,
             introspection_sources,
         };
         let r = self.catalog_transact(vec![op], |_| Ok(())).await;
@@ -1889,12 +1959,6 @@ impl Coordinator {
                     .unwrap();
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ClusterAlreadyExists(_),
-                ..
-            })) if plan.if_not_exists => {
-                Ok(ExecuteResponse::CreatedComputeInstance { existed: true })
-            }
             Err(err) => Err(err),
         }
     }
@@ -1906,9 +1970,11 @@ impl Coordinator {
         let instance = self.catalog.state().get_compute_instance(plan.id);
         let old_config = instance.config.clone();
 
+        let config =
+            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
         let ops = vec![catalog::Op::UpdateComputeInstanceConfig {
             id: plan.id,
-            config: plan.config.clone(),
+            config,
         }];
         let mut replicas_to_remove = vec![];
         let mut replicas_to_add = vec![];
@@ -1941,8 +2007,12 @@ impl Coordinator {
                     Ok(())
                 }
                 (
-                    InstanceConfig::Managed { size: old_size },
-                    InstanceConfig::Managed { size: new_size },
+                    InstanceConfig::Managed {
+                        size_config: old_size,
+                    },
+                    InstanceConfig::Managed {
+                        size_config: new_size,
+                    },
                 ) => {
                     if old_size != *new_size {
                         coord_bail!("cannot yet change size of cluster");
@@ -4670,6 +4740,7 @@ pub async fn serve(
         metrics_registry,
         now,
         secrets_controller,
+        replica_sizes,
         availability_zones: _,
     }: Config,
 ) -> Result<(Handle, Client), CoordError> {
@@ -4721,6 +4792,7 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
+                replica_sizes,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

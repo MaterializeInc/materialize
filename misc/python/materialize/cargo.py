@@ -46,6 +46,7 @@ class Crate:
             config = toml.load(f)
         self.name = config["package"]["name"]
         self.version = semver.VersionInfo.parse(config["package"]["version"])
+        self.features = config.get("features", {})
         self.path = path
         self.path_dependencies: Set[str] = set()
         for dep_type in ["build-dependencies", "dependencies"]:

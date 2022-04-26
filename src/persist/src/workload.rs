@@ -52,11 +52,11 @@ const DEFAULT_BATCH_MAX_COUNT: usize = (8 * 1024 * 1024) / DEFAULT_RECORD_SIZE_B
 const DEFAULT_RECORD_COUNT: usize = 819_200;
 
 // Selected arbitrarily as representative of production record sizes.
-const DEFAULT_RECORD_SIZE_BYTES_SMALL: usize = 64;
-// Selected arbitrarily to make ~64KiB batches.
-const DEFAULT_BATCH_MAX_COUNT_SMALL: usize = (64 * 1024) / DEFAULT_RECORD_SIZE_BYTES_SMALL;
-// Selected to produce exactly one small batch with default settings.
-const DEFAULT_RECORD_COUNT_SMALL: usize = DEFAULT_BATCH_MAX_COUNT_SMALL;
+const DEFAULT_RECORD_SIZE_BYTES_SMALL: usize = 1024;
+// Selected to produce a small number of batches with default settings.
+const DEFAULT_BATCH_MAX_COUNT_SMALL: usize = DEFAULT_RECORD_COUNT_SMALL / 8;
+// Selected arbitrarily to make ~64KiB of data.
+const DEFAULT_RECORD_COUNT_SMALL: usize = (64 * 1024) / DEFAULT_RECORD_SIZE_BYTES_SMALL;
 
 const TS_DIFF_GOODPUT_SIZE: usize = size_of::<u64>() + size_of::<i64>();
 

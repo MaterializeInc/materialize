@@ -17,6 +17,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
+use futures::Stream;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
@@ -176,7 +178,9 @@ where
         .map(Self)
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         match self.0.get_next_message()? {
             NextMessage::Ready(SourceMessage {
                 key: _,
@@ -357,12 +361,28 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
     }
 }
 
+/// A structured error for `SourceReader::get_next_message`
+/// implementors. Also implements `From<anyhow::Error>`
+/// for convenience.
+pub(crate) struct SourceReaderError {
+    pub inner: SourceErrorDetails,
+}
+
+impl From<anyhow::Error> for SourceReaderError {
+    fn from(e: anyhow::Error) -> Self {
+        SourceReaderError {
+            inner: SourceErrorDetails::Other(format!("{}", e)),
+        }
+    }
+}
+
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.
 ///
 /// TODO: this trait is still a little too Kafka-centric, specifically the concept of
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
+#[async_trait(?Send)]
 pub(crate) trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
@@ -389,9 +409,61 @@ pub(crate) trait SourceReader {
 
     /// Returns the next message available from the source.
     ///
-    /// Note that implementers are required to present messages in strictly ascending\
-    /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error>;
+    /// Note that implementers are required to present messages in strictly ascending offset order
+    /// within each partition.
+    async fn next(
+        &mut self,
+        timestamp_frequency: Duration,
+    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
+        // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
+        // call. Once all source implementations have been transitioned to implement
+        // [SourceReader::next] directly this provided implementation should be removed and the
+        // method should become a required method.
+        loop {
+            match self.get_next_message() {
+                Ok(NextMessage::Ready(msg)) => return Some(Ok(msg)),
+                Err(err) => return Some(Err(err)),
+                // There was a temporary hiccup in getting messages, check again asap.
+                Ok(NextMessage::TransientDelay) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
+                // There were no new messages, check again after a delay
+                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_frequency).await,
+                Ok(NextMessage::Finished) => return None,
+            }
+        }
+    }
+
+    /// Returns the next message available from the source.
+    ///
+    /// Note that implementers are required to present messages in strictly ascending offset order
+    /// within each partition.
+    ///
+    /// # Deprecated
+    ///
+    /// Source implementation should implement the async [SourceReader::next] method instead.
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+        Ok(NextMessage::Pending)
+    }
+
+    /// Returns an adapter that treats the source as a stream.
+    ///
+    /// The stream produces the messages that would be produced by repeated calls to `next`.
+    fn into_stream(
+        mut self,
+        timestamp_frequency: Duration,
+    ) -> Pin<Box<dyn Stream<Item = Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>>>>
+    where
+        Self: Sized + 'static,
+    {
+        Box::pin(async_stream::stream! {
+            while let Some(msg) = self.next(timestamp_frequency).await {
+                yield msg;
+            }
+        })
+    }
 }
 
 pub(crate) enum NextMessage<Key, Value> {
@@ -608,13 +680,6 @@ impl PartitionMetrics {
             last_timestamp: 0,
         }
     }
-}
-
-enum MessageProcessing {
-    Stopped,
-    Active,
-    Yielded,
-    YieldedWithDelay,
 }
 
 type EventSender =
@@ -889,8 +954,8 @@ where
         mut timestamp_histories,
         worker_id,
         worker_count,
-        timestamp_frequency,
         active,
+        timestamp_frequency,
         encoding,
         base_metrics,
         ..
@@ -901,6 +966,8 @@ where
     let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
+        let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+        let waker = futures::task::waker(waker_activator);
 
         // This source will need to be activated when the durability frontier changes.
         if let Some(wrapper) = timestamp_histories.as_mut() {
@@ -925,10 +992,10 @@ where
             .flat_map(|(pid, offset)| Some((pid, offset?)))
             .collect();
 
-        let mut source_reader: Option<S> = if !active {
+        let mut source_reader = if !active {
             None
         } else {
-            match SourceReader::new(
+            match S::new(
                 name.clone(),
                 id,
                 worker_id,
@@ -940,7 +1007,7 @@ where
                 encoding,
                 base_metrics.clone(),
             ) {
-                Ok(source_reader) => Some(source_reader),
+                Ok(source_reader) => Some(source_reader.into_stream(timestamp_frequency)),
                 Err(e) => {
                     error!("Failed to create source: {}", e);
                     None
@@ -980,10 +1047,11 @@ where
             // Record operator has been scheduled
             source_metrics.operator_scheduled_counter.inc();
 
-            let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
-            while let (_, MessageProcessing::Active) = source_state {
-                source_state = match source_reader.get_next_message() {
-                    Ok(NextMessage::Ready(message)) => {
+            let mut context = Context::from_waker(&waker);
+            let mut source_status = SourceStatus::Alive;
+            while let Poll::Ready(item) = source_reader.as_mut().poll_next(&mut context) {
+                match item {
+                    Some(Ok(message)) => {
                         partition_cursors.insert(message.partition.clone(), message.offset + 1);
                         handle_message::<S>(
                             message,
@@ -991,24 +1059,28 @@ where
                             &cap,
                             output,
                             &mut metric_updates,
-                            &timer,
                             &timestamp_histories,
-                        )
+                        );
                     }
-                    Ok(NextMessage::TransientDelay) => {
-                        // There was a temporary hiccup in getting messages, check again asap.
-                        (SourceStatus::Alive, MessageProcessing::Yielded)
+                    Some(Err(e)) => {
+                        output.session(&cap).give(Err(SourceError {
+                            source_id: id,
+                            error: e.inner,
+                        }));
+                        source_status = SourceStatus::Done;
+                        break;
                     }
-                    Ok(NextMessage::Pending) => {
-                        // There were no new messages, check again after a delay
-                        (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
+                    None => {
+                        source_status = SourceStatus::Done;
+                        break;
                     }
-                    Ok(NextMessage::Finished) => (SourceStatus::Done, MessageProcessing::Stopped),
-                    Err(e) => {
-                        output.session(&cap).give(Err(e.to_string()));
-                        (SourceStatus::Done, MessageProcessing::Stopped)
-                    }
-                };
+                }
+                if timer.elapsed() > YIELD_INTERVAL {
+                    // We didn't drain the entire queue, so indicate that we
+                    // should run again but yield the CPU to other operators.
+                    activator.activate();
+                    break;
+                }
             }
 
             bytes_read_counter.inc_by(bytes_read as u64);
@@ -1029,23 +1101,11 @@ where
             // Downgrade compaction frontier to track the current time.
             timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
-            let (source_status, processing_status) = source_state;
-            // Schedule our next activation
-            match processing_status {
-                MessageProcessing::Yielded => activator.activate(),
-                MessageProcessing::YieldedWithDelay => {
-                    activator.activate_after(timestamp_frequency)
-                }
-                _ => (),
-            }
-
             source_status
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", move |r| {
-        r.map_err(|e| SourceError::new(id, SourceErrorDetails::FileIO(e)))
-    });
+    let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", |r| r);
 
     if active {
         ((ok_stream, err_stream), Some(capability))
@@ -1066,13 +1126,12 @@ fn handle_message<S: SourceReader>(
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value>, String>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, String>>,
+        Result<SourceOutput<S::Key, S::Value>, SourceError>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, SourceError>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
-    timer: &std::time::Instant,
     timestamp_bindings: &TimestampBindingRc,
-) -> (SourceStatus, MessageProcessing) {
+) {
     let partition = message.partition.clone();
     let offset = message.offset;
 
@@ -1109,13 +1168,5 @@ fn handle_message<S: SourceReader>(
         Entry::Vacant(entry) => {
             entry.insert((offset, ts, 1));
         }
-    }
-
-    if timer.elapsed() > YIELD_INTERVAL {
-        // We didn't drain the entire queue, so indicate that we
-        // should run again but yield the CPU to other operators.
-        (SourceStatus::Alive, MessageProcessing::Yielded)
-    } else {
-        (SourceStatus::Alive, MessageProcessing::Active)
     }
 }

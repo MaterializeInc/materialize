@@ -38,9 +38,9 @@ use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
-    IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogConnector, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogSchema,
+    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -48,9 +48,8 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
-    StatementDesc,
+    CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -60,6 +59,7 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+use crate::coord::ConcreteComputeInstanceConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -375,18 +375,18 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let (config, introspection) = match config {
-            ComputeInstanceConfig::Remote {
+            ConcreteComputeInstanceConfig::Remote {
                 replicas,
                 introspection,
             } => (InstanceConfig::Remote { replicas }, introspection),
-            ComputeInstanceConfig::Managed {
-                size,
+            ConcreteComputeInstanceConfig::Managed {
+                size_config,
                 introspection,
-            } => (InstanceConfig::Managed { size }, introspection),
+            } => (InstanceConfig::Managed { size_config }, introspection),
         };
         let logging = match introspection {
             None => None,
@@ -1042,6 +1042,13 @@ impl CatalogEntry {
         match self.item() {
             CatalogItem::Secret(secret) => Some(secret),
             _ => None,
+        }
+    }
+
+    pub fn catalog_connector(&self) -> Result<&Connector, SqlCatalogError> {
+        match self.item() {
+            CatalogItem::Connector(connector) => Ok(connector),
+            _ => Err(SqlCatalogError::UnknownConnector(self.name().to_string())),
         }
     }
 
@@ -2142,7 +2149,7 @@ impl Catalog {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
-                config: ComputeInstanceConfig,
+                config: ConcreteComputeInstanceConfig,
                 introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateItem {
@@ -2464,14 +2471,14 @@ impl Catalog {
                 Op::UpdateComputeInstanceConfig { id, config } => {
                     tx.update_compute_instance_config(id, &config)?;
                     let config = match config {
-                        ComputeInstanceConfig::Remote {
+                        ConcreteComputeInstanceConfig::Remote {
                             replicas,
                             introspection: _,
                         } => InstanceConfig::Remote { replicas },
-                        ComputeInstanceConfig::Managed {
-                            size,
+                        ConcreteComputeInstanceConfig::Managed {
+                            size_config,
                             introspection: _,
-                        } => InstanceConfig::Managed { size },
+                        } => InstanceConfig::Managed { size_config },
                     };
                     vec![Action::UpdateComputeInstanceConfig { id, config }]
                 }
@@ -2902,7 +2909,7 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateItem {
@@ -2939,7 +2946,7 @@ pub enum Op {
     },
     UpdateComputeInstanceConfig {
         id: ComputeInstanceId,
-        config: ComputeInstanceConfig,
+        config: ConcreteComputeInstanceConfig,
     },
 }
 
@@ -3312,6 +3319,20 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
     }
 }
 
+impl mz_sql::catalog::CatalogConnector for Connector {
+    fn uri(&self) -> String {
+        match &self.connector {
+            ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+        }
+    }
+
+    fn options(&self) -> std::collections::BTreeMap<String, String> {
+        match &self.connector {
+            ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
+        }
+    }
+}
+
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &QualifiedObjectName {
         self.name()
@@ -3335,6 +3356,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         Ok(self.source_connector()?)
+    }
+
+    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, SqlCatalogError> {
+        Ok(self.catalog_connector()?)
     }
 
     fn create_sql(&self) -> &str {

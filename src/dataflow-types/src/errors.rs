@@ -75,6 +75,7 @@ pub enum SourceErrorDetails {
     Initialization(String),
     FileIO(String),
     Persistence(String),
+    Other(String),
 }
 
 impl Display for SourceErrorDetails {
@@ -89,6 +90,7 @@ impl Display for SourceErrorDetails {
             }
             SourceErrorDetails::FileIO(e) => write!(f, "file IO: {}", e),
             SourceErrorDetails::Persistence(e) => write!(f, "persistence: {}", e),
+            SourceErrorDetails::Other(e) => write!(f, "{}", e),
         }
     }
 }

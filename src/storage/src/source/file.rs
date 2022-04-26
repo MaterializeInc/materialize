@@ -29,9 +29,10 @@ use mz_dataflow_types::sources::{
     encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
     ExternalSourceConnector, MzOffset,
 };
+use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::{PartitionId, SourceInstanceId};
 
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
 use super::metrics::SourceBaseMetrics;
 
@@ -165,7 +166,9 @@ impl SourceReader for FileSourceReader {
         })
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
@@ -181,7 +184,9 @@ impl SourceReader for FileSourceReader {
             }
             Ok(Err(e)) => {
                 error!("Failed to read file for {}. Error: {}.", self.id, e);
-                Err(e)
+                Err(SourceReaderError {
+                    inner: SourceErrorDetails::FileIO(e.to_string()),
+                })
             }
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),

@@ -1280,7 +1280,7 @@ CREATE CLUSTER cluster
 ----
 CREATE CLUSTER cluster
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [] })
 
 parse-statement
 CREATE CLUSTER cluster VIRTUAL
@@ -1294,28 +1294,28 @@ CREATE CLUSTER cluster SIZE 'small'
 ----
 CREATE CLUSTER cluster SIZE 'small'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
 
 parse-statement
 CREATE CLUSTER cluster SIZE = 'small'
 ----
 CREATE CLUSTER cluster SIZE 'small'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
 
 parse-statement
 CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
 ----
 CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Size(Value(String("small"))), Remote { name: Ident("replica1"), hosts: [Value(String("host1"))] }, Size(Value(String("medium"))), Remote { name: Ident("replica2"), hosts: [Value(String("host2"))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small"))), Remote { name: Ident("replica1"), hosts: [Value(String("host1"))] }, Size(Value(String("medium"))), Remote { name: Ident("replica2"), hosts: [Value(String("host2"))] }] })
 
 parse-statement
 CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
 ----
 CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), if_not_exists: false, options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
 
 parse-statement
 ALTER CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
@@ -1429,3 +1429,10 @@ DROP CONNECTOR conn1
 DROP CONNECTOR conn1
 =>
 DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: false })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]) }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })

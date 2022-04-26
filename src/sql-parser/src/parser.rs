@@ -1870,8 +1870,7 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                self.expect_keyword(WITH)?;
-                let with_options = self.parse_with_options(true)?;
+                let with_options = self.parse_opt_with_options()?;
                 CreateConnector::Kafka {
                     broker,
                     with_options,
@@ -2088,8 +2087,15 @@ impl<'a> Parser<'a> {
                 Ok(CreateSourceConnector::File { path, compression })
             }
             KAFKA => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
+                let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
+                    BROKER => KafkaConnector::Inline {
+                        broker: self.parse_literal_string()?,
+                    },
+                    CONNECTOR => KafkaConnector::Reference {
+                        connector: self.parse_object_name()?,
+                    },
+                    _ => unreachable!(),
+                };
                 self.expect_keyword(TOPIC)?;
                 let topic = self.parse_literal_string()?;
                 // one token of lookahead:
@@ -2104,7 +2110,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 Ok(CreateSourceConnector::Kafka(KafkaSourceConnector {
-                    connector: KafkaConnector::Inline { broker },
+                    connector,
                     topic,
                     key,
                 }))
@@ -2491,7 +2497,6 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
-        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
@@ -2501,7 +2506,6 @@ impl<'a> Parser<'a> {
         };
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
-            if_not_exists,
             options,
         }))
     }

@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import os
+import sys
+from typing import Dict
+
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
@@ -18,6 +23,7 @@ from materialize.mzcompose.services import (
 from materialize.zippy.framework import Test
 from materialize.zippy.kafka_actions import *
 from materialize.zippy.mz_actions import *
+from materialize.zippy.scenarios import *
 from materialize.zippy.source_actions import *
 from materialize.zippy.table_actions import *
 from materialize.zippy.view_actions import *
@@ -31,37 +37,27 @@ SERVICES = [
     Testdrive(validate_data_dir=False, no_reset=True, seed=1, default_timeout="300s"),
 ]
 
-all_action_classes = [
-    MzStart,
-    MzStop,
-    KafkaStart,
-    #   KafkaStop,
-    CreateTopic,
-    CreateSource,
-    CreateSource,
-    CreateView,
-    ValidateView,
-    ValidateView,
-    # Not currently viable with persistence disabled
-    #    CreateTable,
-    #    Insert,
-    #    ShiftForward,
-    #    ShiftBackward,
-    #    DeleteFromTail,
-    #    DeleteFromHead,
-    KafkaInsert,
-    KafkaDeleteFromHead,
-    KafkaDeleteFromTail,
-]
-
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--scenario",
+        metavar="SCENARIO",
+        type=str,
+        help="Scenario to run",
+        required=True,
+    )
+
+    parser.add_argument("--seed", metavar="N", type=int, help="Random seed", default=1)
+
+    args = parser.parse_args()
+    scenario_class = globals()[args.scenario]
+
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     c.up("testdrive", persistent=True)
 
-    random.seed(1)
+    random.seed(args.seed)
 
     print("Generating test...")
-    test = Test(action_classes=all_action_classes, max_actions=500)
+    test = Test(scenario=scenario_class(), max_actions=500)
     print("Running test...")
     test.run(c)

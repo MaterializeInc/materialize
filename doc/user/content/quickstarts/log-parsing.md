@@ -389,6 +389,5 @@ In this demo, we saw:
 ## Related pages
 
 - [Microservice demo](/quickstarts/microservice/)
-- [Build a Real-time analytics dashboard](/quickstarts/live-analytics/)
 - [`CREATE SOURCE`](/sql/create-source)
 - [Functions + Operators](/sql/functions)

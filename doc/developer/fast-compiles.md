@@ -100,33 +100,6 @@ here:
 [endler]: https://endler.dev/2020/rust-compile-times/
 [nethercote]: https://nnethercote.github.io/perf-book/compile-times.html
 
-## Split Mac Debug Information
-
-Apparently, a significant part of the time spent compiling a macOS rust binary
-is creating the debug info, which previously required scanning the entire binary
-with the `dsymutil` tool. As of stable rust 1.51.0, the [new `split-debuginfo =
-"unpacked"` option][split-debuginfo-unpacked] allows for skipping this step and
-using the `.o` object files for backtraces, resulting in a link time decrease.
-Most debug tooling then "should work as long as you don't need to move the
-binary to a different location while retaining the debug information." In
-summary, as long as you're not moving the debug binary, this should be a free
-speedup.
-
-This can be enabled by setting the following option in cargo's `.config`:
-
-```yaml
-[profile.dev]
-  split-debuginfo = "unpacked"
-```
-
-On Ruchir's laptop after an initial compile:
-
-- With default options `touch src/materialized/src/bin/materialized/main.rs;
-  cargo run` (basically just relinking) takes ~1m15s
-- With this option, it takes ~30s
-
-[split-debuginfo-unpacked]: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#splitting-debug-information
-
 ## Experimental Mac Linker
 
 The LLVM clang project has an old Mach-O (macOS) linker that seems to be

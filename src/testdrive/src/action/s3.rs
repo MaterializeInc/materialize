@@ -25,6 +25,7 @@ use flate2::Compression as Flate2Compression;
 
 use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, ControlFlow, State};
+use crate::format::bytes;
 use crate::parser::BuiltinCommand;
 
 pub struct CreateBucketAction {
@@ -83,14 +84,22 @@ pub struct PutObjectAction {
     bucket_prefix: String,
     key: String,
     compression: Compression,
-    contents: String,
+    contents: Vec<u8>,
 }
 
 pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, anyhow::Error> {
     let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let key = cmd.args.string("key")?;
     let compression = build_compression(&mut cmd)?;
-    let contents = cmd.input.join("\n");
+    let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
+    let mut contents = vec![];
+    for line in cmd.input {
+        contents.extend(bytes::unescape(line.as_bytes())?);
+        contents.push(b'\n');
+    }
+    if !trailing_newline {
+        contents.pop();
+    }
     cmd.args.done()?;
     Ok(PutObjectAction {
         bucket_prefix,
@@ -110,7 +119,7 @@ impl Action for PutObjectAction {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Put S3 object {}/{}", bucket, self.key);
 
-        let buffer = self.contents.clone().into_bytes();
+        let buffer = self.contents.clone();
         let contents = match self.compression {
             Compression::None => Ok(buffer),
             Compression::Gzip => {

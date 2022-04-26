@@ -121,7 +121,7 @@ where
                     None => {
                         let sleep = Duration::from_secs(1);
                         if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                            return Err(ExternalError::new_timeout(deadline));
                         }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
@@ -283,7 +283,7 @@ where
                     None => {
                         let sleep = Duration::from_secs(1);
                         if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::from(anyhow!("timeout at {:?}", deadline)));
+                            return Err(ExternalError::new_timeout(deadline));
                         }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
@@ -429,13 +429,10 @@ where
     /// should only downgrade their read capability when they are certain they
     /// have all data through the frontier they would downgrade to.
     ///
-    /// This snapshot may be split into a number of splits, each of which may be
-    /// exchanged (including over the network) to load balance the processing of
-    /// this snapshot. These splits are usable by anyone with access to the
-    /// shard's [crate::Location]. The `len()` of the returned `Vec` is
-    /// `num_splits`. If a 1:1 mapping between splits and (e.g. dataflow
-    /// workers) is used, then the work of replaying the snapshot will be
-    /// roughly balanced.
+    /// This is a convenience method for constructing the snapshot and
+    /// immediately consuming it from a single place. If you need to parallelize
+    /// snapshot iteration (potentially from multiple machines), see
+    /// [Self::snapshot_splits] and [Self::snapshot_iter].
     ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
@@ -444,6 +441,49 @@ where
     /// being stored, this is an opportunity to push down projection and key
     /// filter information.
     pub async fn snapshot(
+        &self,
+        timeout: Duration,
+        as_of: Antichain<T>,
+    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
+        let splits = self
+            .snapshot_splits(timeout, as_of, NonZeroUsize::new(1).unwrap())
+            .await?;
+        let mut splits = match splits {
+            Ok(x) => x,
+            Err(err) => return Ok(Err(err)),
+        };
+        assert_eq!(splits.len(), 1);
+        let split = splits.pop().unwrap();
+        self.snapshot_iter(timeout, split).await
+    }
+
+    /// Returns a snapshot of the contents of the shard TVC at `as_of`.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard. The recipient
+    /// should only downgrade their read capability when they are certain they
+    /// have all data through the frontier they would downgrade to.
+    ///
+    /// This snapshot may be split into a number of splits, each of which may be
+    /// exchanged (including over the network) to load balance the processing of
+    /// this snapshot. These splits are usable by anyone with access to the
+    /// shard's [crate::Location]. The `len()` of the returned `Vec` is
+    /// `num_splits`. If a 1:1 mapping between splits and (e.g. dataflow
+    /// workers) is used, then the work of replaying the snapshot will be
+    /// roughly balanced.
+    ///
+    /// This method exists to allow users to parallelize snapshot iteration. If
+    /// you want to immediately consume the snapshot from a single place, you
+    /// likely want the [Self::snapshot] helper.
+    ///
+    /// The clunky two-level Result is to enable more obvious error handling in
+    /// the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// TODO: If/when persist learns about the structure of the keys and values
+    /// being stored, this is an opportunity to push down projection and key
+    /// filter information.
+    pub async fn snapshot_splits(
         &self,
         timeout: Duration,
         as_of: Antichain<T>,
@@ -537,21 +577,7 @@ where
         as_of: T,
     ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
         use crate::NO_TIMEOUT;
-
-        let splits = self
-            .snapshot(
-                NO_TIMEOUT,
-                Antichain::from_elem(as_of),
-                NonZeroUsize::new(1).unwrap(),
-            )
-            .await?;
-        let mut splits = match splits {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        assert_eq!(splits.len(), 1);
-        let split = splits.pop().unwrap();
-        self.snapshot_iter(NO_TIMEOUT, split).await
+        self.snapshot(NO_TIMEOUT, Antichain::from_elem(as_of)).await
     }
 }
 

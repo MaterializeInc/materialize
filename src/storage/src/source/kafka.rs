@@ -32,7 +32,7 @@ use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
 
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
 use self::metrics::KafkaPartitionMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -200,7 +200,9 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer
     /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
             for pid in partitions {

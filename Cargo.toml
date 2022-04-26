@@ -2,8 +2,6 @@
 members = [
     "demo/billing",
     "fuzz",
-    "play/json-flattened-view-gen",
-    "play/mbta",
     "src/avro-derive",
     "src/avro",
     "src/aws-util",
@@ -25,6 +23,7 @@ members = [
     "src/materialized",
     "src/metabase",
     "src/mzcloud-cli",
+    "src/npm",
     "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",

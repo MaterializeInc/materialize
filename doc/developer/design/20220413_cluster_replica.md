@@ -16,11 +16,11 @@ follows:
 
 ```sql
 create_cluster_stmt ::=
-  CREATE CLUSTER [IF NOT EXISTS] <name>
+  CREATE CLUSTER <name>
     [<inline_replica> [, <inline_replica> ...]]
 
 create_cluster_replica_stmt ::=
-  CREATE CLUSTER REPLICA [IF NOT EXISTS] <name> FOR <cluster>
+  CREATE CLUSTER REPLICA <name> FOR <cluster>
     [<replica_option> [, <replica_option> ...]]
 
 inline_replica ::= REPLICA <name> [<replica_option> [, <replica_option> ...]]
@@ -81,14 +81,15 @@ status            | `text`    | The status of the replica. Either `unhealthy` or
 
 #### Replica size
 
-The controller will use the replica size to determine the following three
-properties of [`ServiceConfig`](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#fields):
+The controller will use the replica size to determine the following properties
+of a cluster replica:
 
-  * Memory limit
-  * CPU limit
-  * Processes
+  * [Memory limit](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.memory_limit)
+  * [CPU limit](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.cpu_limit)
+  * [Scale](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.scale)
+  * Timely worker threads, specified as the `--workers` argument to `computed`
 
-The mapping between replica size and the above property values will be
+The mapping between replica size and the above properties will be
 determined by the new `--cluster-replica-sizes` comand line option, which
 accepts a JSON object that can be deserialized into `ClusterReplicaSizeMap`:
 
@@ -97,7 +98,8 @@ accepts a JSON object that can be deserialized into `ClusterReplicaSizeMap`:
 struct ClusterReplicaSizeConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
-    processes: usize,
+    scale: usize,
+    workers: usize,
 }
 
 type ClusterReplicaSizeMap = HashMap<String, ClusterReplicaSizeMap>;
@@ -107,10 +109,16 @@ The default mapping if unspecified will be:
 
 ```jsonc
 {
-    "1": {"processes": 1},
-    "2": {"processes": 2},
-    /// ...
-    "16": {"processes": 16}
+    "1": {"scale": 1, "workers": 1},
+    "2": {"scale": 1, "workers": 2},
+    "4": {"scale": 1, "workers": 4},
+    // ...
+    "32": {"scale": 1, "workers": 32},
+    // Testing with multiple processes on a single machine is a novelty, so
+    // we don't bother providing many options.
+    "2-1": {"scale": 2, "workers": 1},
+    "2-2": {"scale": 2, "workers": 2},
+    "2-4": {"scale": 2, "workers": 4},
 }
 ```
 
@@ -121,21 +129,24 @@ Materialize Cloud should use a mapping along the lines of the following:
 
 ```json
 {
-    "small": {"cpu_limit": 2, "memory_limit": 8, "processes": 1},
-    "medium": {"cpu_limit": 8, "memory_limit": 32, "processes": 1},
-    "large": {"cpu_limit": 32, "memory_limit": 128, "processes": 1},
-    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 1},
-    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 4},
-    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "processes": 16},
+    "small": {"cpu_limit": 2, "memory_limit": 8, "scale": 1, "workers": 1},
+    "medium": {"cpu_limit": 8, "memory_limit": 32, "scale": 1, "workers": 4},
+    "large": {"cpu_limit": 32, "memory_limit": 128, "scale": 1, "workers": 16},
+    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 1, "workers": 64},
+    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 4, "workers": 64},
+    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 16, "workers": 64},
 }
 ```
 
-The actual names and limits are strawmen. The key points are:
+The actual names and limits are strawmen. The key point is that the sizes have
+friendly names that abstract away the details.
 
-  * The sizes have friendly names that abstract away the details
-  * The number of processes doesn't scale until we've maxed out the amount of
-    resources available on a single VM. There is no reason to support horizontal
-    scalability until we've maxed out vertical scalability.
+Determining when to transition from scaling vertically to scaling horizontally
+is an open question that will need to be answered by running experiments on
+representative workloads. Prior work on benchmarking timely/differential in
+isolation showed performance improvements when switching to horizontal
+scalability before maxing out the resources on a single machine due to
+allocator overhead.
 
 #### Replica status
 

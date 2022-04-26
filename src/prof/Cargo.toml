@@ -14,17 +14,31 @@ backtrace = "0.3.64"
 cfg-if = "1.0.0"
 headers = "0.3.7"
 http = "0.2.6"
+include_dir = "0.7.2"
 lazy_static = "1.4.0"
+mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 pprof = "0.7.0"
 serde = { version = "1.0.136", features = ["derive"] }
 tempfile = "3.2.0"
+tracing = "0.1.34"
 tokio = { version = "1.17.0", features = ["time"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 
+[build-dependencies]
+anyhow = "1.0.56"
+mz-npm = { path = "../npm" }
+
 [features]
+# When enabled, static assets for the web UI are loaded from disk on every HTTP
+# request rather than compiled into the binary. This vastly speeds up the
+# iteration cycle when developing the web UI.
+#
+# WARNING: For development use only! When enabled, may allow unrestricted read
+# access to the file system.
+dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["dep:tikv-jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl"]

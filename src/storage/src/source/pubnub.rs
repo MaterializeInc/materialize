@@ -47,7 +47,7 @@ impl SimpleSource for PubNubSourceReader {
             .build()
             .map_err(|e| SourceError {
                 source_id: self.source_id,
-                error: SourceErrorDetails::FileIO(e.to_string()),
+                error: SourceErrorDetails::Other(e.to_string()),
             })?;
 
         let mut pubnub = Builder::new()
@@ -59,7 +59,7 @@ impl SimpleSource for PubNubSourceReader {
         let channel: channel::Name = channel.parse().or_else(|_| {
             Err(SourceError {
                 source_id: self.source_id,
-                error: SourceErrorDetails::FileIO(format!("invalid pubnub channel: {}", channel)),
+                error: SourceErrorDetails::Other(format!("invalid pubnub channel: {}", channel)),
             })
         })?;
 
@@ -75,7 +75,7 @@ impl SimpleSource for PubNubSourceReader {
 
                     timestamper.insert(row).await.map_err(|e| SourceError {
                         source_id: self.source_id,
-                        error: SourceErrorDetails::FileIO(e.to_string()),
+                        error: SourceErrorDetails::Other(e.to_string()),
                     })?;
                 }
             }

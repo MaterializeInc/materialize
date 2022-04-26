@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use derivative::Derivative;
 use serde::de::Unexpected;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// An orchestrator manages services.
 ///
@@ -87,8 +87,8 @@ pub struct ServiceConfig<'a> {
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
-    /// The number of processes to run.
-    pub processes: NonZeroUsize,
+    /// The number of copies of this service to run.
+    pub scale: NonZeroUsize,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -112,7 +112,7 @@ pub struct ServicePort {
     pub port_hint: i32,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
 impl<'de> Deserialize<'de> for MemoryLimit {
@@ -131,8 +131,17 @@ impl<'de> Deserialize<'de> for MemoryLimit {
     }
 }
 
+impl Serialize for MemoryLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <String as Serialize>::serialize(&self.0.to_string(), serializer)
+    }
+}
+
 /// Describes a limit on CPU resources.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct CpuLimit {
     millicpus: usize,
 }
@@ -168,5 +177,14 @@ impl<'de> Deserialize<'de> for CpuLimit {
                 millicpus: millicpus as usize,
             })
         }
+    }
+}
+
+impl Serialize for CpuLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
     }
 }

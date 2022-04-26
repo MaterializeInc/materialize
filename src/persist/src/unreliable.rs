@@ -13,7 +13,6 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -259,7 +258,7 @@ impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
@@ -269,7 +268,7 @@ impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn set(
@@ -285,7 +284,7 @@ impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
@@ -295,7 +294,7 @@ impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 }
 
@@ -345,7 +344,7 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn compare_and_set(
@@ -364,7 +363,7 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn scan(
@@ -379,7 +378,7 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 
     async fn truncate(
@@ -394,7 +393,7 @@ impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
                 return res;
             }
         }
-        Err(ExternalError::from(anyhow!("unreliable: timeout")))
+        Err(ExternalError::new_timeout(deadline))
     }
 }
 

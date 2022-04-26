@@ -17,20 +17,21 @@ use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client as KinesisClient;
 use futures::executor::block_on;
-use mz_dataflow_types::sources::AwsExternalId;
 use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
 use mz_aws_util::kinesis;
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset,
+    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KinesisSourceConnector,
+    MzOffset,
 };
+use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 
 use crate::source::metrics::{KinesisMetrics, SourceBaseMetrics};
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -148,14 +149,16 @@ impl SourceReader for KinesisSourceReader {
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
         if self.last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
             if let Err(e) = block_on(self.update_shard_information()) {
                 error!("{:#?}", e);
-                return Err(anyhow::Error::msg(e.to_string()));
+                return Err(e.into());
             }
             self.last_checked_shards = std::time::Instant::now();
         }
@@ -190,7 +193,9 @@ impl SourceReader for KinesisSourceReader {
                         {
                             // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
                             error!("{}", err);
-                            return Err(anyhow::Error::msg(err));
+                            return Err(SourceReaderError {
+                                inner: SourceErrorDetails::Other(err.to_string()),
+                            });
                         }
                         Err(SdkError::ServiceError { err, .. })
                             if err.is_provisioned_throughput_exceeded_exception() =>
@@ -213,7 +218,9 @@ impl SourceReader for KinesisSourceReader {
                             // - Unknown (raw HTTP provided)
                             // - Blocking
                             error!("{}", e);
-                            return Err(anyhow!("{}", e));
+                            return Err(SourceReaderError {
+                                inner: SourceErrorDetails::Other(e.to_string()),
+                            });
                         }
                     };
 

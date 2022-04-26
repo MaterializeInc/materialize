@@ -257,3 +257,18 @@ The response lists the disk space for the data directory and any subdirectories:
 ```
 
 The `mzdata` directory is typically less than 10MB in size.
+
+### How many `TAIL` processes are running?
+
+You can get the number of active `TAIL` processes in Materialize using the statement below, or another `TAIL` statement.
+Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is created.
+
+```sql
+-- Report the number of tails running
+SELECT count(1) FROM (
+    SELECT id
+    FROM mz_dataflow_names
+    WHERE substring(name, 0, 15) = 'Dataflow: tail'
+    GROUP BY id
+);
+```

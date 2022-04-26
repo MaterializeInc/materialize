@@ -124,7 +124,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             ports: ports_in,
             memory_limit: _,
             cpu_limit: _,
-            processes: processes_in,
+            scale: scale_in,
             labels: _,
             availability_zone: _,
         }: ServiceConfig<'_>,
@@ -140,7 +140,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         let system = sysinfo::System::new_all();
 
-        for i in 0..(processes_in.get()) {
+        for i in 0..(scale_in.get()) {
             let pid_file_location = self
                 .data_dir
                 .join(format!("{}-{}-{}.pid", self.namespace, id, i));

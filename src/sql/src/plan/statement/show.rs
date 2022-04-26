@@ -476,7 +476,6 @@ fn show_sinks<'a>(
     };
 
     if let Some(cluster) = in_cluster {
-        scx.require_experimental_mode("SHOW SINKS...IN CLUSTER")?;
         query_filters.push(format!("clusters.id = {}", cluster.0));
     }
 
@@ -594,7 +593,6 @@ pub fn show_indexes<'a>(
     }
 
     if let Some(cluster) = in_cluster {
-        scx.require_experimental_mode("SHOW INDEXES...IN CLUSTER")?;
         query_filter.push(format!("clusters.id = {}", cluster.0))
     };
 
@@ -669,8 +667,6 @@ pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    scx.require_experimental_mode("SHOW CLUSTERS")?;
-
     let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
 
     ShowSelect::new(scx, query, filter, None, None)

@@ -17,7 +17,7 @@ use clap::ArgEnum;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
-    Service as K8sService, ServicePort, ServiceSpec,
+    SecretVolumeSource, Service as K8sService, ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
@@ -29,6 +29,7 @@ use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_secrets_kubernetes::SECRET_NAME;
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -154,7 +155,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             ports: ports_in,
             memory_limit,
             cpu_limit,
-            processes,
+            scale,
             labels: labels_in,
             availability_zone,
         }: ServiceConfig<'_>,
@@ -220,6 +221,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
+        let volume_name = "secrets-mount".to_string();
+
+        let secrets_volume = Volume {
+            name: volume_name.clone(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(SECRET_NAME.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
@@ -252,8 +264,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
+                    volume_mounts: Some(vec![VolumeMount {
+                        mount_path: "/secrets".to_string(),
+                        name: volume_name.clone(),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }],
+                volumes: Some(vec![secrets_volume]),
                 node_selector,
                 ..Default::default()
             }),
@@ -286,7 +304,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: name.clone(),
-                replicas: Some(processes.get().try_into()?),
+                replicas: Some(scale.get().try_into()?),
                 template: pod_template_spec,
                 ..Default::default()
             }),
@@ -310,7 +328,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..processes.get() {
+        for pod_id in 0..scale.get() {
             let pod_name = format!("{}-{}", &name, pod_id);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
@@ -331,7 +349,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        let hosts = (0..processes.get())
+        let hosts = (0..scale.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",

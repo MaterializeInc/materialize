@@ -149,7 +149,6 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub if_not_exists: bool,
     pub config: ComputeInstanceConfig,
 }
 
@@ -176,7 +175,7 @@ impl ComputeInstanceConfig {
 }
 
 /// Configuration of introspection for a compute instance.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,

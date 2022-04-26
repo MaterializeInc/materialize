@@ -18,7 +18,7 @@ There are broadly three test suites:
 
   3. The long-running **performance and stability test suite**. This test suite
      has yet to be automated. At the moment it consists of engineers manually
-     running the demo in [demo/chbench/](/demo/chbench).
+     running the demo in [test/chbench/](/test/chbench).
 
 The unit/integration and system test suites are run on every PR and can easily
 be run locally. The goal is for these test suites to be quite fast, ideally
@@ -223,7 +223,7 @@ documented at the [pgtest crate][pgtest-docs].
 ## Long-running tests
 
 These are still a work in progress. The beginning of the orchestration has
-begun, though; see the Docker Compose demo in [demo/chbench](/demo/chbench) if
+begun, though; see the Docker Compose demo in [test/chbench](/test/chbench) if
 you're curious.
 
 ## What kind of tests should I write?

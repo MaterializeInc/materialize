@@ -56,7 +56,7 @@ use mz_ore::task;
 use mz_repr::MessagePayload;
 use tracing::{debug, error, trace, warn};
 
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -869,7 +869,9 @@ impl SourceReader for S3SourceReader {
         })
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
@@ -890,7 +892,9 @@ impl SourceReader for S3SourceReader {
                     );
                     Ok(NextMessage::Pending)
                 }
-                e @ (S3Error::ListObjectsFailed { .. } | S3Error::IoError { .. }) => Err(e.into()),
+                e @ (S3Error::ListObjectsFailed { .. } | S3Error::IoError { .. }) => {
+                    Err(anyhow::Error::new(e).into())
+                }
             },
             None => Ok(NextMessage::Pending),
             Some(None) => Ok(NextMessage::Finished),

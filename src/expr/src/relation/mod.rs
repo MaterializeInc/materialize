@@ -257,7 +257,8 @@ impl MirRelationExpr {
     /// visited in `type_stack`.
     pub fn typ(&self) -> RelationType {
         let mut type_stack = Vec::new();
-        self.visit_pre_post(
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 if let MirRelationExpr::Let { body, .. } = &e {
                     // Do not traverse the value sub-graph, since it's not relevant for

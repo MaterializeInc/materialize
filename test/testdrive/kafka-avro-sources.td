@@ -902,7 +902,7 @@ a b
   FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM ms_dbz
+> SELECT * FROM ms_dbz_uncommitted
 a b
 ---
 1 1

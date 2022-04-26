@@ -8,7 +8,6 @@ edition = "2021"
 rust-version = "1.60.0"
 publish = false
 default-run = "materialized"
-build = "build/main.rs"
 
 [package.metadata.deb]
 assets = [
@@ -142,15 +141,8 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 
 [build-dependencies]
 anyhow = "1.0.56"
-askama_shared = { version = "0.12.2", features = ["json"] }
 cc = "1.0.73"
-flate2 = "1.0.23"
-hex = "0.4.3"
-hex-literal = "0.3.4"
-reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"] }
-sha2 = "0.10.2"
-tar = "0.4.38"
-walkdir = "2.3.2"
+mz-npm = { path = "../npm" }
 
 [features]
 default = ["jemalloc"]
@@ -162,7 +154,7 @@ default = ["jemalloc"]
 # access to the file system.
 dev-web = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
-jemalloc = ["mz-prof/jemalloc", "dep:tikv-jemallocator"]
+jemalloc = ["mz-prof/jemalloc", "tikv-jemallocator"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.

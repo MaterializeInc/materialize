@@ -175,7 +175,8 @@ impl JoinInputMapper {
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
     pub fn map_expr_to_local(&self, mut expr: MirScalarExpr) -> MirScalarExpr {
-        expr.visit_mut_post(&mut |e| {
+        #[allow(deprecated)]
+        expr.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c -= self.prior_arities[self.input_relation[*c]];
             }
@@ -187,7 +188,8 @@ impl JoinInputMapper {
     /// creates a new version where column references have been remapped to the
     /// global context.
     pub fn map_expr_to_global(&self, mut expr: MirScalarExpr, index: usize) -> MirScalarExpr {
-        expr.visit_mut_post(&mut |e| {
+        #[allow(deprecated)]
+        expr.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c += self.prior_arities[index];
             }
@@ -312,7 +314,8 @@ impl JoinInputMapper {
         // `e` anyway, so we end up visiting nodes in `e` multiple times
         // here. Alternatively, consider having the future `PredicateKnowledge`
         // take over the responsibilities of this code?
-        expr.visit_mut_pre_post(
+        #[allow(deprecated)]
+        expr.visit_mut_pre_post_nolimit(
             &mut |e| {
                 let mut inputs = self.lookup_inputs(e);
                 if let Some(first_input) = inputs.next() {
