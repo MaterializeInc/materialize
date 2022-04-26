@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import List, Set, Type, TypeVar
+from typing import Dict, List, Set, Type, TypeVar
 
 from materialize.mzcompose import Composition
 
@@ -77,34 +77,67 @@ class Action:
         assert False
 
 
+class Scenario:
+    def config(self) -> Dict[Type[Action], float]:
+        assert False
+
+
 class Test:
     """A Zippy test, consisting of a sequence of actions."""
 
-    def __init__(
-        self, action_classes: List[Type[Action]], max_actions: int = 20
-    ) -> None:
+    def __init__(self, scenario: Scenario, max_actions: int = 20) -> None:
         """Generate a new Zippy test.
 
         Args:
-            action_classes: The set of actions to choose from.
+            scenario: The Scenario to pick actions from.
             max_actions: The number of actions to generate.
         """
+        self._scenario = scenario
         self._actions: List[Action] = []
-        capabilities = Capabilities()
+        self._capabilities = Capabilities()
+
         for i in range(0, max_actions):
-            action_class = random.choice(
-                [
-                    action
-                    for action in action_classes
-                    if all(capabilities.provides(req) for req in action.requires())
-                ]
-            )
-            action = action_class(capabilities)
+            action_class = self._pick_action_class()
+            action = action_class(capabilities=self._capabilities)
             self._actions.append(action)
-            capabilities._extend(action.provides())
-            capabilities._remove(action.removes())
+            self._capabilities._extend(action.provides())
+            self._capabilities._remove(action.removes())
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
         for action in self._actions:
+            print(action)
             action.run(c)
+
+    def _pick_action_class(self) -> Type[Action]:
+        """Select the next Action to run in the Test"""
+        action_classes = []
+        class_weights = []
+
+        for action_class in self._scenario.config().keys():
+            for leaf in self._leaf_subclasses(action_class):
+                # Do not pick an Action whose requirements can not be satisfied
+                if not all(self._capabilities.provides(req) for req in leaf.requires()):
+                    continue
+
+                action_classes.append(leaf)
+                class_weights.append(self._scenario.config()[action_class])
+
+        return random.choices(action_classes, weights=class_weights, k=1)[0]
+
+    def _leaf_subclasses(self, cls: Type[Action]) -> List[Type[Action]]:
+        """Return all Actions that are a subclass of the given cls."""
+        leafs = []
+        if len(cls.__subclasses__()) == 0:
+            return [cls]
+
+        class_list = [cls]
+        while class_list:
+            parent = class_list.pop()
+            for child in parent.__subclasses__():
+                if child not in leafs:
+                    if len(child.__subclasses__()) == 0:
+                        leafs.append(child)
+                    else:
+                        class_list.append(child)
+        return leafs
