@@ -81,14 +81,15 @@ status            | `text`    | The status of the replica. Either `unhealthy` or
 
 #### Replica size
 
-The controller will use the replica size to determine the following three
-properties of [`ServiceConfig`](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#fields):
+The controller will use the replica size to determine the following properties
+of a cluster replica:
 
-  * Memory limit
-  * CPU limit
-  * Scale
+  * [Memory limit](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.memory_limit)
+  * [CPU limit](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.cpu_limit)
+  * [Scale](https://dev.materialize.com/api/rust/mz_orchestrator/struct.ServiceConfig.html#structfield.scale)
+  * Timely worker threads, specified as the `--workers` argument to `computed`
 
-The mapping between replica size and the above property values will be
+The mapping between replica size and the above properties will be
 determined by the new `--cluster-replica-sizes` comand line option, which
 accepts a JSON object that can be deserialized into `ClusterReplicaSizeMap`:
 
@@ -98,6 +99,7 @@ struct ClusterReplicaSizeConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     scale: usize,
+    workers: usize,
 }
 
 type ClusterReplicaSizeMap = HashMap<String, ClusterReplicaSizeMap>;
@@ -107,10 +109,16 @@ The default mapping if unspecified will be:
 
 ```jsonc
 {
-    "1": {"scale": 1},
-    "2": {"scale": 2},
-    /// ...
-    "16": {"scale": 16}
+    "1": {"scale": 1, "workers": 1},
+    "2": {"scale": 1, "workers": 2},
+    "4": {"scale": 1, "workers": 4},
+    // ...
+    "32": {"scale": 1, "workers": 32},
+    // Testing with multiple processes on a single machine is a novelty, so
+    // we don't bother providing many options.
+    "2-1": {"scale": 2, "workers": 1},
+    "2-2": {"scale": 2, "workers": 2},
+    "2-4": {"scale": 2, "workers": 4},
 }
 ```
 
@@ -121,12 +129,12 @@ Materialize Cloud should use a mapping along the lines of the following:
 
 ```json
 {
-    "small": {"cpu_limit": 2, "memory_limit": 8, "scale": 1},
-    "medium": {"cpu_limit": 8, "memory_limit": 32, "scale": 1},
-    "large": {"cpu_limit": 32, "memory_limit": 128, "scale": 1},
-    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 1},
-    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 4},
-    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 16},
+    "small": {"cpu_limit": 2, "memory_limit": 8, "scale": 1, "workers": 1},
+    "medium": {"cpu_limit": 8, "memory_limit": 32, "scale": 1, "workers": 4},
+    "large": {"cpu_limit": 32, "memory_limit": 128, "scale": 1, "workers": 16},
+    "xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 1, "workers": 64},
+    "2xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 4, "workers": 64},
+    "3xlarge": {"cpu_limit": 128, "memory_limit": 512, "scale": 16, "workers": 64},
 }
 ```
 
