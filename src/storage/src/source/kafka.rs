@@ -188,8 +188,8 @@ impl SourceReader for KafkaSourceReader {
                 base_metrics,
                 partition_ids,
                 topic,
-                source_name,
-                source_id,
+                source_id.source_id.to_string(),
+                source_id.dataflow_id.to_string(),
             ),
         })
     }
