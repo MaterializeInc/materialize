@@ -15,6 +15,7 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
+use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
@@ -1447,15 +1448,63 @@ impl fmt::Display for AggregateFunc {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
     pub nullable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
+impl From<&CaptureGroupDesc> for ProtoCaptureGroupDesc {
+    fn from(x: &CaptureGroupDesc) -> Self {
+        Self {
+            index: x.index,
+            name: x.name.clone(),
+            nullable: x.nullable,
+        }
+    }
+}
+
+impl TryFrom<ProtoCaptureGroupDesc> for CaptureGroupDesc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoCaptureGroupDesc) -> Result<Self, Self::Error> {
+        Ok(Self {
+            index: x.index,
+            name: x.name,
+            nullable: x.nullable,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct AnalyzedRegex(
+    #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
+    Vec<CaptureGroupDesc>,
+);
+
+impl From<&AnalyzedRegex> for ProtoAnalyzedRegex {
+    fn from(x: &AnalyzedRegex) -> Self {
+        ProtoAnalyzedRegex {
+            regex: Some((&x.0).into()),
+            groups: x.1.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoAnalyzedRegex> for AnalyzedRegex {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoAnalyzedRegex) -> Result<Self, Self::Error> {
+        Ok(AnalyzedRegex(
+            x.regex.try_into_if_some("ProtoAnalyzedRegex::regex")?,
+            x.groups
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+}
 
 impl AnalyzedRegex {
     pub fn new(s: &str) -> Result<Self, regex::Error> {
@@ -1517,7 +1566,7 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
     datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum TableFunc {
     JsonbEach {
         stringify: bool,
@@ -1549,6 +1598,75 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
+}
+
+impl From<&TableFunc> for ProtoTableFunc {
+    fn from(x: &TableFunc) -> Self {
+        use proto_table_func::Kind;
+        use proto_table_func::ProtoWrap;
+
+        ProtoTableFunc {
+            kind: Some(match x {
+                TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
+                TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
+                TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
+                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into()),
+                TableFunc::CsvExtract(x) => Kind::CsvExtract(x.into_proto()),
+                TableFunc::GenerateSeriesInt32 => Kind::GenerateSeriesInt32(()),
+                TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
+                TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
+                TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
+                TableFunc::Repeat => Kind::Repeat(()),
+                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into()),
+                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into()),
+                TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
+                    types: types.iter().map(Into::into).collect(),
+                    width: width.into_proto(),
+                }),
+                TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoTableFunc> for TableFunc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTableFunc) -> Result<Self, Self::Error> {
+        use proto_table_func::Kind;
+
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
+
+        Ok(match kind {
+            Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
+            Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
+            Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
+            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.try_into()?),
+            Kind::CsvExtract(x) => TableFunc::CsvExtract(usize::from_proto(x)?),
+            Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
+            Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
+            Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
+            Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
+            Kind::Repeat(()) => TableFunc::Repeat,
+            Kind::UnnestArray(x) => TableFunc::UnnestArray {
+                el_typ: x.try_into()?,
+            },
+            Kind::UnnestList(x) => TableFunc::UnnestList {
+                el_typ: x.try_into()?,
+            },
+            Kind::Wrap(x) => TableFunc::Wrap {
+                width: usize::from_proto(x.width)?,
+                types: x
+                    .types
+                    .into_iter()
+                    .map(TryFrom::try_from)
+                    .collect::<Result<_, _>>()?,
+            },
+            Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
+        })
+    }
 }
 
 impl TableFunc {
@@ -1808,7 +1926,7 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc};
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -1816,6 +1934,15 @@ mod tests {
        #[test]
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+       #[test]
+        fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

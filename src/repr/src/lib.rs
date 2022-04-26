@@ -38,7 +38,8 @@ pub mod util;
 pub use datum_vec::{DatumVec, DatumVecBorrow};
 pub use global_id::GlobalId;
 pub use relation::{
-    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, RelationDesc, RelationType,
+    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, RelationDesc,
+    RelationType,
 };
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
