@@ -27,7 +27,6 @@ services:
     command:
       --listen-addr 0.0.0.0:6875
       --data-directory=/share/mzdata
-      --workers 2
       --experimental
       --timestamp-frequency 100ms
       --no-sigbus-sigsegv-backtraces
