@@ -95,7 +95,7 @@ impl ProtoRepr for regex::Regex {
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&repr).map_err(|e| TryFromProtoError::RegexError(e))?)
+        Ok(regex::Regex::new(&repr).map_err(TryFromProtoError::RegexError)?)
     }
 }
 
@@ -115,9 +115,10 @@ impl TryFrom<ProtoRegex> for Regex {
     }
 }
 
-// TODO: generate more sophisticated regexes:
-// * Support groups.
-// * Support a greater range of characters and character classes.
+// TODO: this is not really high priority, but this could modified to generate a
+// greater variety of regexes. Ignoring the beginning-of-file/line and EOF/EOL
+// symbols, the only regexes being generated are `.{#repetitions}` and
+// `x{#repetitions}`.
 const BEGINNING_SYMBOLS: &str = r"((\\A)|\^)?";
 const CHARACTERS: &str = r"[\.x]{1}";
 const REPETITIONS: &str = r"((\*|\+|\?|(\{[1-9],?\}))\??)?";

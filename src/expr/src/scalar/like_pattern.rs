@@ -211,8 +211,22 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
 }
 
 pub fn any_matcher() -> impl Strategy<Value = Matcher> {
+    // Generates a string out of a pool of characters. The pool has at least one
+    // representative from the following classes of the characters (listed in
+    // order of its appearance in the regex):
+    // * Alphanumeric characters, both upper and lower-case.
+    // * Control characters.
+    // * Punctuation.
+    // * Space characters.
+    // * Multi-byte characters.
+    // * _ and %, which are special characters for a like pattern.
+    // * Escaped _ and %, plus the escape character itself. This implementation
+    //   will have to be modified if we support choosing a different escape character.
+    //
+    // Syntax reference for LIKE here:
+    // https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-LIKE
     (
-        r"(_|%)?(([[:alpha:]]|(\\_)|(\\%)|(\\\\)|华){1, 10}(_|%)?){0, 6}",
+        r"([[:alnum:]]|[[:cntrl:]]|[[:punct:]]|[[:space:]]|华|_|%|(\\_)|(\\%)|(\\\\)){0, 50}",
         bool::arbitrary(),
     )
         .prop_map(|(pattern, case_insensitive)| compile(&pattern, case_insensitive).unwrap())
