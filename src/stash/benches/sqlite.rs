@@ -32,7 +32,7 @@ fn bench_update(c: &mut Criterion) {
 
 fn bench_update_many(c: &mut Criterion) {
     let file = NamedTempFile::new().unwrap();
-    let stash = Sqlite::open(file.path()).unwrap();
+    let mut stash = Sqlite::open(file.path()).unwrap();
 
     let orders = stash.collection::<String, String>("orders").unwrap();
     let mut ts = 1;
@@ -69,7 +69,7 @@ fn bench_consolidation(c: &mut Criterion) {
 
 fn bench_consolidation_large(c: &mut Criterion) {
     let file = NamedTempFile::new().unwrap();
-    let stash = Sqlite::open(file.path()).unwrap();
+    let mut stash = Sqlite::open(file.path()).unwrap();
 
     let orders = stash.collection::<String, String>("orders").unwrap();
     let mut ts = 0;
