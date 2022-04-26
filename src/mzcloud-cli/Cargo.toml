@@ -8,7 +8,7 @@ rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.56"
+anyhow = "1.0.57"
 clap = { version = "3.1.9", features = ["derive", "env"] }
 mz-ore = { path = "../ore", features = ["cli"] }
 mzcloud = { git = "https://github.com/MaterializeInc/cloud-sdks" }

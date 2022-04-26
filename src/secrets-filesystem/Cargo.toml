@@ -7,6 +7,6 @@ rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.56"
+anyhow = "1.0.57"
 async-trait = "0.1.53"
 mz-secrets = { path = "../secrets" }
