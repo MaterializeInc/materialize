@@ -13,10 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::error::Error;
 
-use mz_pid_file::{PidFile, PortMetadataFile};
+use mz_pid_file::PidFile;
 
 #[test]
 fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
@@ -48,25 +47,6 @@ fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
     assert!(path.exists());
     pid_file.remove()?;
     assert!(!path.exists());
-
-    Ok(())
-}
-
-#[test]
-fn test_port_metadata_file_basic() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("portfile");
-
-    let port_metadata: HashMap<String, i32> =
-        vec![("joe".to_string(), 42), ("shmoe".to_string(), 666)]
-            .into_iter()
-            .collect();
-    let _port_metadata_file = PortMetadataFile::open(&path, &port_metadata)?;
-    assert!(path.exists());
-
-    let port_metadata_file_contents = PortMetadataFile::read(&path)?;
-
-    assert_eq!(port_metadata, port_metadata_file_contents);
 
     Ok(())
 }
