@@ -12,9 +12,11 @@ syntax = "proto3";
 import "repr/src/adt/char.proto";
 import "repr/src/adt/datetime.proto";
 import "repr/src/adt/numeric.proto";
+import "repr/src/adt/regex.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/chrono.proto";
 import "repr/src/relation_and_scalar.proto";
+import "expr/src/scalar/like_pattern.proto";
 import "google/protobuf/empty.proto";
 
 package mz_expr.scalar.func;
@@ -211,12 +213,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty byte_length_string = 150;
         google.protobuf.Empty char_length = 151;
         google.protobuf.Empty chr = 152;
-        // todo: IsLikeMatch: blocked on like_pattern::Matcher
-        google.protobuf.Empty is_like_match = 153;
-        // todo: IsRegexpMatch: blocked on Regex
-        google.protobuf.Empty is_regexp_match = 154;
-        // todo: RegexpMatch: blocked on Regex
-        google.protobuf.Empty regexp_match = 155;
+        mz_expr.scalar.like_pattern.ProtoMatcher is_like_match = 153;
+        mz_repr.adt.regex.ProtoRegex is_regexp_match = 154;
+        mz_repr.adt.regex.ProtoRegex regexp_match = 155;
         mz_repr.adt.datetime.ProtoDateTimeUnits extract_interval = 156;
         mz_repr.adt.datetime.ProtoDateTimeUnits extract_time = 157;
         mz_repr.adt.datetime.ProtoDateTimeUnits extract_timestamp = 158;

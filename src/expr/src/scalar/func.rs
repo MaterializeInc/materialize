@@ -39,6 +39,7 @@ use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
+use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
@@ -3606,9 +3607,10 @@ impl Arbitrary for UnaryFunc {
             ByteLengthString::arbitrary().prop_map_into(),
             CharLength::arbitrary().prop_map_into(),
             Chr::arbitrary().prop_map_into(),
-            // todo: IsLikeMatch: blocked on like_pattern::Matcher
-            // todo: IsRegexpMatch: blocked on Regex
-            // todo: RegexpMatch: blocked on Regex
+            like_pattern::any_matcher()
+                .prop_map(|matcher| UnaryFunc::IsLikeMatch(IsLikeMatch(matcher))),
+            any_regex().prop_map(|regex| UnaryFunc::IsRegexpMatch(IsRegexpMatch(regex))),
+            any_regex().prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex))),
             ExtractInterval::arbitrary().prop_map_into(),
             ExtractTime::arbitrary().prop_map_into(),
             ExtractTimestamp::arbitrary().prop_map_into(),
@@ -3842,9 +3844,9 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::ByteLengthString(_) => ByteLengthString(()),
             UnaryFunc::CharLength(_) => CharLength(()),
             UnaryFunc::Chr(_) => Chr(()),
-            UnaryFunc::IsLikeMatch(_) => todo!(),
-            UnaryFunc::IsRegexpMatch(_) => todo!(),
-            UnaryFunc::RegexpMatch(_) => todo!(),
+            UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch((&pattern.0).into()),
+            UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch((&regex.0).into()),
+            UnaryFunc::RegexpMatch(regex) => RegexpMatch((&regex.0).into()),
             UnaryFunc::ExtractInterval(func) => ExtractInterval((&func.0).into()),
             UnaryFunc::ExtractTime(func) => ExtractTime((&func.0).into()),
             UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp((&func.0).into()),
@@ -4099,9 +4101,9 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 ByteLengthString(_) => Ok(impls::ByteLengthString.into()),
                 CharLength(_) => Ok(impls::CharLength.into()),
                 Chr(_) => Ok(impls::Chr.into()),
-                IsLikeMatch(_) => todo!(),
-                IsRegexpMatch(_) => todo!(),
-                RegexpMatch(_) => todo!(),
+                IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.try_into()?).into()),
+                IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.try_into()?).into()),
+                RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.try_into()?).into()),
                 ExtractInterval(units) => Ok(impls::ExtractInterval(units.try_into()?).into()),
                 ExtractTime(units) => Ok(impls::ExtractTime(units.try_into()?).into()),
                 ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.try_into()?).into()),
