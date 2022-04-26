@@ -259,6 +259,10 @@ where
         self.seqno
     }
 
+    pub fn upper(&self) -> Antichain<T> {
+        self.collections.upper()
+    }
+
     pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> Result<(R, Self), E>
     where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,

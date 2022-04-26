@@ -381,6 +381,42 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn fetch_upper() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let client = new_test_client().await?;
+
+        let shard_id = ShardId::new();
+
+        let (mut write1, _read1) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
+            .await?;
+
+        let (mut write2, _read2) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
+            .await?;
+
+        let res = write1.append_slice(&data[..], 3).await?;
+        assert_eq!(res, Ok(()));
+
+        // The shard-global upper does advance, even if this writer didn't advance its local upper.
+        assert_eq!(
+            write2.fetch_recent_upper(NO_TIMEOUT).await?,
+            Antichain::from_elem(3)
+        );
+
+        // The writer-local upper should not advance if another writer advances the frontier.
+        assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
+
+        Ok(())
+    }
+
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
     // NOTE: This is a compile-time only test. If it compiles, we're good.
     #[allow(unused)]
