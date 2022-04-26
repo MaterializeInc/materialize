@@ -23,7 +23,7 @@ message ProtoAggregateFunc {
     };
 
     message ProtoLagLead {
-        ProtoColumnOrders order_by = 1; 
+        ProtoColumnOrders order_by = 1;
         oneof lag_lead {
             google.protobuf.Empty lag = 2;
             google.protobuf.Empty lead = 3;
@@ -69,7 +69,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders string_agg  = 36;
         ProtoColumnOrders row_number  = 37;
         ProtoColumnOrders dense_rank  = 38;
-        ProtoLagLead lag_lead  = 39; 
+        ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
     }
 }

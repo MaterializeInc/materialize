@@ -30,6 +30,7 @@ use mz_expr::MirScalarExpr;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use super::ProtoDeltaJoinPlan;
@@ -42,7 +43,7 @@ use super::ProtoDeltaStagePlan;
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
@@ -72,14 +73,14 @@ impl TryFrom<ProtoDeltaJoinPlan> for DeltaJoinPlan {
             path_plans: x
                 .path_plans
                 .into_iter()
-                .map(|x| TryFrom::try_from(x))
+                .map(TryFrom::try_from)
                 .collect::<Result<_, _>>()?,
         })
     }
 }
 
 /// A delta query path is implemented by a sequences of stages,
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
@@ -142,7 +143,7 @@ impl TryFrom<ProtoDeltaPathPlan> for DeltaPathPlan {
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     pub lookup_relation: usize,

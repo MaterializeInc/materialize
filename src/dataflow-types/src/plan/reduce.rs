@@ -71,6 +71,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -83,7 +84,9 @@ include!(concat!(
 ));
 
 /// This enum represents the three potential types of aggregations.
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Arbitrary, Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum ReductionType {
     /// Accumulable functions can be subtracted from (are invertible), and associative.
     /// We can compute these results by moving some data to the diff field under arbitrary
@@ -140,7 +143,7 @@ impl TryFrom<ProtoReductionType> for ReductionType {
 /// shape / general computation of the rendered dataflow graph
 /// in this plan, and then make actually rendering the graph
 /// be as simple (and compiler verifiable) as possible.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
@@ -204,7 +207,7 @@ impl TryFrom<ProtoReducePlan> for ReducePlan {
 /// apply only to the distinct set of values. We need
 /// to apply a distinct operator to those before we
 /// combine them with everything else.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
@@ -297,7 +300,7 @@ impl TryFrom<ProtoAccumulablePlan> for AccumulablePlan {
 /// with monotonic plans, but otherwise, we need to render
 /// them with a reduction tree that splits the inputs into
 /// small, and then progressively larger, buckets
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum HierarchicalPlan {
     /// Plan hierarchical aggregations under monotonic inputs.
     Monotonic(MonotonicPlan),
@@ -340,7 +343,7 @@ impl TryFrom<ProtoHierarchicalPlan> for HierarchicalPlan {
 /// append only, so we can change our computation to
 /// only retain the "best" value in the diff field, instead
 /// of holding onto all values.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
@@ -393,7 +396,7 @@ impl TryFrom<ProtoMonotonicPlan> for MonotonicPlan {
 /// fraction of the original input) and redo the reduction in another
 /// layer. Effectively, we'll construct a min / max heap out of a series
 /// of reduce operators (each one is a separate layer).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
@@ -449,7 +452,7 @@ impl TryFrom<ProtoBucketedPlan> for BucketedPlan {
 /// were only asked to compute a single aggregation, we can skip
 /// that step and return the arrangement provided by computing the aggregation
 /// directly.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation. Here, the
     /// first element denotes the index in the set of inputs
@@ -536,7 +539,7 @@ impl TryFrom<ProtoBasicPlan> for BasicPlan {
 /// types.
 ///
 /// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     pub accumulable: Option<AccumulablePlan>,
@@ -573,9 +576,8 @@ impl TryFrom<ProtoCollationPlan> for CollationPlan {
             basic: x.basic.map(TryInto::try_into).transpose()?,
             aggregate_types: x
                 .aggregate_types
-                .clone()
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -910,5 +912,24 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::RowNumber { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. } => ReductionType::Basic,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    // This test causes stack overflows if not run with --release,
+    // ignore by default.
+    proptest! {
+        #[test]
+        #[ignore]
+        fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }
