@@ -4983,9 +4983,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c090facb9ab04a4fb15fe27f8861059f195dd0847e6f1042016244e129eddeb2"
+checksum = "f2324292407eab69d4ace0eed1524fe612ac37c98aa22b0d868355b17fada530"
 dependencies = [
  "backtrace",
  "cfg-if",
@@ -5427,7 +5427,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.28.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#7b094383d73a433266d8443c1698809f58a4a869"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#109bab76beacec5ec83217ff4aaf22983fb9a34d"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -5444,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.2.0+1.8.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#7b094383d73a433266d8443c1698809f58a4a869"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#109bab76beacec5ec83217ff4aaf22983fb9a34d"
 dependencies = [
  "cmake",
  "libc",
