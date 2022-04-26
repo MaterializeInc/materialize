@@ -63,7 +63,7 @@ impl TryFrom<ProtoJoinPlan> for JoinPlan {
         use proto_join_plan::Kind;
         let kind = value
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoJoinPlan::kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
         Ok(match kind {
             Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
             Kind::Delta(inner) => JoinPlan::Delta(inner.try_into()?),

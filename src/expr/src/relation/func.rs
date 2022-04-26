@@ -891,7 +891,7 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
         use proto_aggregate_func::Kind;
         let kind = x
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoAggregateFunc::kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoAggregateFunc::kind"))?;
         Ok(match kind {
             Kind::MaxNumeric(()) => AggregateFunc::MaxNumeric,
             Kind::MaxInt16(()) => AggregateFunc::MaxInt16,

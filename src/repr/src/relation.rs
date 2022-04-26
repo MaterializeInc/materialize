@@ -264,7 +264,7 @@ impl TryFrom<ProtoColumnName> for ColumnName {
 
     fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
         Ok(ColumnName(x.value.ok_or_else(|| {
-            TryFromProtoError::MissingField("ProtoColumnName::value".into())
+            TryFromProtoError::missing_field("ProtoColumnName::value")
         })?))
     }
 }

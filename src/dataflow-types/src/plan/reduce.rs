@@ -187,7 +187,7 @@ impl TryFrom<ProtoReducePlan> for ReducePlan {
         use proto_reduce_plan::Kind;
         let kind = x
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoReducePlan::kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
         Ok(match kind {
             Kind::Distinct(()) => ReducePlan::Distinct,
             Kind::DistinctNegated(()) => ReducePlan::DistinctNegated,
@@ -327,7 +327,7 @@ impl TryFrom<ProtoHierarchicalPlan> for HierarchicalPlan {
         use proto_hierarchical_plan::Kind;
         let kind = x
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoHierarchicalPlan::Kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoHierarchicalPlan::Kind"))?;
         Ok(match kind {
             Kind::Monotonic(plan) => HierarchicalPlan::Monotonic(plan.try_into()?),
             Kind::Bucketed(plan) => HierarchicalPlan::Bucketed(plan.try_into()?),
@@ -523,7 +523,7 @@ impl TryFrom<ProtoBasicPlan> for BasicPlan {
         use proto_basic_plan::Kind;
         let kind = x
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoBasicPlan::kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
 
         Ok(match kind {
             Kind::Single(x) => {

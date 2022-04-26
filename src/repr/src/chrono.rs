@@ -77,15 +77,15 @@ impl ProtoRepr for NaiveDateTime {
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        let date =
-            NaiveDate::from_proto(repr.date.ok_or_else(|| {
-                TryFromProtoError::MissingField("ProtoNaiveDateTime::date".into())
-            })?)?;
+        let date = NaiveDate::from_proto(
+            repr.date
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoNaiveDateTime::date"))?,
+        )?;
 
-        let time =
-            NaiveTime::from_proto(repr.time.ok_or_else(|| {
-                TryFromProtoError::MissingField("ProtoNaiveDateTime::time".into())
-            })?)?;
+        let time = NaiveTime::from_proto(
+            repr.time
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoNaiveDateTime::time"))?,
+        )?;
 
         Ok(NaiveDateTime::new(date, time))
     }
