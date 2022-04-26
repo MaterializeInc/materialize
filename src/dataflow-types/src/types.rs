@@ -1149,7 +1149,7 @@ pub mod sources {
         !is_avro && !is_stateless_dbz
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
     pub enum ConnectorInner {
         Kafka {
             broker: KafkaAddrs,

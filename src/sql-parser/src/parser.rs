@@ -1723,10 +1723,11 @@ impl<'a> Parser<'a> {
 
     fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
         let connector = if self.peek_keyword(CONNECTOR) {
-            info!("found connector keyword");
             let _ = self.expect_keyword(CONNECTOR);
             CsrConnector::Reference {
                 connector: self.parse_object_name()?,
+                url: None,
+                with_options: None,
             }
         } else {
             CsrConnector::Inline {
@@ -1768,6 +1769,8 @@ impl<'a> Parser<'a> {
         let connector = if self.peek_keyword(CONNECTOR) {
             CsrConnector::Reference {
                 connector: self.parse_object_name()?,
+                url: None,
+                with_options: None,
             }
         } else {
             CsrConnector::Inline {
@@ -2140,6 +2143,8 @@ impl<'a> Parser<'a> {
                     },
                     CONNECTOR => KafkaConnector::Reference {
                         connector: self.parse_object_name()?,
+                        broker: None,
+                        with_options: None,
                     },
                     _ => unreachable!(),
                 };

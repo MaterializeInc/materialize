@@ -15,7 +15,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 /// Represents the addresses of several Kafka brokers.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaAddrs(Vec<(String, u16)>);
 
 impl FromStr for KafkaAddrs {

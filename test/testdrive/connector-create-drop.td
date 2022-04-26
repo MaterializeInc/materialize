@@ -122,12 +122,41 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
-#> CREATE MATERIALIZED SOURCE csr_source
-#  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-#  ENVELOPE DEBEZIUM UPSERT
-
 > SELECT * from csr_source
 id creature
 -----------
 1  lizard
+
+
+> CREATE CONNECTOR broker_connector
+  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
+
+> CREATE MATERIALIZED SOURCE two_connector_source
+  FROM KAFKA CONNECTOR broker_connector
+  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR csr_conn
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * from two_connector_source
+id creature
+-----------
+1  lizard
+
+! DROP CONNECTOR csr_conn
+contains:depended upon by catalog item 'materialize.public.csr_source'
+
+> DROP CONNECTOR csr_conn CASCADE
+
+! CREATE MATERIALIZED SOURCE should_fail
+  FROM KAFKA CONNECTOR does_not_exist
+  TOPIC 'error_topic'
+  FORMAT TEXT
+contains: unknown catalog item 'does_not_exist'
+
+! CREATE MATERIALIZED SOURCE should_fail
+  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR does_not_exist
+  ENVELOPE DEBEZIUM UPSERT
+contains: unknown catalog item 'does_not_exist'

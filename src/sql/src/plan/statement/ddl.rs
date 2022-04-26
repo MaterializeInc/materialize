@@ -74,6 +74,7 @@ use crate::ast::{
     Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
+use crate::connectors::reify_connectors;
 use crate::kafka_util;
 use crate::names::{
     resolve_names_data_type, resolve_object_name, Aug, FullSchemaName, QualifiedObjectName,
@@ -303,6 +304,8 @@ pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
+    let mut depends_on = vec![];
+    let stmt = reify_connectors(stmt, scx.catalog, &mut depends_on)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -355,18 +358,29 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let mut depends_on = vec![];
-
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
             let (broker, options) = match &kafka.connector {
                 mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
-                mz_sql_parser::ast::KafkaConnector::Reference { connector } => {
-                    let connector_name = normalize::unresolved_object_name(connector.clone())?;
-                    let item = scx.catalog.resolve_item(&connector_name)?;
-                    let connector = item.catalog_connector()?;
-                    depends_on.push(item.id());
-                    (connector.uri(), Some(connector.options()))
+                mz_sql_parser::ast::KafkaConnector::Reference {
+                    broker,
+                    with_options,
+                    connector,
+                } => {
+                    let broker_addr = match broker {
+                        Some(url) => url.to_owned(),
+                        None => bail!("resolved connector must specify broker address"),
+                    };
+                    let options = match with_options {
+                        Some(opts) => BTreeMap::from_iter(opts.iter().cloned().tuples()),
+                        None => bail!("resolved connector must specify with_options"),
+                    };
+                    depends_on.push(
+                        scx.catalog
+                            .resolve_item(&normalize::unresolved_object_name(connector.clone())?)?
+                            .id(),
+                    );
+                    (broker_addr, Some(options))
                 }
             };
 
@@ -1333,13 +1347,28 @@ fn get_encoding_inner(
                             with_options: ccsr_options,
                         },
                 } => {
-                    let mut ccsr_with_options = normalize::options(&ccsr_options);
-                    let url = match connector {
-                        mz_sql_parser::ast::CsrConnector::Inline { url: uri } => uri,
-                        mz_sql_parser::ast::CsrConnector::Reference { .. } => "",
+                    let (mut ccsr_with_options, registry_url) = match connector {
+                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options), url),
+                        CsrConnector::Reference {
+                            url, with_options, ..
+                        } => {
+                            let registry_url = match url {
+                                Some(registry) => registry,
+                                None => bail!("connector must specify registry url"),
+                            };
+                            let client_options = match with_options {
+                                Some(opts) => {
+                                    BTreeMap::from_iter(opts.iter().tuples().map(|(k, v)| {
+                                        (k.to_owned(), crate::ast::Value::String(v.to_owned()))
+                                    }))
+                                }
+                                None => BTreeMap::new(),
+                            };
+                            (client_options, registry_url)
+                        }
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        url.parse()?,
+                        registry_url.parse()?,
                         &kafka_util::extract_config(&mut normalize::options(with_options))?,
                         &mut ccsr_with_options,
                     )?;

@@ -122,8 +122,17 @@ impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsrConnector {
-    Inline { url: String },
-    Reference { connector: UnresolvedObjectName },
+    Inline {
+        url: String,
+    },
+    // The reference variant can have url and with_options populated for use in purification
+    // or any other context where
+    Reference {
+        connector: UnresolvedObjectName,
+        url: Option<String>,
+        // Vec of keys interspersed with values
+        with_options: Option<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -142,7 +151,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
             }
-            CsrConnector::Reference { connector } => {
+            CsrConnector::Reference { connector, .. } => {
                 f.write_str("CONNECTOR ");
                 f.write_node(connector);
             }
@@ -176,7 +185,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
             }
-            CsrConnector::Reference { connector } => {
+            CsrConnector::Reference { connector, .. } => {
                 f.write_str("CONNECTOR ");
                 f.write_node(connector);
             }
@@ -537,8 +546,15 @@ impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector {
-    Inline { broker: String },
-    Reference { connector: UnresolvedObjectName },
+    Inline {
+        broker: String,
+    },
+    Reference {
+        connector: UnresolvedObjectName,
+        broker: Option<String>,
+        // This vec is a sequence of keys interspersed with values,
+        with_options: Option<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -612,7 +628,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                         f.write_node(&display::escape_single_quote_string(broker));
                         f.write_str("'");
                     }
-                    KafkaConnector::Reference { connector } => {
+                    KafkaConnector::Reference { connector, .. } => {
                         f.write_str("CONNECTOR ");
                         f.write_node(connector);
                     }
