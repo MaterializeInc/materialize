@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# build and run a rust test and its constituent services.
+
+set -euo pipefail
+
+. misc/shlib/shlib.bash
+
+channel=
+build_flags=()
+positional_args=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        +*)
+            channel="$1"
+            shift
+            ;;
+        --timings|--no-default-features)
+            build_flags+=("$1")
+            shift
+            ;;
+        *)
+            positional_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed
+cargo test "${build_flags[@]}" -- "${positional_args[@]}"
