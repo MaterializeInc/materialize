@@ -1,9 +1,14 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.0.5 - 2022-04-26
 
-* Discontinue support for custom index materialization.
-* Enable defining indexes when creating a materializedview, view, or source.
+* Deprecate support for custom index materialization.
+* Enable defining indexes when creating a `materializedview`, `view`, or `source` using the `indexes` config.
+
+  ```sql
+  {{ config(materialized='view',
+          indexes=[{'columns': ['symbol']}]) }}
+  ```
 
 ## 1.0.4 - 2022-03-27
 
