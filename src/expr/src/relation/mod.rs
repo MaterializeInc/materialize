@@ -2316,3 +2316,108 @@ where
     }
     tiebreaker()
 }
+
+/// Describe a window frame, e.g. `RANGE UNBOUNDED PRECEDING` or
+/// `ROWS BETWEEN 5 PRECEDING AND CURRENT ROW`.
+///
+/// Window frames define a subset of the partition , and only a subset of
+/// window functions make use of the window frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+pub struct WindowFrame {
+    /// ROWS, RANGE or GROUPS
+    pub units: WindowFrameUnits,
+    /// Where the frame starts
+    pub start_bound: WindowFrameBound,
+    /// Where the frame ends
+    pub end_bound: WindowFrameBound,
+}
+
+impl WindowFrame {
+    /// Return the default window frame used when one is not explicitly defined
+    pub fn default() -> Self {
+        WindowFrame {
+            units: WindowFrameUnits::Range,
+            start_bound: WindowFrameBound::UnboundedPreceding,
+            end_bound: WindowFrameBound::CurrentRow,
+        }
+    }
+
+    fn includes_current_row(&self) -> bool {
+        use WindowFrameBound::*;
+        match self.start_bound {
+            UnboundedPreceding => match self.end_bound {
+                UnboundedPreceding => false,
+                OffsetPreceding(0) => true,
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetPreceding(0) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(0) => true,
+                // Any nonzero offsets here will create an empty window
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetPreceding(_) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                // Window ends at the current row
+                OffsetPreceding(0) => true,
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            CurrentRow => true,
+            OffsetFollowing(0) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(_) => unreachable!(),
+                CurrentRow => unreachable!(),
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetFollowing(_) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(_) => unreachable!(),
+                CurrentRow => unreachable!(),
+                OffsetFollowing(_) => false,
+                UnboundedFollowing => false,
+            },
+            UnboundedFollowing => false,
+        }
+    }
+}
+
+/// Describe how frame bounds are interpreted
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+pub enum WindowFrameUnits {
+    /// Each row is treated as the unit of work for bounds
+    Rows,
+    /// Each peer group is treated as the unit of work for bounds,
+    /// and offset-based bounds use the value of the ORDER BY expression
+    Range,
+    /// Each peer group is treated as the unit of work for bounds.
+    /// Groups is currently not supported, and it is rejected during planning.
+    Groups,
+}
+
+/// Specifies [WindowFrame]'s `start_bound` and `end_bound`
+///
+/// The order between frame bounds is significant, as Postgres enforces
+/// some restrictions there.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
+pub enum WindowFrameBound {
+    /// `UNBOUNDED PRECEDING`
+    UnboundedPreceding,
+    /// `<N> PRECEDING`
+    OffsetPreceding(u64),
+    /// `CURRENT ROW`
+    CurrentRow,
+    /// `<N> FOLLOWING`
+    OffsetFollowing(u64),
+    /// `UNBOUNDED FOLLOWING`.
+    UnboundedFollowing,
+}
