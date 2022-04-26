@@ -95,11 +95,11 @@ where
     /// Attempt to pull out the next values of this iterator.
     ///
     /// An empty vector is returned if this iterator is exhausted.
-    pub async fn poll_next(
+    pub async fn next(
         &mut self,
         timeout: Duration,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
-        trace!("SnapshotIter::poll_next timeout={:?}", timeout);
+        trace!("SnapshotIter::next timeout={:?}", timeout);
         let deadline = Instant::now() + timeout;
         loop {
             let key = match self.batches.last() {
@@ -185,7 +185,7 @@ where
 
         let mut ret = Vec::new();
         loop {
-            let mut next = self.poll_next(NO_TIMEOUT).await?;
+            let mut next = self.next(NO_TIMEOUT).await?;
             if next.is_empty() {
                 ret.sort();
                 return Ok(ret);
@@ -224,11 +224,11 @@ where
     D: Semigroup + Codec64,
 {
     /// Attempt to pull out the next values of this subscription.
-    pub async fn poll_next(
+    pub async fn next(
         &mut self,
         timeout: Duration,
     ) -> Result<Vec<ListenEvent<K, V, T, D>>, ExternalError> {
-        trace!("Listen::poll_next timeout={:?}", timeout);
+        trace!("Listen::next timeout={:?}", timeout);
         let deadline = Instant::now() + timeout;
 
         let (batch_keys, desc) = self
@@ -256,7 +256,7 @@ where
 
         let mut ret = Vec::new();
         while self.frontier.less_than(ts) {
-            let mut next = self.poll_next(NO_TIMEOUT).await?;
+            let mut next = self.next(NO_TIMEOUT).await?;
             ret.append(&mut next);
         }
         return Ok(ret);
