@@ -37,7 +37,7 @@ base64 = "0.13.0"
 bytes = "1.1.0"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.1.9", features = ["wrap_help", "env", "derive"] }
+clap = { version = "3.1.12", features = ["wrap_help", "env", "derive"] }
 console-subscriber = { version = "0.1.4", optional = true }
 crossbeam-channel = "0.5.4"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -55,7 +55,7 @@ include_dir = "0.7.2"
 itertools = "0.10.3"
 jsonwebtoken = "8.1.0"
 lazy_static = "1.4.0"
-libc = "0.2.123"
+libc = "0.2.124"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }

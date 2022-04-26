@@ -12,6 +12,8 @@
 steps:
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.cleanup.aws
     timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
     env:
       AWS_DEFAULT_REGION: us-east-2
     plugins:
