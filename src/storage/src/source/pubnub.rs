@@ -22,7 +22,7 @@ use mz_dataflow_types::ConnectorContext;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use crate::source::{SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
@@ -84,7 +84,7 @@ impl SourceReader for PubNubSourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>> {
         loop {
             let stream = match &mut self.stream {
                 None => {
@@ -101,7 +101,7 @@ impl SourceReader for PubNubSourceReader {
 
                         let row = Row::pack_slice(&[Datum::String(&s)]);
 
-                        return Some(Ok(SourceMessage {
+                        return Some(Ok(SourceMessageType::Finalized(SourceMessage {
                             partition: PartitionId::None,
                             offset: MzOffset {
                                 // NOTE(guswynn):
@@ -122,7 +122,7 @@ impl SourceReader for PubNubSourceReader {
                             key: (),
                             value: row,
                             headers: None,
-                        }));
+                        })));
                     }
                 }
                 None => {

@@ -33,7 +33,9 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, K
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -490,7 +492,7 @@ impl KafkaSourceReader {
             NextMessage::TransientDelay
         } else {
             *last_offset_ref = offset;
-            NextMessage::Ready(message)
+            NextMessage::Ready(SourceMessageType::Finalized(message))
         }
     }
 }
