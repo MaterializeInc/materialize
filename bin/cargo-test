@@ -37,4 +37,4 @@ while [[ $# -gt 0 ]]; do
 done
 
 cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed
-cargo test "${positional_args[@]}"
+cargo test "${build_flags[@]}" -- "${positional_args[@]}"
