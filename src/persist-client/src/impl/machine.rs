@@ -64,6 +64,11 @@ where
         self.state.shard_id()
     }
 
+    pub async fn upper(&mut self, deadline: Instant) -> Result<Antichain<T>, ExternalError> {
+        self.fetch_and_update_state(deadline).await?;
+        Ok(self.state.upper())
+    }
+
     pub async fn register(
         &mut self,
         deadline: Instant,
