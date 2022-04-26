@@ -29,7 +29,7 @@ def main() -> None:
     deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
     deps.acquire()
 
-    tag = sys.argv[1] if sys.argv[1] is not None else "latest"
+    tag = sys.argv[1] if len(sys.argv) > 1 else "latest"
 
     for mzimage in IMAGES:
         spawn.runv(
