@@ -52,7 +52,7 @@ pub trait Stash {
     ///
     /// It is valid to construct multiple handles to the same named collection
     /// and use them simultaneously.
-    fn collection<K, V>(&self, name: &str) -> Result<StashCollection<K, V>, StashError>
+    fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Codec + Ord,
         V: Codec + Ord;
@@ -66,7 +66,7 @@ pub trait Stash {
     /// frontier. The time may also be greater than the upper frontier,
     /// indicating data that has not yet been made definite.
     fn iter<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
     where
@@ -82,7 +82,7 @@ pub trait Stash {
     /// frontier. The time may also be greater than the upper frontier,
     /// indicating data that has not yet been made definite.
     fn iter_key<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         key: &K,
     ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
@@ -111,7 +111,7 @@ pub trait Stash {
     ///
     /// If this method returns `Ok`, the entries have been made durable.
     fn update_many<K: Codec, V: Codec, I>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         entries: I,
     ) -> Result<(), StashError>
@@ -126,7 +126,7 @@ pub trait Stash {
     /// Intuitively, this method declares that all times less than `upper` are
     /// definite.
     fn seal<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         upper: AntichainRef<Timestamp>,
     ) -> Result<(), StashError>;
@@ -136,7 +136,7 @@ pub trait Stash {
     ///
     /// See [Stash::seal]
     fn seal_batch<K, V>(
-        &self,
+        &mut self,
         seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
         for (id, new_upper) in seals {
@@ -153,7 +153,7 @@ pub trait Stash {
     /// Intuitively, this method performs logical compaction. Existing entries
     /// whose time is less than `since` are fast-forwarded to `since`.
     fn compact<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         since: AntichainRef<Timestamp>,
     ) -> Result<(), StashError>;
@@ -163,7 +163,7 @@ pub trait Stash {
     ///
     /// See [Stash::compact]
     fn compact_batch<K, V>(
-        &self,
+        &mut self,
         compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
         for (id, since) in compactions {
@@ -177,14 +177,14 @@ pub trait Stash {
     /// Intuitively, this method performs physical compaction. Existing
     /// key–value pairs whose time is less than the since frontier are
     /// consolidated together when possible.
-    fn consolidate<K, V>(&self, collection: StashCollection<K, V>) -> Result<(), StashError>;
+    fn consolidate<K, V>(&mut self, collection: StashCollection<K, V>) -> Result<(), StashError>;
 
     /// Performs multiple consolidations at once, potentially in a more performant way than
     /// performing the individual consolidations one by one.
     ///
     /// See [Stash::consolidate]
     fn consolidate_batch<K, V>(
-        &self,
+        &mut self,
         collections: &[StashCollection<K, V>],
     ) -> Result<(), StashError> {
         for collection in collections {
@@ -195,13 +195,13 @@ pub trait Stash {
 
     /// Reports the current since frontier.
     fn since<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Antichain<Timestamp>, StashError>;
 
     /// Reports the current upper frontier.
     fn upper<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Antichain<Timestamp>, StashError>;
 }
