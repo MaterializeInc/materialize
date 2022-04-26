@@ -347,12 +347,23 @@ pub fn plan_create_source(
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            let (broker, topic) = match &kafka.connector {
-                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker, &kafka.topic),
-                // Temporary until the rest of the connector plumbing is finished
-                mz_sql_parser::ast::KafkaConnector::Reference { .. } => unreachable!(),
+            let (broker, options) = match &kafka.connector {
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
+                mz_sql_parser::ast::KafkaConnector::Reference { connector } => {
+                    let connector_name = normalize::unresolved_object_name(connector.clone())?;
+                    let item = scx.catalog.resolve_item(&connector_name)?;
+                    let connector = item.catalog_connector()?;
+                    depends_on.push(item.id());
+                    (connector.uri(), Some(connector.options()))
+                }
             };
-            let config_options = kafka_util::extract_config(&mut with_options)?;
+
+            // If we got options from a connector then use those, they have already had kafka_util::extract_config run on them
+            let config_options = if let Some(opts) = options {
+                opts
+            } else {
+                kafka_util::extract_config(&mut with_options)?
+            };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
@@ -390,7 +401,7 @@ pub fn plan_create_source(
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
-                topic: topic.clone(),
+                topic: kafka.topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,

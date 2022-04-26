@@ -76,7 +76,6 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::TryFutureExt;
 use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -1409,13 +1408,15 @@ impl Coordinator {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
+                let catalog = self.catalog.for_session(&session);
                 let purify_fut = mz_sql::pure::purify_create_source(
                     self.now(),
                     self.catalog.config().aws_external_id.clone(),
                     stmt,
+                    &catalog,
                 );
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let result = purify_fut.err_into().await;
+                    let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
                         .send(Message::CreateSourceStatementReady(
                             CreateSourceStatementReady {

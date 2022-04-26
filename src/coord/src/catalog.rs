@@ -38,9 +38,9 @@ use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
-    IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogConnector, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogSchema,
+    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -1042,6 +1042,13 @@ impl CatalogEntry {
         match self.item() {
             CatalogItem::Secret(secret) => Some(secret),
             _ => None,
+        }
+    }
+
+    pub fn catalog_connector(&self) -> Result<&Connector, SqlCatalogError> {
+        match self.item() {
+            CatalogItem::Connector(connector) => Ok(connector),
+            _ => Err(SqlCatalogError::UnknownConnector(self.name().to_string())),
         }
     }
 
@@ -3312,6 +3319,20 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
     }
 }
 
+impl mz_sql::catalog::CatalogConnector for Connector {
+    fn uri(&self) -> String {
+        match &self.connector {
+            ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+        }
+    }
+
+    fn options(&self) -> std::collections::BTreeMap<String, String> {
+        match &self.connector {
+            ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
+        }
+    }
+}
+
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &QualifiedObjectName {
         self.name()
@@ -3335,6 +3356,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         Ok(self.source_connector()?)
+    }
+
+    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, SqlCatalogError> {
+        Ok(self.catalog_connector()?)
     }
 
     fn create_sql(&self) -> &str {
