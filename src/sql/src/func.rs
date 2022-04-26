@@ -492,6 +492,12 @@ impl From<ScalarWindowFunc> for Operation<ScalarWindowFunc> {
     }
 }
 
+impl From<ValueWindowFunc> for Operation<(HirScalarExpr, ValueWindowFunc)> {
+    fn from(a: ValueWindowFunc) -> Operation<(HirScalarExpr, ValueWindowFunc)> {
+        Operation::unary(move |_ecx, e| Ok((e, a.clone())))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 /// Describes possible types of function parameters.
 ///
@@ -2534,6 +2540,9 @@ lazy_static! {
                     };
                     Ok((e, ValueWindowFunc::Lead))
                 }) => AnyCompatible, 3111;
+            },
+            "first_value" => ValueWindow {
+                params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
             },
 
             // Table functions.

@@ -368,6 +368,10 @@ impl ValueWindowExpr {
                 order_by: self.order_by,
                 lag_lead: mz_expr::LagLeadType::Lead,
             },
+            ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
+                order_by: self.order_by,
+                window_frame: self.window_frame,
+            },
         }
     }
 }
@@ -377,6 +381,7 @@ impl ValueWindowExpr {
 pub enum ValueWindowFunc {
     Lag,
     Lead,
+    FirstValue,
 }
 
 impl ValueWindowFunc {
@@ -388,6 +393,7 @@ impl ValueWindowFunc {
                     .clone()
                     .nullable(true)
             }
+            ValueWindowFunc::FirstValue => input_type.scalar_type.nullable(true),
         }
     }
 }
