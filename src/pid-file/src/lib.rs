@@ -248,6 +248,6 @@ impl<P: AsRef<Path>> PortMetadataFile<P> {
 
 impl<P: AsRef<Path>> Drop for PortMetadataFile<P> {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.path).expect("failed to remove file");
+        let _ = std::fs::remove_file(&self.path);
     }
 }
