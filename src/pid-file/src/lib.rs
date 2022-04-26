@@ -217,7 +217,7 @@ impl<P: AsRef<Path>> PortMetadataFile<P> {
         port_metadata: &HashMap<String, i32>,
     ) -> Result<PortMetadataFile<P>, Error> {
         let port_metadata = serde_json::to_string(&port_metadata)
-            .expect(format!("failed to serialize {:?}", port_metadata).as_str());
+            .unwrap_or_else(|_| panic!("failed to serialize {:?}", port_metadata));
         let mut file = OpenOptions::new()
             .write(true)
             .truncate(true)

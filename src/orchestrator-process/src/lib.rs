@@ -228,13 +228,13 @@ async fn supervise(
             port_allocator.free(*port);
         }
     }
-    let _port_metadata_file = PortMetadataFile::open(&port_metadata_file_location, &ports).expect(
-        format!(
-            "unable to create port metadata file {}",
-            port_metadata_file_location.as_os_str().to_str().unwrap()
-        )
-        .as_str(),
-    );
+    let _port_metadata_file = PortMetadataFile::open(&port_metadata_file_location, &ports)
+        .unwrap_or_else(|_| {
+            panic!(
+                "unable to create port metadata file {}",
+                port_metadata_file_location.as_os_str().to_str().unwrap()
+            )
+        });
     loop {
         info!(
             "Launching {}: {} {}...",
