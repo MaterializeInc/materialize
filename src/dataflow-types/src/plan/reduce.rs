@@ -350,16 +350,36 @@ pub struct MonotonicPlan {
 }
 
 impl From<&MonotonicPlan> for ProtoMonotonicPlan {
-    fn from(_: &MonotonicPlan) -> Self {
-        todo!()
+    fn from(x: &MonotonicPlan) -> Self {
+        Self {
+            //aggr_funcs: x.aggr_funcs.into_iter().map(|x| (&x).into()).collect(),
+            aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
+            skips: x
+                .skips
+                .clone()
+                .into_iter()
+                .map(|x| x.into_proto())
+                .collect(),
+        }
     }
 }
 
 impl TryFrom<ProtoMonotonicPlan> for MonotonicPlan {
     type Error = TryFromProtoError;
 
-    fn try_from(value: ProtoMonotonicPlan) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(x: ProtoMonotonicPlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            aggr_funcs: x
+                .aggr_funcs
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
+            skips: x
+                .skips
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -387,16 +407,32 @@ pub struct BucketedPlan {
 }
 
 impl From<&BucketedPlan> for ProtoBucketedPlan {
-    fn from(_: &BucketedPlan) -> Self {
-        todo!()
+    fn from(x: &BucketedPlan) -> Self {
+        ProtoBucketedPlan {
+            aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
+            skips: x.skips.iter().map(|&x| x.into_proto()).collect(),
+            buckets: x.buckets.clone(),
+        }
     }
 }
 
 impl TryFrom<ProtoBucketedPlan> for BucketedPlan {
     type Error = TryFromProtoError;
 
-    fn try_from(value: ProtoBucketedPlan) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(x: ProtoBucketedPlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            aggr_funcs: x
+                .aggr_funcs
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            skips: x
+                .skips
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<_, _>>()?,
+            buckets: x.buckets,
+        })
     }
 }
 
@@ -427,17 +463,72 @@ pub enum BasicPlan {
     Multiple(Vec<(usize, AggregateExpr)>),
 }
 
+impl From<&(usize, AggregateExpr)> for proto_basic_plan::ProtoSingleBasicPlan {
+    fn from(x: &(usize, AggregateExpr)) -> proto_basic_plan::ProtoSingleBasicPlan {
+        Self {
+            index: x.0.into_proto(),
+            expr: Some((&x.1).into()),
+        }
+    }
+}
+
+impl TryFrom<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_basic_plan::ProtoSingleBasicPlan) -> Result<Self, Self::Error> {
+        Ok((
+            usize::from_proto(x.index)?,
+            x.expr.try_into_if_some("ProtoSingleBasicPlan::expr")?,
+        ))
+    }
+}
+
 impl From<&BasicPlan> for ProtoBasicPlan {
-    fn from(_: &BasicPlan) -> Self {
-        todo!()
+    fn from(x: &BasicPlan) -> Self {
+        use proto_basic_plan::*;
+
+        Self {
+            kind: Some(match x {
+                BasicPlan::Single(index, expr) => Kind::Single({
+                    ProtoSingleBasicPlan {
+                        index: index.into_proto(),
+                        expr: Some(expr.into()),
+                    }
+                }),
+                BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
+                    aggrs: aggrs.iter().map(Into::into).collect(),
+                }),
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto_basic_plan::ProtoMultipleBasicPlan> for Vec<(usize, AggregateExpr)> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_basic_plan::ProtoMultipleBasicPlan) -> Result<Self, Self::Error> {
+        x.aggrs
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()
     }
 }
 
 impl TryFrom<ProtoBasicPlan> for BasicPlan {
     type Error = TryFromProtoError;
 
-    fn try_from(value: ProtoBasicPlan) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(x: ProtoBasicPlan) -> Result<Self, Self::Error> {
+        use proto_basic_plan::Kind;
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::MissingField("ProtoBasicPlan::kind".into()))?;
+
+        Ok(match kind {
+            Kind::Single(x) => {
+                BasicPlan::Single(usize::from_proto(x.index)?, x.expr.try_into_if_some("")?)
+            }
+            Kind::Multiple(x) => BasicPlan::Multiple(x.try_into()?),
+        })
     }
 }
 
@@ -464,10 +555,10 @@ pub struct CollationPlan {
 impl From<&CollationPlan> for ProtoCollationPlan {
     fn from(x: &CollationPlan) -> Self {
         Self {
-            accumulable: todo!(),
-            hierarchical: todo!(),
-            basic: todo!(),
-            aggregate_types: todo!(),
+            accumulable: x.clone().accumulable.map(|x| (&x).into()),
+            hierarchical: x.hierarchical.clone().map(|x| (&x).into()),
+            basic: x.basic.clone().map(|x| (&x).into()),
+            aggregate_types: x.aggregate_types.iter().map(Into::into).collect(),
         }
     }
 }
@@ -475,12 +566,17 @@ impl From<&CollationPlan> for ProtoCollationPlan {
 impl TryFrom<ProtoCollationPlan> for CollationPlan {
     type Error = TryFromProtoError;
 
-    fn try_from(value: ProtoCollationPlan) -> Result<Self, Self::Error> {
+    fn try_from(x: ProtoCollationPlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            accumulable: todo!(),
-            hierarchical: todo!(),
-            basic: todo!(),
-            aggregate_types: todo!(),
+            accumulable: x.accumulable.map(TryInto::try_into).transpose()?,
+            hierarchical: x.hierarchical.map(TryInto::try_into).transpose()?,
+            basic: x.basic.map(TryInto::try_into).transpose()?,
+            aggregate_types: x
+                .aggregate_types
+                .clone()
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
         })
     }
 }
