@@ -4953,12 +4953,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
                 source_or_sink
             )));
         }
-        SourceConnectorType::AvroOcf => {
-            return Err(CoordError::SafeModeViolation(format!(
-                "Avro OCF {}",
-                source_or_sink
-            )));
-        }
         _ => (),
     }
     Ok(())

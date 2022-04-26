@@ -161,23 +161,6 @@ pub fn purify_create_source(
                     None => {}
                 }
             }
-            CreateSourceConnector::AvroOcf { path, .. } => {
-                let path = path.clone();
-                task::block_in_place(|| {
-                    // mz_avro::Reader has no async equivalent, so we're stuck
-                    // using blocking calls here.
-                    let f = std::fs::File::open(path)?;
-                    let r = mz_avro::Reader::new(f)?;
-                    if !with_options_map.contains_key("reader_schema") {
-                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                        with_options.push(WithOption {
-                            key: Ident::new("reader_schema"),
-                            value: Some(WithOptionValue::Value(Value::String(schema))),
-                        });
-                    }
-                    Ok::<_, anyhow::Error>(())
-                })?;
-            }
             // Report an error if a file cannot be opened, or if it is a directory.
             CreateSourceConnector::File { path, .. } => {
                 let f = File::open(&path).await?;

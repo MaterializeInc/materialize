@@ -12,7 +12,6 @@
 use std::cmp;
 use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use rusqlite::{named_params, params, Connection, OptionalExtension, Transaction};
 use timely::progress::Antichain;
@@ -60,7 +59,7 @@ CREATE TABLE uppers (
 /// migration path.
 #[derive(Debug)]
 pub struct Sqlite {
-    conn: Arc<Mutex<Connection>>,
+    conn: Connection,
 }
 
 impl Sqlite {
@@ -82,16 +81,10 @@ impl Sqlite {
             )));
         }
         tx.commit()?;
-        Ok(Sqlite {
-            conn: Arc::new(Mutex::new(conn)),
-        })
+        Ok(Sqlite { conn })
     }
 
-    fn since_tx(
-        &self,
-        tx: &Transaction,
-        collection_id: Id,
-    ) -> Result<Antichain<Timestamp>, StashError> {
+    fn since_tx(tx: &Transaction, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
         let since: Option<Timestamp> = tx.query_row(
             "SELECT since FROM sinces WHERE collection_id = $collection_id",
             named_params! {"$collection_id": collection_id},
@@ -100,11 +93,7 @@ impl Sqlite {
         Ok(Antichain::from_iter(since))
     }
 
-    fn upper_tx(
-        &self,
-        tx: &Transaction,
-        collection_id: Id,
-    ) -> Result<Antichain<Timestamp>, StashError> {
+    fn upper_tx(tx: &Transaction, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
         let upper: Option<Timestamp> = tx.query_row(
             "SELECT upper FROM uppers WHERE collection_id = $collection_id",
             named_params! {"$collection_id": collection_id},
@@ -115,13 +104,12 @@ impl Sqlite {
 }
 
 impl Stash for Sqlite {
-    fn collection<K, V>(&self, name: &str) -> Result<StashCollection<K, V>, StashError>
+    fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Codec + Ord,
         V: Codec + Ord,
     {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
+        let tx = self.conn.transaction()?;
 
         let collection_id_opt = tx
             .query_row(
@@ -159,16 +147,15 @@ impl Stash for Sqlite {
     }
 
     fn iter<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
     where
         K: Codec + Ord,
         V: Codec + Ord,
     {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
-        let since = match self.since_tx(&tx, collection.id)?.into_option() {
+        let tx = self.conn.transaction()?;
+        let since = match Self::since_tx(&tx, collection.id)?.into_option() {
             Some(since) => since,
             None => {
                 return Err(StashError::from(
@@ -196,7 +183,7 @@ impl Stash for Sqlite {
     }
 
     fn iter_key<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         key: &K,
     ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
@@ -206,9 +193,8 @@ impl Stash for Sqlite {
     {
         let mut key_buf = vec![];
         key.encode(&mut key_buf);
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
-        let since = match self.since_tx(&tx, collection.id)?.into_option() {
+        let tx = self.conn.transaction()?;
+        let since = match Self::since_tx(&tx, collection.id)?.into_option() {
             Some(since) => since,
             None => {
                 return Err(StashError::from(
@@ -240,16 +226,15 @@ impl Stash for Sqlite {
     }
 
     fn update_many<K: Codec, V: Codec, I>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         entries: I,
     ) -> Result<(), StashError>
     where
         I: IntoIterator<Item = ((K, V), Timestamp, Diff)>,
     {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
-        let upper = self.upper_tx(&tx, collection.id)?;
+        let tx = self.conn.transaction()?;
+        let upper = Self::upper_tx(&tx, collection.id)?;
         let mut insert_stmt = tx.prepare(
             "INSERT INTO data (collection_id, key, value, time, diff)
              VALUES ($collection_id, $key, $value, $time, $diff)",
@@ -282,7 +267,7 @@ impl Stash for Sqlite {
     }
 
     fn seal<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         new_upper: AntichainRef<Timestamp>,
     ) -> Result<(), StashError> {
@@ -290,15 +275,14 @@ impl Stash for Sqlite {
     }
 
     fn seal_batch<K, V>(
-        &self,
+        &mut self,
         seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
+        let tx = self.conn.transaction()?;
         let mut update_stmt =
             tx.prepare("UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id")?;
         for (collection, new_upper) in seals {
-            let upper = self.upper_tx(&tx, collection.id)?;
+            let upper = Self::upper_tx(&tx, collection.id)?;
             if PartialOrder::less_than(new_upper, &upper) {
                 return Err(StashError::from(format!(
                     "seal request {} is less than the current upper frontier {}",
@@ -316,7 +300,7 @@ impl Stash for Sqlite {
     }
 
     fn compact<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
         new_since: AntichainRef<Timestamp>,
     ) -> Result<(), StashError> {
@@ -324,16 +308,15 @@ impl Stash for Sqlite {
     }
 
     fn compact_batch<K, V>(
-        &self,
+        &mut self,
         compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
+        let tx = self.conn.transaction()?;
         let mut compact_stmt =
             tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
         for (collection, new_since) in compactions {
-            let since = self.since_tx(&tx, collection.id)?;
-            let upper = self.upper_tx(&tx, collection.id)?;
+            let since = Self::since_tx(&tx, collection.id)?;
+            let upper = Self::upper_tx(&tx, collection.id)?;
             if PartialOrder::less_than(&upper, new_since) {
                 return Err(StashError::from(format!(
                     "compact request {} is greater than the current upper frontier {}",
@@ -357,16 +340,15 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    fn consolidate<K, V>(&self, collection: StashCollection<K, V>) -> Result<(), StashError> {
+    fn consolidate<K, V>(&mut self, collection: StashCollection<K, V>) -> Result<(), StashError> {
         self.consolidate_batch(&[collection])
     }
 
     fn consolidate_batch<K, V>(
-        &self,
+        &mut self,
         collections: &[StashCollection<K, V>],
     ) -> Result<(), StashError> {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
+        let tx = self.conn.transaction()?;
 
         let mut consolidation_stmt = tx.prepare(
             "DELETE FROM data
@@ -380,7 +362,7 @@ impl Stash for Sqlite {
         let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
 
         for collection in collections {
-            let since = self.since_tx(&tx, collection.id)?.into_option();
+            let since = Self::since_tx(&tx, collection.id)?.into_option();
             match since {
                 Some(since) => {
                     let mut updates = consolidation_stmt
@@ -422,24 +404,22 @@ impl Stash for Sqlite {
 
     /// Reports the current since frontier.
     fn since<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Antichain<Timestamp>, StashError> {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
-        let since = self.since_tx(&tx, collection.id)?;
+        let tx = self.conn.transaction()?;
+        let since = Self::since_tx(&tx, collection.id)?;
         tx.commit()?;
         Ok(since)
     }
 
     /// Reports the current upper frontier.
     fn upper<K, V>(
-        &self,
+        &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Antichain<Timestamp>, StashError> {
-        let mut conn = self.conn.lock().expect("lock poisoned");
-        let tx = conn.transaction()?;
-        let upper = self.upper_tx(&tx, collection.id)?;
+        let tx = self.conn.transaction()?;
+        let upper = Self::upper_tx(&tx, collection.id)?;
         tx.commit()?;
         Ok(upper)
     }

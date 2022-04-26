@@ -444,7 +444,6 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum DataEncoding {
             Avro(AvroEncoding),
-            AvroOcf(AvroOcfEncoding),
             Protobuf(ProtobufEncoding),
             Csv(CsvEncoding),
             Regex(RegexEncoding),
@@ -505,11 +504,7 @@ pub mod sources {
                     DataEncoding::Bytes => {
                         RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
                     }
-                    DataEncoding::AvroOcf(AvroOcfEncoding {
-                        reader_schema: schema,
-                        ..
-                    })
-                    | DataEncoding::Avro(AvroEncoding { schema, .. }) => {
+                    DataEncoding::Avro(AvroEncoding { schema, .. }) => {
                         let parsed_schema =
                             avro::parse_schema(schema).context("validating avro schema")?;
                         avro::schema_to_relationdesc(parsed_schema)
@@ -578,7 +573,6 @@ pub mod sources {
             pub fn op_name(&self) -> &'static str {
                 match self {
                     DataEncoding::Bytes => "Bytes",
-                    DataEncoding::AvroOcf { .. } => "AvroOcf",
                     DataEncoding::Avro(_) => "Avro",
                     DataEncoding::Protobuf(_) => "Protobuf",
                     DataEncoding::Regex { .. } => "Regex",
@@ -595,11 +589,6 @@ pub mod sources {
             pub schema: String,
             pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
-        }
-
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-        pub struct AvroOcfEncoding {
-            pub reader_schema: String,
         }
 
         /// Encoding in Protobuf format.
@@ -1176,12 +1165,10 @@ pub mod sources {
         /// even when failures/restarts happen.
         pub fn yields_stable_input(&self) -> bool {
             if let SourceConnector::External { connector, .. } = self {
-                // Conservatively, set all Kafka, File, or AvroOcf sources as having stable inputs because
+                // Conservatively, set all Kafka/File sources as having stable inputs because
                 // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
                 match connector {
-                    ExternalSourceConnector::Kafka(_)
-                    | ExternalSourceConnector::File(_)
-                    | ExternalSourceConnector::AvroOcf(_) => true,
+                    ExternalSourceConnector::Kafka(_) | ExternalSourceConnector::File(_) => true,
                     // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
                     // and this order is not replayable across different reads of the same Kinesis stream.
                     ExternalSourceConnector::Kinesis(_) => false,
@@ -1219,7 +1206,6 @@ pub mod sources {
         Kafka(KafkaSourceConnector),
         Kinesis(KinesisSourceConnector),
         File(FileSourceConnector),
-        AvroOcf(FileSourceConnector),
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
@@ -1304,12 +1290,6 @@ pub mod sources {
                     };
                     columns
                 }
-                Self::AvroOcf(_) => {
-                    if include_defaults {
-                        columns.push(default_col("mz_obj_no"))
-                    };
-                    columns
-                }
                 // TODO: should we include object key and possibly object-internal offset here?
                 Self::S3(_) => {
                     if include_defaults {
@@ -1328,7 +1308,6 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_) => Some("mz_offset"),
                 ExternalSourceConnector::Kinesis(_) => Some("mz_offset"),
                 ExternalSourceConnector::File(_) => Some("mz_line_no"),
-                ExternalSourceConnector::AvroOcf(_) => Some("mz_obj_no"),
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1369,7 +1348,6 @@ pub mod sources {
 
                 ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::AvroOcf(_)
                 | ExternalSourceConnector::S3(_) => {
                     if include_defaults {
                         vec![IncludedColumnSource::DefaultPosition]
@@ -1389,7 +1367,6 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_) => "kafka",
                 ExternalSourceConnector::Kinesis(_) => "kinesis",
                 ExternalSourceConnector::File(_) => "file",
-                ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
                 ExternalSourceConnector::S3(_) => "s3",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
@@ -1408,7 +1385,6 @@ pub mod sources {
                     stream_name, ..
                 }) => Some(stream_name.as_str()),
                 ExternalSourceConnector::File(_) => None,
-                ExternalSourceConnector::AvroOcf(_) => None,
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1423,7 +1399,6 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::AvroOcf(_)
                 | ExternalSourceConnector::PubNub(_) => false,
             }
         }
@@ -1635,7 +1610,6 @@ pub mod sources {
 pub mod sinks {
 
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
     use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
@@ -1671,7 +1645,6 @@ pub mod sinks {
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
-        AvroOcf(AvroOcfSinkConnector),
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1706,17 +1679,10 @@ pub mod sinks {
         pub value_schema_id: i32,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AvroOcfSinkConnector {
-        pub value_desc: RelationDesc,
-        pub path: PathBuf,
-    }
-
     impl SinkConnector {
         /// Returns the name of the sink connector.
         pub fn name(&self) -> &'static str {
             match self {
-                SinkConnector::AvroOcf(_) => "avro-ocf",
                 SinkConnector::Kafka(_) => "kafka",
                 SinkConnector::Tail(_) => "tail",
             }
@@ -1739,7 +1705,6 @@ pub mod sinks {
         pub fn requires_source_compaction_holdback(&self) -> bool {
             match self {
                 SinkConnector::Kafka(k) => k.exactly_once,
-                SinkConnector::AvroOcf(_) => false,
                 SinkConnector::Tail(_) => false,
             }
         }
@@ -1749,7 +1714,6 @@ pub mod sinks {
         pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
             match self {
                 SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
-                SinkConnector::AvroOcf(_) => &[],
                 SinkConnector::Tail(_) => &[],
             }
         }
@@ -1761,14 +1725,6 @@ pub mod sinks {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkConnectorBuilder {
         Kafka(KafkaSinkConnectorBuilder),
-        AvroOcf(AvroOcfSinkConnectorBuilder),
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AvroOcfSinkConnectorBuilder {
-        pub path: PathBuf,
-        pub file_name_suffix: String,
-        pub value_desc: RelationDesc,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -2120,11 +2120,6 @@ impl<'a> Parser<'a> {
                 let arn = self.parse_literal_string()?;
                 Ok(CreateSourceConnector::Kinesis { arn })
             }
-            AVRO => {
-                self.expect_keyword(OCF)?;
-                let path = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::AvroOcf { path })
-            }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS
                 // (MATCHING '<pattern>')?
@@ -2210,11 +2205,6 @@ impl<'a> Parser<'a> {
                     key,
                     consistency,
                 })
-            }
-            AVRO => {
-                self.expect_keyword(OCF)?;
-                let path = self.parse_literal_string()?;
-                Ok(CreateSinkConnector::AvroOcf { path })
             }
             _ => unreachable!(),
         }

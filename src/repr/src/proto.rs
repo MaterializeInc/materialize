@@ -24,6 +24,8 @@ pub enum TryFromProtoError {
     CharTryFromError(CharTryFromError),
     /// A date conversion failed
     DateConversionError(String),
+    /// A regex compilation failed
+    RegexError(regex::Error),
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
@@ -55,6 +57,7 @@ impl std::fmt::Display for TryFromProtoError {
             TryFromIntError(error) => error.fmt(f),
             CharTryFromError(error) => error.fmt(f),
             DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
+            RegexError(error) => error.fmt(f),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
         }
     }
@@ -66,6 +69,7 @@ impl std::error::Error for TryFromProtoError {
         match self {
             TryFromIntError(error) => Some(error),
             CharTryFromError(error) => Some(error),
+            RegexError(error) => Some(error),
             DateConversionError(_) => None,
             MissingField(_) => None,
         }

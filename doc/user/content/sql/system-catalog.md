@@ -83,16 +83,6 @@ Field      | Type       | Meaning
 `records`  | [`bigint`] | The number of records in the arrangement.
 `batches`  | [`bigint`] | The number of batches in the arrangement.
 
-### `mz_avro_ocf_sinks`
-
-The `mz_avro_ocf_sinks` table contains a row for each Avro OCF sink in the
-system.
-
-Field     | Type      | Meaning
-----------|-----------|--------
-`sink_id` | [`text`]  | The ID of the sink.
-`path`    | [`bytea`] | The path to the Avro OCF file into which the sink is writing.
-
 ### `mz_base_types`
 
 The `mz_base_types` table contains a row for each base type in the system.
@@ -474,7 +464,7 @@ Field            | Type        | Meaning
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
-`connector_type` | [`text`]    | The type of the sink: `avro-ocf` or `kafka`.
+`connector_type` | [`text`]    | The type of the sink: `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_sources`
@@ -487,7 +477,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`connector_type` | [`text`]   | The type of the source: `avro-ocf`, `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
+`connector_type` | [`text`]   | The type of the source: `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
 `volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`

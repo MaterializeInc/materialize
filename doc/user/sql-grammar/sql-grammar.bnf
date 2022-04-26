@@ -48,10 +48,7 @@ create_schema ::=
 create_sink ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
     'FROM' item_name
-    'INTO' (
-    sink_kafka_connector |
-    'AVRO OCF' path
-    )
+    'INTO' sink_kafka_connector
     ( sink_with_options )?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
@@ -61,7 +58,7 @@ create_source_file ::=
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' ('FILE' path
   (compression)? with_options?
-  'FORMAT' format_spec | 'AVRO OCF' path with_options? )
+  'FORMAT' format_spec)
   ('ENVELOPE' ('NONE' | 'DEBEZIUM'))?
 create_source_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name

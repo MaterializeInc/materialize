@@ -44,7 +44,7 @@ To run the tests upgrading from the current source to the current source:
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; ./mzcompose run default 'avro-ocf*'
+./mzcompose down -v ; ./mzcompose run default 'avro-*'
 ```
 
 If you are running a particular test that specifies the version, then you

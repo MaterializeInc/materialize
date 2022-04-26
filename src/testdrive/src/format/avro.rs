@@ -220,29 +220,6 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
     }
 }
 
-pub fn validate_sink<I>(
-    key_schema: Option<&Schema>,
-    value_schema: &Schema,
-    expected: I,
-    actual: &[(Option<Value>, Option<Value>)],
-    regex: &Option<Regex>,
-    regex_replacement: &String,
-) -> Result<(), anyhow::Error>
-where
-    I: IntoIterator,
-    I::Item: AsRef<str>,
-{
-    validate_sink_with_partial_search(
-        key_schema,
-        value_schema,
-        expected,
-        actual,
-        regex,
-        regex_replacement,
-        false,
-    )
-}
-
 pub fn validate_sink_with_partial_search<I>(
     key_schema: Option<&Schema>,
     value_schema: &Schema,

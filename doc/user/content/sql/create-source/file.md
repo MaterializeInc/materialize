@@ -88,24 +88,6 @@ It's important to note that Materialize uses the [Rust regex dialect](https://gi
 ### Creating a source
 
 {{< tabs tabID="1" >}}
-{{< tab "Avro">}}
-
-To read from a local [Avro Object Container
-File](https://avro.apache.org/docs/current/spec.html#Object+Container+Files) (OCF):
-
-```sql
-CREATE SOURCE avro_source
-  FROM AVRO OCF '/local/path/file.ocf'
-  WITH (tail = true);
-```
-
-This creates a source that...
-
-- Automatically determines its schema from the OCF file's embedded schema.
-- Dynamically checks for new entries.
-- Is append-only.
-
-{{< /tab >}}
 {{< tab "JSON">}}
 
 To read from a local JSON-formatted file:

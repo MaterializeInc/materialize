@@ -25,7 +25,7 @@ use timely::scheduling::SyncActivator;
 
 use mz_dataflow_types::{
     sources::{
-        encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
+        encoding::{AvroEncoding, DataEncoding, RegexEncoding},
         IncludedColumnSource,
     },
     DecodeError, LinearOperator,
@@ -283,15 +283,6 @@ fn get_decoder(
                 }
             };
             DataDecoder { inner, metrics }
-        }
-        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-            let state =
-                avro::AvroDecoderState::new(&reader_schema, None, debug_name.to_string(), false)
-                    .expect("Schema was verified to be correct during purification");
-            DataDecoder {
-                inner: DataDecoderInner::Avro(state),
-                metrics,
-            }
         }
         DataEncoding::Csv(enc) => {
             let state = CsvDecoderState::new(enc, operators);

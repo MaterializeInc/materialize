@@ -21,6 +21,7 @@ fn main() {
                 "repr/src/adt/char.proto",
                 "repr/src/adt/datetime.proto",
                 "repr/src/adt/numeric.proto",
+                "repr/src/adt/regex.proto",
                 "repr/src/adt/varchar.proto",
             ],
             &[".."],

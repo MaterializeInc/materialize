@@ -462,13 +462,6 @@ CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^
 
 parse-statement
-CREATE SOURCE foo FROM AVRO OCF '/tmp/bar'
-----
-CREATE SOURCE foo FROM AVRO OCF '/tmp/bar'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: AvroOcf { path: "/tmp/bar" }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
-
-parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM
@@ -775,13 +768,6 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
 error: Expected end of statement, found KEY
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
                                                                ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
-----
-CREATE SINK foo FROM bar INTO AVRO OCF 'baz' WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: AvroOcf { path: "baz" }, with_options: [], format: None, envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES

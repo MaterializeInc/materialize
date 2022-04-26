@@ -1,0 +1,35 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_expr.scalar.like_pattern;
+
+message ProtoSubpattern {
+    uint64 consume = 1;
+    bool many = 2;
+    string suffix = 3;
+}
+
+message ProtoMatcherImpl {
+    message ProtoSubpatternVec {
+        repeated ProtoSubpattern vec = 1;
+    }
+
+    oneof kind {
+        ProtoSubpatternVec string = 1;
+        string regex = 2;
+    }
+}
+
+message ProtoMatcher {
+    string pattern = 1;
+    bool case_insensitive = 2;
+    ProtoMatcherImpl matcher_impl = 3;
+}

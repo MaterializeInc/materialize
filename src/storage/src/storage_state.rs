@@ -121,8 +121,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 self.storage_state.now.clone(),
             );
             match connector {
-                ExternalSourceConnector::AvroOcf(_)
-                | ExternalSourceConnector::File(_)
+                ExternalSourceConnector::File(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::S3(_) => {
                     rt_default.add_partition(PartitionId::None, None);

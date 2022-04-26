@@ -628,35 +628,6 @@ Adjust the number of tries testdrive will perform while waiting for a SQL statem
 Set `max-tries` to `1` in order to ensure that statements are executed only once. If the desired result is not achieved on the first try, the test will fail. This is
 useful when testing operations that should return the right result immediately rather than eventually.
 
-
-## Actions on Avro OCF files
-
-#### `$ avro-ocf-write path=... schema=... codec=(snapy|null) [repeat=N]`
-
-Writes the data following the action into the specified file using the specified schema. The schema is traditionally provided using a variable that is defined elsewhere in the test.
-
-If the `repeat` parameter is provided, the data provided will be appended to the
-file the specified number of times, rather than just once.
-
-#### `$ avro-ocf-append path=... [repeat=N]`
-
-Appends the data provided to an already-existing file
-
-If the `repeat` parameter is provided, the data provided will be appended to the
-file the specified number of times, rather than just once.
-
-#### `$ avro-ocf-verify sink=...`
-
-Validates that the data emitted from an AVRO OCF file sink matches the expected output.
-```
-> CREATE SINK basic_sink_${testdrive.seed} FROM basic
-  INTO AVRO OCF '${testdrive.temp-dir}/basic-sink.ocf'
-
-$ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
-{"before": null, "after": {"row": {"a": 1, "b": 2, "mz_obj_no": 1}}}
-{"before": null, "after": {"row": {"a": 3, "b": 4, "mz_obj_no": 2}}}
-```
-
 ## Actions on local files
 
 #### `$ file-append path=file.name [compression=gzip] [repeat=N]`
