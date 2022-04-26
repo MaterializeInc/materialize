@@ -21,13 +21,14 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::relation::{compare_columns, ColumnOrder};
+use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
@@ -709,6 +710,101 @@ where
     })
 }
 
+// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+fn first_value<'a, I>(
+    datums: I,
+    temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, InputValue) record
+    let datums = order_aggregate_datums(datums, order_by);
+
+    // Decode the input (OriginalRow, InputValue) into separate datums
+    let datums = datums
+        .into_iter()
+        .map(|d| {
+            let mut iter = d.unwrap_list().iter();
+            let original_row = iter.next().unwrap();
+            let input_value = iter.next().unwrap();
+
+            (input_value, original_row)
+        })
+        .collect_vec();
+
+    let length = datums.len();
+    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
+    for (idx, (current_datum, original_row)) in datums.iter().enumerate() {
+        let first_value = match &window_frame.start_bound {
+            // Always return the current value
+            WindowFrameBound::CurrentRow => *current_datum,
+            WindowFrameBound::UnboundedPreceding => {
+                if let WindowFrameBound::OffsetPreceding(end_offset) = &window_frame.end_bound {
+                    let end_offset = usize::cast_from(*end_offset);
+
+                    // If the frame ends before the first row, return null
+                    if idx < end_offset {
+                        Datum::Null
+                    } else {
+                        datums[0].0
+                    }
+                } else {
+                    datums[0].0
+                }
+            }
+            WindowFrameBound::OffsetPreceding(offset) => {
+                let start_offset = usize::cast_from(*offset);
+                let start_idx = idx.saturating_sub(start_offset);
+                if let WindowFrameBound::OffsetPreceding(end_offset) = &window_frame.end_bound {
+                    let end_offset = usize::try_from(*end_offset)
+                        .expect("Window frame offset does not fit in usize");
+
+                    // If the frame is empty or ends before the first row, return null
+                    if start_offset < end_offset || idx < end_offset {
+                        Datum::Null
+                    } else {
+                        datums[start_idx].0
+                    }
+                } else {
+                    datums[start_idx].0
+                }
+            }
+            WindowFrameBound::OffsetFollowing(offset) => {
+                let start_offset =
+                    usize::try_from(*offset).expect("Window frame offset does not fit in usize");
+                let start_idx = idx.saturating_add(start_offset);
+                if let WindowFrameBound::OffsetFollowing(end_offset) = &window_frame.end_bound {
+                    // If the frame is empty or starts after the last row, return null
+                    if offset > end_offset || start_idx >= length {
+                        Datum::Null
+                    } else {
+                        datums[start_idx].0
+                    }
+                } else {
+                    datums.get(start_idx).map(|d| d.0).unwrap_or(Datum::Null)
+                }
+            }
+            // Forbidden during planning
+            WindowFrameBound::UnboundedFollowing => unreachable!(),
+        };
+
+        result.push((first_value, *original_row));
+    }
+
+    let result = result.into_iter().map(|(lag, original_row)| {
+        temp_storage.make_datum(|packer| {
+            packer.push_list(vec![lag, original_row]);
+        })
+    });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
+
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -791,6 +887,10 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
     },
+    FirstValue {
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -848,6 +948,10 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
             } => lag_lead(datums, temp_storage, order_by, lag_lead_type),
+            AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            } => first_value(datums, temp_storage, order_by, window_frame),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -876,6 +980,7 @@ impl AggregateFunc {
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             AggregateFunc::DenseRank { .. } => Datum::empty_list(),
             AggregateFunc::LagLead { .. } => Datum::empty_list(),
+            AggregateFunc::FirstValue { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -970,6 +1075,28 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from(column_name), value_type),
+                            (ColumnName::from("?record?"), original_row_type),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                }
+            }
+            AggregateFunc::FirstValue { .. } => {
+                // The input type for FirstValue is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let value_type = fields[0].unwrap_record_element_type()[1]
+                    .clone()
+                    .nullable(true);
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_oid: None,
@@ -1274,6 +1401,7 @@ impl fmt::Display for AggregateFunc {
                 lag_lead: LagLeadType::Lead,
                 ..
             } => f.write_str("lead"),
+            AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
