@@ -1709,7 +1709,6 @@ impl TryFrom<ProtoEvalError> for EvalError {
 mod tests {
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     #[test]
     fn test_reduce() {
