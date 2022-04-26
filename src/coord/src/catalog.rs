@@ -1481,8 +1481,17 @@ impl Catalog {
         for (role_name, _role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
         }
-        for (name, _id) in &catalog.state.compute_instances_by_name {
+        for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
+            for (replica_name, _replica_config) in
+                &catalog.state.compute_instances_by_id[id].replicas
+            {
+                builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
+                    *id,
+                    &replica_name,
+                    1,
+                ));
+            }
         }
 
         Ok((catalog, builtin_table_updates))
@@ -2463,7 +2472,10 @@ impl Catalog {
                 }
                 Op::DropComputeInstanceReplica { name, compute_id } => {
                     tx.remove_compute_instance_replica(&name, compute_id)?;
-                    // builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
+                    builtin_table_updates.push(
+                        self.state
+                            .pack_compute_instance_replica_update(compute_id, &name, -1),
+                    );
                     vec![Action::DropComputeInstanceReplica { name, compute_id }]
                 }
                 Op::DropItem(id) => {
@@ -2673,7 +2685,11 @@ impl Catalog {
                         name.clone(),
                         config,
                     );
-                    // TODO: replica system table
+                    builtin_table_updates.push(state.pack_compute_instance_replica_update(
+                        compute_instance_id,
+                        &name,
+                        1,
+                    ));
                 }
 
                 Action::CreateItem {

@@ -395,6 +395,7 @@ mz_worker_materialization_frontiers           system true          volatile    l
 mz_array_types
 mz_base_types
 mz_clusters
+mz_cluster_replicas
 mz_columns
 mz_connectors
 mz_databases
@@ -422,6 +423,7 @@ name                  type
 mz_array_types        system
 mz_base_types         system
 mz_clusters           system
+mz_cluster_replicas   system
 mz_columns            system
 mz_connectors         system
 mz_databases          system
@@ -451,6 +453,7 @@ mz_views              system
 mz_array_types
 mz_base_types
 mz_clusters
+mz_cluster_replicas
 mz_columns
 mz_connectors
 mz_databases
@@ -481,6 +484,7 @@ test_table
 mz_array_types
 mz_base_types
 mz_clusters
+mz_cluster_replicas
 mz_columns
 mz_connectors
 mz_databases
@@ -505,7 +509,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-23
+24
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

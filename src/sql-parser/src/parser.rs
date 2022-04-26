@@ -4148,12 +4148,16 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
-            CONNECTORS,
+            OBJECTS, ROLES, CLUSTER, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+            SECRETS, CONNECTORS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
                 ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    self.expect_keyword(REPLICAS)?;
+                    ObjectType::ClusterReplica
+                }
                 CLUSTERS => ObjectType::Cluster,
                 SINKS => ObjectType::Sink,
                 SOURCES => ObjectType::Source,
