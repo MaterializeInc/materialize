@@ -7,7 +7,7 @@ rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.56"
+anyhow = "1.0.57"
 aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
 aws-sdk-s3 = { version = "0.10.1", default-features = false }
 bytefmt = "0.1.7"

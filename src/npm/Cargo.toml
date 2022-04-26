@@ -7,7 +7,7 @@ rust-version = "1.60.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.56"
+anyhow = "1.0.57"
 askama_shared = { version = "0.12.2", features = ["json"] }
 cc = "1.0.73"
 flate2 = "1.0.23"
