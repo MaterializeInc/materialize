@@ -190,21 +190,40 @@ where
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
         match self.0.get_next_message()? {
-            NextMessage::Ready(SourceMessage {
+            NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
                 key: _,
                 value,
                 partition,
                 offset,
                 upstream_time_millis,
                 headers,
-            }) => Ok(NextMessage::Ready(SourceMessage {
-                key: None,
+            })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
+                SourceMessage {
+                    key: None,
+                    value,
+                    partition,
+                    offset,
+                    upstream_time_millis,
+                    headers,
+                },
+            ))),
+            NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
+                key: _,
                 value,
                 partition,
                 offset,
                 upstream_time_millis,
                 headers,
-            })),
+            })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
+                SourceMessage {
+                    key: None,
+                    value,
+                    partition,
+                    offset,
+                    upstream_time_millis,
+                    headers,
+                },
+            ))),
             NextMessage::Pending => Ok(NextMessage::Pending),
             NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
             NextMessage::Finished => Ok(NextMessage::Finished),
@@ -401,7 +420,7 @@ pub trait SourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>> {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
         // call. Once all source implementations have been transitioned to implement
         // [SourceReader::next] directly this provided implementation should be removed and the
@@ -441,7 +460,7 @@ pub trait SourceReader {
     fn into_stream<'a>(
         mut self,
         timestamp_frequency: Duration,
-    ) -> LocalBoxStream<'a, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>>
+    ) -> LocalBoxStream<'a, Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>>
     where
         Self: Sized + 'a,
     {
@@ -454,10 +473,22 @@ pub trait SourceReader {
 }
 
 pub enum NextMessage<Key, Value> {
-    Ready(SourceMessage<Key, Value>),
+    Ready(SourceMessageType<Key, Value>),
     Pending,
     TransientDelay,
     Finished,
+}
+
+/// A wrapper around [`SourceMessage`] that allows
+/// [`SourceReader`]'s to communicate if a message
+/// if the final message a specific offset
+pub enum SourceMessageType<Key, Value> {
+    /// Communicate that this [`SourceMessage`] is the final
+    /// message its its offset.
+    Finalized(SourceMessage<Key, Value>),
+    /// Communicate that more [`SourceMessage`]'s
+    /// will come later at the same offset as this one.
+    InProgress(SourceMessage<Key, Value>),
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -994,13 +1025,47 @@ where
 
             let mut timestamp_interval = tokio::time::interval(timestamp_frequency);
             timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
             let mut pending_messages = vec![];
             loop {
+                // TODO(guswyn): move lots of this out of the macro so rustfmt works better
                 tokio::select! {
                     // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
                     item = source_stream.next() => {
                         match item {
-                            Some(Ok(message)) => pending_messages.push(Ok(message)),
+                            Some(Ok(message)) => match message {
+                                // Note that this
+                                // 1. Requires that sources that produce `InProgress` messages
+                                //    ALWAYS produce a `Finalized` for the final message.
+                                // 2. Requires that sources that produce `InProgress` messages
+                                //    NEVER produces messages at offsets below the most recent
+                                //    `Finalized` message.
+                                // 3. Buffers EVERY message associated with a single offset. This
+                                //    can be improved, tracked in
+                                //    <https://github.com/MaterializeInc/materialize/issues/12557>
+                                SourceMessageType::Finalized(message) => {
+                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
+                                        &message.partition
+                                    ) {
+                                        pending_messages.extend(untimestamped_messages.drain(..));
+                                    }
+                                    pending_messages.push(Ok(message));
+                                }
+                                SourceMessageType::InProgress(message) => {
+                                    // this extra if-statement is just here to avoid a clone in
+                                    // case we have expensive partition id's someday
+                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
+                                        &message.partition
+                                    ) {
+                                        untimestamped_messages.push(Ok(message))
+                                    } else {
+                                        untimestamped_messages
+                                            .entry(message.partition.clone())
+                                            .or_default()
+                                            .push(Ok(message))
+                                    }
+                                }
+                            }
                             // TODO: make errors definite
                             Some(Err(e)) => pending_messages.push(Err(e)),
                             None => {},

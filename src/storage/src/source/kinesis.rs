@@ -30,7 +30,9 @@ use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 
 use crate::source::metrics::KinesisMetrics;
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -172,7 +174,7 @@ impl SourceReader for KinesisSourceReader {
         }
 
         if let Some(message) = self.buffered_messages.pop_front() {
-            Ok(NextMessage::Ready(message))
+            Ok(NextMessage::Ready(SourceMessageType::Finalized(message)))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
@@ -255,7 +257,7 @@ impl SourceReader for KinesisSourceReader {
                 }
             }
             Ok(match self.buffered_messages.pop_front() {
-                Some(message) => NextMessage::Ready(message),
+                Some(message) => NextMessage::Ready(SourceMessageType::Finalized(message)),
                 None => NextMessage::Pending,
             })
         }

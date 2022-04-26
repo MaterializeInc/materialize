@@ -56,7 +56,9 @@ use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::GlobalId;
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -884,14 +886,16 @@ impl SourceReader for S3SourceReader {
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
-                Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
-                    offset: self.offset.into(),
-                    upstream_time_millis: None,
-                    key: (),
-                    value: record,
-                    headers: None,
-                }))
+                Ok(NextMessage::Ready(SourceMessageType::Finalized(
+                    SourceMessage {
+                        partition: PartitionId::None,
+                        offset: self.offset.into(),
+                        upstream_time_millis: None,
+                        key: (),
+                        value: record,
+                        headers: None,
+                    },
+                )))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
