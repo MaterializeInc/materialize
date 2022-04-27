@@ -15,19 +15,15 @@ aws-sdk-kinesis = { version = "0.10.1", default-features = false, optional = tru
 aws-sdk-s3 = { version = "0.10.1", default-features = false, optional = true }
 aws-sdk-sqs = { version = "0.10.1", default-features = false, optional = true }
 bincode = { version = "1.3.3", optional = true }
-byteorder = { version = "1.4.3", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 crossbeam-channel = { version = "0.5.4", optional = true }
 csv-core = { version = "0.1.10", optional = true }
-dec = { version = "0.4.8", features = ["serde"], optional = true }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-enum-iterator = { version = "0.7.0", optional = true }
 flate2 = { version = "1.0.23", optional = true }
 futures = "0.3.21"
 globset = { version = "0.4.8", optional = true }
 inotify = { version = "0.10.0", optional = true }
-itertools = { version = "0.10.3", optional = true }
 lazy_static = { version = "1.4.0", optional = true }
 log = { version = "0.4.16", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
@@ -41,7 +37,6 @@ mz-ore = { path = "../ore", features = ["task"] }
 mz-persist-client = { path = "../persist-client", optional = true }
 mz-persist-types = { path = "../persist-types", optional = true }
 mz-pgcopy = { path = "../pgcopy", optional = true }
-mz-pid-file = { path = "../pid-file" }
 mz-postgres-util = { path = "../postgres-util", optional = true }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
@@ -49,10 +44,8 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", b
 prometheus = { version = "0.13.0", default-features = false, optional = true }
 prost = { version = "0.10.1", optional = true }
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false, optional = true }
-rand = { version = "0.8.5", optional = true }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"], optional = true }
 regex = { version = "1.5.4", optional = true }
-scopeguard = { version = "1.1.0", optional = true }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { version = "1.0.79", optional = true }
 tempfile = { version = "3.2.0", optional = true }
@@ -73,17 +66,13 @@ server = [
     "aws-sdk-s3",
     "aws-sdk-sqs",
     "bincode",
-    "byteorder",
     "bytes",
     "chrono",
     "crossbeam-channel",
     "csv-core",
-    "dec",
-    "enum-iterator",
     "flate2",
     "globset",
     "inotify",
-    "itertools",
     "lazy_static",
     "log",
     "mz-avro",
@@ -99,10 +88,8 @@ server = [
     "prometheus",
     "prost",
     "pubnub-hyper",
-    "rand",
     "rdkafka",
     "regex",
-    "scopeguard",
     "serde_json",
     "tempfile",
     "tokio-postgres",

@@ -11,11 +11,8 @@ anyhow = "1.0.57"
 async-trait = "0.1.53"
 byteorder = "1.4.3"
 bytes = "1.1.0"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-csv = "1.1.6"
 futures = "0.3.21"
 itertools = "0.10.3"
-lazy_static = "1.4.0"
 mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
@@ -26,10 +23,8 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.38", features = ["vendored"] }
-ordered-float = { version = "2.10.0", features = ["serde"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio = "1.17.0"
 tokio-openssl = "0.6.3"
-tokio-stream = "0.1.8"
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = "0.1.34"
