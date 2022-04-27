@@ -129,7 +129,7 @@ const MIGRATIONS: &[&dyn Migration] = &[
          (4, NULL, 'mz_internal'),
          (5, NULL, 'information_schema');
      INSERT INTO roles VALUES (1, 'materialize');
-     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
+     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
