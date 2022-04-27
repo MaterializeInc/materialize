@@ -26,6 +26,7 @@ use url::Url;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
+use mz_dataflow_types::reconciliation::command::StorageCommandReconcile;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -188,10 +189,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
-    assert!(
-        !args.reconcile,
-        "Storage runtime does not support command reconciliation."
-    );
     let workers = config.workers;
     let (storage_server, request_rx, _thread) =
         mz_storage::tcp_boundary::server::serve(args.storage_addr, workers).await?;
@@ -203,7 +200,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let (server, client) = mz_storage::serve_boundary_requests(config, request_rx, move |index| {
         boundary.lock().unwrap()[index % workers].take().unwrap()
     })?;
-    let client: Box<dyn StorageClient> = Box::new(client);
+    let mut client: Box<dyn StorageClient> = Box::new(client);
+    if args.reconcile {
+        client = Box::new(StorageCommandReconcile::new(client))
+    }
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {

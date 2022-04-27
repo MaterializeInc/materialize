@@ -122,6 +122,8 @@ pub struct Config {
     pub replica_sizes: ClusterReplicaSizeMap,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
+    /// Whether to support independent restarts of materialized
+    pub reconcile: bool,
 }
 
 /// Configures TLS encryption for connections.
@@ -290,7 +292,10 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                         ),
                     ];
                     if config.orchestrator.linger {
-                        storage_opts.push(format!("--linger"))
+                        storage_opts.push(format!("--linger"));
+                    }
+                    if config.reconcile {
+                        storage_opts.push(format!("--reconcile"));
                     }
                     storage_opts
                 },
@@ -318,6 +323,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         computed_image: config.orchestrator.computed_image,
         storage_addr: storage_service.addresses("compute").into_element(),
         linger: config.orchestrator.linger,
+        reconcile: config.reconcile,
     };
 
     // Initialize secrets controller.

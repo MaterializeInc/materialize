@@ -108,6 +108,10 @@ pub struct Args {
     #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
     disable_user_indexes: bool,
 
+    /// Whether to support independent restarts of materialized
+    #[clap(long, env = "MZ_RECONCILE")]
+    reconcile: bool,
+
     /// The address on which Prometheus metrics get exposed.
     ///
     /// This address is never served TLS-encrypted or authenticated so care
@@ -756,6 +760,7 @@ max log level: {max_log_level}",
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
+        reconcile: args.reconcile,
     }))?;
 
     eprintln!(

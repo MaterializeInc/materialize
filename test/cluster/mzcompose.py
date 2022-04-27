@@ -44,7 +44,10 @@ SERVICES = [
         options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
         ports=[2100, 2102],
     ),
-    Materialized(extra_ports=[2101], options="--process-listen-host=0.0.0.0"),
+    Materialized(
+        extra_ports=[2101],
+        options="--process-listen-host=0.0.0.0 --orchestrator-linger true --reconcile",
+    ),
     Testdrive(
         volumes=[
             "mzdata:/share/mzdata",
@@ -93,10 +96,10 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("computed_4")
     c.sql(
         """
-        ALTER CLUSTER cluster1
-            REMOTE replica1 ('computed_1:2100', 'computed_2:2100'),
-            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
-        """
+       ALTER CLUSTER cluster1
+           REMOTE replica1 ('computed_1:2100', 'computed_2:2100'),
+           REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
+       """
     )
     c.run("testdrive", *glob)
 
@@ -109,14 +112,27 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # verify that tests still pass.
     c.sql(
         """
-        ALTER CLUSTER cluster1
-            REMOTE replica1 ('computed_1:2100', 'computed_2:2100')
-        """
+       ALTER CLUSTER cluster1
+           REMOTE replica1 ('computed_1:2100', 'computed_2:2100')
+       """
     )
     c.sql(
         """
-        ALTER CLUSTER cluster1
-            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
-        """
+       ALTER CLUSTER cluster1
+           REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
+       """
     )
     c.run("testdrive", "smoke/insert-select.td")
+
+    # TODO(jkosh44) This doesn't really work. The storaged process is in the materlized docker container so it's getting
+    #  restarted with materialized. Going into the container and killing the materialized process inside the container
+    #  (ex: c.exec("materialized", "bash", "-c", "[[ `killal materialized` ]] && exit 0 || exit 1") won't work because
+    #  tini exits when the process it started exits, which in this case is materialized, which causes the container to
+    #  exit. Essentially we need some way to restart materialized in the container without shutting the entire container
+    #  down.
+    #  This also manifest in the commented out testdrive hanging forever.
+    # Restart materialized and verify that tests pass.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+    # c.run("testdrive", *glob)

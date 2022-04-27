@@ -58,6 +58,8 @@ pub struct OrchestratorConfig {
     pub storage_addr: String,
     /// Whether or not process should die when connection with ADAPTER is lost.
     pub linger: bool,
+    /// Whether to support independent restarts of materialized
+    pub reconcile: bool,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -173,6 +175,7 @@ where
                     computed_image,
                     storage_addr,
                     linger,
+                    reconcile,
                 } = &self.orchestrator;
 
                 let default_listen_host = orchestrator.listen_host();
@@ -202,6 +205,9 @@ where
                                     }
                                     if *linger {
                                         compute_opts.push(format!("--linger"));
+                                    }
+                                    if *reconcile {
+                                        compute_opts.push(format!("--reconcile"));
                                     }
                                     compute_opts
                                 },

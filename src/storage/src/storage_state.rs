@@ -95,6 +95,26 @@ pub struct TableState<T> {
     pub(crate) inputs: Vec<LocalInput>,
 }
 
+impl TableState<mz_repr::Timestamp> {
+    fn truncate(&mut self) {
+        // Add the retractions to all existing renders of the table.
+        for input in &mut self.inputs {
+            if let Some(capability) = input.capability.upgrade() {
+                let capability = capability.borrow_mut();
+                let mut session = input.handle.session(capability.clone());
+                for (row, _timestamp, diff) in &self.data {
+                    session.give((row.clone(), *capability.time(), -*diff));
+                }
+            }
+        }
+        // Discard entries that are no longer active.
+        self.inputs
+            .retain(|input| input.capability.upgrade().is_some());
+
+        self.data.clear();
+    }
+}
+
 /// A wrapper around [StorageState] with a live timely worker and response channel.
 pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
     /// The underlying Timely worker.
@@ -178,6 +198,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
+            //TODO(jkosh44) Why do we need this
+            StorageCommand::CreateInstance() => {}
+            StorageCommand::DropInstance() => {}
             StorageCommand::CreateSources(sources) => {
                 for source in sources {
                     self.setup_timestamp_binding_state(&source);
@@ -304,6 +327,14 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             &mut table_state.data,
                         );
                         table_state.last_consolidated_size = table_state.data.len();
+                    }
+                }
+            }
+
+            StorageCommand::Truncate(ids) => {
+                for id in ids {
+                    if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
+                        table_state.truncate();
                     }
                 }
             }

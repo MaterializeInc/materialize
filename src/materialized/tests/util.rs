@@ -182,6 +182,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cors_allowed_origin: Origin::list([]).into(),
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
+        reconcile: true,
     }))?;
     let server = Server {
         inner,

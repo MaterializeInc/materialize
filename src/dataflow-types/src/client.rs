@@ -160,6 +160,10 @@ pub struct RenderSourcesCommand<T> {
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Indicates the creation of the storage instance, and is the first command.
+    CreateInstance(),
+    /// Indicates the termination of the storage instance, and is the last command.
+    DropInstance(),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Render the enumerated sources.
@@ -169,6 +173,10 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+    /// Truncate the contents of tables.
+    ///
+    /// Each entry names a table by its global identifier.
+    Truncate(Vec<GlobalId>),
     /// Append data and advance the frontier of the enumerated collections
     ///
     /// Each entry in the vector names a collection and provides a list of updates to insert and a
