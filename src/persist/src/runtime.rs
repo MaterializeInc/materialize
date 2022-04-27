@@ -797,7 +797,7 @@ mod tests {
         // Normal case: registration uses same key and value codec.
         let _ = client.create_or_load::<(), String>("stream");
 
-        // i64erent key codec
+        // Different key codec
         assert_eq!(
             client
                 .create_or_load::<Vec<u8>, String>("stream")
@@ -808,7 +808,7 @@ mod tests {
             ))
         );
 
-        // i64erent val codec
+        // Different val codec
         assert_eq!(
             client.create_or_load::<(), Vec<u8>>("stream").0.stream_id(),
             Err(Error::from(
