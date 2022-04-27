@@ -520,6 +520,34 @@ mod tests {
     }
 
     #[test]
+    fn downgrade_since() {
+        let mut state = State::<(), (), u64, i64>::new(ShardId::new());
+        let reader = ReaderId::new();
+        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        // Greater
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(2)),
+            Continue(Since(Antichain::from_elem(2)))
+        );
+        // Equal
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(2)),
+            Continue(Since(Antichain::from_elem(2)))
+        );
+        // Less (no-op)
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(1)),
+            Continue(Since(Antichain::from_elem(2)))
+        );
+    }
+
+    #[test]
     fn empty_batch_optimization() {
         mz_ore::test::init_logging();
 
