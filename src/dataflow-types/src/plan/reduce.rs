@@ -557,7 +557,7 @@ pub struct CollationPlan {
 impl From<&CollationPlan> for ProtoCollationPlan {
     fn from(x: &CollationPlan) -> Self {
         Self {
-            accumulable: x.clone().accumulable.map(|x| (&x).into()),
+            accumulable: x.accumulable.clone().map(|x| (&x).into()),
             hierarchical: x.hierarchical.clone().map(|x| (&x).into()),
             basic: x.basic.clone().map(|x| (&x).into()),
             aggregate_types: x.aggregate_types.iter().map(Into::into).collect(),
