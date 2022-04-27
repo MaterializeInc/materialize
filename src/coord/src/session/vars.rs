@@ -100,6 +100,12 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
+const INTERVAL_STYLE: ServerVar<str> = ServerVar {
+    name: static_uncased_str!("IntervalStyle"),
+    value: "postgres",
+    description: "Sets the display format for interval values (PostgreSQL).",
+};
+
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     name: static_uncased_str!("qgm_optimizations_experimental"),
     value: &false,
@@ -198,6 +204,7 @@ pub struct Vars {
     extra_float_digits: SessionVar<i32>,
     failpoints: ServerVar<str>,
     integer_datetimes: ServerVar<bool>,
+    interval_style: ServerVar<str>,
     qgm_optimizations: SessionVar<bool>,
     search_path: ServerVar<[&'static str]>,
     server_version: ServerVar<str>,
@@ -220,6 +227,7 @@ impl Default for Vars {
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             failpoints: FAILPOINTS,
             integer_datetimes: INTEGER_DATETIMES,
+            interval_style: INTERVAL_STYLE,
             qgm_optimizations: SessionVar::new(&QGM_OPTIMIZATIONS),
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
@@ -246,6 +254,7 @@ impl Vars {
             &self.extra_float_digits,
             &self.failpoints,
             &self.integer_datetimes,
+            &self.interval_style,
             &self.qgm_optimizations,
             &self.search_path,
             &self.server_version,
@@ -302,6 +311,8 @@ impl Vars {
             Ok(&self.failpoints)
         } else if name == INTEGER_DATETIMES.name {
             Ok(&self.integer_datetimes)
+        } else if name == INTERVAL_STYLE.name {
+            Ok(&self.interval_style)
         } else if name == QGM_OPTIMIZATIONS.name {
             Ok(&self.qgm_optimizations)
         } else if name == SEARCH_PATH.name {
@@ -400,6 +411,13 @@ impl Vars {
             Ok(())
         } else if name == INTEGER_DATETIMES.name {
             Err(CoordError::ReadOnlyParameter(&INTEGER_DATETIMES))
+        } else if name == INTERVAL_STYLE.name {
+            // Only `postgres` is supported right now
+            if UncasedStr::new(value) != INTERVAL_STYLE.value {
+                return Err(CoordError::FixedValueParameter(&INTERVAL_STYLE));
+            } else {
+                Ok(())
+            }
         } else if name == QGM_OPTIMIZATIONS.name {
             self.qgm_optimizations.set(value, local)
         } else if name == SEARCH_PATH.name {
@@ -452,6 +470,7 @@ impl Vars {
             extra_float_digits,
             failpoints: _,
             integer_datetimes: _,
+            interval_style: _,
             qgm_optimizations,
             search_path: _,
             server_version: _,
@@ -507,6 +526,11 @@ impl Vars {
     /// Returns the value of the `integer_datetimes` configuration parameter.
     pub fn integer_datetimes(&self) -> bool {
         *self.integer_datetimes.value
+    }
+
+    /// Returns the value of the `intervalstyle` configuration parameter.
+    pub fn intervalstyle(&self) -> &'static str {
+        self.interval_style.value
     }
 
     /// Returns the value of the `qgm_optimizations` configuration parameter.
