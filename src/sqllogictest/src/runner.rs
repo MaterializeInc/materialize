@@ -589,7 +589,7 @@ impl Runner {
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
-            reconcile: true,
+            reconcile: false,
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
