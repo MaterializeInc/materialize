@@ -43,6 +43,8 @@ pub struct KubernetesOrchestratorConfig {
     pub service_labels: HashMap<String, String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
+    /// Whether a secrets volume is available to be mounted.
+    pub has_secrets: bool,
 }
 
 #[derive(ArgEnum, Debug, Clone, Copy)]
@@ -68,6 +70,7 @@ pub struct KubernetesOrchestrator {
     kubernetes_namespace: String,
     service_labels: HashMap<String, String>,
     image_pull_policy: KubernetesImagePullPolicy,
+    has_secrets: bool,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -101,6 +104,7 @@ impl KubernetesOrchestrator {
             kubernetes_namespace,
             service_labels: config.service_labels,
             image_pull_policy: config.image_pull_policy,
+            has_secrets: config.has_secrets,
         })
     }
 }
@@ -118,6 +122,7 @@ impl Orchestrator for KubernetesOrchestrator {
             namespace: namespace.into(),
             service_labels: self.service_labels.clone(),
             image_pull_policy: self.image_pull_policy,
+            has_secrets: self.has_secrets,
         })
     }
 }
@@ -131,6 +136,7 @@ struct NamespacedKubernetesOrchestrator {
     namespace: String,
     service_labels: HashMap<String, String>,
     image_pull_policy: KubernetesImagePullPolicy,
+    has_secrets: bool,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -277,14 +283,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
-                    volume_mounts: Some(vec![VolumeMount {
-                        mount_path: "/secrets".to_string(),
-                        name: volume_name.clone(),
-                        ..Default::default()
-                    }]),
+                    volume_mounts: if self.has_secrets {
+                        Some(vec![VolumeMount {
+                            mount_path: "/secrets".to_string(),
+                            name: volume_name.clone(),
+                            ..Default::default()
+                        }])
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 }],
-                volumes: Some(vec![secrets_volume]),
+                volumes: if self.has_secrets {
+                    Some(vec![secrets_volume])
+                } else {
+                    None
+                },
                 node_selector,
                 ..Default::default()
             }),

@@ -578,6 +578,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         .into()
     };
 
+    // Configure secrets controller.
+    let secrets_controller = match args.secrets_controller {
+        None => None,
+        Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
+        Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
+            context: args.kubernetes_context,
+        }),
+    };
+
     // Configure orchestrator.
     let orchestrator = OrchestratorConfig {
         backend: match args.orchestrator {
@@ -590,6 +599,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .map(|l| (l.key, l.value))
                         .collect(),
                     image_pull_policy: args.kubernetes_image_pull_policy,
+                    has_secrets: secrets_controller.is_some()
+                    
                 })
             }
             Orchestrator::Process => {
@@ -617,15 +628,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args
             .orchestrator_linger
             .unwrap_or_else(|| args.orchestrator.default_linger_value()),
-    };
-
-    // Configure secrets controller.
-    let secrets_controller = match args.secrets_controller {
-        None => None,
-        Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
-        Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context,
-        }),
     };
 
     // Configure storage.
