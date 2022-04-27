@@ -2377,13 +2377,19 @@ impl Catalog {
                     name,
                     on_cluster_name,
                     config,
+                    service_name,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?;
+                    tx.insert_compute_instance_replica(
+                        &on_cluster_name,
+                        &name,
+                        &config,
+                        service_name,
+                    )?;
                     vec![Action::CreateComputeInstanceReplica {
                         name,
                         on_cluster_name,
@@ -3053,6 +3059,7 @@ pub enum Op {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
+        service_name: String,
     },
     CreateItem {
         id: GlobalId,

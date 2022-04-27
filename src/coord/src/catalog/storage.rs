@@ -150,9 +150,10 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     stash,
                     vec![
                         (
-                            ComputeInstanceReplicaKey { compute_instance_id: 1, name: "default_replica".into() },
-                            ComputeInstanceReplicaValue {
+                            ComputeInstanceReplicaKey{ compute_instance_id: 1, name: "default_replica".into() },
+                            ComputeInstanceReplicaValue{
                                 config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
+                                service_name: "cluster-default-default-replica".into()
                             }
                         )
                     ]
@@ -601,7 +602,7 @@ impl<S: Append> Connection<S> {
             compute_instance_replicas: TableTransaction::new(
                 compute_instance_replicas,
                 None,
-                |_a, _b| false,
+                |a, b| a.service_name == b.service_name,
             ),
             introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
                 false
@@ -764,6 +765,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         compute_name: &str,
         replica_name: &str,
         config: &ConcreteComputeInstanceReplicaConfig,
+        service_name: String,
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
@@ -787,10 +789,17 @@ impl<'a, S: Append> Transaction<'a, S> {
                     compute_instance_id: compute_instance_id.unwrap(),
                     name: replica_name.into(),
                 },
-                ComputeInstanceReplicaValue { config },
+                ComputeInstanceReplicaValue {
+                    config,
+                    service_name: service_name.clone(),
+                },
             )
             .map_err(|_| {
-                ErrorKind::ReplicaAlreadyExists(replica_name.to_owned(), compute_name.to_owned())
+                ErrorKind::DuplicateReplica(
+                    replica_name.to_owned(),
+                    service_name,
+                    compute_name.to_owned(),
+                )
             })?;
         Ok(())
     }
@@ -981,6 +990,13 @@ impl<'a, S: Append> Transaction<'a, S> {
         add_batch(
             self.stash,
             &mut batches,
+            &COLLECTION_COMPUTE_INSTANCE_REPLICAS,
+            self.compute_instance_replicas.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
             &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
             self.introspection_sources.pending(),
         )
@@ -1108,6 +1124,8 @@ impl_codec!(ComputeInstanceReplicaKey);
 struct ComputeInstanceReplicaValue {
     #[prost(string)]
     config: String,
+    #[prost(string)]
+    service_name: String,
 }
 impl_codec!(ComputeInstanceReplicaValue);
 

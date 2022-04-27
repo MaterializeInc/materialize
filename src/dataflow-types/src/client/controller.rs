@@ -131,6 +131,15 @@ impl Default for ClusterReplicaSizeMap {
     }
 }
 
+/// Deterministically generates replica names based on inputs.
+///
+/// This function needs to be publicly accessible so other layers can ensure we
+/// do not attempt to create multiple replicas with the same name.
+pub fn generate_replica_service_name(cluster_name: &str, replica_name: &str) -> String {
+    let raw = format!("cluster-{cluster_name}-{replica_name}");
+    mz_orchestrator_kubernetes::sanitize_str_for_service_hostname(&raw)
+}
+
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 ///
 /// NOTE(benesch): I find the fact that this type is called `Controller` but is
@@ -160,11 +169,6 @@ where
         Ok(())
     }
 
-    /// Deterministically generates replica names based on inputs.
-    fn generate_replica_name(instance: ComputeInstanceId, name: &str) -> String {
-        format!("cluster-{instance}-{name}")
-    }
-
     /// Adds replicas of an instance.
     ///
     /// # Panics
@@ -173,7 +177,8 @@ where
     pub async fn add_replica_to_instance(
         &mut self,
         instance: ComputeInstanceId,
-        name: &str,
+        cluster_name: &str,
+        replica_name: &str,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         assert!(
@@ -181,7 +186,7 @@ where
             "call Controller::create_instance before calling add_replica_to_instance"
         );
 
-        let replica_name = Self::generate_replica_name(instance, name);
+        let replica_name = generate_replica_service_name(cluster_name, replica_name);
 
         // Add replicas backing that instance.
         match config {
@@ -267,10 +272,11 @@ where
     pub async fn drop_replica(
         &mut self,
         instance: ComputeInstanceId,
-        name: &str,
+        cluster_name: &str,
+        replica_name: &str,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        let replica_name = Self::generate_replica_name(instance, name);
+        let replica_name = generate_replica_service_name(cluster_name, replica_name);
         if let ConcreteComputeInstanceReplicaConfig::Managed {
             size_config: _size_config,
         } = config

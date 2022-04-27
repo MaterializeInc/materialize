@@ -492,13 +492,19 @@ impl Coordinator {
         builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
+            let instance_name = instance.name.clone();
             self.dataflow_client
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (name, config) in &instance.replicas {
+            for (replica_name, config) in &instance.replicas {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, name, config.clone())
+                    .add_replica_to_instance(
+                        instance.id,
+                        &instance_name,
+                        &replica_name,
+                        config.clone(),
+                    )
                     .await
                     .unwrap();
             }
@@ -1972,10 +1978,13 @@ impl Coordinator {
 
         for (replica_name, config) in replicas {
             let config = concretize_replica_config(config, &self.replica_sizes)?;
+            let service_name =
+                mz_dataflow_types::client::generate_replica_service_name(&name, &replica_name);
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
                 on_cluster_name: name.clone(),
+                service_name,
             });
         }
         self.catalog_transact(ops, |_| Ok(())).await?;
@@ -1989,7 +1998,7 @@ impl Coordinator {
             .unwrap();
         for (replica_name, config) in &instance.replicas {
             self.dataflow_client
-                .add_replica_to_instance(instance.id, &replica_name, config.clone())
+                .add_replica_to_instance(instance.id, &name, &replica_name, config.clone())
                 .await
                 .unwrap();
         }
@@ -2006,15 +2015,18 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let instance_id = self.catalog.resolve_compute_instance(&for_cluster)?.id;
         let config = concretize_replica_config(config, &self.replica_sizes)?;
+        let service_name =
+            mz_dataflow_types::client::generate_replica_service_name(&for_cluster, &name);
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
-            on_cluster_name: for_cluster,
+            on_cluster_name: for_cluster.clone(),
+            service_name,
         };
 
         self.catalog_transact(vec![op], |_| Ok(())).await?;
         self.dataflow_client
-            .add_replica_to_instance(instance_id, &name, config)
+            .add_replica_to_instance(instance_id, &for_cluster, &name, config)
             .await
             .unwrap();
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
@@ -2656,7 +2668,11 @@ impl Coordinator {
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
-            instance_replica_drop_sets.push((instance.id, instance.replicas.clone()));
+            instance_replica_drop_sets.push((
+                instance.id,
+                instance.name.clone(),
+                instance.replicas.clone(),
+            ));
             for replica_name in instance.replicas.keys() {
                 ops.push(catalog::Op::DropComputeInstanceReplica {
                     name: replica_name.to_string(),
@@ -2669,10 +2685,10 @@ impl Coordinator {
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
-        for (instance_id, replicas) in instance_replica_drop_sets {
-            for (name, config) in replicas {
+        for (instance_id, instance_name, replicas) in instance_replica_drop_sets {
+            for (replica_name, config) in replicas {
                 self.dataflow_client
-                    .drop_replica(instance_id, &name, config)
+                    .drop_replica(instance_id, &instance_name, &replica_name, config)
                     .await
                     .unwrap();
             }
@@ -2692,8 +2708,8 @@ impl Coordinator {
         if names.is_empty() {
             return Ok(ExecuteResponse::DroppedComputeInstanceReplicas);
         }
-
-        let instance = self.catalog.resolve_compute_instance(&cluster.unwrap())?;
+        let cluster_name = cluster.unwrap();
+        let instance = self.catalog.resolve_compute_instance(&cluster_name)?;
         let compute_id = instance.id;
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
@@ -2709,7 +2725,7 @@ impl Coordinator {
 
         for (compute_id, name, config) in replicas_to_drop {
             self.dataflow_client
-                .drop_replica(compute_id, &name, config)
+                .drop_replica(compute_id, &cluster_name, &name, config)
                 .await
                 .unwrap();
         }

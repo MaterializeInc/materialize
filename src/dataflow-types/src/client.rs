@@ -39,7 +39,7 @@ use crate::{
 };
 
 pub mod controller;
-pub use controller::Controller;
+pub use controller::{generate_replica_service_name, Controller};
 
 use self::controller::storage::CollectionMetadata;
 use self::controller::ClusterReplicaSizeConfig;
