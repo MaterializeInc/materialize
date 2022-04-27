@@ -1784,12 +1784,12 @@ pub mod sources {
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
         /// The most trivial version is `None`, which typically produces triples where the diff
-        /// is ALWAYS `1`
+        /// is `1`. However, some sources are able to produce values with more exotic diff's,
+        /// such as the posgres source. Currently, this is the only variant usable with
+        /// those sources.
         ///
         /// If the `KeyEnvelope` is present,
         /// include the key columns as an output column of the source with the given properties.
-        // TODO(guswynn): update `None` docs to describe `-1` diff case, when support for it is
-        // added for postgres sources.
         None(KeyEnvelope),
         /// `Debezium` avoids holding onto previously seen values by trusting the required
         /// `before` and `after` value fields coming from the upstream source.

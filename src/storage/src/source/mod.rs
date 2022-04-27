@@ -126,7 +126,7 @@ pub struct RawSourceCreationConfig<'a, G> {
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput<K, V>
+pub struct SourceOutput<K, V, D>
 where
     K: Data,
     V: Data,
@@ -146,18 +146,23 @@ where
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+
+    /// Indicator for what the differential `diff` value
+    /// for this decoded message should be
+    pub diff: D,
 }
 
 /// A wrapper that converts a delimited source reader that only provides
 /// values into a key/value reader whose key is always None
 pub struct DelimitedValueSource<S>(S);
 
-impl<S> SourceReader for DelimitedValueSource<S>
+impl<S, D: timely::Data> SourceReader for DelimitedValueSource<S>
 where
-    S: SourceReader<Key = (), Value = Option<Vec<u8>>>,
+    S: SourceReader<Key = (), Value = Option<Vec<u8>>, Diff = D>,
 {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Diff = D;
 
     fn new(
         source_name: String,
@@ -188,7 +193,7 @@ where
 
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         match self.0.get_next_message()? {
             NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
                 key: _,
@@ -197,6 +202,7 @@ where
                 offset,
                 upstream_time_millis,
                 headers,
+                specific_diff,
             })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
                 SourceMessage {
                     key: None,
@@ -205,6 +211,7 @@ where
                     offset,
                     upstream_time_millis,
                     headers,
+                    specific_diff,
                 },
             ))),
             NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
@@ -214,6 +221,7 @@ where
                 offset,
                 upstream_time_millis,
                 headers,
+                specific_diff,
             })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
                 SourceMessage {
                     key: None,
@@ -222,6 +230,7 @@ where
                     offset,
                     upstream_time_millis,
                     headers,
+                    specific_diff,
                 },
             ))),
             NextMessage::Pending => Ok(NextMessage::Pending),
@@ -236,8 +245,10 @@ where
 pub struct DecodeResult {
     /// The decoded key
     pub key: Option<Result<Row, DecodeError>>,
-    /// The decoded value
-    pub value: Option<Result<Row, DecodeError>>,
+    /// The decoded value, as well as the the
+    /// differential `diff` value for this value, if the value
+    /// is present and not and error.
+    pub value: Option<Result<(Row, Diff), DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: i64,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
@@ -261,7 +272,7 @@ pub struct KafkaMetadata {
     pub timestamp: i64,
 }
 
-impl<K, V> SourceOutput<K, V>
+impl<K, V, D> SourceOutput<K, V, D>
 where
     K: Data,
     V: Data,
@@ -274,7 +285,8 @@ where
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
         headers: Option<Vec<(String, Option<Vec<u8>>)>>,
-    ) -> SourceOutput<K, V> {
+        diff: D,
+    ) -> SourceOutput<K, V, D> {
         SourceOutput {
             key,
             value,
@@ -282,13 +294,15 @@ where
             upstream_time_millis,
             partition,
             headers,
+            diff,
         }
     }
 }
-impl<K, V> SourceOutput<K, V>
+impl<K, V, D> SourceOutput<K, V, D>
 where
     K: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
     V: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    D: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
 {
     /// A parallelization contract that hashes by positions (if available)
     /// and otherwise falls back to hashing by value. Values can be just as
@@ -392,6 +406,7 @@ impl From<anyhow::Error> for SourceReaderError {
 pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
+    type Diff: timely::Data;
 
     /// Create a new source reader.
     ///
@@ -420,7 +435,8 @@ pub trait SourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
         // call. Once all source implementations have been transitioned to implement
         // [SourceReader::next] directly this provided implementation should be removed and the
@@ -450,7 +466,7 @@ pub trait SourceReader {
     /// Source implementation should implement the async [SourceReader::next] method instead.
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         Ok(NextMessage::Pending)
     }
 
@@ -460,7 +476,10 @@ pub trait SourceReader {
     fn into_stream<'a>(
         mut self,
         timestamp_frequency: Duration,
-    ) -> LocalBoxStream<'a, Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>>
+    ) -> LocalBoxStream<
+        'a,
+        Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>,
+    >
     where
         Self: Sized + 'a,
     {
@@ -472,8 +491,8 @@ pub trait SourceReader {
     }
 }
 
-pub enum NextMessage<Key, Value> {
-    Ready(SourceMessageType<Key, Value>),
+pub enum NextMessage<Key, Value, Diff> {
+    Ready(SourceMessageType<Key, Value, Diff>),
     Pending,
     TransientDelay,
     Finished,
@@ -482,18 +501,18 @@ pub enum NextMessage<Key, Value> {
 /// A wrapper around [`SourceMessage`] that allows
 /// [`SourceReader`]'s to communicate if a message
 /// if the final message a specific offset
-pub enum SourceMessageType<Key, Value> {
+pub enum SourceMessageType<Key, Value, Diff> {
     /// Communicate that this [`SourceMessage`] is the final
     /// message its its offset.
-    Finalized(SourceMessage<Key, Value>),
+    Finalized(SourceMessage<Key, Value, Diff>),
     /// Communicate that more [`SourceMessage`]'s
     /// will come later at the same offset as this one.
-    InProgress(SourceMessage<Key, Value>),
+    InProgress(SourceMessage<Key, Value, Diff>),
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage<Key, Value> {
+pub struct SourceMessage<Key, Value, Diff> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -509,9 +528,15 @@ pub struct SourceMessage<Key, Value> {
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+
+    /// Allow sources to optionally output a specific differential
+    /// `diff` value. Defaults to `+1`.
+    ///
+    /// Only supported with `SourceEnvelope::None`
+    pub specific_diff: Diff,
 }
 
-impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>> {
+impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>, ()> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
@@ -521,7 +546,7 @@ impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>> {
     }
 }
 
-impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
@@ -942,7 +967,7 @@ pub fn create_raw_source<G, S: 'static>(
     connector_context: ConnectorContext,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
+        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -1191,13 +1216,13 @@ where
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message<S: SourceReader>(
-    message: SourceMessage<S::Key, S::Value>,
+    message: SourceMessage<S::Key, S::Value, S::Diff>,
     bytes_read: &mut usize,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value>, SourceError>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, SourceError>>,
+        Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ts: Timestamp,
@@ -1226,6 +1251,7 @@ fn handle_message<S: SourceReader>(
         message.upstream_time_millis,
         message.partition,
         message.headers,
+        message.specific_diff,
     )));
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {

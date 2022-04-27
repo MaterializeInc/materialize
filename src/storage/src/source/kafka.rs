@@ -78,6 +78,7 @@ pub struct KafkaSourceReader {
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     /// Create a new instance of a Kafka reader.
     fn new(
@@ -198,7 +199,7 @@ impl SourceReader for KafkaSourceReader {
     /// (and this partition) we skip this message, and seek to the appropriate offset
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
             for pid in partitions {
@@ -412,7 +413,9 @@ impl KafkaSourceReader {
     /// We maintain the list of partition queues in a queue, and add queues that we polled from to
     /// the end of the queue. We thus swing through all available partition queues in a somewhat
     /// fair manner.
-    fn poll_from_next_queue(&mut self) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>> {
+    fn poll_from_next_queue(
+        &mut self,
+    ) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>> {
         let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
         let message = match partition_queue.get_next_message() {
@@ -445,8 +448,8 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
         let partition = match message.partition {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
@@ -566,7 +569,7 @@ fn create_kafka_config(
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
-) -> SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+) -> SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
     let kafka_offset = KafkaOffset {
         offset: msg.offset(),
     };
@@ -586,6 +589,7 @@ fn construct_source_message(
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
         headers,
+        specific_diff: (),
     }
 }
 
@@ -618,7 +622,7 @@ impl PartitionConsumer {
     /// be transformed into empty values
     fn get_next_message(
         &mut self,
-    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
+    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let result = construct_source_message(&msg, self.include_headers);

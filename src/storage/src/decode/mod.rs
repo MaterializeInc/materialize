@@ -64,7 +64,7 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
     schema: &str,
     registry: Option<mz_ccsr::ClientConfig>,
     confluent_wire_format: bool,
@@ -75,7 +75,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>>::position_value_contract(),
+        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>, ()>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = Rc::clone(&channel);
@@ -351,7 +351,7 @@ fn try_decode(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -379,7 +379,7 @@ where
 
     let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
-    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| x.value.hashed();
+    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>| x.value.hashed();
 
     let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
         move |input, output| {
@@ -394,6 +394,7 @@ where
                     upstream_time_millis,
                     partition,
                     headers,
+                    diff: (),
                 } in data.iter()
                 {
                     let key = key_decoder
@@ -410,7 +411,7 @@ where
 
                     session.give(DecodeResult {
                         key,
-                        value,
+                        value: value.map(|s| s.map(|r| (r, 1))),
                         position: *position,
                         upstream_time_millis: *upstream_time_millis,
                         partition: partition.clone(),
@@ -452,7 +453,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
@@ -491,6 +492,7 @@ where
                     upstream_time_millis,
                     partition,
                     headers,
+                    diff: (),
                 } in data.iter()
                 {
                     let value = match value {
@@ -526,7 +528,7 @@ where
 
                                     session.give(DecodeResult {
                                         key: None,
-                                        value: Some(value),
+                                        value: Some(value.map(|r| (r, 1))),
                                         position,
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
@@ -588,7 +590,7 @@ where
                         if value_bytes_remaining.is_empty() {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value),
+                                value: Some(value.map(|r| (r, 1))),
                                 position,
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
@@ -599,7 +601,7 @@ where
                         } else {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value),
+                                value: Some(value.map(|r| (r, 1))),
                                 position,
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),

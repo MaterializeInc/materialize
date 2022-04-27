@@ -317,7 +317,15 @@ fn process_new_data(
             .entry(key);
 
         let new_entry = UpsertSourceData {
-            value: new_value.map(ResultExt::err_into),
+            value: new_value.map(ResultExt::err_into).map(|res| {
+                res.map(|(v, diff)| match diff {
+                    1 => v,
+                    _ => unreachable!(
+                        "Upsert should only be used with sources \
+                                        with no explicit diff"
+                    ),
+                })
+            }),
             position: new_position,
             // upsert sources don't have a column for this, so setting it to
             // `None` is fine.

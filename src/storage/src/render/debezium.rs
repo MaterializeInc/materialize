@@ -62,7 +62,10 @@ where
                                 }
                             };
                             let value = match result.value {
-                                Some(Ok(value)) => value,
+                                Some(Ok((value, 1))) => value,
+                                Some(Ok(_)) => unreachable!(
+                                    "Debezium should only be used with sources with no explicit diff"
+                                ),
                                 Some(Err(err)) => {
                                     session.give((Err(err.into()), cap.time().clone(), 1));
                                     continue;
@@ -178,13 +181,21 @@ where
     };
 
     let data_dist = move |result: &DecodeResult| {
+        let value = match &result.value {
+            Some(Ok((v, 1))) => Some(Ok(v)),
+            Some(Ok(_)) => {
+                unreachable!("Debezium should only be used with sources with no explicit diff")
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        };
         // If we can't pull out the transaction_id, it doesn't matter which worker we end up on.  Use
         // value as that's how we distribute decoding dbz messages.
-        let default_hash = result.value.hashed();
+        let default_hash = value.hashed();
 
         // The logic below mirrors inline decoding of the data.  The shape of the value is validated
         // when constructing the source.
-        let value = match result.value.as_ref() {
+        let value = match value {
             Some(Ok(v)) => v,
             _ => return default_hash,
         };
@@ -304,7 +315,10 @@ where
                                 }
                             };
                             let value = match result.value.clone() {
-                                Some(Ok(value)) => value,
+                                Some(Ok((value, 1))) => value,
+                                Some(Ok(_)) => unreachable!(
+                                    "Debezium should only be used with sources with no explicit diff"
+                                ),
                                 Some(Err(err)) => {
                                     output.session(&data_cap).give((
                                         Err(err.into()),

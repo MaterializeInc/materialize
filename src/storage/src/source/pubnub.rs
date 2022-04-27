@@ -35,6 +35,7 @@ pub struct PubNubSourceReader {
 impl SourceReader for PubNubSourceReader {
     type Key = ();
     type Value = Row;
+    type Diff = ();
 
     fn new(
         _source_name: String,
@@ -84,7 +85,8 @@ impl SourceReader for PubNubSourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
         loop {
             let stream = match &mut self.stream {
                 None => {
@@ -122,6 +124,7 @@ impl SourceReader for PubNubSourceReader {
                             key: (),
                             value: row,
                             headers: None,
+                            specific_diff: (),
                         })));
                     }
                 }
