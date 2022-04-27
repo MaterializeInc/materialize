@@ -599,8 +599,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .map(|l| (l.key, l.value))
                         .collect(),
                     image_pull_policy: args.kubernetes_image_pull_policy,
-                    has_secrets: secrets_controller.is_some()
-                    
+                    has_secrets: secrets_controller.is_some(),
                 })
             }
             Orchestrator::Process => {
