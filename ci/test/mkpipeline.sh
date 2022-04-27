@@ -45,6 +45,4 @@ steps:
   - label: mkpipeline
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline
     priority: 2
-    agents:
-      queue: linux
 EOF
