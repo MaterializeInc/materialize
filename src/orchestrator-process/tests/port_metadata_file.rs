@@ -23,7 +23,7 @@ fn test_port_metadata_file_basic() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("portfile");
 
-    let port_metadata: HashMap<String, i32> =
+    let port_metadata: HashMap<String, u16> =
         vec![("joe".to_string(), 42), ("shmoe".to_string(), 666)]
             .into_iter()
             .collect();

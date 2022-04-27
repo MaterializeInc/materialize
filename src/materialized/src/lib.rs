@@ -272,16 +272,16 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             "runtime",
             ServiceConfig {
                 image: config.orchestrator.storaged_image.clone(),
-                args: &|ports| {
+                args: &|_hosts_ports, my_ports, _my_index| {
                     let mut storage_opts = vec![
                         format!("--workers=1"),
                         format!(
                             "--storage-addr={}:{}",
-                            default_listen_host, ports["compute"]
+                            default_listen_host, my_ports["compute"]
                         ),
                         format!(
                             "--listen-addr={}:{}",
-                            default_listen_host, ports["controller"]
+                            default_listen_host, my_ports["controller"]
                         ),
                         format!("--persist-blob-url={}", config.persist_location.blob_uri),
                         format!(

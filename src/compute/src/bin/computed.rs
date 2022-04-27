@@ -67,14 +67,8 @@ struct Args {
     )]
     workers: usize,
     /// Number of this computed process.
-    #[clap(
-        short = 'p',
-        long,
-        env = "COMPUTED_PROCESS",
-        value_name = "P",
-        default_value = "0"
-    )]
-    process: usize,
+    #[clap(short = 'p', long, env = "COMPUTED_PROCESS", value_name = "P")]
+    process: Option<usize>,
     /// Total number of computed processes.
     #[clap(
         short = 'n',
@@ -128,6 +122,31 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
     let threads = args.workers;
     let process = args.process;
     let processes = args.processes;
+    if processes == 0 {
+        bail!("0 is a nonsensical number of processes.")
+    }
+    if process > Some(processes - 1) {
+        let process = process.unwrap();
+        bail!("Process index out of bounds: {process} out of 0..{processes}.");
+    }
+    let process = if processes == 1 {
+        0
+    } else {
+        process
+            .or_else(|| {
+                // Dirty hack: we parse the process from the hostname, if possible. This is the recommended way to get the Ordinal Index of a Kubernetes replica.
+                std::env::var("HOSTNAME").ok().and_then(|hostname| {
+                    hostname
+                        .rsplit_once('-')
+                        .and_then(|(_, idx)| idx.parse::<usize>().ok())
+                })
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Process index not provided, and failed to deduce it from hostname."
+                )
+            })?
+    };
     let report = true;
 
     if processes > 1 {

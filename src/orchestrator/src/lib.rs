@@ -77,10 +77,23 @@ pub struct ServiceConfig<'a> {
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
-    /// A function that generates the arguments for each process the service
-    /// given the mapping from port names to assignments.
+    /// A function that generates the arguments for each process of the service
+    /// given various information about the process to be configured.
+    ///
+    /// The first argument is the port mappings for each host; the second mapping is the
+    /// port mappings for the host or set of hosts presently being configured.
+    ///
+    /// The third argument is the index of this process in the service, _if available_.
+    /// It is not available from all orchestrators; for example, the Kubernetes orchestrator
+    /// configures the arguments for all processes at once.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(&HashMap<String, i32>) -> Vec<String> + Send + Sync),
+    pub args: &'a (dyn Fn(
+        &[(String, HashMap<String, u16>)],
+        &HashMap<String, u16>,
+        Option<usize>,
+    ) -> Vec<String>
+             + Send
+             + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -109,7 +122,7 @@ pub struct ServicePort {
     /// The desired port number.
     ///
     /// Not all orchestrator backends will make use of the hint.
-    pub port_hint: i32,
+    pub port_hint: u16,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

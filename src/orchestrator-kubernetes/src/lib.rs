@@ -208,7 +208,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ports_in
                         .iter()
                         .map(|port| ServicePort {
-                            port: port.port_hint,
+                            port: port.port_hint.into(),
                             name: Some(port.name.clone()),
                             ..Default::default()
                         })
@@ -232,12 +232,25 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             ..Default::default()
         };
 
+        let hosts = (0..scale.get())
+            .map(|i| {
+                format!(
+                    "{name}-{i}.{name}.{}.svc.cluster.local",
+                    self.kubernetes_namespace
+                )
+            })
+            .collect::<Vec<_>>();
+
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
-            .collect();
+            .collect::<HashMap<_, _>>();
         let node_selector = availability_zone
             .map(|az| BTreeMap::from([("materialize.cloud/availability-zone".to_string(), az)]));
+        let hosts_ports = hosts
+            .iter()
+            .map(|host| (host.clone(), ports.clone()))
+            .collect::<Vec<_>>();
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -248,13 +261,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args(&ports)),
+                    args: Some(args(&hosts_ports, &ports, None)),
                     image_pull_policy: Some(self.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
                             .iter()
                             .map(|port| ContainerPort {
-                                container_port: port.port_hint,
+                                container_port: port.port_hint.into(),
                                 name: Some(port.name.clone()),
                                 ..Default::default()
                             })
@@ -349,14 +362,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        let hosts = (0..scale.get())
-            .map(|i| {
-                format!(
-                    "{name}-{i}.{name}.{}.svc.cluster.local",
-                    self.kubernetes_namespace
-                )
-            })
-            .collect();
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
@@ -394,7 +399,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 #[derive(Debug, Clone)]
 struct KubernetesService {
     hosts: Vec<String>,
-    ports: HashMap<String, i32>,
+    ports: HashMap<String, u16>,
 }
 
 impl Service for KubernetesService {

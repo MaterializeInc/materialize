@@ -37,7 +37,7 @@ lazy_static! {
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     };
-    static ref PORT_ALLOCATOR: Arc<IdAllocator<i32>> = Arc::new(IdAllocator::new(2100, 2200));
+    static ref PORT_ALLOCATOR: Arc<IdAllocator<u16>> = Arc::new(IdAllocator::new(2100, 2200));
 }
 
 #[derive(Clone)]
