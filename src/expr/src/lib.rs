@@ -39,19 +39,18 @@ pub use linear::{
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject,
 };
-pub use relation::func::ProtoAggregateFunc;
 pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
-pub use relation::ProtoColumnOrder;
 pub use relation::{
     compare_columns, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    MirRelationExpr, RowSetFinishing, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    RECURSION_LIMIT,
+    MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, RECURSION_LIMIT,
 };
+pub use relation::{ProtoAggregateFunc, ProtoColumnOrder};
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
-pub use scalar::{ProtoAggregateExpr, ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};
+pub use scalar::{ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

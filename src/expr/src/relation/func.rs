@@ -32,7 +32,10 @@ use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound};
+use crate::relation::{
+    compare_columns, proto_aggregate_func, proto_table_func, ColumnOrder, ProtoAggregateFunc,
+    ProtoTableFunc, WindowFrame, WindowFrameBound,
+};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 

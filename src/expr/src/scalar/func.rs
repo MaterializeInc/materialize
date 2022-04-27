@@ -45,9 +45,10 @@ use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSom
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
+use crate::scalar::{
+    ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
+};
 use crate::{like_pattern, EvalError, MirScalarExpr};
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.func.rs"));
 
 #[macro_use]
 mod macros;
@@ -128,7 +129,7 @@ impl fmt::Display for UnmaterializableFunc {
 
 impl From<&UnmaterializableFunc> for ProtoUnmaterializableFunc {
     fn from(func: &UnmaterializableFunc) -> Self {
-        use proto_unmaterializable_func::Kind::*;
+        use crate::scalar::proto_unmaterializable_func::Kind::*;
         let kind = match func {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
@@ -152,7 +153,7 @@ impl TryFrom<ProtoUnmaterializableFunc> for UnmaterializableFunc {
     type Error = TryFromProtoError;
 
     fn try_from(func: ProtoUnmaterializableFunc) -> Result<Self, Self::Error> {
-        use proto_unmaterializable_func::Kind::*;
+        use crate::scalar::proto_unmaterializable_func::Kind::*;
         if let Some(kind) = func.kind {
             match kind {
                 CurrentDatabase(()) => Ok(UnmaterializableFunc::CurrentDatabase),
@@ -2832,7 +2833,7 @@ impl Arbitrary for BinaryFunc {
 impl From<&BinaryFunc> for ProtoBinaryFunc {
     #[allow(clippy::todo)]
     fn from(func: &BinaryFunc) -> Self {
-        use proto_binary_func::Kind::*;
+        use crate::scalar::proto_binary_func::Kind::*;
         let kind = match func {
             BinaryFunc::And => And(()),
             BinaryFunc::Or => Or(()),
@@ -2983,7 +2984,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
 
     #[allow(clippy::todo)]
     fn try_from(func: ProtoBinaryFunc) -> Result<Self, Self::Error> {
-        use proto_binary_func::Kind::*;
+        use crate::scalar::proto_binary_func::Kind::*;
         if let Some(kind) = func.kind {
             match kind {
                 And(()) => Ok(BinaryFunc::And),
@@ -3677,14 +3678,9 @@ impl Arbitrary for UnaryFunc {
 }
 
 impl From<&UnaryFunc> for ProtoUnaryFunc {
-    #[allow(unused_variables)]
-    #[allow(clippy::todo)]
     fn from(func: &UnaryFunc) -> Self {
-        use proto_unary_func::Kind::*;
-        use proto_unary_func::ProtoCastStringToChar;
-        use proto_unary_func::ProtoCastStringToVarChar;
-        use proto_unary_func::ProtoPadChar;
-        use proto_unary_func::ProtoTimezoneTime;
+        use crate::scalar::proto_unary_func::Kind::*;
+        use crate::scalar::proto_unary_func::*;
         let kind = match func {
             UnaryFunc::Not(_) => Not(()),
             UnaryFunc::IsNull(_) => IsNull(()),
@@ -3774,9 +3770,24 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToFloat32(_) => CastStringToFloat32(()),
             UnaryFunc::CastStringToFloat64(_) => CastStringToFloat64(()),
             UnaryFunc::CastStringToDate(_) => CastStringToDate(()),
-            UnaryFunc::CastStringToArray(_) => todo!(),
-            UnaryFunc::CastStringToList(_) => todo!(),
-            UnaryFunc::CastStringToMap(_) => todo!(),
+            UnaryFunc::CastStringToArray(inner) => {
+                CastStringToArray(Box::new(ProtoCastToVariableType {
+                    return_ty: Some((&inner.return_ty).into()),
+                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                }))
+            }
+            UnaryFunc::CastStringToList(inner) => {
+                CastStringToList(Box::new(ProtoCastToVariableType {
+                    return_ty: Some((&inner.return_ty).into()),
+                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                }))
+            }
+            UnaryFunc::CastStringToMap(inner) => {
+                CastStringToMap(Box::new(ProtoCastToVariableType {
+                    return_ty: Some((&inner.return_ty).into()),
+                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                }))
+            }
             UnaryFunc::CastStringToTime(_) => CastStringToTime(()),
             UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
             UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
@@ -3826,10 +3837,20 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastJsonbToBool(_) => CastJsonbToBool(()),
             UnaryFunc::CastUuidToString(_) => CastUuidToString(()),
             UnaryFunc::CastRecordToString(func) => CastRecordToString((&func.ty).into()),
-            UnaryFunc::CastRecord1ToRecord2(_) => todo!(),
+            UnaryFunc::CastRecord1ToRecord2(inner) => {
+                CastRecord1ToRecord2(ProtoCastRecord1ToRecord2 {
+                    return_ty: Some((&inner.return_ty).into()),
+                    cast_exprs: inner.cast_exprs.iter().map(Into::into).collect(),
+                })
+            }
             UnaryFunc::CastArrayToString(func) => CastArrayToString((&func.ty).into()),
             UnaryFunc::CastListToString(func) => CastListToString((&func.ty).into()),
-            UnaryFunc::CastList1ToList2(_) => todo!(),
+            UnaryFunc::CastList1ToList2(inner) => {
+                CastList1ToList2(Box::new(ProtoCastToVariableType {
+                    return_ty: Some((&inner.return_ty).into()),
+                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                }))
+            }
             UnaryFunc::CastArrayToListOneDim(_) => CastArrayToListOneDim(()),
             UnaryFunc::CastMapToString(func) => CastMapToString((&func.ty).into()),
             UnaryFunc::CastInt2VectorToString(_) => CastInt2VectorToString(()),
@@ -3920,9 +3941,8 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
 impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
     type Error = TryFromProtoError;
 
-    #[allow(clippy::todo)]
     fn try_from(func: ProtoUnaryFunc) -> Result<Self, Self::Error> {
-        use proto_unary_func::Kind::*;
+        use crate::scalar::proto_unary_func::Kind::*;
         if let Some(kind) = func.kind {
             match kind {
                 Not(()) => Ok(impls::Not.into()),
@@ -4023,9 +4043,33 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToFloat32(()) => Ok(impls::CastStringToFloat32.into()),
                 CastStringToFloat64(()) => Ok(impls::CastStringToFloat64.into()),
                 CastStringToDate(()) => Ok(impls::CastStringToDate.into()),
-                CastStringToArray(()) => todo!(),
-                CastStringToList(()) => todo!(),
-                CastStringToMap(()) => todo!(),
+                CastStringToArray(inner) => Ok(impls::CastStringToArray {
+                    return_ty: inner
+                        .return_ty
+                        .try_into_if_some("ProtoCastStringToArray::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .try_into_if_some("ProtoCastStringToArray::cast_expr")?,
+                }
+                .into()),
+                CastStringToList(inner) => Ok(impls::CastStringToList {
+                    return_ty: inner
+                        .return_ty
+                        .try_into_if_some("ProtoCastStringToList::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .try_into_if_some("ProtoCastStringToList::cast_expr")?,
+                }
+                .into()),
+                CastStringToMap(inner) => Ok(impls::CastStringToMap {
+                    return_ty: inner
+                        .return_ty
+                        .try_into_if_some("ProtoCastStringToMap::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .try_into_if_some("ProtoCastStringToMap::cast_expr")?,
+                }
+                .into()),
                 CastStringToTime(()) => Ok(impls::CastStringToTime.into()),
                 CastStringToTimestamp(()) => Ok(impls::CastStringToTimestamp.into()),
                 CastStringToTimestampTz(()) => Ok(impls::CastStringToTimestampTz.into()),
@@ -4084,10 +4128,28 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastRecordToString(ty) => {
                     Ok(impls::CastRecordToString { ty: ty.try_into()? }.into())
                 }
-                CastRecord1ToRecord2(_) => todo!(),
+                CastRecord1ToRecord2(inner) => Ok(impls::CastRecord1ToRecord2 {
+                    return_ty: inner
+                        .return_ty
+                        .try_into_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
+                    cast_exprs: inner
+                        .cast_exprs
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+                .into()),
                 CastArrayToString(ty) => Ok(impls::CastArrayToString { ty: ty.try_into()? }.into()),
                 CastListToString(ty) => Ok(impls::CastListToString { ty: ty.try_into()? }.into()),
-                CastList1ToList2(_) => todo!(),
+                CastList1ToList2(inner) => Ok(impls::CastList1ToList2 {
+                    return_ty: inner
+                        .return_ty
+                        .try_into_if_some("ProtoCastList1ToList2::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .try_into_if_some("ProtoCastList1ToList2::cast_expr")?,
+                }
+                .into()),
                 CastArrayToListOneDim(()) => Ok(impls::CastArrayToListOneDim.into()),
                 CastMapToString(ty) => Ok(impls::CastMapToString { ty: ty.try_into()? }.into()),
                 CastInt2VectorToString(_) => Ok(impls::CastInt2VectorToString.into()),
@@ -4187,6 +4249,14 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
         }
+    }
+}
+
+impl TryFrom<Box<ProtoUnaryFunc>> for UnaryFunc {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: Box<ProtoUnaryFunc>) -> Result<Self, Self::Error> {
+        Ok((*value).try_into()?)
     }
 }
 
@@ -5616,8 +5686,8 @@ impl Arbitrary for VariadicFunc {
 
 impl From<&VariadicFunc> for ProtoVariadicFunc {
     fn from(func: &VariadicFunc) -> Self {
-        use proto_variadic_func::Kind::*;
-        use proto_variadic_func::ProtoRecordCreate;
+        use crate::scalar::proto_variadic_func::Kind::*;
+        use crate::scalar::proto_variadic_func::ProtoRecordCreate;
         let kind = match func {
             VariadicFunc::Coalesce => Coalesce(()),
             VariadicFunc::Greatest => Greatest(()),
@@ -5654,8 +5724,8 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
     type Error = TryFromProtoError;
 
     fn try_from(func: ProtoVariadicFunc) -> Result<Self, Self::Error> {
-        use proto_variadic_func::Kind::*;
-        use proto_variadic_func::ProtoRecordCreate;
+        use crate::scalar::proto_variadic_func::Kind::*;
+        use crate::scalar::proto_variadic_func::ProtoRecordCreate;
         if let Some(kind) = func.kind {
             match kind {
                 Coalesce(()) => Ok(VariadicFunc::Coalesce),
