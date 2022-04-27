@@ -56,7 +56,7 @@ pub struct KinesisSourceReader {
     /// TODO(natacha): this should be moved to timestamper
     last_checked_shards: Instant,
     /// Storage for messages that have not yet been timestamped
-    buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>>>,
+    buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>, ()>>,
     /// Count of processed message
     processed_message_count: i64,
     /// Metrics from which per-shard metrics get created.
@@ -121,6 +121,7 @@ impl KinesisSourceReader {
 impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn new(
         _source_name: String,
@@ -161,7 +162,7 @@ impl SourceReader for KinesisSourceReader {
     }
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -250,6 +251,7 @@ impl SourceReader for KinesisSourceReader {
                             key: (),
                             value: Some(data),
                             headers: None,
+                            specific_diff: (),
                         };
                         self.buffered_messages.push_back(source_message);
                     }

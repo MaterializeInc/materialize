@@ -408,7 +408,7 @@ where
                             SourceType::Row(source) => (
                                 source.map(|r| DecodeResult {
                                     key: None,
-                                    value: Some(Ok(r.value)),
+                                    value: Some(Ok((r.value, 1))),
                                     position: r.position,
                                     upstream_time_millis: r.upstream_time_millis,
                                     partition: r.partition,
@@ -503,7 +503,12 @@ where
                                 let flattened_stream =
                                     flatten_results_prepend_keys(key_envelope, results);
 
-                                let flattened_stream = flattened_stream.pass_through("decode", 1);
+                                let flattened_stream = flattened_stream
+                                    .pass_through("decode", 1)
+                                    .map(|(val, time, diff)| match val {
+                                        Ok((val, diff)) => (Ok(val), time, diff),
+                                        Err(e) => (Err(e), time, diff),
+                                    });
 
                                 // TODO: Maybe we should finally move this to some central
                                 // place and re-use. There seem to be enough instances of this
@@ -631,7 +636,7 @@ where
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 struct KV {
     key: Option<Result<Row, DecodeError>>,
-    val: Option<Result<Row, DecodeError>>,
+    val: Option<Result<(Row, Diff), DecodeError>>,
 }
 
 fn append_metadata_to_value<G>(
@@ -642,12 +647,12 @@ where
 {
     results.map(move |res| {
         let val = res.value.map(|val_result| {
-            val_result.map(|mut val| {
+            val_result.map(|(mut val, diff)| {
                 if !res.metadata.is_empty() {
                     RowPacker::for_existing_row(&mut val).extend(res.metadata.into_iter());
                 }
 
-                val
+                (val, diff)
             })
         });
 
@@ -704,7 +709,7 @@ where
 fn flatten_results_prepend_keys<G>(
     key_envelope: &KeyEnvelope,
     results: timely::dataflow::Stream<G, KV>,
-) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
+) -> timely::dataflow::Stream<G, Result<(Row, Diff), DecodeError>>
 where
     G: Scope,
 {
@@ -713,16 +718,16 @@ where
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value)| {
+                maybe_kv.map(|(mut key, value, diff)| {
                     RowPacker::for_existing_row(&mut key).extend_by_row(&value);
-                    key
+                    (key, diff)
                 })
             }),
         KeyEnvelope::Named(_) => {
             results
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
-                    maybe_kv.map(|(mut key, value)| {
+                    maybe_kv.map(|(mut key, value, diff)| {
                         // Named semantics rename a key that is a single column, and encode a
                         // multi-column field as a struct with that name
                         let row = if key.iter().nth(1).is_none() {
@@ -735,7 +740,7 @@ where
                             packer.extend_by_row(&value);
                             new_row
                         };
-                        row
+                        (row, diff)
                     })
                 })
         }
@@ -743,10 +748,10 @@ where
 }
 
 /// Handle possibly missing key or value portions of messages
-fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row), DecodeError>> {
+fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row, Diff), DecodeError>> {
     match (key, val) {
         (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value))),
+            (Ok(key), Ok((value, diff))) => Some(Ok((key, value, diff))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
             (Err(e), _) => Some(Err(e)),

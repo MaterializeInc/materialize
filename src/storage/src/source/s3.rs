@@ -784,6 +784,7 @@ where
 impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn new(
         source_name: String,
@@ -882,7 +883,7 @@ impl SourceReader for S3SourceReader {
 
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
@@ -894,6 +895,7 @@ impl SourceReader for S3SourceReader {
                         key: (),
                         value: record,
                         headers: None,
+                        specific_diff: (),
                     },
                 )))
             }
