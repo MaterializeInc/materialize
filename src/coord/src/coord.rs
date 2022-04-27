@@ -3042,8 +3042,15 @@ impl Coordinator {
 
         let compute_instance = self
             .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
+            .resolve_compute_instance(session.vars().cluster())?;
+
+        if compute_instance.replicas.is_empty() {
+            return Err(CoordError::NoReplicasAvailable(
+                compute_instance.name.clone(),
+            ));
+        }
+
+        let compute_instance = compute_instance.id;
 
         let source_ids = source.depends_on();
 
