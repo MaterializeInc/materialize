@@ -74,7 +74,7 @@ pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
         // {
-        //     "1": {"scale": 1, "workers": 2},
+        //     "1": {"scale": 1, "workers": 1},
         //     "2": {"scale": 1, "workers": 2},
         //     "4": {"scale": 1, "workers": 4},
         //     /// ...
