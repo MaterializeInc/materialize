@@ -65,6 +65,7 @@ pub struct ClusterReplicaSizeConfig {
     pub memory_limit: Option<MemoryLimit>,
     pub cpu_limit: Option<CpuLimit>,
     pub scale: NonZeroUsize,
+    pub workers: NonZeroUsize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -73,23 +74,55 @@ pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
         // {
-        //     "1": {"scale": 1},
-        //     "2": {"scale": 2},
+        //     "1": {"scale": 1, "workers": 2},
+        //     "2": {"scale": 1, "workers": 2},
+        //     "4": {"scale": 1, "workers": 4},
         //     /// ...
-        //     "16": {"scale": 16}
+        //     "32": {"scale": 1, "workers": 32}
         // }
-        let inner = (1..=16)
+        let mut inner = (0..=5)
             .map(|i| {
+                let workers = 1 << i;
                 (
-                    i.to_string(),
+                    workers.to_string(),
                     ClusterReplicaSizeConfig {
                         memory_limit: None,
                         cpu_limit: None,
-                        scale: NonZeroUsize::new(i).unwrap(),
+                        scale: NonZeroUsize::new(1).unwrap(),
+                        workers: NonZeroUsize::new(workers).unwrap(),
                     },
                 )
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
+        // Testing with multiple processes on a single machine is a novelty, so
+        // we don't bother providing many options.
+        inner.insert(
+            "2-1".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(1).unwrap(),
+            },
+        );
+        inner.insert(
+            "2-2".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(2).unwrap(),
+            },
+        );
+        inner.insert(
+            "2-4".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(4).unwrap(),
+            },
+        );
         Self(inner)
     }
 }
@@ -155,6 +188,7 @@ where
                                         default_listen_host, ports["controller"]
                                     ),
                                     format!("{}:{}", default_listen_host, ports["compute"]),
+                                    format!("--workers={}", size_config.workers),
                                 ];
                                 if *linger {
                                     compute_opts.push(format!("--linger"));
