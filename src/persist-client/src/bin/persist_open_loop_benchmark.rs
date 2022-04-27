@@ -451,7 +451,8 @@ mod raw_persist_benchmark {
                 batch.iter().map(|((k, v), t, d)| ((&*k, &*v), &*t, &*d)),
                 new_upper,
             )
-            .await??;
+            .await??
+            .expect("invalid current upper");
 
             Ok(())
         }
