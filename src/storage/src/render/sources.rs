@@ -296,6 +296,8 @@ where
                     );
 
                     (ok_stream.as_collection(), capability)
+                } else if let ExternalSourceConnector::Persist(_) = connector {
+                    unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -335,6 +337,7 @@ where
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                         ExternalSourceConnector::PubNub(_) => unreachable!(),
+                        ExternalSourceConnector::Persist(_) => unreachable!(),
                     };
 
                     // Include any source errors.
@@ -493,6 +496,9 @@ where
                                     (stream.as_collection(), Some(errors))
                                 }
                                 SourceEnvelope::CdcV2 => unreachable!(),
+                                SourceEnvelope::DifferentialRow => {
+                                    unreachable!("persist sources go through a special render path")
+                                }
                             }
                         }
                     };

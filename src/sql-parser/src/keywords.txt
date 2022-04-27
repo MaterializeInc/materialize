@@ -37,6 +37,7 @@ Avro
 Begin
 Between
 Bigint
+Blob
 Boolean
 Both
 Bpchar
@@ -67,6 +68,7 @@ Confluent
 Connection
 Connector
 Connectors
+Consensus
 Consistency
 Constraint
 Copy
@@ -205,6 +207,7 @@ Ordinality
 Outer
 Over
 Partition
+Persist
 Physical
 Plan
 Plans
@@ -252,6 +255,7 @@ Sequences
 Serializable
 Session
 Set
+Shard
 Show
 Sink
 Sinks

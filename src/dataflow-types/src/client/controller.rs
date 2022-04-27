@@ -34,6 +34,7 @@ use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_persist_types::Codec64;
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -143,7 +144,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + Copy + Unpin,
+    T: Timestamp + Lattice + Codec64 + Copy + Unpin,
 {
     pub async fn create_instance(
         &mut self,
@@ -291,7 +292,7 @@ impl<T> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
 {
     pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         let mut storage_alive = true;

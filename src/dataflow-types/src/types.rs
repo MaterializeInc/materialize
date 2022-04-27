@@ -409,14 +409,19 @@ pub mod sources {
 
     use anyhow::{anyhow, bail};
     use chrono::NaiveDateTime;
+    use differential_dataflow::lattice::Lattice;
     use globset::Glob;
     use http::Uri;
+    use mz_persist_client::read::ReadHandle;
+    use mz_persist_client::ShardId;
+    use mz_persist_types::Codec64;
     use serde::{Deserialize, Serialize};
+    use timely::progress::Timestamp;
     use uuid::Uuid;
 
     use crate::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
-    use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+    use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
@@ -450,6 +455,7 @@ pub mod sources {
             Postgres,
             Bytes,
             Text,
+            RowCodec(RelationDesc),
         }
 
         impl SourceDataEncoding {
@@ -567,6 +573,7 @@ pub mod sources {
                             }
                             .nullable(false),
                         ),
+                    DataEncoding::RowCodec(desc) => desc.clone(),
                 })
             }
 
@@ -579,6 +586,7 @@ pub mod sources {
                     DataEncoding::Csv(_) => "Csv",
                     DataEncoding::Text => "Text",
                     DataEncoding::Postgres => "Postgres",
+                    DataEncoding::RowCodec(_) => "RowCodec",
                 }
             }
         }
@@ -778,6 +786,9 @@ pub mod sources {
         /// `CdcV2` requires sources output messages in a strict form that requires a upstream-provided
         /// timeline.
         CdcV2,
+        /// An envelope for sources that directly read differential Rows. This is internal and
+        /// cannot be requested via SQL.
+        DifferentialRow,
     }
 
     /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
@@ -790,6 +801,9 @@ pub mod sources {
         Debezium(DebeziumEnvelope),
         Upsert(UpsertStyle),
         CdcV2,
+        /// An envelope for sources that directly read differential Rows. This is internal and
+        /// cannot be requested via SQL.
+        DifferentialRow,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -971,6 +985,7 @@ pub mod sources {
                 }
                 UnplannedSourceEnvelope::None(inner) => SourceEnvelope::None(inner),
                 UnplannedSourceEnvelope::CdcV2 => SourceEnvelope::CdcV2,
+                UnplannedSourceEnvelope::DifferentialRow => SourceEnvelope::DifferentialRow,
             }
         }
 
@@ -1088,6 +1103,10 @@ pub mod sources {
                         ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                     }
                 }
+                UnplannedSourceEnvelope::DifferentialRow => (
+                    self.into_source_envelope(None),
+                    value_desc.concat(metadata_desc),
+                ),
             })
         }
     }
@@ -1217,12 +1236,52 @@ pub mod sources {
                 SourceConnector::Local { timeline, .. } => timeline.clone(),
             }
         }
+
         pub fn requires_single_materialization(&self) -> bool {
             if let SourceConnector::External { connector, .. } = self {
                 connector.requires_single_materialization()
             } else {
                 false
             }
+        }
+
+        /// Returns a `ReadHandle` that can be used to read from the persist shard that a rendered
+        /// version of this connector would write to or if the input data is available as a persist
+        /// shard. Returns `None` if this type of connector doesn't write to persist.
+        pub async fn get_read_handle<T: Timestamp + Lattice + Codec64>(
+            &self,
+        ) -> Result<
+            Option<ReadHandle<Row, Row, T, mz_repr::Diff>>,
+            mz_persist::location::ExternalError,
+        > {
+            let result = match self {
+                SourceConnector::External {
+                    connector: ExternalSourceConnector::Persist(persist_connector),
+                    ..
+                } => {
+                    let location = mz_persist_client::Location {
+                        blob_uri: persist_connector.blob_uri.clone(),
+                        consensus_uri: persist_connector.consensus_uri.clone(),
+                    };
+
+                    let timeout = Duration::from_secs(60);
+
+                    let (blob, consensus) = location.open(timeout).await?;
+
+                    let persist_client =
+                        mz_persist_client::Client::new(timeout, blob, consensus).await?;
+
+                    let (_write, read) = persist_client
+                        .open::<Row, Row, T, mz_repr::Diff>(timeout, persist_connector.shard_id)
+                        .await?;
+
+                    Some(read)
+                }
+                SourceConnector::External { .. } => None,
+                SourceConnector::Local { .. } => None,
+            };
+
+            Ok(result)
         }
     }
 
@@ -1234,6 +1293,7 @@ pub mod sources {
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
+        Persist(PersistSourceConnector),
     }
 
     impl ExternalSourceConnector {
@@ -1324,6 +1384,7 @@ pub mod sources {
                 }
                 Self::Postgres(_) => vec![],
                 Self::PubNub(_) => vec![],
+                Self::Persist(_) => vec![],
             }
         }
 
@@ -1336,6 +1397,7 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
+                ExternalSourceConnector::Persist(_) => None,
             }
         }
 
@@ -1380,9 +1442,9 @@ pub mod sources {
                         Vec::new()
                     }
                 }
-                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
-                    Vec::new()
-                }
+                ExternalSourceConnector::Postgres(_)
+                | ExternalSourceConnector::PubNub(_)
+                | ExternalSourceConnector::Persist(_) => Vec::new(),
             }
         }
 
@@ -1395,6 +1457,7 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => "s3",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
+                ExternalSourceConnector::Persist(_) => "persist",
             }
         }
 
@@ -1413,6 +1476,7 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
+                ExternalSourceConnector::Persist(_) => None,
             }
         }
 
@@ -1424,7 +1488,8 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::PubNub(_) => false,
+                | ExternalSourceConnector::PubNub(_)
+                | ExternalSourceConnector::Persist(_) => false,
             }
         }
     }
@@ -1454,6 +1519,13 @@ pub mod sources {
     pub struct PubNubSourceConnector {
         pub subscribe_key: String,
         pub channel: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct PersistSourceConnector {
+        pub consensus_uri: String,
+        pub blob_uri: String,
+        pub shard_id: ShardId,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1642,6 +1714,7 @@ pub mod sinks {
     use url::Url;
 
     use mz_kafka_util::KafkaAddrs;
+    use mz_persist_client::ShardId;
     use mz_repr::{GlobalId, RelationDesc};
 
     /// A sink for updates to a relational collection.
@@ -1658,6 +1731,9 @@ pub mod sinks {
     pub enum SinkEnvelope {
         Debezium,
         Upsert,
+        /// An envelope for sinks that directly write differential Rows. This is internal and
+        /// cannot be requested via SQL.
+        DifferentialRow,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1670,6 +1746,7 @@ pub mod sinks {
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
+        Persist(PersistSinkConnector),
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1704,12 +1781,21 @@ pub mod sinks {
         pub value_schema_id: i32,
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct PersistSinkConnector {
+        pub value_desc: RelationDesc,
+        pub shard_id: ShardId,
+        pub consensus_uri: String,
+        pub blob_uri: String,
+    }
+
     impl SinkConnector {
         /// Returns the name of the sink connector.
         pub fn name(&self) -> &'static str {
             match self {
                 SinkConnector::Kafka(_) => "kafka",
                 SinkConnector::Tail(_) => "tail",
+                SinkConnector::Persist(_) => "persist",
             }
         }
 
@@ -1731,6 +1817,7 @@ pub mod sinks {
             match self {
                 SinkConnector::Kafka(k) => k.exactly_once,
                 SinkConnector::Tail(_) => false,
+                SinkConnector::Persist(_) => false,
             }
         }
 
@@ -1740,6 +1827,7 @@ pub mod sinks {
             match self {
                 SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
                 SinkConnector::Tail(_) => &[],
+                SinkConnector::Persist(_) => &[],
             }
         }
     }
@@ -1750,6 +1838,15 @@ pub mod sinks {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkConnectorBuilder {
         Kafka(KafkaSinkConnectorBuilder),
+        Persist(PersistSinkConnectorBuilder),
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct PersistSinkConnectorBuilder {
+        pub consensus_uri: String,
+        pub blob_uri: String,
+        pub shard_id: ShardId,
+        pub value_desc: RelationDesc,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

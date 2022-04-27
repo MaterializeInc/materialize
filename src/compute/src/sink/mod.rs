@@ -9,6 +9,7 @@
 
 mod kafka;
 mod metrics;
+mod persist_sink;
 mod tail;
 
 pub(crate) use metrics::KafkaBaseMetrics;

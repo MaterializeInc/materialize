@@ -128,6 +128,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
+                persist_handles: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 decode_metrics,
