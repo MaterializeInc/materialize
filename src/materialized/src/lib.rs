@@ -36,6 +36,7 @@ use mz_persist_client::PersistLocation;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_postgres::{self, NoTls};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
@@ -93,6 +94,9 @@ pub struct Config {
     pub data_directory: PathBuf,
     /// Where the persist library should store its data.
     pub persist_location: PersistLocation,
+    /// Optional Postgres connection string which will use Postgres as the metadata
+    /// stash instead of sqlite from the `data_directory`.
+    pub catalog_postgres_stash: Option<String>,
 
     // === Platform options. ===
     /// Configuration of service orchestration.
@@ -194,6 +198,28 @@ pub enum SecretsControllerConfig {
 
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+    match &config.catalog_postgres_stash {
+        Some(s) => {
+            let (client, connection) = tokio_postgres::connect(s, NoTls).await?;
+            mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+                if let Err(e) = connection.await {
+                    panic!("postgres stash connection error: {}", e);
+                }
+            });
+            let stash = mz_stash::Postgres::open(client).await?;
+            serve_stash(config, stash).await
+        }
+        None => {
+            let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+            serve_stash(config, stash).await
+        }
+    }
+}
+
+async fn serve_stash<S: mz_stash::Append + 'static>(
+    config: Config,
+    stash: S,
+) -> Result<Server, anyhow::Error> {
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -250,8 +276,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
-
-    let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
 
     // Load the coordinator catalog from disk.
     let coord_storage =
