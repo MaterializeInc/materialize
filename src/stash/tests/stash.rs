@@ -10,13 +10,59 @@
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 
-use mz_stash::{Sqlite, Stash, Timestamp};
+use mz_stash::{Postgres, Sqlite, Stash, StashCollection, Timestamp};
 
 #[test]
 fn test_stash_sqlite() -> Result<(), anyhow::Error> {
     let file = NamedTempFile::new()?;
     let conn = Sqlite::open(file.path())?;
     test_stash(conn)
+}
+
+#[test]
+fn test_stash_postgres() -> Result<(), anyhow::Error> {
+    use postgres::{Client, NoTls};
+
+    let connstr = match std::env::var("POSTGRES_URL") {
+        Ok(s) => s,
+        Err(_) => {
+            println!("skipping test_stash_postgres because POSTGRES_URL is not set");
+            return Ok(());
+        }
+    };
+    fn clear(client: &mut Client) {
+        client
+            .batch_execute(
+                "
+                    DROP TABLE IF EXISTS uppers;
+                    DROP TABLE IF EXISTS  sinces;
+                    DROP TABLE IF EXISTS  data;
+                    DROP TABLE IF EXISTS  collections;
+                    DROP TABLE IF EXISTS  fence;
+                ",
+            )
+            .unwrap();
+    }
+    {
+        let mut client = Client::connect(&connstr, NoTls)?;
+        clear(&mut client);
+        let conn = Postgres::open(client)?;
+        test_stash(conn)?;
+    }
+    // Test the fence.
+    {
+        let mut client1 = Client::connect(&connstr, NoTls)?;
+        clear(&mut client1);
+        let mut conn1 = Postgres::open(client1)?;
+        let mut conn2 = Postgres::open(Client::connect(&connstr, NoTls)?)?;
+        assert!(match conn1.collection::<String, String>("c") {
+            Err(e) => e.is_unrecoverable(),
+            _ => panic!("expected error"),
+        });
+        let _: StashCollection<String, String> = conn2.collection("c")?;
+    }
+
+    Ok(())
 }
 
 fn test_stash<S: Stash>(mut stash: S) -> Result<(), anyhow::Error> {

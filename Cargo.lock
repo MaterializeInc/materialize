@@ -4151,6 +4151,7 @@ dependencies = [
  "criterion",
  "differential-dataflow",
  "mz-persist-types",
+ "postgres",
  "rusqlite",
  "tempfile",
  "timely",

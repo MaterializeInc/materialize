@@ -19,8 +19,10 @@ use timely::progress::Antichain;
 
 use mz_persist_types::Codec;
 
+mod postgres;
 mod sqlite;
 
+pub use crate::postgres::Postgres;
 pub use crate::sqlite::Sqlite;
 
 pub type Diff = i64;
@@ -274,9 +276,18 @@ pub struct StashError {
     inner: InternalStashError,
 }
 
+impl StashError {
+    // Returns whether the error is unrecoverable (retrying will never succeed).
+    pub fn is_unrecoverable(&self) -> bool {
+        matches!(self.inner, InternalStashError::Fence(_))
+    }
+}
+
 #[derive(Debug)]
 enum InternalStashError {
     Sqlite(rusqlite::Error),
+    Postgres(::postgres::Error),
+    Fence(String),
     Other(String),
 }
 
@@ -285,12 +296,20 @@ impl fmt::Display for StashError {
         f.write_str("stash error: ")?;
         match &self.inner {
             InternalStashError::Sqlite(e) => e.fmt(f),
+            InternalStashError::Postgres(e) => std::fmt::Display::fmt(&e, f),
+            InternalStashError::Fence(e) => f.write_str(&e),
             InternalStashError::Other(e) => f.write_str(&e),
         }
     }
 }
 
 impl Error for StashError {}
+
+impl From<InternalStashError> for StashError {
+    fn from(inner: InternalStashError) -> StashError {
+        StashError { inner }
+    }
+}
 
 impl From<String> for StashError {
     fn from(e: String) -> StashError {
