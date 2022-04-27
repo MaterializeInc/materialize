@@ -343,7 +343,7 @@ $ kafka-verify format=avro sink=materialize.public.double_avro_2 sort-messages=t
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
 
 > CREATE SINK json_avro_2 FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
@@ -351,7 +351,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true 
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_avro_2 sort-messages=true key=false
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
 
 ! CREATE SINK json_reuse_topic_no_parens FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
@@ -368,7 +368,7 @@ contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens sort-messages=true key=false
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
 
 # This updated syntax will also succeed, creating a reusable topic.
 > CREATE SINK json_reuse_topic_with_parens FROM rt_binding_consistency_test_source
