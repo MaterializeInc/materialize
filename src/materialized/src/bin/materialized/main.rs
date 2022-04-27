@@ -169,11 +169,6 @@ pub struct Args {
     #[structopt(long, default_value = "2100")]
     base_service_port: u16,
 
-    // === Secrets controller options. ===
-    /// The secrets controller implementation to use
-    #[structopt(long, hide = true, arg_enum)]
-    secrets_controller: Option<SecretsController>,
-
     // === Timely worker configuration. ===
     /// Address of a storage process that the controller should connect to.
     #[clap(
@@ -423,12 +418,6 @@ impl Orchestrator {
     }
 }
 
-#[derive(ArgEnum, Debug, Clone)]
-enum SecretsController {
-    LocalFileSystem,
-    Kubernetes,
-}
-
 #[derive(Debug)]
 struct OrchestratorLabel {
     key: String,
@@ -578,28 +567,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         .into()
     };
 
-    // Configure secrets controller.
-    let secrets_controller = match args.secrets_controller {
-        None => None,
-        Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
-        Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context.clone(),
-        }),
-    };
-
     // Configure orchestrator.
     let orchestrator = OrchestratorConfig {
         backend: match args.orchestrator {
             Orchestrator::Kubernetes => {
                 OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
-                    context: args.kubernetes_context,
+                    context: args.kubernetes_context.clone(),
                     service_labels: args
                         .orchestrator_service_label
                         .into_iter()
                         .map(|l| (l.key, l.value))
                         .collect(),
                     image_pull_policy: args.kubernetes_image_pull_policy,
-                    has_secrets: secrets_controller.is_some(),
                 })
             }
             Orchestrator::Process => {
@@ -734,6 +713,13 @@ max log level: {max_log_level}",
         bail!("--availability-zone values must be unique");
     }
 
+    let secrets_controller = match args.orchestrator {
+        Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
+            context: args.kubernetes_context,
+        },
+        Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -745,7 +731,7 @@ max log level: {max_log_level}",
         data_directory,
         persist_location,
         orchestrator,
-        secrets_controller,
+        secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
