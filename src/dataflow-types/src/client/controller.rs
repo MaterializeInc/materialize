@@ -79,6 +79,11 @@ impl Default for ClusterReplicaSizeMap {
         //     "4": {"scale": 1, "workers": 4},
         //     /// ...
         //     "32": {"scale": 1, "workers": 32}
+        //     /// Testing with multiple processes on a single machine is a novelty, so
+        //     /// we don't bother providing many options.
+        //     "2-1": {"scale": 2, "workers": 1},
+        //     "2-2": {"scale": 2, "workers": 2},
+        //     "2-4": {"scale": 2, "workers": 4},
         // }
         let mut inner = (0..=5)
             .map(|i| {
@@ -94,8 +99,6 @@ impl Default for ClusterReplicaSizeMap {
                 )
             })
             .collect::<HashMap<_, _>>();
-        // Testing with multiple processes on a single machine is a novelty, so
-        // we don't bother providing many options.
         inner.insert(
             "2-1".to_string(),
             ClusterReplicaSizeConfig {
