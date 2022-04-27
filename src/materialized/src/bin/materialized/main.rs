@@ -583,7 +583,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         None => None,
         Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
         Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context,
+            context: args.kubernetes_context.clone(),
         }),
     };
 
@@ -592,7 +592,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         backend: match args.orchestrator {
             Orchestrator::Kubernetes => {
                 OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
-                    context: args.kubernetes_context.clone(),
+                    context: args.kubernetes_context,
                     service_labels: args
                         .orchestrator_service_label
                         .into_iter()
