@@ -214,7 +214,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         path.clone(),
                         args.clone(),
                         Arc::clone(&self.port_allocator),
-                        std::mem::take(&mut processes[i]),
+                        processes[i].clone(),
                         self.suppress_output,
                         std::mem::take(port_metadata_file_locations[i].as_mut().unwrap()),
                     ),
