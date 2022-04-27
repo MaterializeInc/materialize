@@ -23,10 +23,11 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
+use super::scalar::ProtoAggregateExpr;
 use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
 use crate::{
@@ -1486,7 +1487,7 @@ impl fmt::Display for ColumnOrder {
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -1495,6 +1496,28 @@ pub struct AggregateExpr {
     /// Should the aggregation be applied only to distinct results in each group.
     #[serde(default)]
     pub distinct: bool,
+}
+
+impl From<&AggregateExpr> for ProtoAggregateExpr {
+    fn from(x: &AggregateExpr) -> Self {
+        ProtoAggregateExpr {
+            func: Some((&x.func).into()),
+            expr: Some((&x.expr).into()),
+            distinct: x.distinct,
+        }
+    }
+}
+
+impl TryFrom<ProtoAggregateExpr> for AggregateExpr {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoAggregateExpr) -> Result<Self, Self::Error> {
+        Ok(Self {
+            func: x.func.try_into_if_some("ProtoAggregateExpr::func")?,
+            expr: x.expr.try_into_if_some("ProtoAggregateExpr::expr")?,
+            distinct: x.distinct,
+        })
+    }
 }
 
 impl AggregateExpr {
@@ -1984,6 +2007,15 @@ mod tests {
         #[test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
+            let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

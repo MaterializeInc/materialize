@@ -15,8 +15,11 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
+use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +33,8 @@ use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, 
 use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -711,13 +716,13 @@ where
 
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum LagLeadType {
     Lag,
     Lead,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -796,6 +801,169 @@ pub enum AggregateFunc {
     /// Useful for removing an expensive aggregation while maintaining the shape
     /// of a reduce operator.
     Dummy,
+}
+
+impl From<&Vec<ColumnOrder>> for proto_aggregate_func::ProtoColumnOrders {
+    fn from(x: &Vec<ColumnOrder>) -> Self {
+        proto_aggregate_func::ProtoColumnOrders {
+            orders: x.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<proto_aggregate_func::ProtoColumnOrders> for Vec<ColumnOrder> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_aggregate_func::ProtoColumnOrders) -> Result<Self, Self::Error> {
+        x.orders
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()
+    }
+}
+
+impl From<&AggregateFunc> for ProtoAggregateFunc {
+    fn from(x: &AggregateFunc) -> Self {
+        use proto_aggregate_func::Kind;
+        ProtoAggregateFunc {
+            kind: Some(match x {
+                AggregateFunc::MaxNumeric => Kind::MaxNumeric(()),
+                AggregateFunc::MaxInt16 => Kind::MaxInt16(()),
+                AggregateFunc::MaxInt32 => Kind::MaxInt32(()),
+                AggregateFunc::MaxInt64 => Kind::MaxInt64(()),
+                AggregateFunc::MaxFloat32 => Kind::MaxFloat32(()),
+                AggregateFunc::MaxFloat64 => Kind::MaxFloat64(()),
+                AggregateFunc::MaxBool => Kind::MaxBool(()),
+                AggregateFunc::MaxString => Kind::MaxString(()),
+                AggregateFunc::MaxDate => Kind::MaxDate(()),
+                AggregateFunc::MaxTimestamp => Kind::MaxTimestamp(()),
+                AggregateFunc::MaxTimestampTz => Kind::MaxTimestampTz(()),
+                AggregateFunc::MinNumeric => Kind::MinNumeric(()),
+                AggregateFunc::MinInt16 => Kind::MinInt16(()),
+                AggregateFunc::MinInt32 => Kind::MinInt32(()),
+                AggregateFunc::MinInt64 => Kind::MinInt64(()),
+                AggregateFunc::MinFloat32 => Kind::MinFloat32(()),
+                AggregateFunc::MinFloat64 => Kind::MinFloat64(()),
+                AggregateFunc::MinBool => Kind::MinBool(()),
+                AggregateFunc::MinString => Kind::MinString(()),
+                AggregateFunc::MinDate => Kind::MinDate(()),
+                AggregateFunc::MinTimestamp => Kind::MinTimestamp(()),
+                AggregateFunc::MinTimestampTz => Kind::MinTimestampTz(()),
+                AggregateFunc::SumInt16 => Kind::SumInt16(()),
+                AggregateFunc::SumInt32 => Kind::SumInt32(()),
+                AggregateFunc::SumInt64 => Kind::SumInt64(()),
+                AggregateFunc::SumFloat32 => Kind::SumFloat32(()),
+                AggregateFunc::SumFloat64 => Kind::SumFloat64(()),
+                AggregateFunc::SumNumeric => Kind::SumNumeric(()),
+                AggregateFunc::Count => Kind::Count(()),
+                AggregateFunc::Any => Kind::Any(()),
+                AggregateFunc::All => Kind::All(()),
+                AggregateFunc::JsonbAgg { order_by } => Kind::JsonbAgg(order_by.into()),
+                AggregateFunc::JsonbObjectAgg { order_by } => Kind::JsonbObjectAgg(order_by.into()),
+                AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into()),
+                AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into()),
+                AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into()),
+                AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into()),
+                AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into()),
+                AggregateFunc::LagLead { order_by, lag_lead } => {
+                    Kind::LagLead(proto_aggregate_func::ProtoLagLead {
+                        order_by: Some(order_by.into()),
+                        lag_lead: Some(match lag_lead {
+                            LagLeadType::Lag => {
+                                proto_aggregate_func::proto_lag_lead::LagLead::Lag(())
+                            }
+                            LagLeadType::Lead => {
+                                proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
+                            }
+                        }),
+                    })
+                }
+                AggregateFunc::Dummy => Kind::Dummy(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoAggregateFunc) -> Result<Self, Self::Error> {
+        use proto_aggregate_func::Kind;
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoAggregateFunc::kind"))?;
+        Ok(match kind {
+            Kind::MaxNumeric(()) => AggregateFunc::MaxNumeric,
+            Kind::MaxInt16(()) => AggregateFunc::MaxInt16,
+            Kind::MaxInt32(()) => AggregateFunc::MaxInt32,
+            Kind::MaxInt64(()) => AggregateFunc::MaxInt64,
+            Kind::MaxFloat32(()) => AggregateFunc::MaxFloat32,
+            Kind::MaxFloat64(()) => AggregateFunc::MaxFloat64,
+            Kind::MaxBool(()) => AggregateFunc::MaxBool,
+            Kind::MaxString(()) => AggregateFunc::MaxString,
+            Kind::MaxDate(()) => AggregateFunc::MaxDate,
+            Kind::MaxTimestamp(()) => AggregateFunc::MaxTimestamp,
+            Kind::MaxTimestampTz(()) => AggregateFunc::MaxTimestampTz,
+            Kind::MinNumeric(()) => AggregateFunc::MinNumeric,
+            Kind::MinInt16(()) => AggregateFunc::MinInt16,
+            Kind::MinInt32(()) => AggregateFunc::MinInt32,
+            Kind::MinInt64(()) => AggregateFunc::MinInt64,
+            Kind::MinFloat32(()) => AggregateFunc::MinFloat32,
+            Kind::MinFloat64(()) => AggregateFunc::MinFloat64,
+            Kind::MinBool(()) => AggregateFunc::MinBool,
+            Kind::MinString(()) => AggregateFunc::MinString,
+            Kind::MinDate(()) => AggregateFunc::MinDate,
+            Kind::MinTimestamp(()) => AggregateFunc::MinTimestamp,
+            Kind::MinTimestampTz(()) => AggregateFunc::MinTimestampTz,
+            Kind::SumInt16(()) => AggregateFunc::SumInt16,
+            Kind::SumInt32(()) => AggregateFunc::SumInt32,
+            Kind::SumInt64(()) => AggregateFunc::SumInt64,
+            Kind::SumFloat32(()) => AggregateFunc::SumFloat32,
+            Kind::SumFloat64(()) => AggregateFunc::SumFloat64,
+            Kind::SumNumeric(()) => AggregateFunc::SumNumeric,
+            Kind::Count(()) => AggregateFunc::Count,
+            Kind::Any(()) => AggregateFunc::Any,
+            Kind::All(()) => AggregateFunc::All,
+            Kind::JsonbAgg(order_by) => AggregateFunc::JsonbAgg {
+                order_by: order_by.try_into()?,
+            },
+            Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
+                order_by: order_by.try_into()?,
+            },
+            Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
+                order_by: order_by.try_into()?,
+            },
+            Kind::ListConcat(order_by) => AggregateFunc::ListConcat {
+                order_by: order_by.try_into()?,
+            },
+            Kind::StringAgg(order_by) => AggregateFunc::StringAgg {
+                order_by: order_by.try_into()?,
+            },
+            Kind::RowNumber(order_by) => AggregateFunc::RowNumber {
+                order_by: order_by.try_into()?,
+            },
+            Kind::DenseRank(order_by) => AggregateFunc::DenseRank {
+                order_by: order_by.try_into()?,
+            },
+            Kind::LagLead(pll) => AggregateFunc::LagLead {
+                order_by: pll.order_by.try_into_if_some("ProtoLagLead::order_by")?,
+                lag_lead: match pll.lag_lead {
+                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lag(())) => {
+                        LagLeadType::Lag
+                    }
+                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lead(())) => {
+                        LagLeadType::Lead
+                    }
+                    None => {
+                        return Err(TryFromProtoError::MissingField(
+                            "ProtoLagLead::lag_lead".into(),
+                        ))
+                    }
+                },
+            },
+            Kind::Dummy(()) => AggregateFunc::Dummy,
+        })
+    }
 }
 
 impl AggregateFunc {
@@ -1634,6 +1802,22 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AggregateFunc, ProtoAggregateFunc};
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+       #[test]
+        fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

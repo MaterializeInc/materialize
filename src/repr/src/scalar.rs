@@ -1087,7 +1087,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
 
         let kind = value
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoScalarType::Kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoScalarType::Kind"))?;
 
         match kind {
             Bool(()) => Ok(ScalarType::Bool),

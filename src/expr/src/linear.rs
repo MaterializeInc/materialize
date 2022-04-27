@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 use std::collections::{HashMap, HashSet};
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::{Datum, Row};
@@ -29,7 +30,7 @@ use crate::{MirRelationExpr, MirScalarExpr};
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -1239,6 +1240,7 @@ pub mod plan {
 
     use std::collections::HashMap;
 
+    use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -1249,9 +1251,21 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
         mfp: MapFilterProject,
+    }
+
+    // TODO(lluki): Replace this function with some TryFrom<Proto..> once #11970 is fixed
+    pub fn safe_mfp_stub() -> SafeMfpPlan {
+        SafeMfpPlan {
+            mfp: MapFilterProject {
+                expressions: vec![],
+                predicates: vec![],
+                projection: vec![],
+                input_arity: 0,
+            },
+        }
     }
 
     impl SafeMfpPlan {
