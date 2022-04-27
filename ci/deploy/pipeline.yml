@@ -74,8 +74,6 @@ steps:
     trigger: sql-logic-tests
     async: true
     branches: "v*.*rc*"
-    agents:
-      queue: linux-x86_64
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
@@ -86,8 +84,6 @@ steps:
     trigger: nightlies
     async: true
     branches: "v*.*rc*"
-    agents:
-      queue: linux-x86_64
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
