@@ -30,7 +30,9 @@ pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType};
 ///
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`ScalarType::nullable`] method.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ColumnType {
     /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ScalarType,
