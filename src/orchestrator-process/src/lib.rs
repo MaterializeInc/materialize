@@ -195,7 +195,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         }
 
         // Now create all the processes that weren't detected as being still alive
-        // let hosts_ports = std::iter::from_fn(|| ("localhost".to_string(), ))
         let hosts_ports = processes
             .iter()
             .map(|ports| ("localhost".to_string(), ports.clone()))
