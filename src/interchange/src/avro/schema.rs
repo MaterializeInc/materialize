@@ -194,7 +194,6 @@ fn validate_schema_2(
             ScalarType::Record {
                 fields: columns,
                 custom_id: None,
-                custom_name: None,
             }
         }
         SchemaPiece::Array(inner) => {

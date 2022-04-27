@@ -1448,7 +1448,6 @@ impl AggregateFunc {
                             }),
                         ],
                         custom_id: None,
-                        custom_name: None,
                     }),
                     custom_id: None,
                 },
@@ -1471,7 +1470,6 @@ impl AggregateFunc {
                             }),
                         ],
                         custom_id: None,
-                        custom_name: None,
                     }),
                     custom_id: None,
                 },
@@ -1499,7 +1497,6 @@ impl AggregateFunc {
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_id: None,
-                        custom_name: None,
                     }),
                     custom_id: None,
                 }
@@ -1521,7 +1518,6 @@ impl AggregateFunc {
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_id: None,
-                        custom_name: None,
                     }),
                     custom_id: None,
                 }
@@ -1543,7 +1539,6 @@ impl AggregateFunc {
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_id: None,
-                        custom_name: None,
                     }),
                     custom_id: None,
                 }

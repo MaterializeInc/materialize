@@ -166,7 +166,6 @@ fn derive_inner_type(
             let ty = ScalarType::Record {
                 fields,
                 custom_id: None,
-                custom_name: None,
             };
             Ok(ty.nullable(true))
         }

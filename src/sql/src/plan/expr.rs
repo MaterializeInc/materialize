@@ -506,7 +506,6 @@ impl AbstractExpr for CoercibleScalarExpr {
                     scalar_type: ScalarType::Record {
                         fields,
                         custom_id: None,
-                        custom_name: None,
                     },
                     nullable: false,
                 })

@@ -7,11 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::iter;
 use std::rc::Rc;
 
-use crate::avro::DiffPair;
-use crate::encode::column_names_and_types;
 use differential_dataflow::{
     lattice::Lattice,
     trace::BatchReader,
@@ -19,9 +18,13 @@ use differential_dataflow::{
 };
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
+use lazy_static::lazy_static;
+use maplit::hashmap;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
+
+use crate::avro::DiffPair;
 
 /// Given a stream of batches, produce a stream of (vectors of) DiffPairs, in timestamp order.
 // This is useful for some sink envelopes (e.g., Debezium and Upsert), which need
@@ -114,18 +117,53 @@ where
     x.as_collection()
 }
 
-pub fn dbz_desc(desc: RelationDesc) -> RelationDesc {
-    let cols = column_names_and_types(desc);
+// NOTE(benesch): statically allocating transient IDs for the
+// transaction and row types is a bit of a hack to allow us to attach
+// custom names to these types in the generated Avro schema. In the
+// future, these types should be real types that get created in the
+// catalog with userspace IDs when the user creates the sink, and their
+// names and IDs should be plumbed in from the catalog at the moment
+// the sink is created.
+pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
+pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
+
+lazy_static! {
+    pub static ref ENVELOPE_CUSTOM_NAMES: HashMap<GlobalId, String> = hashmap! {
+        TRANSACTION_TYPE_ID => "transaction".into(),
+        DBZ_ROW_TYPE_ID => "row".into(),
+    };
+}
+
+pub(crate) fn dbz_envelope(
+    names_and_types: Vec<(ColumnName, ColumnType)>,
+) -> Vec<(ColumnName, ColumnType)> {
     let row = ColumnType {
         nullable: true,
         scalar_type: ScalarType::Record {
-            fields: cols.into_iter().collect(),
-            custom_id: None,
-            custom_name: Some("row".to_owned()),
+            fields: names_and_types,
+            custom_id: Some(DBZ_ROW_TYPE_ID),
         },
     };
-    let typ = RelationType::new(vec![row.clone(), row]);
-    RelationDesc::new(typ, ["before", "after"])
+    vec![("before".into(), row.clone()), ("after".into(), row)]
+}
+
+pub(crate) fn txn_metadata(names_and_types: &mut Vec<(ColumnName, ColumnType)>) {
+    names_and_types.push((
+        "transaction".into(),
+        ColumnType {
+            nullable: false,
+            scalar_type: ScalarType::Record {
+                fields: vec![(
+                    "id".into(),
+                    ColumnType {
+                        scalar_type: ScalarType::String,
+                        nullable: false,
+                    },
+                )],
+                custom_id: Some(TRANSACTION_TYPE_ID),
+            },
+        },
+    ))
 }
 
 pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {

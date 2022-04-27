@@ -61,18 +61,13 @@ impl ColumnType {
                 })
             }
             (
-                ScalarType::Record {
-                    fields,
-                    custom_id,
-                    custom_name,
-                },
+                ScalarType::Record { fields, custom_id },
                 ScalarType::Record {
                     fields: other_fields,
                     custom_id: other_custom_id,
-                    custom_name: other_custom_name,
                 },
             ) => {
-                if custom_id != other_custom_id || custom_name != other_custom_name {
+                if custom_id != other_custom_id {
                     bail!(
                         "Can't union types: {:?} and {:?}",
                         self.scalar_type,
@@ -98,7 +93,6 @@ impl ColumnType {
                     scalar_type: ScalarType::Record {
                         fields: union_fields,
                         custom_id,
-                        custom_name,
                     },
                     nullable: self.nullable || other.nullable,
                 })
