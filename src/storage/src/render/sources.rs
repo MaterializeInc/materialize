@@ -34,7 +34,8 @@ use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader, SourceToken,
+    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
+    SourceOutput, SourceToken,
 };
 use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -43,15 +44,19 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 ///
 /// This enum puts no restrictions to the generic parameters of the variants since it only serves
 /// as a type-level enum.
-enum SourceType<Delimited, ByteStream, RowSource> {
+enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
     /// A delimited source
     Delimited(Delimited),
     /// A bytestream source
     ByteStream(ByteStream),
     /// A source that produces Row's natively,
     /// and skips any `render_decode` stream
-    /// adapters
+    /// adapters, and can produce
+    /// retractions
     Row(RowSource),
+    /// A source that produces Row's natively,
+    /// that are purely appended.
+    AppendRow(AppendRowSource),
 }
 
 /// A description of a table imported by [`render_table`].
@@ -273,30 +278,9 @@ where
                 as_of: as_of_frontier.clone(),
             };
 
-            // Pubnub and Postgres are `SimpleSource`s, so they produce _raw_ sources
-            // that are usable as final _differential_ `Collection`s
-            let (mut collection, capability) = if let ExternalSourceConnector::Postgres(
-                pg_connector,
-            ) = connector
+            let (mut collection, capability) = if let ExternalSourceConnector::Persist(_) =
+                connector
             {
-                let source = PostgresSourceReader::new(
-                    src_id,
-                    pg_connector,
-                    base_source_config.base_metrics,
-                );
-
-                let ((ok_stream, err_stream), capability) =
-                    source::create_raw_source_simple(base_source_config, source);
-
-                error_collections.push(
-                    err_stream
-                        .map(DataflowError::SourceError)
-                        .pass_through("source-errors", 1)
-                        .as_collection(),
-                );
-
-                (ok_stream.as_collection(), Some(capability))
-            } else if let ExternalSourceConnector::Persist(_) = connector {
                 unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
             } else {
                 // Build the _raw_ ok and error sources using `create_raw_source` and the
@@ -329,9 +313,16 @@ where
                         );
                         ((SourceType::ByteStream(ok), err), cap)
                     }
-                    ExternalSourceConnector::Postgres(_) => unreachable!(),
                     ExternalSourceConnector::PubNub(_) => {
                         let ((ok, err), cap) = source::create_raw_source::<_, PubNubSourceReader>(
+                            base_source_config,
+                            &connector,
+                            storage_state.connector_context.clone(),
+                        );
+                        ((SourceType::AppendRow(ok), err), cap)
+                    }
+                    ExternalSourceConnector::Postgres(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
                             base_source_config,
                             &connector,
                             storage_state.connector_context.clone(),
@@ -405,10 +396,34 @@ where
                                 &mut linear_operators,
                                 storage_state.decode_metrics.clone(),
                             ),
+                            SourceType::AppendRow(source) => (
+                                source.map(
+                                    |SourceOutput {
+                                         key: (),
+                                         value,
+                                         position,
+                                         upstream_time_millis,
+                                         partition,
+                                         // Not expected to support headers
+                                         // when full rows are produced
+                                         headers: _,
+                                         diff: (),
+                                     }| DecodeResult {
+                                        key: None,
+                                        // The diff for appends is +1
+                                        value: Some(Ok((value, 1))),
+                                        position,
+                                        upstream_time_millis,
+                                        partition,
+                                        metadata: Row::default(),
+                                    },
+                                ),
+                                None,
+                            ),
                             SourceType::Row(source) => (
                                 source.map(|r| DecodeResult {
                                     key: None,
-                                    value: Some(Ok((r.value, 1))),
+                                    value: Some(Ok((r.value, r.diff))),
                                     position: r.position,
                                     upstream_time_millis: r.upstream_time_millis,
                                     partition: r.partition,
@@ -421,12 +436,7 @@ where
                             needed_tokens.push(Arc::new(tok));
                         }
 
-                        // Render `SourceEnvelope`s. An Envelope decribes how to turn a stream
-                        // of `DecodeResult`s into a _differential_ `Collection`, and is the
-                        // final stage of rendering (minus some extra transformations below).
-                        //
-                        // Note that currently this code happens to not call the final
-                        // `as_collection` until later.
+                        // render envelopes
                         match &envelope {
                             SourceEnvelope::Debezium(dbz_envelope) => {
                                 let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
