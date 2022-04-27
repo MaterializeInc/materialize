@@ -218,39 +218,50 @@ where
 
 /// An unreliable delegate to [BlobMulti].
 #[derive(Debug)]
-pub struct UnreliableBlobMulti<B> {
+pub struct UnreliableBlobMulti {
     rng: tokio::sync::Mutex<SmallRng>,
-    blob: B,
+    should_happen: f64,
+    should_timeout: f64,
+    blob: Arc<dyn BlobMulti + Send + Sync>,
 }
 
-impl<B> UnreliableBlobMulti<B> {
+impl UnreliableBlobMulti {
     /// Returns a new [UnreliableBlobMulti].
     ///
     /// TODO: Once we turn down the old persist API, return an
     /// [UnreliableHandle] with the previous totally available or unavailable
     /// behavior, plus the new partially available behavior
-    pub fn new_from_seed(seed: u64, blob: B) -> Self {
+    ///
+    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
+    pub fn new_from_seed(
+        seed: u64,
+        should_happen: f64,
+        should_timeout: f64,
+        blob: Arc<dyn BlobMulti + Send + Sync>,
+    ) -> Self {
+        assert!(should_happen >= 0.0);
+        assert!(should_happen <= 1.0);
+        assert!(should_timeout >= 0.0);
+        assert!(should_timeout <= 1.0);
         UnreliableBlobMulti {
             rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
+            should_happen,
+            should_timeout,
             blob,
         }
     }
 
     async fn should_happen(&self) -> bool {
-        // If necessary, we could make this configurable.
-        const SHOULD_HAPPEN_P: f64 = 0.5;
-        self.rng.lock().await.gen_bool(SHOULD_HAPPEN_P)
+        self.rng.lock().await.gen_bool(self.should_happen)
     }
 
     async fn should_timeout(&self) -> bool {
-        // If necessary, we could make this configurable.
-        const SHOULD_TIMEOUT_P: f64 = 0.5;
-        self.rng.lock().await.gen_bool(SHOULD_TIMEOUT_P)
+        self.rng.lock().await.gen_bool(self.should_timeout)
     }
 }
 
 #[async_trait]
-impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
+impl BlobMulti for UnreliableBlobMulti {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         if self.should_happen().await {
             let res = self.blob.get(deadline, key).await;
@@ -300,39 +311,50 @@ impl<B: BlobMulti + Send + Sync> BlobMulti for UnreliableBlobMulti<B> {
 
 /// An unreliable delegate to [Consensus].
 #[derive(Debug)]
-pub struct UnreliableConsensus<C> {
+pub struct UnreliableConsensus {
     rng: tokio::sync::Mutex<SmallRng>,
-    consensus: C,
+    should_happen: f64,
+    should_timeout: f64,
+    consensus: Arc<dyn Consensus + Send + Sync>,
 }
 
-impl<C> UnreliableConsensus<C> {
+impl UnreliableConsensus {
     /// Returns a new [UnreliableConsensus].
     ///
     /// TODO: Once we turn down the old persist API, return an
     /// [UnreliableHandle] with the previous totally available or unavailable
     /// behavior, plus the new partially available behavior
-    pub fn new_from_seed(seed: u64, consensus: C) -> Self {
+    ///
+    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
+    pub fn new_from_seed(
+        seed: u64,
+        should_happen: f64,
+        should_timeout: f64,
+        consensus: Arc<dyn Consensus + Send + Sync>,
+    ) -> Self {
+        assert!(should_happen >= 0.0);
+        assert!(should_happen <= 1.0);
+        assert!(should_timeout >= 0.0);
+        assert!(should_timeout <= 1.0);
         UnreliableConsensus {
             rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
+            should_happen,
+            should_timeout,
             consensus,
         }
     }
 
     async fn should_happen(&self) -> bool {
-        // If necessary, we could make this configurable.
-        const SHOULD_HAPPEN_P: f64 = 0.5;
-        self.rng.lock().await.gen_bool(SHOULD_HAPPEN_P)
+        self.rng.lock().await.gen_bool(self.should_happen)
     }
 
     async fn should_timeout(&self) -> bool {
-        // If necessary, we could make this configurable.
-        const SHOULD_TIMEOUT_P: f64 = 0.5;
-        self.rng.lock().await.gen_bool(SHOULD_TIMEOUT_P)
+        self.rng.lock().await.gen_bool(self.should_timeout)
     }
 }
 
 #[async_trait]
-impl<C: Consensus + Send + Sync> Consensus for UnreliableConsensus<C> {
+impl Consensus for UnreliableConsensus {
     async fn head(
         &self,
         deadline: Instant,
