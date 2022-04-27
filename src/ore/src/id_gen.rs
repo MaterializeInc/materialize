@@ -79,6 +79,7 @@ where
         let mut inner = self.0.lock().expect("lock poisoned");
         while let Some(id) = self.alloc_inner(&mut inner) {
             if !inner.allocated.contains(&id) {
+                inner.allocated.insert(id);
                 return Some(id);
             }
         }
@@ -112,9 +113,9 @@ where
 
     /// Marks an ID as allocated and prevents `IdAllocator` from allocating it
     /// in the future.
-    pub fn mark_allocated(&self, id: T) {
+    pub fn mark_allocated(&self, id: T) -> bool {
         let mut inner = self.0.lock().expect("lock poisoned");
-        inner.allocated.insert(id);
+        inner.allocated.insert(id)
     }
 }
 
@@ -146,7 +147,7 @@ mod tests {
     #[test]
     fn test_mark_allocated() {
         let ida = IdAllocator::new(1, 10);
-        ida.mark_allocated(4);
+        assert!(ida.mark_allocated(4));
 
         while let Some(id) = ida.alloc() {
             assert_ne!(4, id);
@@ -159,5 +160,7 @@ mod tests {
         ida.free(4);
         assert_eq!(4, ida.alloc().unwrap());
         assert!(ida.alloc().is_none());
+
+        assert!(!ida.mark_allocated(9));
     }
 }

@@ -162,7 +162,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         } else {
                             // Existing non-dead process, so we don't create a new one
                             for port in port_metadata.values() {
-                                self.port_allocator.mark_allocated(*port);
+                                if !self.port_allocator.mark_allocated(*port) {
+                                    // Somehow we've re-allocated an already used port which
+                                    // shouldn't be possible. So we just kill the process and panic.
+                                    process.kill();
+                                    panic!("port re-use");
+                                }
                             }
                             handles.push(AbortOnDrop(Box::new(ExternalProcess {
                                 pid,
