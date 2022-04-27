@@ -315,6 +315,11 @@ pub fn plan_create_source(
         include_metadata,
     } = &stmt;
 
+    let envelope = match envelope.as_ref() {
+        None => Envelope::None,
+        Some(envelope) => envelope.clone(),
+    };
+
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original);
     let mut with_option_objects = normalize::option_objects(with_options_original);
@@ -396,7 +401,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -492,7 +497,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
@@ -510,7 +515,7 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("File sources do not support key decoding");
             }
@@ -555,7 +560,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -601,7 +606,7 @@ pub fn plan_create_source(
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
-    let key_envelope = get_key_envelope(include_metadata, envelope, &encoding)?;
+    let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
     // Not all source envelopes are compatible with all source connectors.
     // Whoever constructs the source ingestion pipeline is responsible for

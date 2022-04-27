@@ -211,7 +211,7 @@ pub fn purify_create_source(
         purify_source_format(
             format,
             connector,
-            &envelope,
+            envelope,
             file,
             &config_options,
             with_options,
@@ -225,7 +225,7 @@ pub fn purify_create_source(
 async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
     connector: &mut CreateSourceConnector,
-    envelope: &Envelope,
+    envelope: &Option<Envelope>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -245,7 +245,7 @@ async fn purify_source_format(
     match (&connector, &envelope, &*format) {
         (
             CreateSourceConnector::Kafka { .. },
-            Envelope::Upsert,
+            Some(Envelope::Upsert),
             CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
         ) => {
             *format = CreateSourceFormat::KeyValue {
@@ -302,7 +302,7 @@ async fn purify_source_format(
 async fn purify_source_format_single(
     format: &mut Format<Raw>,
     connector: &mut CreateSourceConnector,
-    envelope: &Envelope,
+    envelope: &Option<Envelope>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -370,7 +370,7 @@ async fn purify_source_format_single(
 async fn purify_csr_connector_proto(
     connector: &mut CreateSourceConnector,
     csr_connector: &mut CsrConnectorProto<Raw>,
-    envelope: &Envelope,
+    envelope: &Option<Envelope>,
     with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
@@ -401,7 +401,7 @@ async fn purify_csr_connector_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key.is_none() {
+            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
                 bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
             }
 
@@ -422,7 +422,7 @@ async fn purify_csr_connector_proto(
 async fn purify_csr_connector_avro(
     connector: &mut CreateSourceConnector,
     csr_connector: &mut CsrConnectorAvro<Raw>,
-    envelope: &Envelope,
+    envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
@@ -453,7 +453,7 @@ async fn purify_csr_connector_avro(
             value_schema,
             ..
         } = get_remote_csr_schema(ccsr_config, topic.clone()).await?;
-        if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key_schema.is_none() {
+        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
             bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
         }
 

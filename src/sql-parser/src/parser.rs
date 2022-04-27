@@ -1927,9 +1927,9 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            envelope
+            Some(envelope)
         } else {
-            Envelope::None
+            None
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
