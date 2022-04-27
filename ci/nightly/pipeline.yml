@@ -35,6 +35,7 @@ steps:
           - { value: zippy-kafka-sources }
           - { value: secrets }
           - { value: catalog-compat }
+          - { value: unused-deps }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -270,3 +271,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: catalog-compat
           run: catalog-compat
+
+  - id: unused-deps
+    label: Unused dependencies
+    command: bin/ci-builder run nightly bin/unused-deps
+    # inputs:
+    #  - Cargo.lock
+    #  - "**/Cargo.toml"
+    #  - "**/*.rs"
+    timeout_in_minutes: 30
+    # https://github.com/est31/cargo-udeps/issues/103
+    soft_fail: true
+    agents:
+      queue: linux-x86_64
