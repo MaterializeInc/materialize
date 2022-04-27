@@ -92,12 +92,8 @@ impl TypeCategory {
             | ScalarType::String
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. } => Self::String,
-            ScalarType::Record {
-                custom_name,
-                custom_id,
-                ..
-            } => {
-                if custom_name.is_some() || custom_id.is_some() {
+            ScalarType::Record { custom_id, .. } => {
+                if custom_id.is_some() {
                     Self::Composite
                 } else {
                     Self::Pseudo

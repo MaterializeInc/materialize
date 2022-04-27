@@ -45,6 +45,7 @@ use tracing::{debug, error, info};
 use mz_avro::types::Value;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
+    SinkEnvelope,
 };
 use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
@@ -56,7 +57,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -132,10 +133,7 @@ where
             sinked_collection,
             sink_id,
             self.clone(),
-            self.key_desc_and_indices
-                .clone()
-                .map(|(desc, _indices)| desc),
-            self.value_desc.clone(),
+            sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &compute_state.sink_metrics.kafka,
@@ -1021,8 +1019,7 @@ fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: KafkaSinkConnector,
-    key_desc: Option<RelationDesc>,
-    value_desc: RelationDesc,
+    envelope: Option<SinkEnvelope>,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
@@ -1036,6 +1033,12 @@ where
 
     let shared_gate_ts = Rc::new(Cell::new(None));
 
+    let key_desc = connector
+        .key_desc_and_indices
+        .as_ref()
+        .map(|(desc, _indices)| desc.clone());
+    let value_desc = connector.value_desc.clone();
+
     let encoded_stream = match connector.published_schema_info {
         Some(PublishedSchemaInfo {
             key_schema_id,
@@ -1046,6 +1049,7 @@ where
                 None,
                 key_desc,
                 value_desc,
+                matches!(envelope, Some(SinkEnvelope::Debezium)),
                 connector.consistency.is_some(),
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
@@ -1059,7 +1063,12 @@ where
             )
         }
         None => {
-            let encoder = JsonEncoder::new(key_desc, value_desc, connector.consistency.is_some());
+            let encoder = JsonEncoder::new(
+                key_desc,
+                value_desc,
+                matches!(envelope, Some(SinkEnvelope::Debezium)),
+                connector.consistency.is_some(),
+            );
             encode_stream(
                 stream,
                 as_of.clone(),

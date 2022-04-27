@@ -190,15 +190,16 @@ pub fn build_schema(row_schema: serde_json::Value) -> Schema {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
 
-    use super::*;
-    use crate::avro::encode_datums_as_avro;
-    use crate::encode::column_names_and_types;
     use mz_avro::types::Value;
     use mz_avro::AvroDeserializer;
     use mz_avro::GeneralDeserializer;
     use mz_repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
+    use super::*;
+    use crate::avro::encode_datums_as_avro;
+    use crate::encode::column_names_and_types;
     use crate::json::build_row_schema_json;
 
     /// Collected state to encode update batches and progress statements.
@@ -277,8 +278,11 @@ mod tests {
             .with_column("price", ScalarType::Float64.nullable(true));
 
         let encoder = Encoder::new(desc.clone());
-        let row_schema =
-            build_row_schema_json(&crate::encode::column_names_and_types(desc), "data");
+        let row_schema = build_row_schema_json(
+            &crate::encode::column_names_and_types(desc),
+            "data",
+            &HashMap::new(),
+        );
         let schema = build_schema(row_schema);
 
         let values = vec![

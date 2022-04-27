@@ -55,7 +55,6 @@ message ProtoScalarType {
         reserved 2;
         reserved "custom_oid";
         repeated ProtoRecordField fields = 1;
-        optional string custom_name = 3;
         optional global_id.ProtoGlobalId custom_id = 4;
     }
 

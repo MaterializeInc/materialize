@@ -7,39 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use mz_ore::collections::CollectionExt;
+use serde_json::{json, Map};
+
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
-use serde_json::{json, Map};
+use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
+use crate::envelopes;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
     key_columns: Option<Vec<(ColumnName, ColumnType)>>,
     value_columns: Vec<(ColumnName, ColumnType)>,
-    include_transaction: bool,
 }
 
 impl JsonEncoder {
     pub fn new(
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
+        debezium: bool,
         include_transaction: bool,
     ) -> Self {
+        let mut value_columns = column_names_and_types(value_desc);
+        if debezium {
+            value_columns = envelopes::dbz_envelope(value_columns);
+        }
+        if include_transaction {
+            envelopes::txn_metadata(&mut value_columns);
+        }
         JsonEncoder {
             key_columns: if let Some(desc) = key_desc {
                 Some(column_names_and_types(desc))
             } else {
                 None
             },
-            value_columns: column_names_and_types(value_desc),
-            include_transaction,
+            value_columns,
         }
     }
 
@@ -48,7 +55,7 @@ impl JsonEncoder {
         row: mz_repr::Row,
         names_types: &[(ColumnName, ColumnType)],
     ) -> Vec<u8> {
-        let value = encode_datums_as_json(row.iter(), names_types, self.include_transaction);
+        let value = encode_datums_as_json(row.iter(), names_types);
         value.to_string().into_bytes()
     }
 }
@@ -75,7 +82,10 @@ impl fmt::Debug for JsonEncoder {
         f.debug_struct("JsonEncoder")
             .field(
                 "schema",
-                &format!("{:?}", build_row_schema_json(&self.value_columns, "schema")),
+                &format!(
+                    "{:?}",
+                    build_row_schema_json(&self.value_columns, "schema", &HashMap::new())
+                ),
             )
             .finish()
     }
@@ -85,33 +95,14 @@ impl fmt::Debug for JsonEncoder {
 pub fn encode_datums_as_json<'a, I>(
     datums: I,
     names_types: &[(ColumnName, ColumnType)],
-    include_transaction: bool,
 ) -> serde_json::value::Value
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    // todo@jldlaughlin: this is awful and hacky! revisit
     let value_fields = datums
         .into_iter()
-        .enumerate()
-        .map(|(i, datum)| {
-            if i >= names_types.len() && include_transaction {
-                let transaction_id = TypedDatum::new(
-                    datum.unwrap_list().into_first(),
-                    ColumnType {
-                        scalar_type: ScalarType::String,
-                        nullable: false,
-                    },
-                )
-                .json();
-                ("transaction".to_owned(), json!({ "id": transaction_id }))
-            } else {
-                (
-                    names_types[i].0.as_str().to_owned(),
-                    TypedDatum::new(datum, names_types[i].1.clone()).json(),
-                )
-            }
-        })
+        .zip(names_types)
+        .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ.clone()).json()))
         .collect();
     serde_json::value::Value::Object(value_fields)
 }
@@ -233,6 +224,7 @@ impl<'a> ToJson for TypedDatum<'_> {
 fn build_row_schema_field<F: FnMut() -> String>(
     namer: &mut F,
     names_seen: &mut HashSet<String>,
+    custom_names: &HashMap<GlobalId, String>,
     typ: &ColumnType,
 ) -> serde_json::value::Value {
     let mut field_type = match &typ.scalar_type {
@@ -286,6 +278,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
             let inner = build_row_schema_field(
                 namer,
                 names_seen,
+                custom_names,
                 &ColumnType {
                     nullable: true,
                     scalar_type: ty.unwrap_collection_element_type().clone(),
@@ -300,6 +293,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
             let inner = build_row_schema_field(
                 namer,
                 names_seen,
+                custom_names,
                 &ColumnType {
                     nullable: true,
                     scalar_type: (**value_type).clone(),
@@ -311,11 +305,9 @@ fn build_row_schema_field<F: FnMut() -> String>(
             })
         }
         ScalarType::Record {
-            fields,
-            custom_name,
-            ..
+            fields, custom_id, ..
         } => {
-            let (name, name_seen) = match custom_name {
+            let (name, name_seen) = match custom_id.as_ref().and_then(|id| custom_names.get(id)) {
                 Some(name) => (name.clone(), !names_seen.insert(name.clone())),
                 None => (namer(), false),
             };
@@ -323,7 +315,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
                 json!(name)
             } else {
                 let fields = fields.to_vec();
-                let json_fields = build_row_schema_fields(&fields, names_seen, namer);
+                let json_fields = build_row_schema_fields(&fields, names_seen, namer, custom_names);
                 json!({
                     "type": "record",
                     "name": name,
@@ -354,10 +346,11 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
     columns: &[(ColumnName, ColumnType)],
     names_seen: &mut HashSet<String>,
     namer: &mut F,
+    custom_names: &HashMap<GlobalId, String>,
 ) -> Vec<serde_json::value::Value> {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
-        let field_type = build_row_schema_field(namer, names_seen, typ);
+        let field_type = build_row_schema_field(namer, names_seen, custom_names, typ);
         fields.push(json!({
             "name": name,
             "type": field_type,
@@ -370,13 +363,19 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
+    custom_names: &HashMap<GlobalId, String>,
 ) -> serde_json::value::Value {
     let mut name_idx = 0;
-    let fields = build_row_schema_fields(columns, &mut Default::default(), &mut move || {
-        let ret = format!("com.materialize.sink.record{}", name_idx);
-        name_idx += 1;
-        ret
-    });
+    let fields = build_row_schema_fields(
+        columns,
+        &mut Default::default(),
+        &mut move || {
+            let ret = format!("com.materialize.sink.record{}", name_idx);
+            name_idx += 1;
+            ret
+        },
+        custom_names,
+    );
     json!({
         "type": "record",
         "fields": fields,

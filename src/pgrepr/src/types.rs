@@ -797,7 +797,6 @@ impl TryFrom<&Type> for ScalarType {
             Type::Record(_) => Ok(ScalarType::Record {
                 fields: vec![],
                 custom_id: None,
-                custom_name: None,
             }),
             Type::Text => Ok(ScalarType::String),
             Type::Time { precision: None } => Ok(ScalarType::Time),

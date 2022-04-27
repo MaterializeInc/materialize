@@ -959,9 +959,7 @@ pub enum ScalarType {
         /// The names and types of the fields of the record, in order from left
         /// to right.
         fields: Vec<(ColumnName, ColumnType)>,
-        // TODO: turn custom_id and name into an enum. it should only be possible to set one at a time
         custom_id: Option<GlobalId>,
-        custom_name: Option<String>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -1057,14 +1055,9 @@ impl From<&ScalarType> for ProtoScalarType {
                     element_type: Some(element_type.as_ref().into()),
                     custom_id: custom_id.map(|id| (&id).into()),
                 })),
-                ScalarType::Record {
-                    custom_id,
-                    fields,
-                    custom_name,
-                } => Record(ProtoRecord {
+                ScalarType::Record { custom_id, fields } => Record(ProtoRecord {
                     custom_id: custom_id.map(|id| (&id).into()),
                     fields: fields.into_iter().map(Into::into).collect(),
-                    custom_name: custom_name.clone(),
                 }),
                 ScalarType::Array(typ) => Array(typ.as_ref().into()),
                 ScalarType::Map {
@@ -1141,7 +1134,6 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                custom_name: x.custom_name,
             }),
             Map(x) => Ok(ScalarType::Map {
                 value_type: Box::new(
@@ -1754,7 +1746,6 @@ impl<'a> ScalarType {
             Record {
                 fields,
                 custom_id: None,
-                custom_name: None,
             } => {
                 let fields = fields
                     .iter()
@@ -1770,7 +1761,6 @@ impl<'a> ScalarType {
                     .collect_vec();
                 Record {
                     fields,
-                    custom_name: None,
                     custom_id: None,
                 }
             }
@@ -1948,16 +1938,13 @@ impl<'a> ScalarType {
                 Record {
                     fields: fields_a,
                     custom_id: oid_a,
-                    custom_name: name_a,
                 },
                 Record {
                     fields: fields_b,
                     custom_id: oid_b,
-                    custom_name: name_b,
                 },
             ) => {
                 (oid_a == oid_b || structure_only)
-                    && (name_a == name_b || structure_only)
                     && fields_a.len() == fields_b.len()
                     && fields_a
                         .iter()
@@ -2048,18 +2035,9 @@ impl Arbitrary for ScalarType {
                             prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
                         // Now we combine it with the default strategies to get Records.
-                        (
-                            fields_strat,
-                            any::<Option<GlobalId>>(),
-                            any::<Option<String>>(),
-                        )
-                            .prop_map(
-                                |(fields, custom_id, custom_name)| ScalarType::Record {
-                                    fields,
-                                    custom_id,
-                                    custom_name,
-                                },
-                            )
+                        (fields_strat, any::<Option<GlobalId>>()).prop_map(|(fields, custom_id)| {
+                            ScalarType::Record { fields, custom_id }
+                        })
                     }
                 ]
             },
@@ -2104,7 +2082,6 @@ fn verify_base_eq_record_nullability() {
             },
         )],
         custom_id: None,
-        custom_name: None,
     };
     let s2 = ScalarType::Record {
         fields: vec![(
@@ -2115,12 +2092,10 @@ fn verify_base_eq_record_nullability() {
             },
         )],
         custom_id: None,
-        custom_name: None,
     };
     let s3 = ScalarType::Record {
         fields: vec![],
         custom_id: None,
-        custom_name: None,
     };
     assert!(s1.base_eq(&s2));
     assert!(!s1.base_eq(&s3));

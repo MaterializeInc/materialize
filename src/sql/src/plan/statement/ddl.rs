@@ -50,7 +50,6 @@ use mz_dataflow_types::sources::{
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
-use mz_interchange::envelopes;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
@@ -1901,6 +1900,7 @@ fn kafka_sink_builder(
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
+    envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
@@ -1973,6 +1973,7 @@ fn kafka_sink_builder(
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
+                matches!(envelope, SinkEnvelope::Debezium),
                 include_transaction,
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
@@ -2350,12 +2351,6 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey.into());
     }
 
-    let value_desc = match envelope {
-        SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
-        SinkEnvelope::Upsert => desc.clone(),
-        SinkEnvelope::DifferentialRow => desc.clone(),
-    };
-
     if as_of.is_some() {
         bail!("CREATE SINK ... AS OF is no longer supported");
     }
@@ -2377,7 +2372,8 @@ pub fn plan_create_sink(
             topic,
             relation_key_indices,
             key_desc_and_indices,
-            value_desc,
+            desc.clone(),
+            envelope,
             suffix_nonce,
             &root_user_dependencies,
         )?,
@@ -2391,7 +2387,7 @@ pub fn plan_create_sink(
             blob_uri,
             consensus_uri,
             shard_id,
-            value_desc,
+            desc.clone(),
         )?,
     };
 

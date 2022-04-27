@@ -3075,10 +3075,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 let item = self.get_item(id);
                 self.minimal_qualification(item.name()).to_string()
             }
-            Record {
-                custom_name: Some(name),
-                ..
-            } => name.clone(),
             Record { fields, .. } => format!(
                 "record({})",
                 fields

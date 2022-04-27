@@ -4553,7 +4553,6 @@ fn scalar_type_from_catalog(
                         .collect::<Result<Vec<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
-                        custom_name: None,
                         custom_id: Some(id),
                     })
                 }

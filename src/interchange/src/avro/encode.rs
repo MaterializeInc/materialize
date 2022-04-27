@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
@@ -23,6 +24,7 @@ use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_P
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
+use crate::envelopes::{self, ENVELOPE_CUSTOM_NAMES};
 use crate::json::build_row_schema_json;
 
 lazy_static! {
@@ -80,19 +82,6 @@ lazy_static! {
     })).expect("valid schema constructed");
 }
 
-/// Builds a Debezium-encoded Avro schema that corresponds to `desc`.
-///
-/// Requires that all column names in `desc` are present. The returned schema
-/// has some special properties to ease encoding:
-///
-///   * Union schemas are only used to represent nullability. The first
-///     variant is always the null variant, and the second and last variant
-///     is the non-null variant.
-fn build_schema(columns: &[(ColumnName, ColumnType)], class_name: Option<&str>) -> Schema {
-    let row_schema = build_row_schema_json(&columns, class_name.unwrap_or("envelope"));
-    Schema::parse(&row_schema).expect("valid schema constructed")
-}
-
 fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
     // The first byte is a magic byte (0) that indicates the Confluent
     // serialization format version, and the next four bytes are a
@@ -135,37 +124,31 @@ impl AvroSchemaGenerator {
         value_fullname: Option<&str>,
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
+        debezium: bool,
         include_transaction: bool,
     ) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
+        if debezium {
+            value_columns = envelopes::dbz_envelope(value_columns);
+        }
         if include_transaction {
             // TODO(rkhaitan): this schema omits the total_order and data collection_order
             // fields found in Debezium's transaction metadata struct. We chose to omit
             // those because the order is not stable across reruns and has no semantic
             // meaning for records within a timestamp in Materialize. These fields may
             // be useful in the future for deduplication.
-            value_columns.push((
-                "transaction".into(),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Record {
-                        fields: vec![(
-                            "id".into(),
-                            ColumnType {
-                                scalar_type: ScalarType::String,
-                                nullable: false,
-                            },
-                        )],
-                        custom_id: None,
-                        custom_name: Some("transaction".to_string()),
-                    },
-                },
-            ));
+            envelopes::txn_metadata(&mut value_columns);
         }
-        let writer_schema = build_schema(&value_columns, value_fullname);
+        let row_schema = build_row_schema_json(
+            &value_columns,
+            value_fullname.unwrap_or("envelope"),
+            &ENVELOPE_CUSTOM_NAMES,
+        );
+        let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
         let key_info = key_desc.map(|key_desc| {
             let columns = column_names_and_types(key_desc);
-            let row_schema = build_row_schema_json(&columns, key_fullname.unwrap_or("row"));
+            let row_schema =
+                build_row_schema_json(&columns, key_fullname.unwrap_or("row"), &HashMap::new());
             KeyInfo {
                 schema: Schema::parse(&row_schema).expect("valid schema constructed"),
                 columns,
