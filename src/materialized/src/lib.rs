@@ -251,12 +251,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
+    let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+
     // Load the coordinator catalog from disk.
-    let coord_storage = mz_coord::catalog::storage::Connection::open(
-        &config.data_directory,
-        Some(config.experimental_mode),
-    )
-    .await?;
+    let coord_storage =
+        mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {

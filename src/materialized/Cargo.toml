@@ -70,6 +70,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-secrets-filesystem = { path = "../secrets-filesystem" }
 mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
+mz-stash = { path = "../stash" }
 native-tls = { version = "0.2.10", features = ["alpn"] }
 nix = "0.23.1"
 num_cpus = "1.13.1"

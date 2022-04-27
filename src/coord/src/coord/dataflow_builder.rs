@@ -27,6 +27,7 @@ use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row};
+use mz_stash::Append;
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
@@ -59,7 +60,7 @@ pub enum ExprPrepStyle<'a> {
     AsOf,
 }
 
-impl Coordinator {
+impl<S: Append> Coordinator<S> {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(
         &self,
