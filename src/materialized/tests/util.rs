@@ -27,7 +27,7 @@ use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
@@ -37,7 +37,7 @@ lazy_static! {
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     };
-    static ref PORT_ALLOCATOR: Arc<IdAllocator<u16>> = Arc::new(IdAllocator::new(2100, 2200));
+    static ref PORT_ALLOCATOR: Arc<PortAllocator> = Arc::new(PortAllocator::new(2100, 2200));
 }
 
 #[derive(Clone)]

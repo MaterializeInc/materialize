@@ -28,7 +28,7 @@ use tracing::{error, info};
 
 use crate::port_metadata_file::PortMetadataFile;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
 
 /// Configures a [`ProcessOrchestrator`].
@@ -38,7 +38,7 @@ pub struct ProcessOrchestratorConfig {
     /// images.
     pub image_dir: PathBuf,
     /// The ports to allocate.
-    pub port_allocator: Arc<IdAllocator<u16>>,
+    pub port_allocator: Arc<PortAllocator>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The host spawned subprocesses bind to.
@@ -56,7 +56,7 @@ pub struct ProcessOrchestratorConfig {
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<u16>>,
+    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     process_listen_host: String,
@@ -110,7 +110,7 @@ impl Orchestrator for ProcessOrchestrator {
 struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<u16>>,
+    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
     data_dir: PathBuf,
@@ -168,7 +168,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             process.kill();
                         } else {
                             // Existing non-dead process, so we don't create a new one
-                            processes.push(port_metadata);
+                            for port in port_metadata.values() {
+                                if !self.port_allocator.mark_allocated(*port) {
+                                    // Somehow we've re-allocated an already used port which
+                                    // shouldn't be possible. So we just kill the process and panic.
+                                    process.kill();
+                                    panic!("port re-use");
+                                }
+                            }
                             handles.push(AbortOnDrop(Box::new(ExternalProcess {
                                 pid,
                                 _port_metadata_file: PortMetadataFile::open_existing(
@@ -241,7 +248,7 @@ async fn supervise(
     full_id: String,
     path: PathBuf,
     args: Vec<String>,
-    port_allocator: Arc<IdAllocator<u16>>,
+    port_allocator: Arc<PortAllocator>,
     ports: HashMap<String, u16>,
     suppress_output: bool,
     port_metadata_file_location: PathBuf,

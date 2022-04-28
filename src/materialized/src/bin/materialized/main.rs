@@ -53,7 +53,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -589,7 +589,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     // binaries and release binaries look for other release
                     // binaries.
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                    port_allocator: Arc::new(IdAllocator::new(
+                    port_allocator: Arc::new(PortAllocator::new(
                         args.base_service_port,
                         args.base_service_port
                             .checked_add(100)
