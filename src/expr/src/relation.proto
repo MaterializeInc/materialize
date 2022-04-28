@@ -11,9 +11,35 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 package mz_expr.relation;
 
 message ProtoColumnOrder {
     uint64 column = 1;
     bool desc = 2;
+}
+
+message ProtoWindowFrame {
+    message ProtoWindowFrameBound {
+        oneof kind {
+            google.protobuf.Empty unbounded_preceding = 1;
+            uint64 offset_preceding = 2;
+            google.protobuf.Empty current_row = 3;
+            uint64 offset_following = 4;
+            google.protobuf.Empty unbounded_following = 5;
+        }
+    }
+
+    message ProtoWindowFrameUnits {
+        oneof kind {
+            google.protobuf.Empty rows = 1;
+            google.protobuf.Empty range = 2;
+            google.protobuf.Empty groups = 3;
+        }
+    }
+
+    ProtoWindowFrameUnits units = 1;
+    ProtoWindowFrameBound start_bound = 2;
+    ProtoWindowFrameBound end_bound = 3;
 }

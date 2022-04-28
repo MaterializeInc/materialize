@@ -8,16 +8,12 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
-bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.1.12", features = ["derive"] }
 csv = "1.1.6"
-futures = "0.3.21"
-futures-channel = "0.3.16"
 hex = "0.4.3"
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../../test/test-util" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prost = "0.10.1"
 prost-types = "0.10.0"
 rand = "0.8.5"

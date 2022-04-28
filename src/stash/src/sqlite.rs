@@ -21,7 +21,8 @@ use mz_persist_types::Codec;
 use timely::progress::frontier::AntichainRef;
 
 use crate::{
-    AntichainFormatter, Diff, Id, InternalStashError, Stash, StashCollection, StashError, Timestamp,
+    AntichainFormatter, Append, AppendBatch, Diff, Id, InternalStashError, Stash, StashCollection,
+    StashError, Timestamp,
 };
 
 const APPLICATION_ID: i32 = 0x0872_e898; // chosen randomly
@@ -100,6 +101,58 @@ impl Sqlite {
             |row| row.get("upper"),
         )?;
         Ok(Antichain::from_iter(upper))
+    }
+
+    fn seal_batch_tx<'a, I>(tx: &Transaction, seals: I) -> Result<(), StashError>
+    where
+        I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
+    {
+        let mut update_stmt =
+            tx.prepare("UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id")?;
+        for (collection_id, new_upper) in seals {
+            let upper = Self::upper_tx(&tx, collection_id)?;
+            if PartialOrder::less_than(new_upper, &upper) {
+                return Err(StashError::from(format!(
+                    "seal request {} is less than the current upper frontier {}",
+                    AntichainFormatter(new_upper),
+                    AntichainFormatter(&upper),
+                )));
+            }
+            update_stmt.execute(
+                named_params! {"$upper": new_upper.as_option(), "$collection_id": collection_id},
+            )?;
+        }
+        drop(update_stmt);
+        Ok(())
+    }
+
+    fn update_many_tx<I>(tx: &Transaction, collection_id: Id, entries: I) -> Result<(), StashError>
+    where
+        I: Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+    {
+        let upper = Self::upper_tx(&tx, collection_id)?;
+        let mut insert_stmt = tx.prepare(
+            "INSERT INTO data (collection_id, key, value, time, diff)
+             VALUES ($collection_id, $key, $value, $time, $diff)",
+        )?;
+        for ((key, value), time, diff) in entries {
+            if !upper.less_equal(&time) {
+                return Err(StashError::from(format!(
+                    "entry time {} is less than the current upper frontier {}",
+                    time,
+                    AntichainFormatter(&upper)
+                )));
+            }
+            insert_stmt.execute(named_params! {
+                "$collection_id": collection_id,
+                "$key": key,
+                "$value": value,
+                "$time": time,
+                "$diff": diff,
+            })?;
+        }
+        drop(insert_stmt);
+        Ok(())
     }
 }
 
@@ -233,35 +286,15 @@ impl Stash for Sqlite {
     where
         I: IntoIterator<Item = ((K, V), Timestamp, Diff)>,
     {
-        let tx = self.conn.transaction()?;
-        let upper = Self::upper_tx(&tx, collection.id)?;
-        let mut insert_stmt = tx.prepare(
-            "INSERT INTO data (collection_id, key, value, time, diff)
-             VALUES ($collection_id, $key, $value, $time, $diff)",
-        )?;
-        let mut key_buf = vec![];
-        let mut value_buf = vec![];
-        for ((key, value), time, diff) in entries {
-            if !upper.less_equal(&time) {
-                return Err(StashError::from(format!(
-                    "entry time {} is less than the current upper frontier {}",
-                    time,
-                    AntichainFormatter(&upper)
-                )));
-            }
-            key_buf.clear();
-            value_buf.clear();
+        let entries = entries.into_iter().map(|((key, value), time, diff)| {
+            let mut key_buf = vec![];
+            let mut value_buf = vec![];
             key.encode(&mut key_buf);
             value.encode(&mut value_buf);
-            insert_stmt.execute(named_params! {
-                "$collection_id": collection.id,
-                "$key": key_buf,
-                "$value": value_buf,
-                "$time": time,
-                "$diff": diff,
-            })?;
-        }
-        drop(insert_stmt);
+            ((key_buf, value_buf), time, diff)
+        });
+        let tx = self.conn.transaction()?;
+        Self::update_many_tx(&tx, collection.id, entries)?;
         tx.commit()?;
         Ok(())
     }
@@ -278,23 +311,11 @@ impl Stash for Sqlite {
         &mut self,
         seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
     ) -> Result<(), StashError> {
+        let seals = seals
+            .iter()
+            .map(|(collection, frontier)| (collection.id, frontier));
         let tx = self.conn.transaction()?;
-        let mut update_stmt =
-            tx.prepare("UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id")?;
-        for (collection, new_upper) in seals {
-            let upper = Self::upper_tx(&tx, collection.id)?;
-            if PartialOrder::less_than(new_upper, &upper) {
-                return Err(StashError::from(format!(
-                    "seal request {} is less than the current upper frontier {}",
-                    AntichainFormatter(new_upper),
-                    AntichainFormatter(&upper),
-                )));
-            }
-            update_stmt.execute(
-                named_params! {"$upper": new_upper.as_option(), "$collection_id": collection.id},
-            )?;
-        }
-        drop(update_stmt);
+        Self::seal_batch_tx(&tx, seals)?;
         tx.commit()?;
         Ok(())
     }
@@ -430,5 +451,24 @@ impl From<rusqlite::Error> for StashError {
         StashError {
             inner: InternalStashError::Sqlite(e),
         }
+    }
+}
+
+impl Append for Sqlite {
+    fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = AppendBatch>,
+    {
+        let tx = self.conn.transaction()?;
+        for batch in batches {
+            let upper = Self::upper_tx(&tx, batch.collection_id)?;
+            if upper != batch.lower {
+                return Err("unexpected lower".into());
+            }
+            Self::update_many_tx(&tx, batch.collection_id, batch.entries.into_iter())?;
+            Self::seal_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.upper)))?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 }

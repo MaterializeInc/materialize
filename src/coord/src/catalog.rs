@@ -52,6 +52,7 @@ use mz_sql::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
+use mz_stash::Append;
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -1572,12 +1573,12 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(
-        tx: &mut storage::Transaction,
+    pub fn load_catalog_items<S: Append>(
+        tx: &mut storage::Transaction<S>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
-        let items = tx.load_items()?;
+        let items = tx.loaded_items();
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
@@ -2691,7 +2692,7 @@ impl Catalog {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        tx.commit().map_err(|err| CoordError::Catalog(err.into()))?;
+        tx.commit()?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);

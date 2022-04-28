@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Utilities for tracking metrics related to decoding.
+
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::{metric, metrics::raw::IntCounterVec};
 

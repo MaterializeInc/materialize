@@ -33,8 +33,8 @@ use tracing::{debug, warn};
 
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
-    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, SinkConnectorBuilder,
-    SinkEnvelope,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
+    PersistSinkConnectorBuilder, SinkConnectorBuilder, SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -44,8 +44,9 @@ use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
-    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    KinesisSourceConnector, PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector,
+    S3SourceConnector, SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope,
+    UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -315,6 +316,18 @@ pub fn plan_create_source(
         include_metadata,
     } = &stmt;
 
+    let envelope = match envelope.as_ref() {
+        // Persist sources cannot use Envelope::None because that comes with the guarantee that the
+        // produced updates are monotonic (we only ever add data, never remove). The persist source
+        // does not guarantee that because we simply read differential row updates, which can be
+        // retractions (negative `diff`).
+        None if matches!(connector, CreateSourceConnector::Persist { .. }) => {
+            Envelope::DifferentialRow
+        }
+        None => Envelope::None,
+        Some(envelope) => envelope.clone(),
+    };
+
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original);
     let mut with_option_objects = normalize::option_objects(with_options_original);
@@ -396,7 +409,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -492,7 +505,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
@@ -510,7 +523,7 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("File sources do not support key decoding");
             }
@@ -555,7 +568,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -598,16 +611,100 @@ pub fn plan_create_source(
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
+        CreateSourceConnector::Persist {
+            consensus_uri,
+            blob_uri,
+            collection_id,
+            columns,
+        } => {
+            if envelope != Envelope::DifferentialRow {
+                bail!("CREATE SOURCE ... PERSIST does not allow specifying an ENVELOPE");
+            }
+
+            // TODO(aljoscha): Instead of taking a blob and consensus parameters, these should be
+            // picked up from the STORAGE configuration.
+            // TODO(aljoscha): Users should not have to manually specify the columns. Instead, we
+            // should keep track of STORAGE collections (including their schema) and resolve the
+            // types by talking to STORAGE.
+
+            let names: Vec<_> = columns
+                .iter()
+                .map(|c| normalize::column_name(c.name.clone()))
+                .collect();
+
+            // Build initial relation type that handles declared data types
+            // and NOT NULL constraints.
+            let mut column_types = Vec::with_capacity(columns.len());
+            let mut defaults = Vec::with_capacity(columns.len());
+            let mut keys = Vec::new();
+
+            for (i, c) in columns.into_iter().enumerate() {
+                let aug_data_type = &c.data_type;
+                let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
+                let mut nullable = true;
+                let mut default = Expr::null();
+                for option in &c.options {
+                    match &option.option {
+                        ColumnOption::NotNull => nullable = false,
+                        ColumnOption::Default(expr) => {
+                            // Ensure expression can be planned and yields the correct
+                            // type.
+                            let _ = query::plan_default_expr(scx, expr, &ty)?;
+                            default = expr.clone();
+                        }
+                        ColumnOption::Unique { is_primary } => {
+                            keys.push(vec![i]);
+                            if *is_primary {
+                                nullable = false;
+                            }
+                        }
+                        other => {
+                            bail_unsupported!(format!(
+                                "CREATE TABLE with column constraint: {}",
+                                other
+                            ))
+                        }
+                    }
+                }
+                column_types.push(ty.nullable(nullable));
+                defaults.push(default);
+            }
+
+            let typ = RelationType::new(column_types);
+            let desc = RelationDesc::new(typ, names);
+
+            let connector = ExternalSourceConnector::Persist(PersistSourceConnector {
+                consensus_uri: consensus_uri.clone(),
+                blob_uri: blob_uri.clone(),
+                shard_id: collection_id.parse()?,
+            });
+
+            (
+                connector,
+                SourceDataEncoding::Single(DataEncoding::RowCodec(desc)),
+            )
+        }
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
-    let key_envelope = get_key_envelope(include_metadata, envelope, &encoding)?;
+    let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
+    // Not all source envelopes are compatible with all source connectors.
+    // Whoever constructs the source ingestion pipeline is responsible for
+    // choosing compatible envelopes and connectors.
+    //
+    // TODO(guswynn): ambiguously assert which connectors and envelopes are
+    // compatible in typechecking
+    //
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => {
             UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
+        }
+        mz_sql_parser::ast::Envelope::DifferentialRow => {
+            assert!(key_envelope.is_none());
+            UnplannedSourceEnvelope::DifferentialRow
         }
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
@@ -1397,7 +1494,7 @@ fn get_key_envelope(
                 //
                 // Otherwise it gets the names of the columns in the type
                 let is_composite = match key {
-                    DataEncoding::Postgres => {
+                    DataEncoding::Postgres | DataEncoding::RowCodec(_) => {
                         bail!("{} sources cannot use INCLUDE KEY", key.op_name())
                     }
                     DataEncoding::Bytes | DataEncoding::Text => false,
@@ -2061,6 +2158,30 @@ fn get_kafka_sink_consistency_config(
     Ok(result)
 }
 
+fn persist_sink_builder(
+    format: Option<Format<Aug>>,
+    envelope: SinkEnvelope,
+    blob_uri: String,
+    consensus_uri: String,
+    shard_id: String,
+    value_desc: RelationDesc,
+) -> Result<SinkConnectorBuilder, anyhow::Error> {
+    if format.is_some() {
+        bail!("CREATE SINK ... PERSIST cannot specify a format");
+    }
+
+    if envelope != SinkEnvelope::DifferentialRow {
+        bail!("CREATE SINK ... PERSIST does not support specifying an ENVELOPE");
+    }
+
+    Ok(SinkConnectorBuilder::Persist(PersistSinkConnectorBuilder {
+        consensus_uri,
+        blob_uri,
+        shard_id: shard_id.parse()?,
+        value_desc,
+    }))
+}
+
 pub fn describe_create_sink(
     _: &StatementContext,
     _: &CreateSinkStatement<Raw>,
@@ -2094,6 +2215,12 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
+        // The persist sink only works with its own special envelope, so make that the default.
+        None if matches!(connector, CreateSinkConnector::Persist { .. }) => {
+            SinkEnvelope::DifferentialRow
+        }
+        Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
+        // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => {
             SinkEnvelope::Debezium
         }
@@ -2161,6 +2288,7 @@ pub fn plan_create_sink(
                 None
             }
         }
+        CreateSinkConnector::Persist { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2181,6 +2309,7 @@ pub fn plan_create_sink(
     let value_desc = match envelope {
         SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
+        SinkEnvelope::DifferentialRow => desc.clone(),
     };
 
     if as_of.is_some() {
@@ -2207,6 +2336,18 @@ pub fn plan_create_sink(
             value_desc,
             suffix_nonce,
             &root_user_dependencies,
+        )?,
+        CreateSinkConnector::Persist {
+            consensus_uri,
+            blob_uri,
+            shard_id,
+        } => persist_sink_builder(
+            format,
+            envelope,
+            blob_uri,
+            consensus_uri,
+            shard_id,
+            value_desc,
         )?,
     };
 

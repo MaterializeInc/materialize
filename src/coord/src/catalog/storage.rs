@@ -8,148 +8,169 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::hash::Hash;
+use std::iter::once;
 use std::path::Path;
 
-use rusqlite::params;
-use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
-use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
+use bytes::BufMut;
+use prost::{self, Message};
+use uuid::Uuid;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::coord::ConcreteComputeInstanceConfig;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_persist_types::Codec;
+use mz_repr::global_id::ProtoGlobalId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
-use uuid::Uuid;
+use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 
 use crate::catalog::error::{Error, ErrorKind};
 
-const APPLICATION_ID: i32 = 0x1854_47dc;
+const USER_VERSION: &str = "user_version";
 
-/// A catalog migration
-trait Migration {
-    /// Applies a catalog migration given the top level data directory and an active transaction to
-    /// the catalog's SQLite database.
-    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error>;
-}
+fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
+    // Initial state.
+    let migrations: &[fn(&mut S) -> Result<(), StashError>] = &[
+        |stash| {
+            // Bump uppers so peek works.
+            COLLECTION_SETTING.upsert(stash, vec![])?;
+            COLLECTION_SYSTEM_GID_MAPPING.upsert(stash, vec![])?;
+            COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX.upsert(stash, vec![])?;
+            COLLECTION_ITEM.upsert(stash, vec![])?;
 
-impl<'a> Migration for &'a str {
-    fn apply(&self, _path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
-        tx.execute_batch(self)?;
-        Ok(())
+            COLLECTION_GID_ALLOC.upsert(
+                stash,
+                vec![
+                    (
+                        GidAllocKey {
+                            name: "user".into(),
+                        },
+                        GidAllocValue { next_gid: 1 },
+                    ),
+                    (
+                        GidAllocKey {
+                            name: "system".into(),
+                        },
+                        GidAllocValue { next_gid: 1 },
+                    ),
+                ],
+            )?;
+            COLLECTION_DATABASE.upsert(
+                stash,
+                vec![(
+                    DatabaseKey { id: 1 },
+                    DatabaseValue {
+                        name: "materialize".into(),
+                    },
+                )],
+            )?;
+            COLLECTION_SCHEMA.upsert(
+                stash,
+                vec![
+                    (
+                        SchemaKey { id: 1 },
+                        SchemaValue {
+                            database_id: None,
+                            name: "mz_catalog".into(),
+                        },
+                    ),
+                    (
+                        SchemaKey { id: 2 },
+                        SchemaValue {
+                            database_id: None,
+                            name: "pg_catalog".into(),
+                        },
+                    ),
+                    (
+                        SchemaKey { id: 3 },
+                        SchemaValue {
+                            database_id: Some(1),
+                            name: "public".into(),
+                        },
+                    ),
+                    (
+                        SchemaKey { id: 4 },
+                        SchemaValue {
+                            database_id: None,
+                            name: "mz_internal".into(),
+                        },
+                    ),
+                    (
+                        SchemaKey { id: 5 },
+                        SchemaValue {
+                            database_id: None,
+                            name: "information_schema".into(),
+                        },
+                    ),
+                ],
+            )?;
+            COLLECTION_ROLE.upsert(
+                stash,
+                vec![(
+                    RoleKey { id: 1 },
+                    RoleValue {
+                        name: "materialize".into(),
+                    },
+                )],
+            )?;
+            COLLECTION_COMPUTE_INSTANCES.upsert(
+                stash,
+                vec![(
+                    ComputeInstanceKey { id: 1 },
+                    ComputeInstanceValue {
+                        name: "default".into(),
+                        config: Some("{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}".into()),
+                    },
+                )],
+            )?;
+            Ok(())
+        },
+        // Add new migrations here.
+        //
+        // Migrations should be preceded with a comment of the following form:
+        //
+        //     > Short summary of migration's purpose.
+        //     >
+        //     > Introduced in <VERSION>.
+        //     >
+        //     > Optional additional commentary about safety or approach.
+        //
+        // Please include @benesch on any code reviews that add or edit migrations.
+        // Migrations must preserve backwards compatibility with all past releases
+        // of materialized. Migrations can be edited up until they ship in a
+        // release, after which they must never be removed, only patched by future
+        // migrations. Migrations must be transactional or idempotent (in case of
+        // midway failure).
+    ];
+
+    for (i, migration) in migrations
+        .iter()
+        .enumerate()
+        .skip(usize::cast_from(version))
+    {
+        (migration)(stash)?;
+        COLLECTION_CONFIG.upsert_key(
+            stash,
+            &USER_VERSION.to_string(),
+            &ConfigValue {
+                value: u64::cast_from(i),
+            },
+        )?;
     }
+    Ok(())
 }
-
-impl<F: Fn(&Path, &rusqlite::Transaction) -> Result<(), Error>> Migration for F {
-    fn apply(&self, path: &Path, tx: &rusqlite::Transaction) -> Result<(), Error> {
-        (self)(path, tx)
-    }
-}
-
-/// Schema migrations for the on-disk state.
-const MIGRATIONS: &[&dyn Migration] = &[
-    // Creates initial schema.
-    //
-    // Introduced for v0.1.0.
-    &"CREATE TABLE user_gid_alloc (
-         next_gid integer NOT NULL
-     );
-
-     CREATE TABLE system_gid_alloc (
-        next_gid integer NOT NULL
-     );
-
-     CREATE TABLE databases (
-         id   integer PRIMARY KEY,
-         name text NOT NULL UNIQUE
-     );
-
-     CREATE TABLE schemas (
-         id          integer PRIMARY KEY,
-         database_id integer REFERENCES databases,
-         name        text NOT NULL,
-         UNIQUE (database_id, name)
-     );
-
-     CREATE TABLE items (
-         gid        blob PRIMARY KEY,
-         schema_id  integer REFERENCES schemas,
-         name       text NOT NULL,
-         definition blob NOT NULL,
-         UNIQUE (schema_id, name)
-     );
-
-     CREATE TABLE settings (
-        name TEXT PRIMARY KEY,
-        value TEXT
-     );
-
-     CREATE TABLE roles (
-        id   integer PRIMARY KEY,
-        name text NOT NULL UNIQUE
-     );
-
-     CREATE TABLE compute_instances (
-        id   integer PRIMARY KEY,
-        name text NOT NULL UNIQUE,
-        config text
-     );
-
-     CREATE TABLE system_gid_mapping (
-        schema_name text NOT NULL,
-        object_name text NOT NULL,
-        id integer NOT NULL,
-        fingerprint integer NOT NULL,
-        PRIMARY KEY (schema_name, object_name)
-     );
-
-     CREATE TABLE compute_introspection_source_indexes (
-        compute_id integer NOT NULL REFERENCES compute_instances (id) ON DELETE CASCADE,
-        name text NOT NULL,
-        index_id integer NOT NULL UNIQUE,
-        PRIMARY KEY (compute_id, name)
-     );
-
-     CREATE INDEX compute_introspection_source_indexes_ind
-        ON compute_introspection_source_indexes(compute_id);
-
-     INSERT INTO user_gid_alloc VALUES (1);
-     INSERT INTO system_gid_alloc VALUES (1);
-     INSERT INTO databases VALUES (1, 'materialize');
-     INSERT INTO schemas VALUES
-         (1, NULL, 'mz_catalog'),
-         (2, NULL, 'pg_catalog'),
-         (3, 1, 'public'),
-         (4, NULL, 'mz_internal'),
-         (5, NULL, 'information_schema');
-     INSERT INTO roles VALUES (1, 'materialize');
-     INSERT INTO compute_instances (id, name, config) VALUES (1, 'default', '{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}');",
-    // Add new migrations here.
-    //
-    // Migrations should be preceded with a comment of the following form:
-    //
-    //     > Short summary of migration's purpose.
-    //     >
-    //     > Introduced in <VERSION>.
-    //     >
-    //     > Optional additional commentary about safety or approach.
-    //
-    // Please include @benesch on any code reviews that add or edit migrations.
-    // Migrations must preserve backwards compatibility with all past releases
-    // of materialized. Migrations can be edited up until they ship in a
-    // release, after which they must never be removed, only patched by future
-    // migrations.
-];
 
 #[derive(Debug)]
-pub struct Connection {
-    inner: rusqlite::Connection,
+pub struct Connection<S = mz_stash::Sqlite> {
+    stash: S,
+    //  inner: rusqlite::Connection,
     experimental_mode: bool,
     cluster_id: Uuid,
 }
@@ -158,47 +179,37 @@ impl Connection {
     pub fn open(
         data_dir_path: &Path,
         experimental_mode: Option<bool>,
-    ) -> Result<Connection, Error> {
-        let mut sqlite = rusqlite::Connection::open(&data_dir_path.join("catalog"))?;
-
-        // Validate application ID.
-        let tx = sqlite.transaction()?;
-        let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
-        if app_id == 0 {
-            // Fresh catalog, so install the correct ID. We also apply the
-            // zeroth migration for historical reasons: the default
-            // `user_version` of zero indicates that the zeroth migration has
-            // been applied.
-            tx.execute_batch(&format!("PRAGMA application_id = {}", APPLICATION_ID))?;
-            MIGRATIONS[0].apply(data_dir_path, &tx)?;
-        } else if app_id != APPLICATION_ID {
-            return Err(Error::new(ErrorKind::Corruption {
-                detail: "catalog file has incorrect application_id".into(),
-            }));
-        };
-        tx.commit()?;
+    ) -> Result<Connection<mz_stash::Sqlite>, Error> {
+        let mut stash = mz_stash::Sqlite::open(&data_dir_path.join("stash"))?;
 
         // Run unapplied migrations. The `user_version` field stores the index
-        // of the last migration that was run.
-        let version: u32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
-        for (i, migration) in MIGRATIONS
-            .iter()
-            .enumerate()
-            .skip(usize::cast_from(version) + 1)
+        // of the last migration that was run. If the upper is min, the config
+        // collection is empty.
+        let skip = if COLLECTION_CONFIG.upper(&mut stash)?.elements() == [mz_stash::Timestamp::MIN]
         {
-            let tx = sqlite.transaction()?;
-            migration.apply(data_dir_path, &tx)?;
-            tx.execute_batch(&format!("PRAGMA user_version = {}", i))?;
-            tx.commit()?;
-        }
+            0
+        } else {
+            // An advanced collection must have had its user version set, so the unwrap
+            // must succeed.
+            COLLECTION_CONFIG
+                .peek_key_one(&mut stash, &USER_VERSION.to_string())?
+                .expect("user_version must exist")
+                .value
+                + 1
+        };
+        migrate(&mut stash, skip)?;
 
-        Ok(Connection {
-            experimental_mode: Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?,
-            cluster_id: Self::set_or_get_cluster_id(&mut sqlite)?,
-            inner: sqlite,
-        })
+        let conn = Connection {
+            experimental_mode: Self::set_or_get_experimental_mode(&mut stash, experimental_mode)?,
+            cluster_id: Self::set_or_get_cluster_id(&mut stash)?,
+            stash,
+        };
+
+        Ok(conn)
     }
+}
 
+impl<S: Append> Connection<S> {
     /// Sets catalog's `experimental_mode` setting on initialization or gets
     /// that value.
     ///
@@ -218,30 +229,20 @@ impl Connection {
     ///
     /// - If server has not been initialized and `experimental_mode.is_none()`.
     fn set_or_get_experimental_mode(
-        sqlite: &mut rusqlite::Connection,
+        stash: &mut impl Append,
         experimental_mode: Option<bool>,
     ) -> Result<bool, Error> {
-        let tx = sqlite.transaction()?;
-        let current_setting: Option<String> = tx
-            .query_row(
-                "SELECT value FROM settings WHERE name = 'experimental_mode';",
-                params![],
-                |row| row.get(0),
-            )
-            .optional()?;
+        let current_setting = Self::get_setting_stash(stash, "experimental_mode")?
+            .map(|cs| cs.parse::<bool>().unwrap());
 
         let res = match (current_setting, experimental_mode) {
             // Server init
             (None, Some(experimental_mode)) => {
-                tx.execute(
-                    "INSERT INTO settings VALUES ('experimental_mode', ?);",
-                    params![experimental_mode],
-                )?;
+                Self::set_setting_stash(stash, "experimental_mode", experimental_mode.to_string())?;
                 Ok(experimental_mode)
             }
             // Server reboot
-            (Some(cs), Some(experimental_mode)) => {
-                let current_setting = cs.parse::<usize>().unwrap() != 0;
+            (Some(current_setting), Some(experimental_mode)) => {
                 if current_setting && !experimental_mode {
                     // Setting is true but was not given `--experimental` flag.
                     Err(Error::new(ErrorKind::ExperimentalModeRequired))
@@ -253,123 +254,111 @@ impl Connection {
                 }
             }
             // Reading existing catalog
-            (Some(cs), None) => Ok(cs.parse::<usize>().unwrap() != 0),
+            (Some(cs), None) => Ok(cs),
             // Test code that doesn't care. Just disable experimental mode.
             (None, None) => Ok(false),
         };
-        tx.commit()?;
         res
     }
 
-    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    fn set_or_get_cluster_id(sqlite: &mut rusqlite::Connection) -> Result<Uuid, Error> {
-        let tx = sqlite.transaction()?;
-        let current_setting: Option<SqlVal<Uuid>> = tx
-            .query_row(
-                "SELECT value FROM settings WHERE name = 'cluster_id';",
-                params![],
-                |row| row.get(0),
-            )
-            .optional()?;
+    fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
+        Self::get_setting_stash(&mut self.stash, key)
+    }
 
-        let res = match current_setting {
+    fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
+        Self::set_setting_stash(&mut self.stash, key, value)
+    }
+
+    fn get_setting_stash(stash: &mut impl Stash, key: &str) -> Result<Option<String>, Error> {
+        let settings = COLLECTION_SETTING.get(stash)?;
+        let v = stash.peek_key_one(
+            settings,
+            &SettingKey {
+                name: key.to_string(),
+            },
+        )?;
+        Ok(v.map(|v| v.value))
+    }
+
+    fn set_setting_stash<V: Into<String> + std::fmt::Display>(
+        stash: &mut impl Append,
+        key: &str,
+        value: V,
+    ) -> Result<(), Error> {
+        let key = SettingKey {
+            name: key.to_string(),
+        };
+        let value = SettingValue {
+            value: value.into(),
+        };
+        COLLECTION_SETTING
+            .upsert(stash, once((key, value)))
+            .map_err(|e| e.into())
+    }
+
+    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
+    fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
+        let current_setting = Self::get_setting_stash(stash, "cluster_id")?;
+        match current_setting {
             // Server init
             None => {
                 // Generate a new version 4 UUID. These are generated from random input.
                 let cluster_id = Uuid::new_v4();
-                tx.execute(
-                    "INSERT INTO settings VALUES ('cluster_id', ?);",
-                    params![SqlVal(cluster_id)],
-                )?;
+                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string())?;
                 Ok(cluster_id)
             }
             // Server reboot
-            Some(cs) => Ok(cs.0),
-        };
-        tx.commit()?;
-        res
+            Some(cs) => Ok(Uuid::parse_str(&cs)?),
+        }
     }
 
     pub fn get_catalog_content_version(&mut self) -> Result<String, Error> {
-        let tx = self.inner.transaction()?;
-        let current_setting: Option<String> = tx
-            .query_row(
-                "SELECT value FROM settings WHERE name = 'catalog_content_version';",
-                params![],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let version = match current_setting {
-            Some(v) => match v.parse::<u32>() {
-                // Prior to v0.8.4 catalog content versions was stored as a u32
-                Ok(_) => "pre-v0.8.4".to_string(),
-                Err(_) => v,
-            },
-            None => "new".to_string(),
-        };
-        tx.commit()?;
-        Ok(version)
+        self.get_setting("catalog_content_version")
+            .map(|v| v.unwrap_or_else(|| "new".to_string()))
     }
 
     pub fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
-        let tx = self.inner.transaction()?;
-        tx.execute(
-            "INSERT INTO settings (name, value) VALUES ('catalog_content_version', ?)
-                    ON CONFLICT (name) DO UPDATE SET value=excluded.value;",
-            params![new_version],
-        )?;
-        tx.commit()?;
-        Ok(())
+        self.set_setting("catalog_content_version", new_version)
     }
 
-    pub fn load_databases(&self) -> Result<Vec<(DatabaseId, String)>, Error> {
-        self.inner
-            .prepare("SELECT id, name FROM databases")?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let id: i64 = row.get(0)?;
-                let name: String = row.get(1)?;
-                Ok((DatabaseId(id), name))
-            })?
-            .collect()
+    pub fn load_databases(&mut self) -> Result<Vec<(DatabaseId, String)>, Error> {
+        Ok(COLLECTION_DATABASE
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .map(|(k, v)| (DatabaseId::new(k.id), v.name))
+            .collect())
     }
 
-    pub fn load_schemas(&self) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
-        self.inner
-            .prepare(
-                "SELECT schemas.id, schemas.name, databases.id
-                FROM schemas
-                LEFT JOIN databases ON schemas.database_id = databases.id",
-            )?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let id: i64 = row.get(0)?;
-                let schema_name: String = row.get(1)?;
-                let database_id: Option<i64> = row.get(2)?;
-                Ok((SchemaId(id), schema_name, database_id.map(DatabaseId)))
-            })?
-            .collect()
+    pub fn load_schemas(&mut self) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
+        Ok(COLLECTION_SCHEMA
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    SchemaId::new(k.id),
+                    v.name,
+                    v.database_id.map(DatabaseId::new),
+                )
+            })
+            .collect())
     }
 
-    pub fn load_roles(&self) -> Result<Vec<(i64, String)>, Error> {
-        self.inner
-            .prepare("SELECT id, name FROM roles")?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let id: i64 = row.get(0)?;
-                let name: String = row.get(1)?;
-                Ok((id, name))
-            })?
-            .collect()
+    pub fn load_roles(&mut self) -> Result<Vec<(i64, String)>, Error> {
+        Ok(COLLECTION_ROLE
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .map(|(k, v)| (k.id, v.name))
+            .collect())
     }
 
     pub fn load_compute_instances(
-        &self,
+        &mut self,
     ) -> Result<Vec<(i64, String, ConcreteComputeInstanceConfig)>, Error> {
-        self.inner
-            .prepare("SELECT id, name, config FROM compute_instances")?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let id: i64 = row.get(0)?;
-                let name: String = row.get(1)?;
-                let config: Option<String> = row.get(2)?;
-                let config: ConcreteComputeInstanceConfig = match config {
+        COLLECTION_COMPUTE_INSTANCES
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .map(|(k, v)| {
+                let config = match v.config {
                     None => {
                         return Err(Error::new(ErrorKind::Unstructured(
                             "migrating catalog from materialized to platform is not supported"
@@ -377,44 +366,44 @@ impl Connection {
                         )))
                     }
                     Some(config) => serde_json::from_str(&config)
-                        .map_err(|err| rusqlite::Error::from(FromSqlError::Other(Box::new(err))))?,
+                        .map_err(|err| Error::from(StashError::from(err.to_string())))?,
                 };
-                Ok((id, name, config))
-            })?
+                Ok((k.id, v.name, config))
+            })
             .collect()
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
-    pub fn load_system_gids(&self) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
-        self.inner
-            .prepare("SELECT schema_name, object_name, id, fingerprint FROM system_gid_mapping")?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let schema_name: String = row.get(0)?;
-                let object_name: String = row.get(1)?;
-                let id: i64 = row.get(2)?;
-                let fingerprint: i64 = row.get(3)?;
-                let id = id as u64;
-                let fingerprint = fingerprint as u64;
-                Ok((
-                    (schema_name, object_name),
-                    (GlobalId::System(id), fingerprint),
-                ))
-            })?
-            .collect()
+    pub fn load_system_gids(
+        &mut self,
+    ) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
+        Ok(COLLECTION_SYSTEM_GID_MAPPING
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    (k.schema_name, k.object_name),
+                    (GlobalId::System(v.id), v.fingerprint),
+                )
+            })
+            .collect())
     }
 
     pub fn load_introspection_source_index_gids(
-        &self,
+        &mut self,
         compute_id: ComputeInstanceId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
-        self.inner
-            .prepare("SELECT name, index_id FROM compute_introspection_source_indexes WHERE compute_id = ?")?
-            .query_and_then(params![compute_id], |row| -> Result<_, Error> {
-                let name: String = row.get(0)?;
-                let index_id: i64 = row.get(1)?;
-                Ok((name, GlobalId::System(index_id as u64)))
-            })?
-            .collect()
+        Ok(COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
+            .peek_one(&mut self.stash)?
+            .into_iter()
+            .filter_map(|(k, v)| {
+                if k.compute_id == compute_id {
+                    Some((k.name, GlobalId::System(v.index_id)))
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
@@ -429,21 +418,25 @@ impl Connection {
             return Ok(());
         }
 
-        let tx = self.inner.transaction()?;
-        for (schema_name, object_name, id, fingerprint) in mappings {
-            let id = if let GlobalId::System(id) = id {
-                id
-            } else {
-                panic!("non-system id provided")
-            };
-            tx.execute(
-                "INSERT INTO system_gid_mapping (schema_name, object_name, id, fingerprint) VALUES (?, ?, ?, ?)
-                        ON CONFLICT (schema_name, object_name) DO UPDATE SET id=excluded.id, fingerprint=excluded.fingerprint;",
-                params![schema_name, object_name, id as i64, fingerprint as i64],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        let mappings = mappings
+            .into_iter()
+            .map(|(schema_name, object_name, id, fingerprint)| {
+                let id = if let GlobalId::System(id) = id {
+                    id
+                } else {
+                    panic!("non-system id provided")
+                };
+                (
+                    GidMappingKey {
+                        schema_name: schema_name.to_string(),
+                        object_name: object_name.to_string(),
+                    },
+                    GidMappingValue { id, fingerprint },
+                )
+            });
+        COLLECTION_SYSTEM_GID_MAPPING
+            .upsert(&mut self.stash, mappings)
+            .map_err(|e| e.into())
     }
 
     /// Panics if provided id is not a system id
@@ -455,20 +448,23 @@ impl Connection {
             return Ok(());
         }
 
-        let tx = self.inner.transaction()?;
-        for (compute_id, name, index_id) in mappings {
+        let mappings = mappings.into_iter().map(|(compute_id, name, index_id)| {
             let index_id = if let GlobalId::System(id) = index_id {
                 id
             } else {
                 panic!("non-system id provided")
             };
-            tx.execute(
-                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)",
-                params![compute_id, name, index_id as i64],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+            (
+                ComputeIntrospectionSourceIndexKey {
+                    compute_id,
+                    name: name.to_string(),
+                },
+                ComputeIntrospectionSourceIndexValue { index_id },
+            )
+        });
+        COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
+            .upsert(&mut self.stash, mappings)
+            .map_err(|e| e.into())
     }
 
     pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
@@ -484,29 +480,44 @@ impl Connection {
     }
 
     fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
-        let tx = self.inner.transaction()?;
-        // SQLite doesn't support u64s, so we constrain ourselves to the more
-        // limited range of positive i64s.
-        let id: i64 = tx.query_row(
-            format!("SELECT next_gid FROM {id_type}_gid_alloc").as_str(),
-            params![],
-            |row| row.get(0),
-        )?;
-        if id == i64::MAX {
-            return Err(Error::new(ErrorKind::IdExhaustion));
-        }
-        let id = id as u64;
-        tx.execute(
-            format!("UPDATE {id_type}_gid_alloc SET next_gid = ?").as_str(),
-            params![(id + amount) as i64],
-        )?;
-        tx.commit()?;
-        Ok((id..id + amount).collect())
+        let key = GidAllocKey {
+            name: id_type.to_string(),
+        };
+        let prev = COLLECTION_GID_ALLOC.peek_key_one(&mut self.stash, &key)?;
+        let id = prev.expect("must exist").next_gid;
+        let next = match id.checked_add(amount) {
+            Some(next_gid) => GidAllocValue { next_gid },
+            None => return Err(Error::new(ErrorKind::IdExhaustion)),
+        };
+        COLLECTION_GID_ALLOC.upsert_key(&mut self.stash, &key, &next)?;
+        Ok((id..next.next_gid).collect())
     }
 
-    pub fn transaction(&mut self) -> Result<Transaction, Error> {
+    pub fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
+        let databases = COLLECTION_DATABASE.peek_one(&mut self.stash)?;
+        let schemas = COLLECTION_SCHEMA.peek_one(&mut self.stash)?;
+        let roles = COLLECTION_ROLE.peek_one(&mut self.stash)?;
+        let items = COLLECTION_ITEM.peek_one(&mut self.stash)?;
+        let compute_instances = COLLECTION_COMPUTE_INSTANCES.peek_one(&mut self.stash)?;
+        let introspection_sources =
+            COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX.peek_one(&mut self.stash)?;
+
         Ok(Transaction {
-            inner: self.inner.transaction()?,
+            stash: &mut self.stash,
+            databases: TableTransaction::new(databases, Some(|k| k.id), |a, b| a.name == b.name),
+            schemas: TableTransaction::new(schemas, Some(|k| k.id), |a, b| {
+                a.database_id == b.database_id && a.name == b.name
+            }),
+            items: TableTransaction::new(items, None, |a, b| {
+                a.schema_id == b.schema_id && a.name == b.name
+            }),
+            roles: TableTransaction::new(roles, Some(|k| k.id), |a, b| a.name == b.name),
+            compute_instances: TableTransaction::new(compute_instances, Some(|k| k.id), |a, b| {
+                a.name == b.name
+            }),
+            introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
+                false
+            }),
         })
     }
 
@@ -519,53 +530,65 @@ impl Connection {
     }
 }
 
-pub struct Transaction<'a> {
-    inner: rusqlite::Transaction<'a>,
+pub struct Transaction<'a, S> {
+    stash: &'a mut S,
+    databases: TableTransaction<DatabaseKey, DatabaseValue, i64>,
+    schemas: TableTransaction<SchemaKey, SchemaValue, i64>,
+    items: TableTransaction<ItemKey, ItemValue, i64>,
+    roles: TableTransaction<RoleKey, RoleValue, i64>,
+    compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue, i64>,
+    introspection_sources: TableTransaction<
+        ComputeIntrospectionSourceIndexKey,
+        ComputeIntrospectionSourceIndexValue,
+        i64,
+    >,
 }
 
-impl Transaction<'_> {
-    pub fn load_items(&self) -> Result<Vec<(GlobalId, QualifiedObjectName, Vec<u8>)>, Error> {
-        // Order user views by their GlobalId
-        self.inner
-            .prepare(
-                "SELECT items.gid, databases.id, schemas.id, items.name, items.definition
-                FROM items
-                JOIN schemas ON items.schema_id = schemas.id
-                JOIN databases ON schemas.database_id = databases.id
-                ORDER BY json_extract(items.gid, '$.User')",
-            )?
-            .query_and_then(params![], |row| -> Result<_, Error> {
-                let id: SqlVal<GlobalId> = row.get(0)?;
-                let database: i64 = row.get(1)?;
-                let schema: i64 = row.get(2)?;
-                let item: String = row.get(3)?;
-                let definition: Vec<u8> = row.get(4)?;
-                Ok((
-                    id.0,
-                    QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::from(database),
-                            schema_spec: SchemaSpecifier::from(schema),
-                        },
-                        item,
+impl<'a, S: Append> Transaction<'a, S> {
+    pub fn loaded_items(&self) -> Vec<(GlobalId, QualifiedObjectName, Vec<u8>)> {
+        let databases = self.databases.items();
+        let schemas = self.schemas.items();
+        let mut items = Vec::new();
+        self.items.for_values(|k, v| {
+            let schema = match schemas.get(&SchemaKey { id: v.schema_id }) {
+                Some(schema) => schema,
+                None => return,
+            };
+            let database_id = match schema.database_id {
+                Some(id) => id,
+                None => return,
+            };
+            let _database = match databases.get(&DatabaseKey { id: database_id }) {
+                Some(database) => database,
+                None => return,
+            };
+            items.push((
+                k.gid,
+                QualifiedObjectName {
+                    qualifiers: ObjectQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::from(database_id),
+                        schema_spec: SchemaSpecifier::from(v.schema_id),
                     },
-                    definition,
-                ))
-            })?
-            .collect()
+                    item: v.name.clone(),
+                },
+                v.definition.clone(),
+            ));
+        });
+        items.sort_by_key(|(id, _, _)| *id);
+        items
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
-        match self
-            .inner
-            .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
-            .execute(params![database_name])
-        {
-            Ok(_) => Ok(DatabaseId(self.inner.last_insert_rowid())),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::DatabaseAlreadyExists(database_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+        match self.databases.insert(
+            |id| DatabaseKey { id: id.unwrap() },
+            DatabaseValue {
+                name: database_name.to_string(),
+            },
+        ) {
+            Ok(id) => Ok(DatabaseId::new(id.unwrap())),
+            Err(()) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
+                database_name.to_owned(),
+            ))),
         }
     }
 
@@ -574,30 +597,31 @@ impl Transaction<'_> {
         database_id: DatabaseId,
         schema_name: &str,
     ) -> Result<SchemaId, Error> {
-        match self
-            .inner
-            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
-            .execute(params![database_id.0, schema_name])
-        {
-            Ok(_) => Ok(SchemaId(self.inner.last_insert_rowid())),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::SchemaAlreadyExists(schema_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+        match self.schemas.insert(
+            |id| SchemaKey { id: id.unwrap() },
+            SchemaValue {
+                database_id: Some(database_id.0),
+                name: schema_name.to_string(),
+            },
+        ) {
+            Ok(id) => Ok(SchemaId::new(id.unwrap())),
+            Err(()) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
+                schema_name.to_owned(),
+            ))),
         }
     }
 
     pub fn insert_role(&mut self, role_name: &str) -> Result<i64, Error> {
-        match self
-            .inner
-            .prepare_cached("INSERT INTO roles (name) VALUES (?)")?
-            .execute(params![role_name])
-        {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::RoleAlreadyExists(role_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+        match self.roles.insert(
+            |id| RoleKey { id: id.unwrap() },
+            RoleValue {
+                name: role_name.to_string(),
+            },
+        ) {
+            Ok(id) => Ok(id.unwrap()),
+            Err(()) => Err(Error::new(ErrorKind::RoleAlreadyExists(
+                role_name.to_owned(),
+            ))),
         }
     }
 
@@ -609,19 +633,20 @@ impl Transaction<'_> {
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let config = serde_json::to_string(config)
-            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        let id = match self
-            .inner
-            .prepare_cached("INSERT INTO compute_instances (name, config) VALUES (?, ?)")?
-            .execute(params![cluster_name, config])
-        {
-            Ok(_) => self.inner.last_insert_rowid(),
-            Err(err) if is_constraint_violation(&err) => {
+            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+        let id = match self.compute_instances.insert(
+            |id| ComputeInstanceKey { id: id.unwrap() },
+            ComputeInstanceValue {
+                name: cluster_name.to_string(),
+                config: Some(config),
+            },
+        ) {
+            Ok(id) => id.unwrap(),
+            Err(()) => {
                 return Err(Error::new(ErrorKind::ClusterAlreadyExists(
                     cluster_name.to_owned(),
                 )))
             }
-            Err(err) => return Err(err.into()),
         };
 
         for (builtin, index_id) in introspection_sources {
@@ -630,11 +655,15 @@ impl Transaction<'_> {
             } else {
                 panic!("non-system id provided")
             };
-            self
-                .inner
-                .prepare_cached(
-                "INSERT INTO compute_introspection_source_indexes (compute_id, name, index_id) VALUES (?, ?, ?)")?
-                .execute(params![id, builtin.name, index_id as i64])?;
+            self.introspection_sources
+                .insert(
+                    |_| ComputeIntrospectionSourceIndexKey {
+                        compute_id: id,
+                        name: builtin.name.to_string(),
+                    },
+                    ComputeIntrospectionSourceIndexValue { index_id },
+                )
+                .expect("no uniqueness violation");
         }
 
         Ok(id)
@@ -646,44 +675,44 @@ impl Transaction<'_> {
         config: &ConcreteComputeInstanceConfig,
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
-            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        match self
-            .inner
-            .prepare_cached("UPDATE compute_instances SET config = ? WHERE id = ?")?
-            .execute(params![config, id])
-        {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
+            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+        self.compute_instances.update(|k, v| {
+            if k.id == id {
+                Some(ComputeInstanceValue {
+                    name: v.name.clone(),
+                    config: Some(config.clone()),
+                })
+            } else {
+                None
+            }
+        })?;
+        Ok(())
     }
 
     pub fn insert_item(
-        &self,
+        &mut self,
         id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
         item: &[u8],
     ) -> Result<(), Error> {
-        match self
-            .inner
-            .prepare_cached(
-                "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
-            )?
-            .execute(params![SqlVal(&id), schema_id.0, item_name, item])
-        {
+        match self.items.insert(
+            |_| ItemKey { gid: id },
+            ItemValue {
+                schema_id: schema_id.0,
+                name: item_name.to_string(),
+                definition: item.to_vec(),
+            },
+        ) {
             Ok(_) => Ok(()),
-            Err(err) if is_constraint_violation(&err) => Err(Error::new(
-                ErrorKind::ItemAlreadyExists(item_name.to_owned()),
-            )),
-            Err(err) => Err(err.into()),
+            Err(()) => Err(Error::new(ErrorKind::ItemAlreadyExists(
+                item_name.to_owned(),
+            ))),
         }
     }
 
-    pub fn remove_database(&self, id: &DatabaseId) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM databases WHERE id = ?")?
-            .execute(params![id.0])?;
+    pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
+        let n = self.databases.delete(|k, _v| k.id == id.0).len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -693,14 +722,11 @@ impl Transaction<'_> {
     }
 
     pub fn remove_schema(
-        &self,
+        &mut self,
         database_id: &DatabaseId,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND id = ?")?
-            .execute(params![database_id.0, schema_id.0])?;
+        let n = self.schemas.delete(|k, _v| k.id == schema_id.0).len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -709,11 +735,8 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn remove_role(&self, name: &str) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM roles WHERE name = ?")?
-            .execute(params![name])?;
+    pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
+        let n = self.roles.delete(|_k, v| v.name == name).len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -722,24 +745,22 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn remove_compute_instance(&self, name: &str) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM compute_instances WHERE name = ?")?
-            .execute(params![name])?;
-        assert!(n <= 1);
-        if n == 1 {
+    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(), Error> {
+        let deleted = self.compute_instances.delete(|_k, v| v.name == name);
+        assert!(deleted.len() <= 1);
+        if deleted.len() == 1 {
+            // Cascade delete introsepction sources.
+            let id = deleted.into_element().id;
+            self.introspection_sources
+                .delete(|k, _v| k.compute_id == id);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         }
     }
 
-    pub fn remove_item(&self, id: GlobalId) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM items WHERE gid = ?")?
-            .execute(params![SqlVal(id)])?;
+    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
+        let n = self.items.delete(|k, _v| k.gid == id).len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -748,11 +769,18 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn update_item(&self, id: GlobalId, item_name: &str, item: &[u8]) -> Result<(), Error> {
-        let n = self
-            .inner
-            .prepare_cached("UPDATE items SET name = ?, definition = ? WHERE gid = ?")?
-            .execute(params![item_name, item, SqlVal(id)])?;
+    pub fn update_item(&mut self, id: GlobalId, item_name: &str, item: &[u8]) -> Result<(), Error> {
+        let n = self.items.update(|k, v| {
+            if k.gid == id {
+                Some(ItemValue {
+                    schema_id: v.schema_id,
+                    name: item_name.to_string(),
+                    definition: item.to_vec(),
+                })
+            } else {
+                None
+            }
+        })?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -761,44 +789,281 @@ impl Transaction<'_> {
         }
     }
 
-    pub fn commit(self) -> Result<(), rusqlite::Error> {
-        self.inner.commit()
-    }
-}
-
-fn is_constraint_violation(err: &rusqlite::Error) -> bool {
-    match err {
-        rusqlite::Error::SqliteFailure(err, _) => {
-            err.code == rusqlite::ErrorCode::ConstraintViolation
+    pub fn commit(self) -> Result<(), Error> {
+        let mut batches = Vec::new();
+        fn add_batch<K, V, S, I>(
+            stash: &mut S,
+            batches: &mut Vec<AppendBatch>,
+            collection: &TypedCollection<K, V>,
+            changes: I,
+        ) -> Result<(), Error>
+        where
+            K: Codec + Ord,
+            V: Codec + Ord,
+            S: Append,
+            I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
+        {
+            let mut changes = changes.into_iter().peekable();
+            if changes.peek().is_none() {
+                return Ok(());
+            }
+            let collection = collection.get(stash)?;
+            let mut batch = collection.make_batch(stash)?;
+            for (k, v, diff) in changes {
+                collection.append_to_batch(&mut batch, &k, &v, diff);
+            }
+            batches.push(batch);
+            Ok(())
         }
-        _ => false,
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_DATABASE,
+            self.databases.pending(),
+        )?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_SCHEMA,
+            self.schemas.pending(),
+        )?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_ITEM,
+            self.items.pending(),
+        )?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_ROLE,
+            self.roles.pending(),
+        )?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_COMPUTE_INSTANCES,
+            self.compute_instances.pending(),
+        )?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
+            self.introspection_sources.pending(),
+        )?;
+        if batches.is_empty() {
+            return Ok(());
+        }
+        self.stash.append(batches).map_err(|e| e.into())
     }
 }
 
-pub struct SqlVal<T>(pub T);
+macro_rules! impl_codec {
+    ($ty:ty) => {
+        impl Codec for $ty {
+            fn codec_name() -> String {
+                "protobuf[$ty]".into()
+            }
 
-impl<T> ToSql for SqlVal<T>
-where
-    T: Serialize,
-{
-    fn to_sql(&self) -> Result<ToSqlOutput, rusqlite::Error> {
-        let bytes = serde_json::to_vec(&self.0)
-            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-        Ok(ToSqlOutput::Owned(Value::Blob(bytes)))
-    }
+            fn encode<B: BufMut>(&self, buf: &mut B) {
+                Message::encode(self, buf).expect("provided buffer had sufficient capacity")
+            }
+
+            fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+                Message::decode(buf).map_err(|err| err.to_string())
+            }
+        }
+    };
 }
 
-impl<T> FromSql for SqlVal<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    fn column_result(val: ValueRef) -> Result<Self, FromSqlError> {
-        let bytes = match val {
-            ValueRef::Blob(bytes) => bytes,
-            _ => return Err(FromSqlError::InvalidType),
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct SettingKey {
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(SettingKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct SettingValue {
+    #[prost(string)]
+    value: String,
+}
+impl_codec!(SettingValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct GidAllocKey {
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(GidAllocKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct GidAllocValue {
+    #[prost(uint64)]
+    next_gid: u64,
+}
+impl_codec!(GidAllocValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct GidMappingKey {
+    #[prost(string)]
+    schema_name: String,
+    #[prost(string)]
+    object_name: String,
+}
+impl_codec!(GidMappingKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct GidMappingValue {
+    #[prost(uint64)]
+    id: u64,
+    #[prost(uint64)]
+    fingerprint: u64,
+}
+impl_codec!(GidMappingValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ComputeInstanceKey {
+    #[prost(int64)]
+    id: i64,
+}
+impl_codec!(ComputeInstanceKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct ComputeInstanceValue {
+    #[prost(string)]
+    name: String,
+    #[prost(string, optional)]
+    config: Option<String>,
+}
+impl_codec!(ComputeInstanceValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ComputeIntrospectionSourceIndexKey {
+    #[prost(int64)]
+    compute_id: i64,
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(ComputeIntrospectionSourceIndexKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct ComputeIntrospectionSourceIndexValue {
+    #[prost(uint64)]
+    index_id: u64,
+}
+impl_codec!(ComputeIntrospectionSourceIndexValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct DatabaseKey {
+    #[prost(int64)]
+    id: i64,
+}
+impl_codec!(DatabaseKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct DatabaseValue {
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(DatabaseValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct SchemaKey {
+    #[prost(int64)]
+    id: i64,
+}
+impl_codec!(SchemaKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct SchemaValue {
+    #[prost(int64, optional)]
+    database_id: Option<i64>,
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(SchemaValue);
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ItemKey {
+    gid: GlobalId,
+}
+
+#[derive(Clone, Message)]
+struct ProtoItemKey {
+    #[prost(message)]
+    gid: Option<ProtoGlobalId>,
+}
+
+// To pleasantly support GlobalId, use a custom impl.
+// TODO: Is there a better way to do this?
+impl Codec for ItemKey {
+    fn codec_name() -> String {
+        "protobuf[ItemKey]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        let proto = ProtoItemKey {
+            gid: Some(ProtoGlobalId::from(&self.gid)),
         };
-        Ok(SqlVal(
-            serde_json::from_slice(bytes).map_err(|err| FromSqlError::Other(Box::new(err)))?,
-        ))
+        Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let proto: ProtoItemKey = Message::decode(buf).map_err(|err| err.to_string())?;
+        Ok(Self {
+            gid: GlobalId::try_from(proto.gid.unwrap()).unwrap(),
+        })
     }
 }
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct ItemValue {
+    #[prost(int64)]
+    schema_id: i64,
+    #[prost(string)]
+    name: String,
+    #[prost(bytes)]
+    definition: Vec<u8>,
+}
+impl_codec!(ItemValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct RoleKey {
+    #[prost(int64)]
+    id: i64,
+}
+impl_codec!(RoleKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct RoleValue {
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(RoleValue);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ConfigValue {
+    #[prost(uint64)]
+    value: u64,
+}
+impl_codec!(ConfigValue);
+
+static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
+static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
+    TypedCollection::new("setting");
+static COLLECTION_GID_ALLOC: TypedCollection<GidAllocKey, GidAllocValue> =
+    TypedCollection::new("gid_alloc");
+static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
+    TypedCollection::new("system_gid_mapping");
+static COLLECTION_COMPUTE_INSTANCES: TypedCollection<ComputeInstanceKey, ComputeInstanceValue> =
+    TypedCollection::new("compute_instance");
+static COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX: TypedCollection<
+    ComputeIntrospectionSourceIndexKey,
+    ComputeIntrospectionSourceIndexValue,
+> = TypedCollection::new("compute_introspection_source_index");
+static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
+    TypedCollection::new("database");
+static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
+static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
+static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");

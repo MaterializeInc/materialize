@@ -83,16 +83,12 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<(), InvalidUsage> {
+    ) -> Result<Result<(), Antichain<T>>, InvalidUsage> {
         // Sanity check that the writer is sending appends such that the lower
         // and upper frontiers line up with previous writes.
         let write_cap = self.writer(writer_id)?;
         if &write_cap.upper != desc.lower() {
-            return Err(InvalidUsage(anyhow!(
-                "writer upper {:?} didn't match batch desc: {:?}",
-                write_cap.upper,
-                desc
-            )));
+            return Ok(Err(write_cap.upper.clone()));
         }
         write_cap.upper.clone_from(desc.upper());
 
@@ -106,13 +102,13 @@ where
         let desc = Description::new(lower, desc.upper().clone(), desc.since().clone());
         if PartialOrder::less_equal(desc.upper(), desc.lower()) {
             // No-op
-            return Ok(());
+            return Ok(Ok(()));
         }
 
         self.trace.push((keys.to_vec(), desc.clone()));
         debug_assert_eq!(&self.upper(), desc.upper());
 
-        Ok(())
+        Ok(Ok(()))
     }
 
     pub fn compare_and_append(

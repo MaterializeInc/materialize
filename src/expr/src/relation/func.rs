@@ -15,6 +15,7 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
+use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
@@ -24,13 +25,14 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::relation::{compare_columns, ColumnOrder};
+use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
@@ -714,6 +716,101 @@ where
     })
 }
 
+// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+fn first_value<'a, I>(
+    datums: I,
+    temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, InputValue) record
+    let datums = order_aggregate_datums(datums, order_by);
+
+    // Decode the input (OriginalRow, InputValue) into separate datums
+    let datums = datums
+        .into_iter()
+        .map(|d| {
+            let mut iter = d.unwrap_list().iter();
+            let original_row = iter.next().unwrap();
+            let input_value = iter.next().unwrap();
+
+            (input_value, original_row)
+        })
+        .collect_vec();
+
+    let length = datums.len();
+    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
+    for (idx, (current_datum, original_row)) in datums.iter().enumerate() {
+        let first_value = match &window_frame.start_bound {
+            // Always return the current value
+            WindowFrameBound::CurrentRow => *current_datum,
+            WindowFrameBound::UnboundedPreceding => {
+                if let WindowFrameBound::OffsetPreceding(end_offset) = &window_frame.end_bound {
+                    let end_offset = usize::cast_from(*end_offset);
+
+                    // If the frame ends before the first row, return null
+                    if idx < end_offset {
+                        Datum::Null
+                    } else {
+                        datums[0].0
+                    }
+                } else {
+                    datums[0].0
+                }
+            }
+            WindowFrameBound::OffsetPreceding(offset) => {
+                let start_offset = usize::cast_from(*offset);
+                let start_idx = idx.saturating_sub(start_offset);
+                if let WindowFrameBound::OffsetPreceding(end_offset) = &window_frame.end_bound {
+                    let end_offset = usize::try_from(*end_offset)
+                        .expect("Window frame offset does not fit in usize");
+
+                    // If the frame is empty or ends before the first row, return null
+                    if start_offset < end_offset || idx < end_offset {
+                        Datum::Null
+                    } else {
+                        datums[start_idx].0
+                    }
+                } else {
+                    datums[start_idx].0
+                }
+            }
+            WindowFrameBound::OffsetFollowing(offset) => {
+                let start_offset =
+                    usize::try_from(*offset).expect("Window frame offset does not fit in usize");
+                let start_idx = idx.saturating_add(start_offset);
+                if let WindowFrameBound::OffsetFollowing(end_offset) = &window_frame.end_bound {
+                    // If the frame is empty or starts after the last row, return null
+                    if offset > end_offset || start_idx >= length {
+                        Datum::Null
+                    } else {
+                        datums[start_idx].0
+                    }
+                } else {
+                    datums.get(start_idx).map(|d| d.0).unwrap_or(Datum::Null)
+                }
+            }
+            // Forbidden during planning
+            WindowFrameBound::UnboundedFollowing => unreachable!(),
+        };
+
+        result.push((first_value, *original_row));
+    }
+
+    let result = result.into_iter().map(|(lag, original_row)| {
+        temp_storage.make_datum(|packer| {
+            packer.push_list(vec![lag, original_row]);
+        })
+    });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
+
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -795,6 +892,10 @@ pub enum AggregateFunc {
     LagLead {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
+    },
+    FirstValue {
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
@@ -878,6 +979,13 @@ impl From<&AggregateFunc> for ProtoAggregateFunc {
                         }),
                     })
                 }
+                AggregateFunc::FirstValue {
+                    order_by,
+                    window_frame,
+                } => Kind::FirstValue(proto_aggregate_func::ProtoFirstValue {
+                    order_by: Some(order_by.into()),
+                    window_frame: Some(window_frame.into()),
+                }),
                 AggregateFunc::Dummy => Kind::Dummy(()),
             }),
         }
@@ -961,6 +1069,12 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
                     }
                 },
             },
+            Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
+                order_by: pfv.order_by.try_into_if_some("ProtoFirstValue::order_by")?,
+                window_frame: pfv
+                    .window_frame
+                    .try_into_if_some("ProtoFirstValue::window_frame")?,
+            },
             Kind::Dummy(()) => AggregateFunc::Dummy,
         })
     }
@@ -1016,6 +1130,10 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
             } => lag_lead(datums, temp_storage, order_by, lag_lead_type),
+            AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            } => first_value(datums, temp_storage, order_by, window_frame),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -1044,6 +1162,7 @@ impl AggregateFunc {
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             AggregateFunc::DenseRank { .. } => Datum::empty_list(),
             AggregateFunc::LagLead { .. } => Datum::empty_list(),
+            AggregateFunc::FirstValue { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -1138,6 +1257,28 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from(column_name), value_type),
+                            (ColumnName::from("?record?"), original_row_type),
+                        ],
+                        custom_id: None,
+                        custom_name: None,
+                    }),
+                    custom_id: None,
+                }
+            }
+            AggregateFunc::FirstValue { .. } => {
+                // The input type for FirstValue is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let value_type = fields[0].unwrap_record_element_type()[1]
+                    .clone()
+                    .nullable(true);
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_id: None,
@@ -1442,20 +1583,69 @@ impl fmt::Display for AggregateFunc {
                 lag_lead: LagLeadType::Lead,
                 ..
             } => f.write_str("lead"),
+            AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
     pub nullable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
+impl From<&CaptureGroupDesc> for ProtoCaptureGroupDesc {
+    fn from(x: &CaptureGroupDesc) -> Self {
+        Self {
+            index: x.index,
+            name: x.name.clone(),
+            nullable: x.nullable,
+        }
+    }
+}
+
+impl TryFrom<ProtoCaptureGroupDesc> for CaptureGroupDesc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoCaptureGroupDesc) -> Result<Self, Self::Error> {
+        Ok(Self {
+            index: x.index,
+            name: x.name,
+            nullable: x.nullable,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct AnalyzedRegex(
+    #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
+    Vec<CaptureGroupDesc>,
+);
+
+impl From<&AnalyzedRegex> for ProtoAnalyzedRegex {
+    fn from(x: &AnalyzedRegex) -> Self {
+        ProtoAnalyzedRegex {
+            regex: Some((&x.0).into()),
+            groups: x.1.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoAnalyzedRegex> for AnalyzedRegex {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoAnalyzedRegex) -> Result<Self, Self::Error> {
+        Ok(AnalyzedRegex(
+            x.regex.try_into_if_some("ProtoAnalyzedRegex::regex")?,
+            x.groups
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+}
 
 impl AnalyzedRegex {
     pub fn new(s: &str) -> Result<Self, regex::Error> {
@@ -1517,7 +1707,7 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
     datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum TableFunc {
     JsonbEach {
         stringify: bool,
@@ -1549,6 +1739,75 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
+}
+
+impl From<&TableFunc> for ProtoTableFunc {
+    fn from(x: &TableFunc) -> Self {
+        use proto_table_func::Kind;
+        use proto_table_func::ProtoWrap;
+
+        ProtoTableFunc {
+            kind: Some(match x {
+                TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
+                TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
+                TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
+                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into()),
+                TableFunc::CsvExtract(x) => Kind::CsvExtract(x.into_proto()),
+                TableFunc::GenerateSeriesInt32 => Kind::GenerateSeriesInt32(()),
+                TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
+                TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
+                TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
+                TableFunc::Repeat => Kind::Repeat(()),
+                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into()),
+                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into()),
+                TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
+                    types: types.iter().map(Into::into).collect(),
+                    width: width.into_proto(),
+                }),
+                TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoTableFunc> for TableFunc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTableFunc) -> Result<Self, Self::Error> {
+        use proto_table_func::Kind;
+
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
+
+        Ok(match kind {
+            Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
+            Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
+            Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
+            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.try_into()?),
+            Kind::CsvExtract(x) => TableFunc::CsvExtract(usize::from_proto(x)?),
+            Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
+            Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
+            Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
+            Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
+            Kind::Repeat(()) => TableFunc::Repeat,
+            Kind::UnnestArray(x) => TableFunc::UnnestArray {
+                el_typ: x.try_into()?,
+            },
+            Kind::UnnestList(x) => TableFunc::UnnestList {
+                el_typ: x.try_into()?,
+            },
+            Kind::Wrap(x) => TableFunc::Wrap {
+                width: usize::from_proto(x.width)?,
+                types: x
+                    .types
+                    .into_iter()
+                    .map(TryFrom::try_from)
+                    .collect::<Result<_, _>>()?,
+            },
+            Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
+        })
+    }
 }
 
 impl TableFunc {
@@ -1808,7 +2067,7 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc};
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -1816,6 +2075,15 @@ mod tests {
        #[test]
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+       #[test]
+        fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

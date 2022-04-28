@@ -20,7 +20,8 @@ use mz_persist_types::Codec;
 use timely::progress::frontier::AntichainRef;
 
 use crate::{
-    AntichainFormatter, Diff, Id, InternalStashError, Stash, StashCollection, StashError, Timestamp,
+    AntichainFormatter, Append, AppendBatch, Diff, Id, InternalStashError, Stash, StashCollection,
+    StashError, Timestamp,
 };
 
 const SCHEMA: &str = "
@@ -445,5 +446,24 @@ impl From<postgres::Error> for StashError {
         StashError {
             inner: InternalStashError::Postgres(e),
         }
+    }
+}
+
+impl Append for Postgres {
+    fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = AppendBatch>,
+    {
+        self.transact(|tx| {
+            for batch in batches {
+                let upper = Self::upper_tx(tx, batch.collection_id)?;
+                if upper != batch.lower {
+                    return Err("unexpected lower".into());
+                }
+                Self::update_many_tx(tx, batch.collection_id, batch.entries.into_iter())?;
+                Self::seal_batch_tx(tx, std::iter::once((batch.collection_id, &batch.upper)))?;
+            }
+            Ok(())
+        })
     }
 }

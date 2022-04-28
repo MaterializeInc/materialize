@@ -15,7 +15,8 @@ use rdkafka::config::ClientConfig;
 
 use mz_dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-    KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConsistencyConnector, PersistSinkConnector, PersistSinkConnectorBuilder,
+    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
@@ -29,6 +30,7 @@ pub async fn build(
 ) -> Result<SinkConnector, CoordError> {
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
+        SinkConnectorBuilder::Persist(p) => build_persist_sink(p, id),
     }
 }
 
@@ -327,5 +329,17 @@ async fn build_kafka(
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
         config_options: builder.config_options,
+    }))
+}
+
+fn build_persist_sink(
+    builder: PersistSinkConnectorBuilder,
+    _id: GlobalId,
+) -> Result<SinkConnector, CoordError> {
+    Ok(SinkConnector::Persist(PersistSinkConnector {
+        consensus_uri: builder.consensus_uri,
+        blob_uri: builder.blob_uri,
+        shard_id: builder.shard_id,
+        value_desc: builder.value_desc,
     }))
 }

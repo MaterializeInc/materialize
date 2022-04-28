@@ -109,6 +109,12 @@ where
     /// Applies `updates` to this shard and downgrades this handle's upper to
     /// `new_upper`.
     ///
+    /// The innermost `Result` is `Ok` if the updates were successfully written.
+    /// If not, an `Err` containing the current writer upper is returned. If
+    /// that happens, we also update our local `upper` to match the current
+    /// upper. This is useful in cases where a timeout happens in between a
+    /// successful write and returning that to the client.
+    ///
     /// In contrast to [Self::compare_and_append], multiple [WriteHandle]s (with
     /// different [WriterId]s) may be used concurrently to write to the same
     /// shard, but in this case, the data being written must be identical (in
@@ -142,7 +148,7 @@ where
         timeout: Duration,
         updates: I,
         new_upper: Antichain<T>,
-    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
         trace!(
             "WriteHandle::append timeout={:?} new_upper={:?}",
             timeout,
@@ -172,10 +178,14 @@ where
             .append(deadline, &self.writer_id, &[key], &desc)
             .await?;
         match res {
-            Ok(_) => self.upper = desc.upper().clone(),
+            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
+            Ok(Err(current_upper)) => {
+                self.upper = current_upper.clone();
+                return Ok(Ok(Err(current_upper)));
+            }
             Err(err) => return Ok(Err(err)),
         };
-        Ok(Ok(()))
+        Ok(Ok(Ok(())))
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -332,7 +342,7 @@ where
         &mut self,
         updates: &[((K, V), T, D)],
         new_upper: T,
-    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
         use crate::NO_TIMEOUT;
 
         self.append(

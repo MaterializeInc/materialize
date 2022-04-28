@@ -8,8 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
-askama_shared = { version = "0.12.2", features = ["json"] }
-cc = "1.0.73"
 flate2 = "1.0.23"
 hex = "0.4.3"
 hex-literal = "0.3.4"

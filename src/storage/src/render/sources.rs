@@ -8,16 +8,21 @@
 // by the Apache License, Version 2.0.
 
 //! Logic related to the creation of dataflow sources.
+//!
+//! See [`render_source`] for more details.
 
+use std::any::Any;
 use std::cell::RefCell;
+use std::marker::{Send, Sync};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::ActivateCapability;
-use timely::dataflow::operators::{Map, OkErr, UnorderedInput};
+use timely::dataflow::operators::{ActivateCapability, Map, OkErr, Operator, UnorderedInput};
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::sources::{encoding::*, *};
@@ -25,12 +30,11 @@ use mz_dataflow_types::*;
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
-use crate::decode::decode_cdcv2;
-use crate::decode::render_decode;
-use crate::decode::render_decode_delimited;
+use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
     KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, S3SourceReader, SourceConfig,
+    SourceToken,
 };
 use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -46,8 +50,8 @@ enum SourceType<Delimited, ByteStream> {
     ByteStream(ByteStream),
 }
 
-/// A description of a table imported by [`import_table`].
-struct ImportedTable<G>
+/// A description of a table imported by [`render_table`].
+struct RenderedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -58,40 +62,78 @@ where
     /// A handle for inserting records into the table.
     handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
     /// The initial capability associated with the insert handle.
-    capability: ActivateCapability<Timestamp>,
+    capability: Rc<RefCell<ActivateCapability<Timestamp>>>,
+    /// A type-erased `SourceToken` that, upon drop,
+    /// shuts down the table psesudo-source.
+    token: Arc<dyn Any + Send + Sync>,
 }
 
 /// Imports a table (non-durable, local source of input).
-fn import_table<G>(
+fn render_table<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     scope: &mut G,
-) -> ImportedTable<G>
+) -> RenderedTable<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let ((handle, capability), ok_stream) = scope.new_unordered_input::<(Row, Timestamp, Diff)>();
+    // Convert to reference counted, so that users can downgrade it and allow the
+    // following code to destroy it later on.
+    let capability = Rc::new(RefCell::new(capability));
     let err_collection = Collection::empty(scope);
 
     let as_of_frontier = as_of_frontier.clone();
+    let mut vector = Vec::new();
+    let mut token = None;
+
+    // Note: this `unary` operator is adapted from `Operator::map_in_place`.
+    // It forwards the data along, but adds a way to drop the operator's input capability,
+    // if the returned, thread-safe `SourceToken` is dropped.
     let ok_collection = ok_stream
+        .unary(Pipeline, "MapInPlaceWithSyncToken", |_, operator_info| {
+            let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
+            let drop_activator_weak = Arc::downgrade(&drop_activator);
+
+            let mut local_cap = Some(Rc::clone(&capability));
+
+            token = Some(SourceToken {
+                activator: drop_activator,
+            });
+
+            move |input, output| {
+                // Drop cap and early exit if the source-token is dropped
+                if drop_activator_weak.upgrade().is_none() {
+                    local_cap.take();
+                    return;
+                }
+
+                input.for_each(|time, data| {
+                    data.swap(&mut vector);
+                    output.session(&time).give_vec(&mut vector);
+                })
+            }
+        })
         .map_in_place(move |(_, time, _)| {
             time.advance_by(as_of_frontier.borrow());
         })
         .as_collection();
 
-    ImportedTable {
+    RenderedTable {
         ok_collection,
         err_collection,
         handle,
         capability,
+        token: Arc::new(token.unwrap()),
     }
 }
 
-/// Constructs a `CollectionBundle` and tokens from source arguments.
+/// Constructs a data [`Collection`], an error [`Collection`],
+/// and tokens from a [`SourceInstanceDesc`].
 ///
 /// The first returned pair are the row and error collections, and the
 /// second is a token that will keep the source alive as long as it is held.
-pub(crate) fn import_source<G>(
+// TODO(guswynn): write docs inline for this function
+pub(crate) fn render_source<G>(
     dataflow_debug_name: &String,
     dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
@@ -106,7 +148,7 @@ pub(crate) fn import_source<G>(
     src_id: GlobalId,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-    Rc<dyn std::any::Any>,
+    Arc<dyn std::any::Any + Send + Sync>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -119,7 +161,7 @@ where
     }
 
     // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
+    let mut needed_tokens: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
 
     // This uid must be unique across all different instantiations of a source
     let uid = SourceInstanceId {
@@ -138,7 +180,7 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { .. } => {
-            let mut table = import_table(as_of_frontier, scope);
+            let mut table = render_table(as_of_frontier, scope);
 
             let table_state = match storage_state.table_state.get_mut(&src_id) {
                 Some(table_state) => table_state,
@@ -152,24 +194,24 @@ where
             // Make the new local input reflect the latest table state, then add the
             // local input to the table state.
             {
-                let mut session = table.handle.session(table.capability.clone());
+                let mut session = table.handle.session(table.capability.borrow().clone());
                 for (row, time, diff) in &table_state.data {
                     let mut time = *time;
                     time.advance_by(table_state.since.borrow());
-                    assert!(time >= *table.capability.time());
+                    assert!(time >= *table.capability.borrow().time());
                     session.give((row.clone(), time, *diff));
                 }
             }
-            table.capability.downgrade(&table_state.upper);
+            table.capability.borrow_mut().downgrade(&table_state.upper);
 
-            // Convert to reference counted, so that users can drop it.
-            let capability = Rc::new(RefCell::new(table.capability));
             table_state.inputs.push(LocalInput {
                 handle: table.handle,
-                capability: Rc::downgrade(&capability),
+                // Hand off our a `Weak` to the core capability, so that
+                // it is correctly dropped if the token is dropped.
+                capability: Rc::downgrade(&table.capability),
             });
 
-            ((table.ok_collection, table.err_collection), capability)
+            ((table.ok_collection, table.err_collection), table.token)
         }
 
         SourceConnector::External {
@@ -254,6 +296,8 @@ where
                     );
 
                     (ok_stream.as_collection(), capability)
+                } else if let ExternalSourceConnector::Persist(_) = connector {
+                    unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -293,6 +337,7 @@ where
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                         ExternalSourceConnector::PubNub(_) => unreachable!(),
+                        ExternalSourceConnector::Persist(_) => unreachable!(),
                     };
 
                     // Include any source errors.
@@ -326,13 +371,13 @@ where
                             };
                             // TODO(petrosagg): this should move to the envelope section below and
                             // made to work with a stream of Rows instead of decoding Avro directly
-                            let (oks, token) = decode_cdcv2(
+                            let (oks, token) = render_decode_cdcv2(
                                 &ok_source,
                                 &schema,
                                 schema_registry_config,
                                 confluent_wire_format,
                             );
-                            needed_tokens.push(Rc::new(token));
+                            needed_tokens.push(Arc::new(token));
                             (oks, None)
                         } else {
                             let (results, extra_token) = match ok_source {
@@ -355,7 +400,7 @@ where
                                 ),
                             };
                             if let Some(tok) = extra_token {
-                                needed_tokens.push(Rc::new(tok));
+                                needed_tokens.push(Arc::new(tok));
                             }
 
                             // render envelopes
@@ -371,7 +416,7 @@ where
                                                 .clone();
                                             // TODO(#11667): reuse the existing arrangement if it exists
                                             let ((tx_source_ok, tx_source_err), tx_token) =
-                                                import_source(
+                                                render_source(
                                                     dataflow_debug_name,
                                                     dataflow_id,
                                                     as_of_frontier,
@@ -451,6 +496,9 @@ where
                                     (stream.as_collection(), Some(errors))
                                 }
                                 SourceEnvelope::CdcV2 => unreachable!(),
+                                SourceEnvelope::DifferentialRow => {
+                                    unreachable!("persist sources go through a special render path")
+                                }
                             }
                         }
                     };
@@ -531,7 +579,7 @@ where
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
 
-            let source_token = Rc::new(capability);
+            let source_token = Arc::new(capability);
 
             // We also need to keep track of this mapping globally to activate sources
             // on timestamp advancement queries
@@ -539,12 +587,12 @@ where
                 .ts_source_mapping
                 .entry(src_id)
                 .or_insert_with(Vec::new)
-                .push(Rc::downgrade(&source_token));
+                .push(Arc::downgrade(&source_token));
 
             needed_tokens.push(source_token);
 
             // Return the collections and any needed tokens.
-            ((collection, err_collection), Rc::new(needed_tokens))
+            ((collection, err_collection), Arc::new(needed_tokens))
         }
     }
 }

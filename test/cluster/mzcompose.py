@@ -46,7 +46,7 @@ SERVICES = [
     ),
     Materialized(
         extra_ports=[2101],
-        options="--process-listen-host=0.0.0.0 --orchestrator-linger true --reconcile",
+        options="--orchestrator-linger true --reconcile",
     ),
     Testdrive(
         volumes=[

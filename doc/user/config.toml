@@ -122,6 +122,11 @@ identifier = 'sql-patterns'
 weight = 85
 
 [[menu.main]]
+name = "CREATE SOURCE"
+parent = 'commands'
+url = '/sql/create-source'
+
+[[menu.main]]
 identifier = "integration-guides"
 name = "Integration Guides"
 parent = "integrations"

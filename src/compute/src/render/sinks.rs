@@ -194,9 +194,7 @@ where
             });
             collection
         }
-        // No envelope, this can only happen for TAIL sinks, which work
-        // on vanilla rows.
-        None => keyed.map(|(key, value)| (key, Some(value))),
+        Some(SinkEnvelope::DifferentialRow) | None => keyed.map(|(key, value)| (key, Some(value))),
     };
 
     collection
@@ -232,5 +230,6 @@ where
     match connector {
         SinkConnector::Kafka(connector) => Box::new(connector.clone()),
         SinkConnector::Tail(connector) => Box::new(connector.clone()),
+        SinkConnector::Persist(connector) => Box::new(connector.clone()),
     }
 }

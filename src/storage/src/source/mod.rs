@@ -12,13 +12,11 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -35,7 +33,7 @@ use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Capability, CapabilitySet, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
-use timely::scheduling::activate::{Activator, SyncActivator};
+use timely::scheduling::activate::SyncActivator;
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use tracing::error;
@@ -61,10 +59,11 @@ mod file;
 mod kafka;
 mod kinesis;
 pub mod metrics;
+pub mod persist_source;
 mod postgres;
 mod pubnub;
 mod s3;
-mod util;
+pub mod util;
 
 pub mod timestamp;
 
@@ -276,18 +275,21 @@ where
     }
 }
 
-/// A `SourceToken` manages interest in a source.
+// TODO(guswynn): consider moving back to non-thread-safe `RC`'s if
+// we end up with a boundary-per-worker
+// TODO(guswynn): consider just using `SyncActivateOnDrop` if merged into timely
+/// A `SourceToken` manages interest in a source, and is thread-safe.
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capabilities: Rc<RefCell<Option<(Capability<Timestamp>, CapabilitySet<Timestamp>)>>>,
-    activator: Activator,
+    pub activator: Arc<SyncActivator>,
 }
 
 impl Drop for SourceToken {
     fn drop(&mut self) {
-        *self.capabilities.borrow_mut() = None;
-        self.activator.activate();
+        // Best effort: sync activation
+        // failures are ignored
+        let _ = self.activator.activate();
     }
 }
 

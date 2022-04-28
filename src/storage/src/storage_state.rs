@@ -7,10 +7,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Location;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
@@ -59,7 +62,11 @@ pub struct StorageState {
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    /// Persist handles for all sources that deal with persist collections/shards.
+    pub persist_handles:
+        HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
     /// Handles to external sources, keyed by ID.
+    // TODO(guswynn): determine if this field is needed
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
@@ -148,11 +155,13 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     Some(rt_default)
                 }
                 ExternalSourceConnector::Kafka(_) => Some(rt_default),
-                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => None,
+                ExternalSourceConnector::Postgres(_)
+                | ExternalSourceConnector::PubNub(_)
+                | ExternalSourceConnector::Persist(_) => None,
             }
         } else {
             debug!(
-                "Timestamping not supported for local sources {}. Ignoring",
+                "Timestamping not supported for local or persist sources {}. Ignoring",
                 source.id
             );
             None
@@ -203,8 +212,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
             StorageCommand::DropInstance() => {}
             StorageCommand::CreateSources(sources) => {
                 for source in sources {
-                    self.setup_timestamp_binding_state(&source);
-
                     match &source.desc.connector {
                         SourceConnector::Local { .. } => {
                             self.storage_state.table_state.insert(
@@ -217,10 +224,59 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                                     inputs: vec![],
                                 },
                             );
+
+                            self.setup_timestamp_binding_state(&source);
+
+                            // Initialize shared frontier tracking.
+                            self.storage_state.source_uppers.insert(
+                                source.id,
+                                Rc::new(RefCell::new(Antichain::from_elem(
+                                    mz_repr::Timestamp::minimum(),
+                                ))),
+                            );
+                        }
+                        SourceConnector::External {
+                            connector: ExternalSourceConnector::Persist(persist_connector),
+                            ..
+                        } => {
+                            let location = Location {
+                                blob_uri: persist_connector.blob_uri.clone(),
+                                consensus_uri: persist_connector.consensus_uri.clone(),
+                            };
+
+                            let timeout = Duration::from_secs(60);
+
+                            // TODO: Make these parts async aware?
+                            let (blob, consensus) =
+                                futures_executor::block_on(location.open(timeout)).unwrap();
+
+                            let persist_client = futures_executor::block_on(
+                                mz_persist_client::Client::new(timeout, blob, consensus),
+                            )
+                            .unwrap();
+
+                            let (write, _read) = futures_executor::block_on(
+                                persist_client.open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
+                                    timeout,
+                                    persist_connector.shard_id,
+                                ),
+                            )
+                            .unwrap();
+
+                            self.storage_state.persist_handles.insert(source.id, write);
                         }
                         SourceConnector::External { .. } => {
                             // Nothing to do at the moment, but in the future
                             // prepare source ingestion.
+                            self.setup_timestamp_binding_state(&source);
+
+                            // Initialize shared frontier tracking.
+                            self.storage_state.source_uppers.insert(
+                                source.id,
+                                Rc::new(RefCell::new(Antichain::from_elem(
+                                    mz_repr::Timestamp::minimum(),
+                                ))),
+                            );
                         }
                     }
 
@@ -228,15 +284,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .source_descriptions
                         .insert(source.id, source.desc);
 
-                    // Initialize shared frontier tracking.
                     use timely::progress::Timestamp;
-                    self.storage_state.source_uppers.insert(
-                        source.id,
-                        Rc::new(RefCell::new(Antichain::from_elem(
-                            mz_repr::Timestamp::minimum(),
-                        ))),
-                    );
-
                     self.storage_state.reported_frontiers.insert(
                         source.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
@@ -257,6 +305,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.ts_histories.remove(&id);
                         self.storage_state.ts_source_mapping.remove(&id);
+                        self.storage_state.persist_handles.remove(&id);
                     } else {
                         if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                             ts_history.set_compaction_frontier(frontier.borrow());
@@ -434,6 +483,36 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();
+
+            // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
+            // This is protection against `frontier` lagging behind what we have conditionally reported.
+            if <_ as PartialOrder>::less_than(reported_frontier, &observed_frontier) {
+                let mut change_batch = ChangeBatch::new();
+                for time in reported_frontier.elements().iter() {
+                    change_batch.update(time.clone(), -1);
+                }
+                for time in observed_frontier.elements().iter() {
+                    change_batch.update(time.clone(), 1);
+                }
+                if !change_batch.is_empty() {
+                    changes.push((*id, change_batch));
+                }
+                reported_frontier.clone_from(&observed_frontier);
+            }
+        }
+
+        for (id, write_handle) in self.storage_state.persist_handles.iter_mut() {
+            let reported_frontier = self
+                .storage_state
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Reported frontier missing!");
+
+            // TODO: Make these parts of the code async?
+            let observed_frontier = futures_executor::block_on(
+                write_handle.fetch_recent_upper(Duration::from_secs(60)),
+            )
+            .unwrap();
 
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.
