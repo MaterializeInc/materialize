@@ -79,8 +79,8 @@ impl Action for VerifyTimestampCompactionAction {
 
                         let mut stash = mz_stash::Sqlite::open(&path.join("storage"))?;
                         let collection = stash
-                            .collection::<PartitionId, ()>(&format!("timestamp-bindings-{item_id}"))?;
-                        let bindings: Vec<(PartitionId, u64, MzOffset)> = stash.iter(collection)?
+                            .collection::<PartitionId, ()>(&format!("timestamp-bindings-{item_id}")).await?;
+                        let bindings: Vec<(PartitionId, u64, MzOffset)> = stash.iter(collection).await?
                             .into_iter()
                             .map(|((pid, _), ts, offset)| {
                                 (

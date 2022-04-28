@@ -13,6 +13,7 @@ use std::cmp;
 use std::marker::PhantomData;
 use std::path::Path;
 
+use async_trait::async_trait;
 use rusqlite::{named_params, params, Connection, OptionalExtension, Transaction};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -21,8 +22,8 @@ use mz_persist_types::Codec;
 use timely::progress::frontier::AntichainRef;
 
 use crate::{
-    AntichainFormatter, Append, AppendBatch, Diff, Id, InternalStashError, Stash, StashCollection,
-    StashError, Timestamp,
+    AntichainFormatter, Append, AppendBatch, Data, Diff, Id, InternalStashError, Stash,
+    StashCollection, StashError, Timestamp,
 };
 
 const APPLICATION_ID: i32 = 0x0872_e898; // chosen randomly
@@ -156,8 +157,9 @@ impl Sqlite {
     }
 }
 
+#[async_trait]
 impl Stash for Sqlite {
-    fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
+    async fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Codec + Ord,
         V: Codec + Ord,
@@ -199,13 +201,13 @@ impl Stash for Sqlite {
         })
     }
 
-    fn iter<K, V>(
+    async fn iter<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
     where
-        K: Codec + Ord,
-        V: Codec + Ord,
+        K: Data,
+        V: Data,
     {
         let tx = self.conn.transaction()?;
         let since = match Self::since_tx(&tx, collection.id)?.into_option() {
@@ -235,14 +237,14 @@ impl Stash for Sqlite {
         Ok(rows)
     }
 
-    fn iter_key<K, V>(
+    async fn iter_key<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
         key: &K,
     ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
     where
-        K: Codec + Ord,
-        V: Codec + Ord,
+        K: Data,
+        V: Data,
     {
         let mut key_buf = vec![];
         key.encode(&mut key_buf);
@@ -278,13 +280,16 @@ impl Stash for Sqlite {
         Ok(rows)
     }
 
-    fn update_many<K: Codec, V: Codec, I>(
+    async fn update_many<K: Codec, V: Codec, I>(
         &mut self,
         collection: StashCollection<K, V>,
         entries: I,
     ) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = ((K, V), Timestamp, Diff)>,
+        K: Data,
+        V: Data,
+        I: IntoIterator<Item = ((K, V), Timestamp, Diff)> + Send,
+        I::IntoIter: Send,
     {
         let entries = entries.into_iter().map(|((key, value), time, diff)| {
             let mut key_buf = vec![];
@@ -299,18 +304,26 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    fn seal<K, V>(
+    async fn seal<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
-        new_upper: AntichainRef<Timestamp>,
-    ) -> Result<(), StashError> {
-        self.seal_batch(&[(collection, new_upper.to_owned())])
+        new_upper: AntichainRef<'_, Timestamp>,
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        self.seal_batch(&[(collection, new_upper.to_owned())]).await
     }
 
-    fn seal_batch<K, V>(
+    async fn seal_batch<K, V>(
         &mut self,
         seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError> {
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         let seals = seals
             .iter()
             .map(|(collection, frontier)| (collection.id, frontier));
@@ -320,18 +333,27 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    fn compact<K, V>(
-        &mut self,
+    async fn compact<'a, K, V>(
+        &'a mut self,
         collection: StashCollection<K, V>,
-        new_since: AntichainRef<Timestamp>,
-    ) -> Result<(), StashError> {
+        new_since: AntichainRef<'a, Timestamp>,
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         self.compact_batch(&[(collection, new_since.to_owned())])
+            .await
     }
 
-    fn compact_batch<K, V>(
+    async fn compact_batch<K, V>(
         &mut self,
         compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError> {
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         let tx = self.conn.transaction()?;
         let mut compact_stmt =
             tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
@@ -361,14 +383,25 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    fn consolidate<K, V>(&mut self, collection: StashCollection<K, V>) -> Result<(), StashError> {
-        self.consolidate_batch(&[collection])
+    async fn consolidate<'a, K, V>(
+        &'a mut self,
+        collection: StashCollection<K, V>,
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        self.consolidate_batch(&[collection]).await
     }
 
-    fn consolidate_batch<K, V>(
+    async fn consolidate_batch<K, V>(
         &mut self,
         collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError> {
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         let tx = self.conn.transaction()?;
 
         let mut consolidation_stmt = tx.prepare(
@@ -424,10 +457,14 @@ impl Stash for Sqlite {
     }
 
     /// Reports the current since frontier.
-    fn since<K, V>(
+    async fn since<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError> {
+    ) -> Result<Antichain<Timestamp>, StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         let tx = self.conn.transaction()?;
         let since = Self::since_tx(&tx, collection.id)?;
         tx.commit()?;
@@ -435,10 +472,14 @@ impl Stash for Sqlite {
     }
 
     /// Reports the current upper frontier.
-    fn upper<K, V>(
+    async fn upper<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError> {
+    ) -> Result<Antichain<Timestamp>, StashError>
+    where
+        K: Data,
+        V: Data,
+    {
         let tx = self.conn.transaction()?;
         let upper = Self::upper_tx(&tx, collection.id)?;
         tx.commit()?;
@@ -454,10 +495,12 @@ impl From<rusqlite::Error> for StashError {
     }
 }
 
+#[async_trait]
 impl Append for Sqlite {
-    fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = AppendBatch>,
+        I: IntoIterator<Item = AppendBatch> + Send,
+        I::IntoIter: Send,
     {
         let tx = self.conn.transaction()?;
         for batch in batches {
