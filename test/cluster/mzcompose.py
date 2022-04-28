@@ -19,6 +19,7 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -49,7 +50,11 @@ SERVICES = [
         options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
         ports=[2100, 2102],
     ),
-    Materialized(extra_ports=[2101]),
+    Postgres(),
+    Materialized(
+        options="--persist-consensus-url postgres://postgres:postgres@postgres",
+        extra_ports=[2101],
+    ),
     Testdrive(
         volumes=[
             "mzdata:/mzdata",
@@ -85,8 +90,9 @@ def workflow_nightly(c: Composition) -> None:
 
 
 def test_cluster(c: Composition, *glob: str) -> None:
-    c.up("materialized")
+    c.up("materialized", "postgres")
     c.wait_for_materialized(service="materialized")
+    c.wait_for_postgres()
 
     # Create a remote cluster and verify that tests pass.
     c.up("computed_1")

@@ -17,14 +17,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use differential_dataflow::Hashable;
 use futures::StreamExt;
 use timely::progress::frontier::MutableAntichain;
 use tokio_stream::StreamMap;
 use tracing::debug;
 use uuid::Uuid;
 
-use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
@@ -270,26 +268,7 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<StorageCommand<T>> {
         self.observe_command(&command);
 
-        match command {
-            StorageCommand::Append(appends) => {
-                let mut appends_parts = vec![Vec::with_capacity(appends.len()); self.parts];
-                for (id, updates, upper) in appends {
-                    let mut updates_parts = vec![Vec::new(); self.parts];
-                    for update in updates {
-                        let part = usize::cast_from(update.row.hashed()) % self.parts;
-                        updates_parts[part].push(update);
-                    }
-                    for (part, updates) in appends_parts.iter_mut().zip(updates_parts) {
-                        part.push((id, updates, upper.clone()));
-                    }
-                }
-                appends_parts
-                    .into_iter()
-                    .map(StorageCommand::Append)
-                    .collect()
-            }
-            command => vec![command; self.parts],
-        }
+        vec![command; self.parts]
     }
 
     fn absorb_response(
