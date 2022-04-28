@@ -21,11 +21,27 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
-{{% version-header v0.26.0 %}}
+{{% version-header v0.26.1 %}}
 
-v0.26.0 is a **long-term support (LTS)** release of Materialize. We will support
+v0.26.1 is a **long-term support (LTS)** release of Materialize. We will support
 the v0.26 series through at least August 31, 2022, issuing patch releases as
 necessary to address severe bugs and security vulnerabilities.
+
+- Support configuring the
+  [`search_path`](https://www.postgresql.org/docs/14/runtime-config-client.html#GUC-SEARCH-PATH)
+  session parameter.
+
+- Fix a bug that could cause dataflows to fail to reuse existing
+  [arrangements](/overview/arrangements) {{% gh 11793 %}}.
+
+- Fix a bug that caused the
+  [memory usage visualization](/ops/monitoring#memory-usage-visualization)
+  to fail due to a cross-origin resource sharing (CORS) misconfiguration
+  {{% gh 11817 %}}.
+
+- Avoid leaking memory when an index is dropped {{% gh 11949 %}}.
+
+{{% version-header v0.26.0 %}}
 
 - **Breaking change.** Change the return type of the
   [`list_length`](/sql/functions/#list-func) function from [`bigint`] to
