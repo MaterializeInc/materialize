@@ -102,6 +102,18 @@ Currently, the `StorageCommand` protocol does not express enough information to 
   For example, when reading a Kafka topic, we create a new topic name each time we instantiate the source.
   This is incorrect because we bind an existing identifier to a new definition.
 
+### Interpreting commands
+
+The command protocol exposes the following verbs to communicate state updates from the controller to a storage instance.
+For each, we describe the associated action applied by CR.
+* `CreateSources`: For each source, start tracking its frontier. Lookup existing sources by its `GlobalId` and remember
+  the source if it is new. If the identifier is bound, assert that the existing source is identical to the new
+  definition.
+* `AllowCompaction`: Stop tracking a source if the controller permits compaction to the empty frontier.
+  Forward command as-is, since this command is idempotent.
+* `Append`: Filter out all appends to a source that have a timestamp less than the source's frontier. Forward the rest. 
+  * NOTE: as discussed above, this doesn't currently work for all appends, specifically initialization appends.
+
 ## Response reconciliation
 
 TODO: This section needs expanding.
