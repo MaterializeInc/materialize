@@ -4,7 +4,7 @@ The primary abstraction of the persist library is a set of named collections,
 made and kept definite through durable storage. Each of these collections is
 closely analogous to (and internally modeled after) differential dataflow's
 [arrangement], or more generally its [Collection]. In the language of the
-[correctness doc], these are each are described by a `[since, upper)`.
+[correctness doc], these are each described by a `[since, upper)`.
 
 [correctness doc]: https://github.com/MaterializeInc/materialize/blob/v0.13.0/doc/developer/design/20210831_correctness.md#description
 [Collection]: differential_dataflow::collection::Collection
@@ -50,7 +50,7 @@ you view it as [rustdoc for the persist crate].
   - _write_: Durably adding a set of records to a persisted collection.
   - _seal_: Durably advancing the frontier of a persisted collection. NB: A
     common initial misconception when encountering persist is that _write_ is
-    like a filesystem write with minimal durability guarantees and _seal_ like
+    like a filesystem write with minimal durability guarantees and _seal_
     is like fsync, but this incorrect. A write whose future has resolved as
     successful is durable, regardless of when or if it's sealed.
   - _storage_: An external source of data durability. All of persist's
@@ -341,7 +341,7 @@ operate a bit more like persisted sources.
 # Integration with Sources
 - TODO copy in [aljoscha's doc]
 
-[aljoscha's doc]: [https://github.com/MaterializeInc/materialize/pull/8414
+[aljoscha's doc]: https://github.com/MaterializeInc/materialize/pull/8414
 
 # Integration with Platform
 

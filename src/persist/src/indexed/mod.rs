@@ -2056,7 +2056,7 @@ mod tests {
         // Normal case: registration uses same key and value codec.
         let _ = block_on(|res| i.register("stream", "key", "val", res))?;
 
-        // i64erent key codec
+        // Different key codec
         assert_eq!(
             block_on(|res| i.register("stream", "nope", "val", res)),
             Err(Error::from(
@@ -2064,7 +2064,7 @@ mod tests {
             ))
         );
 
-        // i64erent val codec
+        // Different val codec
         assert_eq!(
             block_on(|res| i.register("stream", "key", "nope", res)),
             Err(Error::from(
