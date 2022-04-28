@@ -351,11 +351,7 @@ where
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
     for (source_id, source) in dataflow.source_imports.iter_mut() {
-        if let mz_dataflow_types::sources::SourceConnector::External {
-            envelope: mz_dataflow_types::sources::SourceEnvelope::None(_),
-            ..
-        } = source.description.connector
-        {
+        if source.description.connector.append_only() {
             monotonic.insert(source_id.clone());
         }
     }
