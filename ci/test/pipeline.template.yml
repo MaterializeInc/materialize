@@ -205,7 +205,7 @@ steps:
   - id: sqllogictest-fast
     label: Fast SQL logic tests
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     inputs: [test/sqllogictest]
     artifact_paths: junit_sqllogictest_*.xml
     plugins:

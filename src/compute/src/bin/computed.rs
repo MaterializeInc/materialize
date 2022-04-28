@@ -10,7 +10,6 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::process;
-use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 use futures::sink::SinkExt;
@@ -262,17 +261,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
-    let (storage_client, _thread) =
-        mz_storage::tcp_boundary::client::connect(args.storage_addr, config.workers).await?;
-    let boundary = (0..config.workers)
-        .into_iter()
-        .map(|_| Some(storage_client.clone()))
-        .collect::<Vec<_>>();
-    let boundary = Arc::new(Mutex::new(boundary));
-    let workers = config.workers;
-    let (server, client) = mz_compute::server::serve_boundary(config, move |index| {
-        boundary.lock().unwrap()[index % workers].take().unwrap()
-    })?;
+    let (server, client) = mz_compute::server::serve(config)?;
     let mut client: Box<dyn ComputeClient> = Box::new(client);
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))

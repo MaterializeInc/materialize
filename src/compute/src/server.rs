@@ -23,7 +23,6 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, Lo
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_storage::boundary::ComputeReplay;
 
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
@@ -55,12 +54,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-///
-/// * `create_boundary`: A function to obtain the worker-local boundary components.
-pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'static>(
-    config: Config,
-    create_boundary: B,
-) -> Result<(Server, LocalComputeClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -90,7 +84,6 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
-        let compute_boundary = create_boundary(timely_worker_index);
         let _tokio_guard = tokio_executor.enter();
         let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
             .take()
@@ -104,7 +97,6 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
             timely_worker,
             command_rx,
             compute_state: None,
-            compute_boundary,
             compute_response_tx,
             metrics_bundle: metrics_bundle.clone(),
             connector_context: config.connector_context.clone(),
@@ -128,19 +120,13 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A, CR>
-where
-    A: Allocate,
-    CR: ComputeReplay,
-{
+struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<ComputeCommand>,
     /// The state associated with rendering dataflows.
     compute_state: Option<ComputeState>,
-    /// The boundary between storage and compute layers, compute side.
-    compute_boundary: CR,
     /// The channel over which compute responses are reported.
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
@@ -150,11 +136,7 @@ where
     pub connector_context: ConnectorContext,
 }
 
-impl<'w, A, CR> Worker<'w, A, CR>
-where
-    A: Allocate + 'w,
-    CR: ComputeReplay,
-{
+impl<'w, A: Allocate> Worker<'w, A> {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
         let mut shutdown = false;
@@ -234,13 +216,12 @@ where
         }
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<A, CR>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx: &mut self.compute_response_tx,
-                boundary: &mut self.compute_boundary,
             })
         } else {
             None
