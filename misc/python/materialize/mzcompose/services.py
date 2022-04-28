@@ -35,7 +35,7 @@ class Materialized(Service):
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
-        timestamp_frequency: str = "100ms",
+        timestamp_frequency: str = "1s",
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,

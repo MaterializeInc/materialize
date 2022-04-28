@@ -17,7 +17,9 @@ from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,
     Kafka,
+    Localstack,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -27,7 +29,12 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(extra_ports=[2101]),
+    Postgres(),
+    Localstack(),
+    Materialized(
+        options="--persist-consensus-url postgres://postgres:postgres@postgres",
+        extra_ports=[2101],
+    ),
     Testdrive(),
 ]
 
@@ -170,7 +177,11 @@ def workflow_default(c: Composition) -> None:
     and then making sure that the cluster continues to operate properly
     """
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "localstack"]
+    )
+    c.up("postgres")
+    c.wait_for_postgres()
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 
@@ -181,10 +192,22 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.up("testdrive", persistent=True)
 
     nodes = [
-        Computed(name="computed_1_1", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_1_2", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_2_1", peers=["computed_2_1", "computed_2_2"]),
-        Computed(name="computed_2_2", peers=["computed_2_1", "computed_2_2"]),
+        Computed(
+            name="computed_1_1",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_1_2",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_2_1",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
+        Computed(
+            name="computed_2_2",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
     ]
 
     with c.override(*nodes):

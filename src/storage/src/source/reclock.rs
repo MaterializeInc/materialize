@@ -52,6 +52,7 @@ impl ReclockOperator {
         CollectionMetadata {
             persist_location,
             timestamp_shard_id,
+            persist_shard: _,
         }: CollectionMetadata,
         now: NowFn,
         update_interval: Duration,

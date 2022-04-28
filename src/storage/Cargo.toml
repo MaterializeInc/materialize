@@ -23,7 +23,6 @@ futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
 globset = { version = "0.4.8", optional = true }
-once_cell = { version = "1.12.0", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
@@ -32,11 +31,14 @@ mz-interchange = { path = "../interchange", optional = true }
 mz-kafka-util = { path = "../kafka-util", optional = true }
 mz-kinesis-util = { path = "../kinesis-util", optional = true }
 mz-ore = { path = "../ore", features = ["task"] }
+mz-persist = { path = "../persist", optional = true }
 mz-persist-client = { path = "../persist-client", optional = true }
+mz-persist-types = { path = "../persist-types", optional = true }
 mz-pgcopy = { path = "../pgcopy", optional = true }
 mz-postgres-util = { path = "../postgres-util", optional = true }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
+once_cell = { version = "1.12.0", optional = true }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
 prometheus = { version = "0.13.1", default-features = false, optional = true }
 prost = { version = "0.10.3", optional = true }
@@ -73,9 +75,12 @@ server = [
     "mz-interchange",
     "mz-kafka-util",
     "mz-kinesis-util",
+    "mz-persist",
     "mz-persist-client",
+    "mz-persist-types",
     "mz-pgcopy",
     "mz-postgres-util",
+    "once_cell",
     "postgres-protocol",
     "prometheus",
     "prost",

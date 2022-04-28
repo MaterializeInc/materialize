@@ -38,6 +38,7 @@ use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 pub mod util;
 
 #[test]
+#[ignore]
 fn test_no_block() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 
@@ -932,13 +933,13 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
         explain,
         "     timestamp:          1036
          since:[         1036]
-         upper:[            0]
+         upper:[         1036]
      has table: true
  table read ts:          1036
 
 source materialize.public.t1 (u1, storage):
  read frontier:[         1036]
-write frontier:[            0]\n",
+write frontier:[         1036]\n",
     );
 
     Ok(())
