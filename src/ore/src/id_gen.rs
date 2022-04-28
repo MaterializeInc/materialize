@@ -15,11 +15,10 @@
 
 //! ID generation utilities.
 
-use std::collections::{HashSet, VecDeque};
-use std::hash::Hash;
+use std::collections::{BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::ops::AddAssign;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 /// Manages the allocation of unique IDs.
 #[derive(Debug, Default)]
@@ -54,12 +53,11 @@ struct IdAllocatorInner<T> {
     next: T,
     max: T,
     free: VecDeque<T>,
-    allocated: HashSet<T>,
 }
 
 impl<T> IdAllocator<T>
 where
-    T: From<u8> + AddAssign + PartialOrd + Copy + Eq + Hash,
+    T: From<u8> + AddAssign + PartialOrd + Copy,
 {
     /// Creates a new `IdAllocator` that will assign IDs between `min` and
     /// `max`, both inclusive.
@@ -68,7 +66,6 @@ where
             next: min,
             max,
             free: VecDeque::new(),
-            allocated: HashSet::new(),
         }))
     }
 
@@ -77,17 +74,6 @@ where
     /// Returns `None` if the allocator is exhausted.
     pub fn alloc(&self) -> Option<T> {
         let mut inner = self.0.lock().expect("lock poisoned");
-        while let Some(id) = self.alloc_inner(&mut inner) {
-            if !inner.allocated.contains(&id) {
-                inner.allocated.insert(id);
-                return Some(id);
-            }
-        }
-
-        None
-    }
-
-    fn alloc_inner(&self, inner: &mut MutexGuard<IdAllocatorInner<T>>) -> Option<T> {
         if let Some(id) = inner.free.pop_front() {
             Some(id)
         } else {
@@ -108,14 +94,50 @@ where
     pub fn free(&self, id: T) {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.free.push_back(id);
-        let _ = inner.allocated.remove(&id);
+    }
+}
+
+/// Manages allocation of process ports. Similar to `IdAllocator` but specific to
+/// the allocation of ports.
+///
+/// Note that the current implementation is fairly memory inefficient.
+#[derive(Debug)]
+pub struct PortAllocator(Mutex<BTreeSet<i32>>);
+
+impl PortAllocator {
+    /// Creates a new `PortAllocator` that will assign ports between `min` and
+    /// `max`, both inclusive.
+    pub fn new(min: i32, max: i32) -> PortAllocator {
+        PortAllocator(Mutex::new((min..=max).collect()))
     }
 
-    /// Marks an ID as allocated and prevents `IdAllocator` from allocating it
-    /// in the future.
-    pub fn mark_allocated(&self, id: T) -> bool {
+    /// Allocates a new port.
+    ///
+    /// Returns `None` if the allocator is exhausted.
+    pub fn alloc(&self) -> Option<i32> {
         let mut inner = self.0.lock().expect("lock poisoned");
-        inner.allocated.insert(id)
+        let port = inner.iter().next().cloned();
+        if let Some(port) = port {
+            assert!(inner.remove(&port));
+        }
+        port
+    }
+
+    /// Releases a new port back to the pool.
+    ///
+    /// It is undefined behavior to free an port twice, or to free an port that was
+    /// not allocated by this allocator.
+    pub fn free(&self, id: i32) {
+        let mut inner = self.0.lock().expect("lock poisoned");
+        let _ = inner.insert(id);
+    }
+
+    /// Marks a port as already allocated.
+    ///
+    /// Returns false if port was previously allocated and true otherwise.
+    pub fn mark_allocated(&self, port: i32) -> bool {
+        let mut inner = self.0.lock().expect("lock poisoned");
+        inner.remove(&port)
     }
 }
 
@@ -145,8 +167,8 @@ mod tests {
     }
 
     #[test]
-    fn test_mark_allocated() {
-        let ida = IdAllocator::new(1, 10);
+    fn test_port_allocator() {
+        let ida = PortAllocator::new(1, 10);
         assert!(ida.mark_allocated(4));
 
         while let Some(id) = ida.alloc() {

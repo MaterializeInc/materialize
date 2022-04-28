@@ -9,7 +9,7 @@
 
 pub mod port_metadata_file;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ pub struct ProcessOrchestratorConfig {
     /// images.
     pub image_dir: PathBuf,
     /// The ports to allocate.
-    pub port_allocator: Arc<IdAllocator<i32>>,
+    pub port_allocator: Arc<PortAllocator<i32>>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The host spawned subprocesses bind to.
@@ -56,7 +56,7 @@ pub struct ProcessOrchestratorConfig {
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<i32>>,
+    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     process_listen_host: String,

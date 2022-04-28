@@ -57,7 +57,7 @@ use uuid::Uuid;
 use materialized::{OrchestratorBackend, OrchestratorConfig};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::{IdAllocator, PortAllocator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
@@ -566,7 +566,7 @@ impl Runner {
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                    port_allocator: Arc::new(IdAllocator::new(2100, 2200)),
+                    port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
                     suppress_output: false,
                     process_listen_host: None,
                     data_dir: temp_dir.path().to_path_buf(),
