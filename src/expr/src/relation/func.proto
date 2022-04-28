@@ -32,6 +32,11 @@ message ProtoAggregateFunc {
         }
     };
 
+    message ProtoFirstValue {
+        ProtoColumnOrders order_by = 1;
+        mz_expr.relation.ProtoWindowFrame window_frame = 2;
+    }
+
     oneof kind {
         google.protobuf.Empty max_numeric = 1;
         google.protobuf.Empty max_int16 = 2;
@@ -73,6 +78,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
+        ProtoFirstValue first_value = 41;
     }
 }
 

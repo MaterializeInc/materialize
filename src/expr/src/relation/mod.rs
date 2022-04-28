@@ -2048,7 +2048,7 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -2117,8 +2117,34 @@ impl WindowFrame {
     }
 }
 
+impl From<&WindowFrame> for ProtoWindowFrame {
+    fn from(x: &WindowFrame) -> Self {
+        ProtoWindowFrame {
+            units: Some((&x.units).into()),
+            start_bound: Some((&x.start_bound).into()),
+            end_bound: Some((&x.end_bound).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoWindowFrame> for WindowFrame {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoWindowFrame) -> Result<Self, Self::Error> {
+        Ok(WindowFrame {
+            units: x.units.try_into_if_some("ProtoWindowFrame::units")?,
+            start_bound: x
+                .start_bound
+                .try_into_if_some("ProtoWindowFrame::start_bound")?,
+            end_bound: x
+                .end_bound
+                .try_into_if_some("ProtoWindowFrame::end_bound")?,
+        })
+    }
+}
+
 /// Describe how frame bounds are interpreted
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,
@@ -2130,11 +2156,54 @@ pub enum WindowFrameUnits {
     Groups,
 }
 
+impl From<&WindowFrameUnits> for proto_window_frame::ProtoWindowFrameUnits {
+    fn from(x: &WindowFrameUnits) -> Self {
+        proto_window_frame::ProtoWindowFrameUnits {
+            kind: Some(match x {
+                WindowFrameUnits::Rows => {
+                    proto_window_frame::proto_window_frame_units::Kind::Rows(())
+                }
+                WindowFrameUnits::Range => {
+                    proto_window_frame::proto_window_frame_units::Kind::Range(())
+                }
+                WindowFrameUnits::Groups => {
+                    proto_window_frame::proto_window_frame_units::Kind::Groups(())
+                }
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_window_frame::ProtoWindowFrameUnits) -> Result<Self, Self::Error> {
+        Ok(match x.kind {
+            Some(proto_window_frame::proto_window_frame_units::Kind::Rows(())) => {
+                WindowFrameUnits::Rows
+            }
+            Some(proto_window_frame::proto_window_frame_units::Kind::Range(())) => {
+                WindowFrameUnits::Range
+            }
+            Some(proto_window_frame::proto_window_frame_units::Kind::Groups(())) => {
+                WindowFrameUnits::Groups
+            }
+            None => {
+                return Err(TryFromProtoError::MissingField(
+                    "ProtoWindowFrameUnits::kind".into(),
+                ))
+            }
+        })
+    }
+}
+
 /// Specifies [WindowFrame]'s `start_bound` and `end_bound`
 ///
 /// The order between frame bounds is significant, as Postgres enforces
 /// some restrictions there.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
+#[derive(
+    Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord,
+)]
 pub enum WindowFrameBound {
     /// `UNBOUNDED PRECEDING`
     UnboundedPreceding,
@@ -2146,6 +2215,59 @@ pub enum WindowFrameBound {
     OffsetFollowing(u64),
     /// `UNBOUNDED FOLLOWING`.
     UnboundedFollowing,
+}
+
+impl From<&WindowFrameBound> for proto_window_frame::ProtoWindowFrameBound {
+    fn from(x: &WindowFrameBound) -> Self {
+        proto_window_frame::ProtoWindowFrameBound {
+            kind: Some(match x {
+                WindowFrameBound::UnboundedPreceding => {
+                    proto_window_frame::proto_window_frame_bound::Kind::UnboundedPreceding(())
+                }
+                WindowFrameBound::OffsetPreceding(offset) => {
+                    proto_window_frame::proto_window_frame_bound::Kind::OffsetPreceding(*offset)
+                }
+                WindowFrameBound::CurrentRow => {
+                    proto_window_frame::proto_window_frame_bound::Kind::CurrentRow(())
+                }
+                WindowFrameBound::OffsetFollowing(offset) => {
+                    proto_window_frame::proto_window_frame_bound::Kind::OffsetFollowing(*offset)
+                }
+                WindowFrameBound::UnboundedFollowing => {
+                    proto_window_frame::proto_window_frame_bound::Kind::UnboundedFollowing(())
+                }
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_window_frame::ProtoWindowFrameBound) -> Result<Self, Self::Error> {
+        Ok(match x.kind {
+            Some(proto_window_frame::proto_window_frame_bound::Kind::UnboundedPreceding(())) => {
+                WindowFrameBound::UnboundedPreceding
+            }
+            Some(proto_window_frame::proto_window_frame_bound::Kind::OffsetPreceding(offset)) => {
+                WindowFrameBound::OffsetPreceding(offset)
+            }
+            Some(proto_window_frame::proto_window_frame_bound::Kind::CurrentRow(())) => {
+                WindowFrameBound::CurrentRow
+            }
+            Some(proto_window_frame::proto_window_frame_bound::Kind::OffsetFollowing(offset)) => {
+                WindowFrameBound::OffsetFollowing(offset)
+            }
+            Some(proto_window_frame::proto_window_frame_bound::Kind::UnboundedFollowing(())) => {
+                WindowFrameBound::UnboundedFollowing
+            }
+            None => {
+                return Err(TryFromProtoError::MissingField(
+                    "ProtoWindowFrameBound::kind".into(),
+                ))
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -2167,6 +2289,33 @@ mod tests {
         #[test]
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
+            let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
+            let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
+            let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
