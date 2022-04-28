@@ -122,7 +122,7 @@ We want source ingestion to satisfy at least these three properties:
 
 ## A recipe for source ingestion
 
-What follows is a recipe for source ingestion that means to provide three properties:
+What follows is a recipe for source ingestion that means to provide the three properties listed above.
 
 In addition, the "recipe" aspect of this means to make it "simple" to determine that you have these properties.
 You could certainly hand roll something that also has the properties, but then you have a bunch of work to do to convince folks.
@@ -210,7 +210,7 @@ The specific choice of what to do depends on our goals, but one attempts to do i
 
 ### Outcomes
 
-The reason we follow the recipe is because many good things happen automatically.
+The reason we follow the recipe is because we uphold the desired three properties automatically.
 
 1. *Definiteness.*
 
