@@ -89,20 +89,35 @@ impl Arbitrary for MirScalarExpr {
                 .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ)),
             any::<UnmaterializableFunc>().prop_map(MirScalarExpr::CallUnmaterializable)
         ];
-        // TODO: fill in the other MIR variants.
-        leaf.prop_recursive(
-            2, // For now, just go one level deep
-            4,
-            5,
-            |inner| {
-                prop_oneof![(inner, any::<UnaryFunc>()).prop_map(|(expr, func)| {
+        leaf.prop_recursive(3, 6, 7, |inner| {
+            prop_oneof![
+                (
+                    any::<VariadicFunc>(),
+                    prop::collection::vec(inner.clone(), 1..5)
+                )
+                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs }),
+                (any::<BinaryFunc>(), inner.clone(), inner.clone()).prop_map(
+                    |(func, expr1, expr2)| MirScalarExpr::CallBinary {
+                        func,
+                        expr1: Box::new(expr1),
+                        expr2: Box::new(expr2)
+                    }
+                ),
+                (inner.clone(), inner.clone(), inner.clone()).prop_map(|(cond, then, els)| {
+                    MirScalarExpr::If {
+                        cond: Box::new(cond),
+                        then: Box::new(then),
+                        els: Box::new(els),
+                    }
+                }),
+                (any::<UnaryFunc>(), inner).prop_map(|(func, expr)| {
                     MirScalarExpr::CallUnary {
                         func,
                         expr: Box::new(expr),
                     }
-                })]
-            },
-        )
+                })
+            ]
+        })
         .boxed()
     }
 }
