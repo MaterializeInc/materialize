@@ -223,7 +223,7 @@ The reason we follow the recipe is because we uphold the desired three propertie
     It is a moment at which we know exactly where we were in input processing (indicated by the reclocking collection), what our "state" was, and what the output corresponded to.
     With this consistent snapshot, one can resume work and proceed as if without interruption. Multiple concurrent instances should also produce identical outputs, because of the consistent snapshot and deterministic execution (onward, from the reclocking input).
 
-3. *Conciseness.*
+3. *Bounded input reliance.*
 
     Our choice of `t` should never regress, and as it advances we are certain that we can resume from input addresses indicated by the reclocking collection.
     As long as we continually advance `t`, by continually making state and output durable, we move forward the input addresses on which we rely.
