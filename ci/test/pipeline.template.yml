@@ -406,6 +406,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: persist-maelstrom
+    label: Maelstrom coverage of persist
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/persist]
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+    agents:
+      queue: linux-x86_64
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64
