@@ -100,23 +100,22 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
-use std::collections::BTreeMap;
-use std::marker::{Send, Sync};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::Hashable;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use timely::PartialOrder;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::*;
-use mz_repr::GlobalId;
+use mz_dataflow_types::{client::CreateSourceCommand, sources::SourceData};
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use crate::boundary::StorageCapture;
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -127,14 +126,12 @@ mod upsert;
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
+pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     debug_name: &str,
-    as_of: Option<Antichain<mz_repr::Timestamp>>,
-    source_imports: BTreeMap<GlobalId, SourceInstanceDesc<CollectionMetadata>>,
-    dataflow_id: uuid::Uuid,
-    boundary: &mut B,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source: CreateSourceCommand<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
@@ -144,105 +141,113 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let as_of = as_of.clone().unwrap();
             let debug_name = format!("{debug_name}-sources");
 
-            // Import declared sources into the rendering context.
-            for (src_id, source) in &source_imports {
-                // If `as_of` is `None`, the rendering request is invalid. We still need to satisfy it,
-                // but we will do this with an empty source.
-                let valid = storage_state.source_uppers.contains_key(src_id);
-                let ((ok, err), token) = if valid {
-                    let ((ok, err), token) = crate::render::sources::render_source(
-                        &debug_name,
-                        &as_of,
-                        source.clone(),
-                        storage_state,
-                        region,
-                        src_id.clone(),
-                    );
+            let ((ok, err), token) = crate::render::sources::render_source(
+                region,
+                &debug_name,
+                &as_of,
+                source.id,
+                source.desc.clone(),
+                source.storage_metadata.clone(),
+                storage_state,
+            );
+            storage_state
+                .source_tokens
+                .insert(source.id, Arc::clone(&token));
 
-                    // Capture the frontier of `ok` to present as the "source upper".
-                    // TODO: remove this code when storage has a better holistic take on source progress.
-                    // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
-                    let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
-                    let weak_token = std::sync::Arc::downgrade(&token);
-                    use timely::dataflow::operators::Operator;
-                    ok.inner.sink(
-                        timely::dataflow::channels::pact::Pipeline,
-                        "frontier monitor",
-                        move |input| {
-                            // Drain the input; we don't need it.
-                            input.for_each(|_, _| {});
+            let operator_name = format!("persist_sink({})", source.storage_metadata.persist_shard);
+            let mut persist_op = OperatorBuilder::new(operator_name, region.clone());
 
-                            // Only attempt the frontier update if the source is still live.
-                            // If it is shutting down, we shouldn't treat the frontier as correct.
-                            if let Some(_) = weak_token.upgrade() {
-                                // Read the input frontier, and join with the shared frontier.
-                                let mut joined_frontier = Antichain::new();
-                                let mut borrow = shared_frontier.borrow_mut();
-                                for time1 in borrow.iter() {
-                                    for time2 in &input.frontier.frontier() {
-                                        use differential_dataflow::lattice::Lattice;
-                                        joined_frontier.insert(time1.join(time2));
-                                    }
+            // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
+            // if other workers from replicated clusters write the same data, though. In the real
+            // implementation, we would use a storage client that transparently handles writing to
+            // multiple shards. One shard would then only be written to by one worker but we get
+            // parallelism from the sharding.
+            // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
+            // multiple persist shards. Then we should set it up such that each worker can write to one
+            // shard.
+            let hashed_id = source.id.hashed();
+            let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+
+            let source_data = ok.map(Ok).concat(&err.map(Err)).inner;
+            let mut input = persist_op.new_input(&source_data, Exchange::new(move |_| hashed_id));
+
+            let shared_frontier = Rc::clone(&storage_state.source_uppers[&source.id]);
+
+            let weak_token = Arc::downgrade(&token);
+
+            persist_op.build_async(
+                region.clone(),
+                move |mut capabilities, frontiers, scheduler| async move {
+                    capabilities.clear();
+                    let mut buffer = Vec::new();
+                    let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+
+                    let mut write = crate::persist_cache::open_writer::<
+                        (),
+                        SourceData,
+                        mz_repr::Timestamp,
+                        mz_repr::Diff,
+                    >(
+                        source.storage_metadata.persist_location,
+                        source.storage_metadata.persist_shard,
+                    )
+                    .await
+                    .expect("could not open persist shard");
+
+                    while scheduler.notified().await {
+                        let input_frontier = frontiers.borrow()[0].clone();
+
+                        if !active_write_worker
+                            || weak_token.upgrade().is_none()
+                            || shared_frontier.borrow().is_empty()
+                        {
+                            return;
+                        }
+
+                        while let Some((_cap, data)) = input.next() {
+                            data.swap(&mut buffer);
+
+                            for (row, ts, diff) in buffer.drain(..) {
+                                stash
+                                    .entry(ts)
+                                    .or_default()
+                                    .push((SourceData(row), ts, diff));
+                            }
+                        }
+
+                        let empty = Vec::new();
+                        let updates = stash
+                            .iter()
+                            .flat_map(|(ts, updates)| {
+                                if !input_frontier.less_equal(ts) {
+                                    updates.iter()
+                                } else {
+                                    empty.iter()
                                 }
-                                *borrow = joined_frontier;
-                            }
-                        },
-                    );
+                            })
+                            .map(|&(ref row, ref ts, ref diff)| ((&(), row), ts, diff));
 
-                    ((ok, err), token)
-                } else {
-                    // This branch exists only to set up a non-source that can be captured and replayed.
-                    use timely::dataflow::operators::generic::operator::source;
-                    use timely::dataflow::operators::ActivateCapability;
-                    use timely::scheduling::Scheduler;
+                        if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
+                            // We always append, even in case we don't have any updates, because appending
+                            // also advances the frontier.
+                            // TODO(aljoscha): Figure out how errors from this should be reported.
+                            let expected_upper = shared_frontier.borrow().clone();
+                            write
+                                .append(updates, expected_upper, input_frontier.clone())
+                                .await
+                                .expect("cannot append updates")
+                                .expect("cannot append updates")
+                                .expect("invalid/outdated upper");
 
-                    let mut tokens = Vec::new();
-                    let ok = source(region, "InvalidSource", |cap, info| {
-                        let mut act_cap = Some(ActivateCapability::new(
-                            cap,
-                            &info.address,
-                            region.activations(),
-                        ));
-
-                        let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-                        let drop_activator_weak = Arc::downgrade(&drop_activator);
-
-                        tokens.push(drop_activator);
-
-                        move |_handle| {
-                            if drop_activator_weak.upgrade().is_some() {
-                                act_cap.take();
-                            }
+                            *shared_frontier.borrow_mut() = input_frontier.clone();
                         }
-                    })
-                    .as_collection();
-                    let err = source(region, "InvalidSource", |cap, info| {
-                        let mut act_cap = Some(ActivateCapability::new(
-                            cap,
-                            &info.address,
-                            region.activations(),
-                        ));
 
-                        let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-                        let drop_activator_weak = Arc::downgrade(&drop_activator);
-
-                        tokens.push(drop_activator);
-
-                        move |_handle| {
-                            if drop_activator_weak.upgrade().is_some() {
-                                act_cap.take();
-                            }
-                        }
-                    })
-                    .as_collection();
-                    ((ok, err), Arc::new(tokens) as Arc<dyn Any + Send + Sync>)
-                };
-
-                boundary.capture(*src_id, ok, err, token, &debug_name, dataflow_id);
-            }
+                        stash.retain(|ts, _updates| input_frontier.less_equal(ts));
+                    }
+                },
+            )
         })
     });
 }

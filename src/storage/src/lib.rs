@@ -11,9 +11,10 @@
 
 //! Driver for timely/differential dataflow.
 
-pub mod boundary;
 #[cfg(feature = "server")]
 pub mod decode;
+#[cfg(feature = "server")]
+pub mod persist_cache;
 #[cfg(feature = "server")]
 pub mod render;
 #[cfg(feature = "server")]
@@ -23,8 +24,7 @@ pub mod source;
 #[cfg(feature = "server")]
 pub mod storage_state;
 
-pub use boundary::{tcp_boundary, ComputeReplay, DummyBoundary, StorageCapture};
 #[cfg(feature = "server")]
 pub use decode::metrics::DecodeMetrics;
 #[cfg(feature = "server")]
-pub use server::{serve_boundary_requests, Config, Server};
+pub use server::{serve, Config, Server};
