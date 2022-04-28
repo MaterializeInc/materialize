@@ -111,7 +111,7 @@ For each, we describe the associated action applied by CR.
   definition.
 * `AllowCompaction`: Stop tracking a source if the controller permits compaction to the empty frontier.
   Forward command as-is, since this command is idempotent.
-* `Append`: Filter out all appends to a source that have a timestamp less than the source's frontier. Forward the rest. 
+* `Append`: Filter out all appends to a source that have a timestamp less than the source's frontier. Forward the rest.
   * NOTE: as discussed above, this doesn't currently work for all appends, specifically initialization appends.
 
 ## Response reconciliation
