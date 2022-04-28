@@ -84,10 +84,12 @@ impl Arbitrary for MirScalarExpr {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         let leaf = prop_oneof![
             (0..10).prop_map(|i| MirScalarExpr::Column(i as usize)),
+            // TODO (#12125): add a leaf variant for MirScalarExpr::literal_ok
             (any::<EvalError>(), any::<ScalarType>())
                 .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ)),
             any::<UnmaterializableFunc>().prop_map(MirScalarExpr::CallUnmaterializable)
         ];
+        // TODO: fill in the other MIR variants.
         leaf.prop_recursive(
             2, // For now, just go one level deep
             4,

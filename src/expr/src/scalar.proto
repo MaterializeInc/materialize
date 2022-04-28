@@ -119,19 +119,19 @@ message ProtoUnaryFunc {
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
-        google.protobuf.Empty is_true = 3;
-        google.protobuf.Empty is_false = 4;
-        google.protobuf.Empty bit_not_int16 = 5;
-        google.protobuf.Empty bit_not_int32 = 6;
-        google.protobuf.Empty bit_not_int64 = 7;
-        google.protobuf.Empty neg_int16 = 8;
-        google.protobuf.Empty neg_int32 = 9;
-        google.protobuf.Empty neg_int64 = 10;
-        google.protobuf.Empty neg_float32 = 11;
-        google.protobuf.Empty neg_float64 = 12;
-        google.protobuf.Empty neg_numeric = 13;
-        google.protobuf.Empty neg_interval = 14;
-        google.protobuf.Empty sqrt_float64 = 15;
+        google.protobuf.Empty is_true = 121;
+        google.protobuf.Empty is_false = 92;
+        google.protobuf.Empty bit_not_int16 = 93;
+        google.protobuf.Empty bit_not_int32 = 94;
+        google.protobuf.Empty bit_not_int64 = 95;
+        google.protobuf.Empty neg_int16 = 88;
+        google.protobuf.Empty neg_int32 = 57;
+        google.protobuf.Empty neg_int64 = 83;
+        google.protobuf.Empty neg_float32 = 39;
+        google.protobuf.Empty neg_float64 = 35;
+        google.protobuf.Empty neg_numeric = 125;
+        google.protobuf.Empty neg_interval = 87;
+        google.protobuf.Empty sqrt_float64 = 103;
         google.protobuf.Empty sqrt_numeric = 16;
         google.protobuf.Empty cbrt_float64 = 17;
         google.protobuf.Empty abs_int16 = 18;
@@ -151,11 +151,11 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_int2_vector_to_array = 32;
         google.protobuf.Empty cast_int32_to_bool = 33;
         google.protobuf.Empty cast_int32_to_float32 = 34;
-        google.protobuf.Empty cast_int32_to_float64 = 35;
+        google.protobuf.Empty cast_int32_to_float64 = 12;
         google.protobuf.Empty cast_int32_to_oid = 36;
         google.protobuf.Empty cast_int32_to_pg_legacy_char = 37;
         google.protobuf.Empty cast_int32_to_int16 = 38;
-        google.protobuf.Empty cast_int32_to_int64 = 39;
+        google.protobuf.Empty cast_int32_to_int64 = 11;
         google.protobuf.Empty cast_int32_to_string = 40;
         google.protobuf.Empty cast_oid_to_int32 = 41;
         google.protobuf.Empty cast_oid_to_int64 = 42;
@@ -173,7 +173,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_int64_to_bool = 54;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int64_to_numeric = 55;
         google.protobuf.Empty cast_int64_to_float32 = 56;
-        google.protobuf.Empty cast_int64_to_float64 = 57;
+        google.protobuf.Empty cast_int64_to_float64 = 9;
         google.protobuf.Empty cast_int64_to_oid = 58;
         google.protobuf.Empty cast_int64_to_string = 59;
         google.protobuf.Empty cast_float32_to_int16 = 60;
@@ -199,19 +199,19 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_string_to_bytes = 80;
         google.protobuf.Empty cast_string_to_int16 = 81;
         google.protobuf.Empty cast_string_to_int32 = 82;
-        google.protobuf.Empty cast_string_to_int64 = 83;
+        google.protobuf.Empty cast_string_to_int64 = 10;
         google.protobuf.Empty cast_string_to_int2_vector = 84;
         google.protobuf.Empty cast_string_to_oid = 85;
         google.protobuf.Empty cast_string_to_float32 = 86;
-        google.protobuf.Empty cast_string_to_float64 = 87;
-        google.protobuf.Empty cast_string_to_date = 88;
+        google.protobuf.Empty cast_string_to_float64 = 14;
+        google.protobuf.Empty cast_string_to_date = 8;
         ProtoCastToVariableType cast_string_to_array = 89;
         ProtoCastToVariableType cast_string_to_list = 90;
         ProtoCastToVariableType cast_string_to_map = 91;
-        google.protobuf.Empty cast_string_to_time = 92;
-        google.protobuf.Empty cast_string_to_timestamp = 93;
-        google.protobuf.Empty cast_string_to_timestamp_tz = 94;
-        google.protobuf.Empty cast_string_to_interval = 95;
+        google.protobuf.Empty cast_string_to_time = 4;
+        google.protobuf.Empty cast_string_to_timestamp = 5;
+        google.protobuf.Empty cast_string_to_timestamp_tz = 6;
+        google.protobuf.Empty cast_string_to_interval = 7;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
         google.protobuf.Empty cast_string_to_uuid = 97;
         ProtoCastStringToChar cast_string_to_char = 98;
@@ -219,7 +219,7 @@ message ProtoUnaryFunc {
         ProtoCastStringToVarChar cast_string_to_var_char = 100;
         google.protobuf.Empty cast_char_to_string = 101;
         google.protobuf.Empty cast_var_char_to_string = 102;
-        google.protobuf.Empty cast_date_to_timestamp = 103;
+        google.protobuf.Empty cast_date_to_timestamp = 15;
         google.protobuf.Empty cast_date_to_timestamp_tz = 104;
         google.protobuf.Empty cast_date_to_string = 105;
         google.protobuf.Empty cast_time_to_interval = 106;
@@ -237,11 +237,12 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_pg_legacy_char_to_string = 118;
         google.protobuf.Empty cast_pg_legacy_char_to_int32 = 119;
         google.protobuf.Empty cast_bytes_to_string = 120;
-        google.protobuf.Empty cast_string_to_jsonb = 121;
+
+        google.protobuf.Empty cast_string_to_jsonb = 3;
         google.protobuf.Empty cast_jsonb_to_string = 122;
         google.protobuf.Empty cast_jsonb_or_null_to_jsonb = 123;
         google.protobuf.Empty cast_jsonb_to_int16 = 124;
-        google.protobuf.Empty cast_jsonb_to_int32 = 125;
+        google.protobuf.Empty cast_jsonb_to_int32 = 13;
         google.protobuf.Empty cast_jsonb_to_int64 = 126;
         google.protobuf.Empty cast_jsonb_to_float32 = 127;
         google.protobuf.Empty cast_jsonb_to_float64 = 128;
@@ -326,17 +327,11 @@ message ProtoUnaryFunc {
         google.protobuf.Empty ln_numeric = 207;
         google.protobuf.Empty exp = 208;
         google.protobuf.Empty exp_numeric = 209;
-        // todo: Sleep(Sleep),
         google.protobuf.Empty sleep = 210;
-        // todo: Panic(Panic),
         google.protobuf.Empty panic = 211;
-        // todo: RescaleNumeric(NumericMaxScale),
         mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
-        // todo: PgColumnSize(PgColumnSize),
         google.protobuf.Empty pg_column_size = 213;
-        // todo: MzRowSize(MzRowSize),
         google.protobuf.Empty mz_row_size = 214;
-        // todo: MzTypeName(MzTypeName),
         google.protobuf.Empty mz_type_name = 215;
     }
 }

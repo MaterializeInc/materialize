@@ -2831,7 +2831,6 @@ impl Arbitrary for BinaryFunc {
 }
 
 impl From<&BinaryFunc> for ProtoBinaryFunc {
-    #[allow(clippy::todo)]
     fn from(func: &BinaryFunc) -> Self {
         use crate::scalar::proto_binary_func::Kind::*;
         let kind = match func {
@@ -2982,7 +2981,6 @@ impl From<&BinaryFunc> for ProtoBinaryFunc {
 impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
     type Error = TryFromProtoError;
 
-    #[allow(clippy::todo)]
     fn try_from(func: ProtoBinaryFunc) -> Result<Self, Self::Error> {
         use crate::scalar::proto_binary_func::Kind::*;
         if let Some(kind) = func.kind {
@@ -3508,10 +3506,13 @@ impl Arbitrary for UnaryFunc {
             CastRegTypeToOid::arbitrary().prop_map_into(),
             CastInt64ToInt16::arbitrary().prop_map_into(),
             CastInt64ToInt32::arbitrary().prop_map_into(),
-            // todo: CastInt16ToNumeric(func)
-            // todo: CastInt32ToNumeric(func)
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastInt16ToNumeric(CastInt16ToNumeric(i))),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastInt32ToNumeric(CastInt32ToNumeric(i))),
             CastInt64ToBool::arbitrary().prop_map_into(),
-            // todo: CastInt64ToNumeric(func)
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastInt64ToNumeric(CastInt64ToNumeric(i))),
             CastInt64ToFloat32::arbitrary().prop_map_into(),
             CastInt64ToFloat64::arbitrary().prop_map_into(),
             CastInt64ToOid::arbitrary().prop_map_into(),
@@ -3521,8 +3522,10 @@ impl Arbitrary for UnaryFunc {
             CastFloat32ToInt64::arbitrary().prop_map_into(),
             CastFloat32ToFloat64::arbitrary().prop_map_into(),
             CastFloat32ToString::arbitrary().prop_map_into(),
-            // todo: CastFloat32ToNumeric(func)
-            // todo: CastFloat64ToNumeric(func)
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastFloat32ToNumeric(CastFloat32ToNumeric(i))),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastFloat64ToNumeric(CastFloat64ToNumeric(i))),
             CastFloat64ToInt16::arbitrary().prop_map_into(),
             CastFloat64ToInt32::arbitrary().prop_map_into(),
             CastFloat64ToInt64::arbitrary().prop_map_into(),
@@ -3545,9 +3548,24 @@ impl Arbitrary for UnaryFunc {
             CastStringToFloat32::arbitrary().prop_map_into(),
             CastStringToFloat64::arbitrary().prop_map_into(),
             CastStringToDate::arbitrary().prop_map_into(),
-            // todo: CastStringToArray: blocked on MirScalarExpr
-            // todo: CastStringToList: blocked on MirScalarExpr
-            // todo: CastStringToMap: blocked on MirScalarExpr
+            (any::<ScalarType>(), any::<MirScalarExpr>()).prop_map(|(return_ty, expr)| {
+                UnaryFunc::CastStringToArray(CastStringToArray {
+                    return_ty,
+                    cast_expr: Box::new(expr),
+                })
+            }),
+            (any::<ScalarType>(), any::<MirScalarExpr>()).prop_map(|(return_ty, expr)| {
+                UnaryFunc::CastStringToList(CastStringToList {
+                    return_ty,
+                    cast_expr: Box::new(expr),
+                })
+            }),
+            (any::<ScalarType>(), any::<MirScalarExpr>()).prop_map(|(return_ty, expr)| {
+                UnaryFunc::CastStringToMap(CastStringToMap {
+                    return_ty,
+                    cast_expr: Box::new(expr),
+                })
+            }),
             CastStringToTime::arbitrary().prop_map_into(),
             CastStringToTimestamp::arbitrary().prop_map_into(),
             CastStringToTimestampTz::arbitrary().prop_map_into(),
@@ -3589,10 +3607,24 @@ impl Arbitrary for UnaryFunc {
             CastJsonbToBool::arbitrary().prop_map_into(),
             CastUuidToString::arbitrary().prop_map_into(),
             CastRecordToString::arbitrary().prop_map_into(),
-            // todo: CastRecord1ToRecord2: blocked on MirScalarExpr
+            (
+                any::<ScalarType>(),
+                proptest::collection::vec(any::<MirScalarExpr>(), 1..5)
+            )
+                .prop_map(|(return_ty, cast_exprs)| {
+                    UnaryFunc::CastRecord1ToRecord2(CastRecord1ToRecord2 {
+                        return_ty,
+                        cast_exprs,
+                    })
+                }),
             CastArrayToString::arbitrary().prop_map_into(),
             CastListToString::arbitrary().prop_map_into(),
-            // todo: CastList1ToList2: blocked on MirScalarExpr
+            (any::<ScalarType>(), any::<MirScalarExpr>()).prop_map(|(return_ty, expr)| {
+                UnaryFunc::CastList1ToList2(CastList1ToList2 {
+                    return_ty,
+                    cast_expr: Box::new(expr),
+                })
+            }),
             CastArrayToListOneDim::arbitrary().prop_map_into(),
             CastMapToString::arbitrary().prop_map_into(),
             CastInt2VectorToString::arbitrary().prop_map_into(),
