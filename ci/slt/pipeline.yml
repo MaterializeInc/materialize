@@ -10,7 +10,7 @@
 steps:
   - id: sqllogictest
     label: ":bulb: SQL logic tests"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 600
     artifact_paths: target/slt-summary.json
     agents:
       queue: linux-x86_64
