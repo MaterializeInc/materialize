@@ -110,7 +110,7 @@ All commands are durably persisted and their effect survives crashes and reboots
 In response to a CREATE SOURCE command, the STORAGE layer should instantiate a *source ingestion pipeline*.
 This pipeline does not need to be a dataflow, but as we will see it is helpful to use timestamps to maintain consistency.
 
-The goal of the source ingestion pipeline is to produce data that can be appended to a `persist` collection.
+The goal of the source ingestion pipeline is to produce data that can be appended to the `persist` shards of a durable storage collection.
 The result of this collection is the primary user-facing output of the source ingestion pipeline.
 There may be other auxiliary information, like the reclocking collection, that feeds in to health checks and user-facing diagnostics.
 
@@ -124,7 +124,7 @@ We want source ingestion to satisfy at least these three properties:
 
 What follows is a recipe for source ingestion that means to provide three properties:
 
-In addition, the "recipe" aspect of this means to make is "simple" to determine that you have these properties.
+In addition, the "recipe" aspect of this means to make it "simple" to determine that you have these properties.
 You could certainly hand roll something that also has the properties, but then you have a bunch of work to do to convince folks.
 By following the recipe, the goal is that you shouldn't have to convince anyone of anything.
 
@@ -140,8 +140,9 @@ By following the recipe, the goal is that you shouldn't have to convince anyone 
 
 2. We have access to the `persist` framework that can record evolving collections
 
-    The framework can accept arbitrary `Append` statements and confirm when the are durably recorded.
-    It handles contended writes, picking at most one winner, and providing a single consistent history of updates.
+    The framework accepts arbitrary `Append` statements to individual shards and confirm when and whether they are durably recorded.
+    It handles contended writes, picking at most one winner, and providing a single consistent history of updates for each shard.
+    A collection may be formed of multiple shards, which may not have the same durable frontiers.
 
 3. We have an evolving understanding of what should happen to our data from raw sources to `persist`.
 
@@ -155,12 +156,10 @@ There is some prep work to do first:
 
 1.  Identify all "raw sources" that contribute to some intended output (e.g. kafka topics, metadata, schema registry).
 
-2.  "Reclock" each input, by choosing and recording in `persist` a collection of source addresses that are monotonically increasing (do not go backwards, but needn't always go forward).
+2.  "Reclock" each input, by choosing and recording in `persist` shards a collection of source addresses that are monotonically increasing (do not go backwards, but needn't always go forward).
 
     We should use times that roughly track "real time" so that they align with the times of other collections.
     The reclocked inputs are going to be treated as if their data "become available" at the first moment for which the data's address is covered by the reclocking collection.
-    Note that this step doesn't use `t` yet.
-    We may have already made reclocking decisions past `t`, and those are durable and not changed.
 
     As suggested, this may include things like the schema registry that aren't conventional inputs, but nonetheless are external sources that influence the output we will produce.
 
@@ -169,23 +168,26 @@ There is some prep work to do first:
     For example, if we are matching up transaction metadata with the data it references, we may need to maintain some outstanding metadata records and some outstanding data records, until all in a transaction match.
     If we intend to hold back transactions until all strictly prior transactions have completed, we may need to hold on even to some completed transactions, awaiting the completion of the prior work.
 
-3. Create `persist` collections for the output and the identified "state".
+3. Create `persist`-backed storage collections for the output and the identified "state".
 
 
 With this prep work done, the assembly instructions are:
 
-1. To start, determine `t` the `min` write frontier in `persist` for all outputs and all state.
+1. To start, determine `t` the `min` write frontier in `persist` for all shards of outputs and all state.
+
+    The time `t` may be strictly less than some of the shards, which will mean that we cannot necessarily write at `t` for all shards.
+    This is fine, and will be discussed in just a moment.
 
 2. From time `t` onward, rehydrate the "state" associated with the source pipeline.
 
 3. Restart each raw source from the addresses found in the persisted reclocking collection at `t`.
 
-4. From time `t` onward, continually produce reclocked messages: messages from the raw source whose addresses are translated to time using persist's reclocking information.
+4. From time `t` onward, continually produce reclocked messages: messages from the raw source whose addresses are translated to timestamps using reclocking information from `persist`.
 
-    It is important that this be based on reclocking information we hear back from persist, rather than what we optimistically proposed at persist.
-    This ensures that the right thing happens in the case there are two contending implementations.
+    It is important that this be based on reclocking information we hear back from `persist`, rather than what we optimistically proposed at `persist`.
+    This ensures that the right thing happens in the case there are contending implementations.
 
-    Each raw source should produce exactly its outputs at times greater or equal to `t`.
+    Each raw source should now produce exactly its outputs at times greater or equal to `t`.
 
 5. From time `t` onward, apply the source pipeline to produce at each time:
 
@@ -193,7 +195,12 @@ With this prep work done, the assembly instructions are:
 
     b. Changes to push at persist to update the state.
 
-These are the whole instructions.
+    Both of these changes may end up being aimed at a `persist` shard that has already committed updates at that time.
+    This can be because on restart not all `persist` shards had the same frontier, or because another storage instance is contending on writes.
+    The writes *should* be identical, owing to the determinism of the pipeline so far.
+    If they are not identical (an instance could assert they are on any failed write) then a new rendition is required (and perhaps a bug report, if this is unexpected).
+
+These are all of the instructions.
 Clearly Step 5. is not fully specified.
 The property it must have is that two independent pipelines should produce the same output and state updates.
 One way to make this happen is to behave as if each message becomes available at its timestamp, and at each time we "immediately" retire all complete work.
@@ -244,5 +251,6 @@ Two example of this are:
 
     If the non-determinism may lead to different results, we need to capture the choices made and play forward from them.
     Reclocking is an example of non-determinism, where it is important to commit the results to `persist`, and then read out of `persist` to be sure to use the commited choices.
+    It may be important to use only a single `persist` shard if the non-determinism must be committed all at once (otherwise, the commits might only land in a subset of the shards).
 
 ![source pipeline](assets/storage-architecture-sources.png)
