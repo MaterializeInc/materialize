@@ -57,7 +57,7 @@ use uuid::Uuid;
 use materialized::{OrchestratorBackend, OrchestratorConfig};
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_ore::id_gen::{IdAllocator, PortAllocator};
+use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
