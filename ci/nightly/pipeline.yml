@@ -34,7 +34,6 @@ steps:
           - { value: aws-config }
           - { value: zippy-kafka-sources }
           - { value: secrets }
-          - { value: catalog-compat }
           - { value: unused-deps }
         multiple: true
         required: false
@@ -259,18 +258,6 @@ steps:
           composition: persistence
           run: failpoints
     skip: Persistence tests disabled
-
-  - id: catalog-compat
-    label: Catalog compatibility test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: catalog-compat
-          run: catalog-compat
 
   - id: unused-deps
     label: Unused dependencies
