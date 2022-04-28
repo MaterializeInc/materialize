@@ -29,7 +29,6 @@ use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::boundary::ComputeReplay;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 
@@ -70,18 +69,16 @@ pub struct ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate, B: ComputeReplay> {
+pub struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
-    /// The boundary with the Storage layer
-    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
+impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
@@ -129,7 +126,6 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                         self.timely_worker,
                         &mut self.compute_state,
                         dataflow,
-                        self.boundary,
                     );
                 }
             }

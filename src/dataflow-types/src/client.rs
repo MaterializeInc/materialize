@@ -13,7 +13,7 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::pin::Pin;
 
@@ -34,8 +34,10 @@ use mz_repr::proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
-use crate::sources::SourceDesc;
-use crate::{DataflowDescription, PeekResponse, Plan, SourceInstanceDesc, TailResponse, Update};
+use crate::{
+    sources::{MzOffset, SourceDesc},
+    DataflowDescription, PeekResponse, TailResponse, Update,
+};
 
 pub mod controller;
 pub use controller::Controller;
@@ -307,26 +309,11 @@ pub struct CreateSourceCommand<T> {
     pub storage_metadata: CollectionMetadata,
 }
 
-/// A command to render a single source
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RenderSourcesCommand<T> {
-    /// A human-readable name.
-    pub debug_name: String,
-    /// The dataflow's ID.
-    pub dataflow_id: uuid::Uuid,
-    /// An optional frontier to which the input should be advanced.
-    pub as_of: Option<Antichain<T>>,
-    /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<CollectionMetadata>>,
-}
-
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
-    /// Render the enumerated sources.
-    RenderSources(Vec<RenderSourcesCommand<T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which

@@ -25,7 +25,6 @@ use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Map, OkErr, Operator, UnorderedInput};
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
 use mz_expr::PartitionId;
@@ -146,13 +145,7 @@ where
 pub fn render_source<G>(
     dataflow_debug_name: &String,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    SourceInstanceDesc {
-        description: src,
-        storage_metadata,
-        arguments: SourceInstanceArguments {
-            operators: mut linear_operators,
-        },
-    }: SourceInstanceDesc<CollectionMetadata>,
+    src: SourceDesc,
     storage_state: &mut crate::storage_state::StorageState,
     scope: &mut G,
     src_id: GlobalId,
@@ -163,6 +156,7 @@ pub fn render_source<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let mut linear_operators: Option<LinearOperator> = None;
     // Blank out trivial linear operators.
     if let Some(operator) = &linear_operators {
         if operator.is_trivial(src.desc.arity()) {
@@ -448,13 +442,7 @@ where
                                             render_source(
                                                 dataflow_debug_name,
                                                 as_of_frontier,
-                                                SourceInstanceDesc {
-                                                    description: tx_src_desc,
-                                                    storage_metadata: tx_collection_metadata,
-                                                    arguments: SourceInstanceArguments {
-                                                        operators: None,
-                                                    },
-                                                },
+                                                tx_src_desc,
                                                 storage_state,
                                                 scope,
                                                 tx_metadata.tx_metadata_global_id,

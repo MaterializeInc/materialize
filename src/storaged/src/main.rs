@@ -11,7 +11,6 @@ use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::process;
-use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 use futures::sink::SinkExt;
@@ -191,17 +190,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         !args.reconcile,
         "Storage runtime does not support command reconciliation."
     );
-    let workers = config.workers;
-    let (storage_server, request_rx, _thread) =
-        mz_storage::tcp_boundary::server::serve(args.storage_addr, workers).await?;
-    let boundary = (0..workers)
-        .into_iter()
-        .map(|_| Some(storage_server.clone()))
-        .collect::<Vec<_>>();
-    let boundary = Arc::new(Mutex::new(boundary));
-    let (server, client) = mz_storage::serve_boundary_requests(config, request_rx, move |index| {
-        boundary.lock().unwrap()[index % workers].take().unwrap()
-    })?;
+    let (server, client) = mz_storage::serve(config)?;
     let client: Box<dyn StorageClient> = Box::new(client);
 
     let mut _pid_file = None;

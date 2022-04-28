@@ -123,7 +123,6 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
-use mz_storage::boundary::ComputeReplay;
 
 pub mod context;
 mod flat_map;
@@ -138,11 +137,10 @@ mod top_k;
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
+pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<mz_dataflow_types::plan::Plan, CollectionMetadata>,
-    boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -177,17 +175,9 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
 
                     (ok_stream.as_collection(), err_stream.as_collection(), token)
                 } else {
-                    // NOTE(aljoscha): In the post-platform, post-storage-compute-split world, we
-                    // will remove the boundary and only the branch that reads directly from
-                    // persist/STORAGE will remain.
-                    let request = SourceInstanceRequest {
-                        source_id: *source_id,
-                        dataflow_id: dataflow.id,
-                        arguments: source.arguments.clone(),
-                        as_of: dataflow.as_of.clone().unwrap(),
-                    };
-
-                    boundary.replay(region, &format!("{name}-{source_id}"), request)
+                    // TODO(petrosagg): read the (ok, err) collections from the persist shard
+                    // specified by storage controller
+                    todo!()
                 };
 
                 // We do not trust `replay` to correctly advance times.

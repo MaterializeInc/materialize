@@ -24,13 +24,12 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{RenderSourcesCommand, StorageCommand, StorageResponse};
+use mz_dataflow_types::client::{CreateSourceCommand, StorageCommand, StorageResponse};
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
-use crate::boundary::StorageCapture;
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::SourceToken;
@@ -98,18 +97,16 @@ pub struct TableState<T> {
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
-pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
+pub struct ActiveStorageState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The storage state itself.
     pub storage_state: &'a mut StorageState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<StorageResponse>,
-    /// The boundary with the Compute layer.
-    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
+impl<'a, A: Allocate> ActiveStorageState<'a, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
@@ -163,6 +160,14 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             // Nothing to do at the moment, but in the future
                             // prepare source ingestion.
 
+                            crate::render::build_storage_dataflow(
+                                self.timely_worker,
+                                &mut self.storage_state,
+                                "foobar",
+                                Some(Antichain::from_elem(0)),
+                                (source.id, source.desc.clone()),
+                            );
+
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
                                 source.id,
@@ -188,7 +193,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .insert(source.id, source.storage_metadata);
                 }
             }
-            StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     if frontier.is_empty() {
@@ -272,25 +276,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         }
     }
 
-    fn build_storage_dataflow(&mut self, dataflows: Vec<RenderSourcesCommand<Timestamp>>) {
-        for RenderSourcesCommand {
-            debug_name,
-            dataflow_id,
-            as_of,
-            source_imports,
-        } in dataflows
-        {
-            crate::render::build_storage_dataflow(
-                self.timely_worker,
-                &mut self.storage_state,
-                &debug_name,
-                as_of,
-                source_imports,
-                dataflow_id,
-                self.boundary,
-            );
-        }
-    }
     /// Emit information about write frontier progress, along with information that should
     /// be made durable for this to be the case.
     ///
