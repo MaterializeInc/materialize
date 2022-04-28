@@ -2778,6 +2778,46 @@ pub mod sources {
             }
         }
 
+        /// Returns `true` if this connector yields data that is
+        /// append-only/monotonic. Append-monly means the source
+        /// never produces retractions.
+        // TODO(guswynn): consider enforcing this more completely at the
+        // parsing/typechecking level, by not using an `envelope`
+        // for sources like pg
+        pub fn append_only(&self) -> bool {
+            match self {
+                // Postgres can produce retractions (deletes)
+                SourceConnector::External {
+                    connector: ExternalSourceConnector::Postgres(_),
+                    ..
+                } => false,
+                // Other sources the `None` envelope are append-only.
+                SourceConnector::External {
+                    envelope: SourceEnvelope::None(_),
+                    ..
+                } => true,
+                // Other combinations may produce retractions.
+                SourceConnector::External {
+                    envelope:
+                        SourceEnvelope::Debezium(_)
+                        | SourceEnvelope::Upsert(_)
+                        | SourceEnvelope::CdcV2
+                        | SourceEnvelope::DifferentialRow,
+                    connector:
+                        ExternalSourceConnector::S3(_)
+                        | ExternalSourceConnector::Kafka(_)
+                        | ExternalSourceConnector::Kinesis(_)
+                        | ExternalSourceConnector::PubNub(_)
+                        | ExternalSourceConnector::Persist(_),
+                    ..
+                } => false,
+                // Local sources (i.e., tables) also support retractions (deletes)
+                SourceConnector::Local { .. } => false,
+                // Log sources _may_ produce retractions.
+                SourceConnector::Log { .. } => false,
+            }
+        }
+
         pub fn name(&self) -> &'static str {
             match self {
                 SourceConnector::External { connector, .. } => connector.name(),
