@@ -27,7 +27,15 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
+use mz_repr::proto::ProtoRepr;
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::TryIntoIfSome;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+
+use super::ProtoDeltaJoinPlan;
+use super::ProtoDeltaPathPlan;
+use super::ProtoDeltaStagePlan;
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -35,7 +43,7 @@ use serde::{Deserialize, Serialize};
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
@@ -44,8 +52,35 @@ pub struct DeltaJoinPlan {
     pub path_plans: Vec<DeltaPathPlan>,
 }
 
+impl From<&DeltaJoinPlan> for ProtoDeltaJoinPlan {
+    fn from(x: &DeltaJoinPlan) -> Self {
+        Self {
+            path_plans: x
+                .path_plans
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoDeltaJoinPlan> for DeltaJoinPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoDeltaJoinPlan) -> Result<Self, Self::Error> {
+        Ok(DeltaJoinPlan {
+            path_plans: x
+                .path_plans
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
 /// A delta query path is implemented by a sequences of stages,
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
@@ -61,8 +96,54 @@ pub struct DeltaPathPlan {
     pub final_closure: Option<JoinClosure>,
 }
 
+impl From<&DeltaPathPlan> for ProtoDeltaPathPlan {
+    fn from(x: &DeltaPathPlan) -> Self {
+        Self {
+            source_relation: x.source_relation.into_proto(),
+            source_key: x
+                .source_key
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            initial_closure: Some((&x.initial_closure).into()),
+            stage_plans: x
+                .stage_plans
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            final_closure: x.final_closure.clone().map(|x| Into::into(&x)),
+        }
+    }
+}
+
+impl TryFrom<ProtoDeltaPathPlan> for DeltaPathPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoDeltaPathPlan) -> Result<Self, Self::Error> {
+        Ok(DeltaPathPlan {
+            source_relation: x.source_relation.try_into()?,
+            source_key: x
+                .source_key
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
+            initial_closure: x
+                .initial_closure
+                .try_into_if_some("ProtoDeltaPathPlan::initial_closure")?,
+            stage_plans: x
+                .stage_plans
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
+            final_closure: x.final_closure.map(|x| x.try_into()).transpose()?,
+        })
+    }
+}
+
 /// A delta query stage performs a stream lookup into an arrangement.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     pub lookup_relation: usize,
@@ -79,6 +160,59 @@ pub struct DeltaStagePlan {
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
+}
+
+impl From<&DeltaStagePlan> for ProtoDeltaStagePlan {
+    fn from(x: &DeltaStagePlan) -> Self {
+        Self {
+            lookup_relation: x.lookup_relation.into_proto(),
+            stream_key: x
+                .stream_key
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            stream_thinning: x
+                .stream_thinning
+                .clone()
+                .into_iter()
+                .map(|x| x.into_proto())
+                .collect(),
+            lookup_key: x
+                .lookup_key
+                .clone()
+                .into_iter()
+                .map(|x| Into::into(&x))
+                .collect(),
+            closure: Some((&x.closure).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoDeltaStagePlan> for DeltaStagePlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoDeltaStagePlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            lookup_relation: usize::from_proto(x.lookup_relation)?,
+            stream_key: x
+                .stream_key
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
+            stream_thinning: x
+                .stream_thinning
+                .into_iter()
+                .map(ProtoRepr::from_proto)
+                .collect::<Result<_, _>>()?,
+            lookup_key: x
+                .lookup_key
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<Result<_, _>>()?,
+            closure: x.closure.try_into_if_some("ProtoDeltaStagePlan::closure")?,
+        })
+    }
 }
 
 impl DeltaJoinPlan {

@@ -12,15 +12,17 @@ use semver::Version;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
+use mz_stash::Append;
 
-use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, SerializedCatalogItem};
 
-fn rewrite_items<F>(tx: &Transaction, mut f: F) -> Result<(), anyhow::Error>
+use super::storage::Transaction;
+
+fn rewrite_items<F, S: Append>(tx: &mut Transaction<S>, mut f: F) -> Result<(), anyhow::Error>
 where
     F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
-    let items = tx.load_items()?;
+    let items = tx.loaded_items();
     for (id, name, def) in items {
         let SerializedCatalogItem::V1 {
             create_sql,
@@ -53,7 +55,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     };
     let mut tx = storage.transaction()?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&tx, |_stmt| Ok(()))?;
+    rewrite_items(&mut tx, |_stmt| Ok(()))?;
 
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
@@ -62,7 +64,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, &catalog)?;
     let _conn_cat = cat.for_system_session();
-    rewrite_items(&tx, |_item| Ok(()))?;
+    rewrite_items(&mut tx, |_item| Ok(()))?;
     tx.commit().map_err(|e| e.into())
 }
 

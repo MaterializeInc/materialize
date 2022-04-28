@@ -14,6 +14,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 import "repr/src/adt/array.proto";
 import "repr/src/strconv.proto";
+import "expr/src/relation/func.proto";
 
 package mz_expr.scalar;
 
@@ -117,4 +118,14 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
     }
+}
+
+message ProtoMirScalarExpr {
+    //TODO: fill me. #11740
+}
+
+message ProtoAggregateExpr {
+    mz_expr.relation.func.ProtoAggregateFunc func = 1;
+    ProtoMirScalarExpr expr = 2;
+    bool distinct = 3;
 }

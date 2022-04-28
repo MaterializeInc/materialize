@@ -1040,9 +1040,10 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "materialized"]
-    )
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+
+    c.up("materialized")
+    c.wait_for_materialized()
 
     c.up("testdrive", persistent=True)
 

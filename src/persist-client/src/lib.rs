@@ -308,7 +308,10 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        write.append_slice(&data[..2], 3).await??;
+        write
+            .append_slice(&data[..2], 3)
+            .await??
+            .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 2.
@@ -319,7 +322,10 @@ mod tests {
         assert_eq!(snap.read_all().await?, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
-        write.append_slice(&data[2..], 4).await??;
+        write
+            .append_slice(&data[2..], 4)
+            .await??
+            .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
@@ -403,7 +409,7 @@ mod tests {
             .await?;
 
         let res = write1.append_slice(&data[..], 3).await?;
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(Ok(())));
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
         assert_eq!(
@@ -413,6 +419,36 @@ mod tests {
 
         // The writer-local upper should not advance if another writer advances the frontier.
         assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn append_with_invalid_upper() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let client = new_test_client().await?;
+
+        let shard_id = ShardId::new();
+
+        let (mut write, _read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
+            .await?;
+
+        let res = write.append_slice(&data[..], 3).await?;
+        assert_eq!(res, Ok(Ok(())));
+
+        write.upper = Antichain::from_elem(0);
+        let res = write.append_slice(&data[..], 3).await?;
+        assert_eq!(res, Ok(Err(Antichain::from_elem(3))));
+
+        // Writing with an outdated upper updates the write handle's upper to the correct upper.
+        assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         Ok(())
     }
@@ -591,7 +627,10 @@ mod tests {
                         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
                         .collect::<Vec<_>>();
                     let updates = updates.iter().map(|((k, v), t, d)| ((k, v), t, d));
-                    write.append(NO_TIMEOUT, updates, new_upper).await??;
+                    write
+                        .append(NO_TIMEOUT, updates, new_upper)
+                        .await??
+                        .expect("invalid current upper");
                 }
                 Ok(())
             });

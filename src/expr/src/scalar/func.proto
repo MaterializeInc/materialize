@@ -272,14 +272,16 @@ message ProtoUnaryFunc {
         google.protobuf.Empty exp_numeric = 209;
         // todo: Sleep(Sleep),
         google.protobuf.Empty sleep = 210;
+        // todo: Panic(Panic),
+        google.protobuf.Empty panic = 211;
         // todo: RescaleNumeric(NumericMaxScale),
-        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 211;
+        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
         // todo: PgColumnSize(PgColumnSize),
-        google.protobuf.Empty pg_column_size = 212;
+        google.protobuf.Empty pg_column_size = 213;
         // todo: MzRowSize(MzRowSize),
-        google.protobuf.Empty mz_row_size = 213;
+        google.protobuf.Empty mz_row_size = 214;
         // todo: MzTypeName(MzTypeName),
-        google.protobuf.Empty mz_type_name = 214;
+        google.protobuf.Empty mz_type_name = 215;
     }
 }
 

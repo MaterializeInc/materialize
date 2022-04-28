@@ -34,6 +34,7 @@ use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_persist_types::Codec64;
 
 use crate::client::GenericClient;
 use crate::client::{
@@ -65,6 +66,7 @@ pub struct ClusterReplicaSizeConfig {
     pub memory_limit: Option<MemoryLimit>,
     pub cpu_limit: Option<CpuLimit>,
     pub scale: NonZeroUsize,
+    pub workers: NonZeroUsize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -73,23 +75,58 @@ pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
         // {
-        //     "1": {"scale": 1},
-        //     "2": {"scale": 2},
+        //     "1": {"scale": 1, "workers": 1},
+        //     "2": {"scale": 1, "workers": 2},
+        //     "4": {"scale": 1, "workers": 4},
         //     /// ...
-        //     "16": {"scale": 16}
+        //     "32": {"scale": 1, "workers": 32}
+        //     /// Testing with multiple processes on a single machine is a novelty, so
+        //     /// we don't bother providing many options.
+        //     "2-1": {"scale": 2, "workers": 1},
+        //     "2-2": {"scale": 2, "workers": 2},
+        //     "2-4": {"scale": 2, "workers": 4},
         // }
-        let inner = (1..=16)
+        let mut inner = (0..=5)
             .map(|i| {
+                let workers = 1 << i;
                 (
-                    i.to_string(),
+                    workers.to_string(),
                     ClusterReplicaSizeConfig {
                         memory_limit: None,
                         cpu_limit: None,
-                        scale: NonZeroUsize::new(i).unwrap(),
+                        scale: NonZeroUsize::new(1).unwrap(),
+                        workers: NonZeroUsize::new(workers).unwrap(),
                     },
                 )
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
+        inner.insert(
+            "2-1".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(1).unwrap(),
+            },
+        );
+        inner.insert(
+            "2-2".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(2).unwrap(),
+            },
+        );
+        inner.insert(
+            "2-4".to_string(),
+            ClusterReplicaSizeConfig {
+                memory_limit: None,
+                cpu_limit: None,
+                scale: NonZeroUsize::new(2).unwrap(),
+                workers: NonZeroUsize::new(4).unwrap(),
+            },
+        );
         Self(inner)
     }
 }
@@ -107,7 +144,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + Copy + Unpin,
+    T: Timestamp + Lattice + Codec64 + Copy + Unpin,
 {
     pub async fn create_instance(
         &mut self,
@@ -141,47 +178,55 @@ where
 
                 let default_listen_host = orchestrator.listen_host();
 
-                let service = orchestrator
-                    .namespace("compute")
-                    .ensure_service(
-                        &format!("cluster-{instance}"),
-                        ServiceConfig {
-                            image: computed_image.clone(),
-                            args: &|ports| {
-                                let mut compute_opts = vec![
-                                    format!("--storage-addr={storage_addr}"),
-                                    format!(
-                                        "--listen-addr={}:{}",
-                                        default_listen_host, ports["controller"]
-                                    ),
-                                    format!("{}:{}", default_listen_host, ports["compute"]),
-                                ];
-                                if *linger {
-                                    compute_opts.push(format!("--linger"));
-                                }
-                                compute_opts
-                            },
-                            ports: vec![
-                                ServicePort {
-                                    name: "controller".into(),
-                                    port_hint: 2100,
+                let service =
+                    orchestrator
+                        .namespace("compute")
+                        .ensure_service(
+                            &format!("cluster-{instance}"),
+                            ServiceConfig {
+                                image: computed_image.clone(),
+                                args: &|hosts_ports, my_ports, my_index| {
+                                    let mut compute_opts = vec![
+                                        format!("--storage-addr={storage_addr}"),
+                                        format!(
+                                            "--listen-addr={}:{}",
+                                            default_listen_host, my_ports["controller"]
+                                        ),
+                                        format!("--processes={}", size_config.scale),
+                                        format!("--workers={}", size_config.workers),
+                                    ];
+                                    compute_opts.extend(hosts_ports.iter().map(|(host, ports)| {
+                                        format!("{host}:{}", ports["compute"])
+                                    }));
+                                    if let Some(my_index) = my_index {
+                                        compute_opts.push(format!("--process={my_index}"));
+                                    }
+                                    if *linger {
+                                        compute_opts.push(format!("--linger"));
+                                    }
+                                    compute_opts
                                 },
-                                ServicePort {
-                                    name: "compute".into(),
-                                    port_hint: 2102,
+                                ports: vec![
+                                    ServicePort {
+                                        name: "controller".into(),
+                                        port_hint: 2100,
+                                    },
+                                    ServicePort {
+                                        name: "compute".into(),
+                                        port_hint: 2102,
+                                    },
+                                ],
+                                cpu_limit: size_config.cpu_limit,
+                                memory_limit: size_config.memory_limit,
+                                scale: size_config.scale,
+                                labels: hashmap! {
+                                    "cluster-id".into() => instance.to_string(),
+                                    "type".into() => "cluster".into(),
                                 },
-                            ],
-                            cpu_limit: size_config.cpu_limit,
-                            memory_limit: size_config.memory_limit,
-                            scale: size_config.scale,
-                            labels: hashmap! {
-                                "cluster-id".into() => instance.to_string(),
-                                "type".into() => "cluster".into(),
+                                availability_zone: None,
                             },
-                            availability_zone: None,
-                        },
-                    )
-                    .await?;
+                        )
+                        .await?;
                 let client = RemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance)
@@ -247,7 +292,7 @@ impl<T> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
 {
     pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         let mut storage_alive = true;

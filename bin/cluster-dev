@@ -76,7 +76,6 @@ spec:
             - --computed-image=$(bin/mzimage spec --dev computed)
             - --data-directory=/data
             - --orchestrator=kubernetes
-            - --secrets-controller=kubernetes
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
             - --kubernetes-image-pull-policy=never

@@ -520,6 +520,12 @@ impl From<ScalarWindowFunc> for Operation<ScalarWindowFunc> {
     }
 }
 
+impl From<ValueWindowFunc> for Operation<(HirScalarExpr, ValueWindowFunc)> {
+    fn from(a: ValueWindowFunc) -> Operation<(HirScalarExpr, ValueWindowFunc)> {
+        Operation::unary(move |_ecx, e| Ok((e, a.clone())))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 /// Describes possible types of function parameters.
 ///
@@ -2563,6 +2569,9 @@ lazy_static! {
                     Ok((e, ValueWindowFunc::Lead))
                 }) => AnyCompatible, 3111;
             },
+            "first_value" => ValueWindow {
+                params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
+            },
 
             // Table functions.
             "generate_series" => Table {
@@ -2961,6 +2970,9 @@ lazy_static! {
             },
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep(func::Sleep), oid::FUNC_MZ_SLEEP_OID;
+            },
+            "mz_panic" => Scalar {
+                params!(String) => UnaryFunc::Panic(func::Panic), oid::FUNC_MZ_PANIC_OID;
             },
             "mz_type_name" => Scalar {
                 params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName), oid::FUNC_MZ_TYPE_NAME;

@@ -33,7 +33,7 @@ impl<P: AsRef<Path>> PortMetadataFile<P> {
     /// Attempts to open and write the specified port metadata file.
     pub fn open(
         path: P,
-        port_metadata: &HashMap<String, i32>,
+        port_metadata: &HashMap<String, u16>,
     ) -> Result<PortMetadataFile<P>, Error> {
         let port_metadata = serde_json::to_string(&port_metadata)
             .unwrap_or_else(|_| panic!("failed to serialize {:?}", port_metadata));
@@ -57,7 +57,7 @@ impl<P: AsRef<Path>> PortMetadataFile<P> {
     }
 
     /// Reads the contents of a `PortMetadataFile`
-    pub fn read(path: P) -> Result<HashMap<String, i32>, Error> {
+    pub fn read(path: P) -> Result<HashMap<String, u16>, Error> {
         let file = OpenOptions::new().read(true).open(path)?;
         let reader = BufReader::new(file);
         let port_metadata = reader.lines().next().expect("empty port metadata file")?;

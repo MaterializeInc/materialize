@@ -1927,9 +1927,9 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            envelope
+            Some(envelope)
         } else {
-            Envelope::None
+            None
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
@@ -2041,8 +2041,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
+        match self
+            .expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])?
+        {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2075,6 +2077,25 @@ impl<'a> Parser<'a> {
                     publication,
                     slot,
                     details,
+                })
+            }
+            PERSIST => {
+                self.expect_keyword(CONSENSUS)?;
+                let consensus_uri = self.parse_literal_string()?;
+
+                self.expect_keyword(BLOB)?;
+                let blob_uri = self.parse_literal_string()?;
+
+                self.expect_keyword(SHARD)?;
+                let shard_id = self.parse_literal_string()?;
+
+                // TODO: fail if/when we have constraints
+                let (columns, _constraints) = self.parse_columns(Mandatory)?;
+                Ok(CreateSourceConnector::Persist {
+                    consensus_uri,
+                    blob_uri,
+                    collection_id: shard_id,
+                    columns,
                 })
             }
             FILE => {
@@ -2170,7 +2191,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_connector(&mut self) -> Result<CreateSinkConnector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, AVRO])? {
+        match self.expect_one_of_keywords(&[KAFKA, AVRO, PERSIST])? {
             KAFKA => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
@@ -2204,6 +2225,35 @@ impl<'a> Parser<'a> {
                     topic,
                     key,
                     consistency,
+                })
+            }
+            PERSIST => {
+                // TODO(aljoscha): We should not require (or allow) passing in consensus/blob
+                // configuration on the sink. Instead, we need to pick up the config that was given
+                // to materialized/storaged when starting up.
+                self.expect_keyword(CONSENSUS)?;
+                let consensus_uri = self.parse_literal_string()?;
+
+                self.expect_keyword(BLOB)?;
+                let blob_uri = self.parse_literal_string()?;
+
+                let shard_id = if self.peek_keyword(SHARD) {
+                    let _ = self.expect_keyword(SHARD)?;
+                    self.parse_literal_string()?
+                } else {
+                    // TODO(aljoscha): persist/storage sinks should have a human-readable
+                    // collection name and STORAGE needs to keep track of which shard IDs they map
+                    // to. Also, the lifecycle of collections created by a sink should be tracked
+                    // separate from the sink. And we can expose something like a `mz_collections`
+                    // to allow querying them.
+                    let shard_id = mz_persist_client::ShardId::new();
+                    format!("{}", shard_id)
+                };
+
+                Ok(CreateSinkConnector::Persist {
+                    consensus_uri,
+                    blob_uri,
+                    shard_id,
                 })
             }
             _ => unreachable!(),

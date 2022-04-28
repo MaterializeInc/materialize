@@ -44,11 +44,6 @@ SHOW CLUSTERS LIKE 'd%'
 ----
 default
 
-# Creating a sized cluster should be rejected.
-# TODO(benesch): this panics.
-# statement error SIZE not yet supported
-# CREATE CLUSTER baz SIZE 'small'
-
 # Test invalid option combinations.
 
 statement error SIZE specified more than once
@@ -203,3 +198,12 @@ DROP CLUSTER foo
 
 statement error unknown cluster size
 CREATE CLUSTER foo SIZE 'lol'
+
+statement ok
+CREATE CLUSTER foo SIZE '1'
+
+statement ok
+CREATE CLUSTER foo2 SIZE '32'
+
+statement ok
+CREATE CLUSTER foo3 SIZE '2-2'

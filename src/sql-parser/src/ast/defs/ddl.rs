@@ -364,6 +364,9 @@ pub enum Envelope {
     Debezium(DbzMode),
     Upsert,
     CdcV2,
+    /// An envelope for sources that directly read differential Rows. This is internal and cannot
+    /// be requested via SQL.
+    DifferentialRow,
 }
 
 impl AstDisplay for Envelope {
@@ -382,6 +385,9 @@ impl AstDisplay for Envelope {
             }
             Self::CdcV2 => {
                 f.write_str("MATERIALIZE");
+            }
+            Self::DifferentialRow => {
+                f.write_str("DIFFERENTIAL ROW");
             }
         }
     }
@@ -501,7 +507,7 @@ pub struct KafkaSourceConnector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
-pub enum CreateSourceConnector {
+pub enum CreateSourceConnector<T: AstInfo> {
     File {
         path: String,
         compression: Compression,
@@ -533,9 +539,15 @@ pub enum CreateSourceConnector {
         /// The PubNub channel to subscribe to
         channel: String,
     },
+    Persist {
+        consensus_uri: String,
+        blob_uri: String,
+        collection_id: String,
+        columns: Vec<ColumnDef<T>>,
+    },
 }
 
-impl AstDisplay for CreateSourceConnector {
+impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSourceConnector::File { path, compression } => {
@@ -622,18 +634,28 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
-        }
-    }
-}
-impl_display!(CreateSourceConnector);
+            CreateSourceConnector::Persist {
+                consensus_uri,
+                blob_uri,
+                collection_id,
+                columns,
+            } => {
+                f.write_str("PERSIST CONSENSUS '");
+                f.write_node(&display::escape_single_quote_string(consensus_uri));
+                f.write_str("' BLOB '");
+                f.write_node(&display::escape_single_quote_string(blob_uri));
+                f.write_str("' SHARD '");
+                f.write_node(&display::escape_single_quote_string(collection_id));
+                f.write_str("'");
 
-impl<T: AstInfo> From<&CreateSinkConnector<T>> for SourceConnectorType {
-    fn from(connector: &CreateSinkConnector<T>) -> SourceConnectorType {
-        match connector {
-            CreateSinkConnector::Kafka { .. } => SourceConnectorType::Kafka,
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(columns));
+                f.write_str(")");
+            }
         }
     }
 }
+impl_display_t!(CreateSourceConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(CreateSinkConnectorKind)]
@@ -643,6 +665,11 @@ pub enum CreateSinkConnector<T: AstInfo> {
         topic: String,
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
+    },
+    Persist {
+        blob_uri: String,
+        consensus_uri: String,
+        shard_id: String,
     },
 }
 
@@ -667,6 +694,19 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
                 }
+            }
+            CreateSinkConnector::Persist {
+                blob_uri,
+                consensus_uri,
+                shard_id,
+            } => {
+                f.write_str("PERSIST CONSENSUS '");
+                f.write_node(&display::escape_single_quote_string(consensus_uri));
+                f.write_str("' BLOB '");
+                f.write_node(&display::escape_single_quote_string(blob_uri));
+                f.write_str("' SHARD '");
+                f.write_node(&display::escape_single_quote_string(shard_id));
+                f.write_str("'");
             }
         }
     }

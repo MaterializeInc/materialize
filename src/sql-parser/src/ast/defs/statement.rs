@@ -407,11 +407,11 @@ impl_display_t!(CreateConnectorStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: CreateSourceConnector,
+    pub connector: CreateSourceConnector<T>,
     pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Envelope,
+    pub envelope: Option<Envelope>,
     pub if_not_exists: bool,
     pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -455,11 +455,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(&display::comma_separated(&self.include_metadata));
         }
 
-        match self.envelope {
-            Envelope::None => (),
-            _ => {
+        match &self.envelope {
+            None => (),
+            Some(Envelope::None) => (),
+            Some(envelope) => {
                 f.write_str(" ENVELOPE ");
-                f.write_node(&self.envelope);
+                f.write_node(envelope);
             }
         }
     }

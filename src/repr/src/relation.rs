@@ -30,7 +30,9 @@ pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType};
 ///
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`ScalarType::nullable`] method.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ColumnType {
     /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ScalarType,
@@ -264,7 +266,7 @@ impl TryFrom<ProtoColumnName> for ColumnName {
 
     fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
         Ok(ColumnName(x.value.ok_or_else(|| {
-            TryFromProtoError::MissingField("ProtoColumnName::value".into())
+            TryFromProtoError::missing_field("ProtoColumnName::value")
         })?))
     }
 }

@@ -90,12 +90,6 @@ pub fn encode_datums_as_json<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut name_idx = 0;
-    let namer = &mut move || {
-        let ret = format!("record{}", name_idx);
-        name_idx += 1;
-        ret
-    };
     // todo@jldlaughlin: this is awful and hacky! revisit
     let value_fields = datums
         .into_iter()
@@ -109,12 +103,12 @@ where
                         nullable: false,
                     },
                 )
-                .json(namer);
+                .json();
                 ("transaction".to_owned(), json!({ "id": transaction_id }))
             } else {
                 (
                     names_types[i].0.as_str().to_owned(),
-                    TypedDatum::new(datum, names_types[i].1.clone()).json(namer),
+                    TypedDatum::new(datum, names_types[i].1.clone()).json(),
                 )
             }
         })
@@ -124,11 +118,11 @@ where
 
 pub trait ToJson {
     /// Transforms this value to a JSON value.
-    fn json<F: FnMut() -> String>(self, namer: &mut F) -> serde_json::value::Value;
+    fn json(self) -> serde_json::value::Value;
 }
 
 impl<'a> ToJson for TypedDatum<'_> {
-    fn json<F: FnMut() -> String>(self, namer: &mut F) -> serde_json::value::Value {
+    fn json(self) -> serde_json::value::Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
             serde_json::value::Value::Null
@@ -194,16 +188,12 @@ impl<'a> ToJson for TypedDatum<'_> {
                                     scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
                             );
-                            datum.json(namer)
+                            datum.json()
                         })
                         .collect();
                     serde_json::value::Value::Array(values)
                 }
-                ScalarType::Record {
-                    fields,
-                    custom_name,
-                    ..
-                } => {
+                ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();
                     let fields: Map<String, serde_json::value::Value> = fields
                         .iter()
@@ -211,16 +201,11 @@ impl<'a> ToJson for TypedDatum<'_> {
                         .map(|((name, typ), datum)| {
                             let name = name.to_string();
                             let datum = TypedDatum::new(datum, typ.clone());
-                            let value = datum.json(namer);
+                            let value = datum.json();
                             (name, value)
                         })
                         .collect();
-
-                    let name = match custom_name {
-                        Some(name) => name.clone(),
-                        None => namer(),
-                    };
-                    json!({ name: fields })
+                    fields.into()
                 }
                 ScalarType::Map { value_type, .. } => {
                     let map = datum.unwrap_map();
@@ -234,7 +219,7 @@ impl<'a> ToJson for TypedDatum<'_> {
                                     scalar_type: (**value_type).clone(),
                                 },
                             );
-                            let value = datum.json(namer);
+                            let value = datum.json();
                             (key.to_string(), value)
                         })
                         .collect();

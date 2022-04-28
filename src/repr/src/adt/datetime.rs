@@ -173,7 +173,7 @@ impl TryFrom<ProtoDateTimeUnits> for DateTimeUnits {
         use proto_date_time_units::Kind;
         let kind = value
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoDateTimeUnits.kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDateTimeUnits.kind"))?;
         Ok(match kind {
             Kind::Epoch(_) => DateTimeUnits::Epoch,
             Kind::Millennium(_) => DateTimeUnits::Millennium,
@@ -433,7 +433,7 @@ impl TryFrom<ProtoTimezone> for Timezone {
         use proto_timezone::Kind;
         let kind = value
             .kind
-            .ok_or_else(|| TryFromProtoError::MissingField("ProtoTimezone::kind".into()))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimezone::kind"))?;
         Ok(match kind {
             Kind::FixedOffset(pof) => Timezone::FixedOffset(FixedOffset::from_proto(pof)?),
             Kind::Tz(ptz) => Timezone::Tz(Tz::from_proto(ptz)?),

@@ -85,6 +85,12 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
     FailpointReached(String),
     #[error("{0}")]
     Unstructured(String),
+    #[error("stash error: {0}")]
+    Stash(#[from] mz_stash::StashError),
+    #[error("stash in unexpected state")]
+    UnexpectedStashState,
+    #[error(transparent)]
+    Uuid(#[from] uuid::Error),
 }
 
 impl Error {
@@ -122,6 +128,18 @@ impl From<rusqlite::Error> for Error {
 
 impl From<SqlCatalogError> for Error {
     fn from(e: SqlCatalogError) -> Error {
+        Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<mz_stash::StashError> for Error {
+    fn from(e: mz_stash::StashError) -> Error {
+        Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<uuid::Error> for Error {
+    fn from(e: uuid::Error) -> Error {
         Error::new(ErrorKind::from(e))
     }
 }

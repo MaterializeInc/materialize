@@ -7,7 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
+//! This module provides functions that
+//! build decoding pipelines from _base_ source streams.
+//!
+//! The primary exports are [`render_decode`], [`render_decode_delimited`], and
+//! [`render_decode_cdcv2`]. See their docs for more details about their differences.
+
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::VecDeque,
+    marker::{Send, Sync},
+    rc::Rc,
+    time::Duration,
+};
 
 use ::regex::Regex;
 use chrono::NaiveDateTime;
@@ -46,12 +59,17 @@ mod csv;
 pub mod metrics;
 mod protobuf;
 
-pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
+/// Decode delimited CDCv2 messages.
+///
+/// This not only literally decodes the avro-encoded messages, but
+/// also builds a differential dataflow collection that respects the
+/// data and progress messages in the underlying CDCv2 stream.
+pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     schema: &str,
     registry: Option<mz_ccsr::ClientConfig>,
     confluent_wire_format: bool,
-) -> (Collection<G, Row, Diff>, Box<dyn Any>) {
+) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
     // We will have already checked validity of the schema by now, so this can't fail.
     let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
     let channel = Rc::new(RefCell::new(VecDeque::new()));
@@ -105,6 +123,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             self.0.borrow_mut().pop_front()
         }
     }
+    // this operator returns a thread-safe drop-token
     let (token, stream) =
         differential_dataflow::capture::source::build(stream.scope(), move |ac| {
             *activator.borrow_mut() = Some(ac);
@@ -294,6 +313,11 @@ fn get_decoder(
         DataEncoding::Postgres => {
             unreachable!("Postgres sources should not go through the general decoding path.")
         }
+        DataEncoding::RowCodec(_) => {
+            unreachable!(
+                "Persist (RowCodec) sources should not go through the general decoding path."
+            )
+        }
     }
 }
 
@@ -338,7 +362,7 @@ pub fn render_decode_delimited<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
+) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope,
 {
@@ -438,7 +462,7 @@ pub fn render_decode<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
+) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {

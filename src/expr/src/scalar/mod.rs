@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
+use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +74,32 @@ pub enum MirScalarExpr {
         then: Box<MirScalarExpr>,
         els: Box<MirScalarExpr>,
     },
+}
+
+impl Arbitrary for MirScalarExpr {
+    // TODO: This is just a stub. #11740
+    type Parameters = ();
+    type Strategy = Just<MirScalarExpr>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![Just(MirScalarExpr::Column(0))]
+    }
+}
+
+impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
+    // TODO: This is just a stub. #11740
+    type Error = TryFromProtoError;
+
+    fn try_from(_value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
+        Ok(MirScalarExpr::Column(0))
+    }
+}
+
+impl From<&MirScalarExpr> for ProtoMirScalarExpr {
+    // TODO: This is just a stub. #11740
+    fn from(_: &MirScalarExpr) -> Self {
+        ProtoMirScalarExpr {}
+    }
 }
 
 impl MirScalarExpr {
@@ -1682,7 +1709,6 @@ impl TryFrom<ProtoEvalError> for EvalError {
 mod tests {
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     #[test]
     fn test_reduce() {

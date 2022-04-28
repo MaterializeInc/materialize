@@ -34,7 +34,7 @@ steps:
           - { value: aws-config }
           - { value: zippy-kafka-sources }
           - { value: secrets }
-          - { value: catalog-compat }
+          - { value: unused-deps }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -259,14 +259,15 @@ steps:
           run: failpoints
     skip: Persistence tests disabled
 
-  - id: catalog-compat
-    label: Catalog compatibility test
-    depends_on: build-x86_64
+  - id: unused-deps
+    label: Unused dependencies
+    command: bin/ci-builder run nightly bin/unused-deps
+    # inputs:
+    #  - Cargo.lock
+    #  - "**/Cargo.toml"
+    #  - "**/*.rs"
     timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
+    # https://github.com/est31/cargo-udeps/issues/103
+    soft_fail: true
     agents:
       queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: catalog-compat
-          run: catalog-compat

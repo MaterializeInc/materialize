@@ -110,15 +110,19 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<SeqNo, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
         let res = self
             .apply_unbatched_cmd(deadline, |_, state| state.append(writer_id, keys, desc))
             .await?;
-        let (seqno, _) = match res {
+        let (seqno, res) = match res {
             Ok(x) => x,
             Err(err) => return Ok(Err(err)),
         };
-        Ok(Ok(seqno))
+        match res {
+            Ok(()) => (),
+            Err(current_upper) => return Ok(Ok(Err(current_upper))),
+        };
+        Ok(Ok(Ok(seqno)))
     }
 
     pub async fn compare_and_append(

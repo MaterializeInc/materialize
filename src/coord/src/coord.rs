@@ -81,7 +81,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -121,8 +121,9 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage, FetchStatement,
-    Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr, SourceConnectorType, Statement,
+    CreateIndexStatement, CreateSinkStatement, CreateSourceConnector, CreateSourceStatement,
+    ExplainStage, FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr,
+    Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
@@ -3458,17 +3459,8 @@ impl Coordinator {
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
                     // hanging awaiting the response to data that may never arrive.
-                    //
-                    // The .get(0) here breaks the antichain abstraction by assuming this antichain
-                    // has 0 or 1 elements in it. It happens to work because we use a timestamp
-                    // type that meets that assumption, but would break if we used a more general
-                    // timestamp.
-                    if let Some(candidate) = upper.elements().get(0) {
-                        if *candidate > Timestamp::minimum() {
-                            candidate.saturating_sub(1)
-                        } else {
-                            Timestamp::minimum()
-                        }
+                    if let Some(candidate) = upper.as_option() {
+                        candidate.step_back().unwrap_or_else(Timestamp::minimum)
                     } else {
                         // A complete trace can be read in its final form with this time.
                         //
@@ -4935,26 +4927,19 @@ pub fn describe(
 }
 
 fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    let (source_or_sink, typ) = match stmt {
-        Statement::CreateSource(CreateSourceStatement { connector, .. }) => {
-            ("source", SourceConnectorType::from(connector))
-        }
-        Statement::CreateSink(CreateSinkStatement { connector, .. }) => {
-            ("sink", SourceConnectorType::from(connector))
-        }
-        _ => return Ok(()),
-    };
-    match typ {
-        // File sources and sinks are prohibited in safe mode because they allow
-        // reading from and writing to arbitrary files on disk.
-        SourceConnectorType::File => {
-            return Err(CoordError::SafeModeViolation(format!(
-                "file {}",
-                source_or_sink
-            )));
-        }
+    match stmt {
+        Statement::CreateSource(CreateSourceStatement { connector, .. }) => match connector {
+            CreateSourceConnector::File { .. } => {
+                return Err(CoordError::SafeModeViolation(format!("file source",)));
+            }
+            _ => (),
+        },
+        Statement::CreateSink(CreateSinkStatement { connector, .. }) => match connector {
+            _ => (),
+        },
         _ => (),
-    }
+    };
+
     Ok(())
 }
 
@@ -5555,11 +5540,19 @@ mod timeline {
 }
 
 pub trait CoordTimestamp:
-    timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug
+    timely::progress::Timestamp
+    + timely::order::TotalOrder
+    + differential_dataflow::lattice::Lattice
+    + std::fmt::Debug
 {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
     fn step_forward(&self) -> Self;
+
+    /// Retreat a timestamp by the least amount possible such that
+    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
+    /// which must only happen if the timestamp is `Timestamp::minimum()`.
+    fn step_back(&self) -> Option<Self>;
 }
 
 impl CoordTimestamp for mz_repr::Timestamp {
@@ -5568,5 +5561,9 @@ impl CoordTimestamp for mz_repr::Timestamp {
             Some(ts) => ts,
             None => panic!("could not step forward"),
         }
+    }
+
+    fn step_back(&self) -> Option<Self> {
+        self.checked_sub(1)
     }
 }

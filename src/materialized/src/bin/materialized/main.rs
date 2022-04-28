@@ -155,7 +155,7 @@ pub struct Args {
     computed_image: Option<String>,
     /// The host on which processes spawned by the process orchestrator listen
     /// for connections.
-    #[structopt(long, hide = true)]
+    #[clap(long, hide = true, env = "MZ_PROCESS_LISTEN_HOST")]
     process_listen_host: Option<String>,
     /// The image pull policy to use for services created by the Kubernetes
     /// orchestrator.
@@ -167,12 +167,7 @@ pub struct Args {
     orchestrator_linger: Option<bool>,
     /// Base port for spawning various services
     #[structopt(long, default_value = "2100")]
-    base_service_port: i32,
-
-    // === Secrets controller options. ===
-    /// The secrets controller implementation to use
-    #[structopt(long, hide = true, arg_enum)]
-    secrets_controller: Option<SecretsController>,
+    base_service_port: u16,
 
     // === Timely worker configuration. ===
     /// Address of a storage process that the controller should connect to.
@@ -423,12 +418,6 @@ impl Orchestrator {
     }
 }
 
-#[derive(ArgEnum, Debug, Clone)]
-enum SecretsController {
-    LocalFileSystem,
-    Kubernetes,
-}
-
 #[derive(Debug)]
 struct OrchestratorLabel {
     key: String,
@@ -619,15 +608,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             .unwrap_or_else(|| args.orchestrator.default_linger_value()),
     };
 
-    // Configure secrets controller.
-    let secrets_controller = match args.secrets_controller {
-        None => None,
-        Some(SecretsController::LocalFileSystem) => Some(SecretsControllerConfig::LocalFileSystem),
-        Some(SecretsController::Kubernetes) => Some(SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context,
-        }),
-    };
-
     // Configure storage.
     let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
@@ -733,6 +713,13 @@ max log level: {max_log_level}",
         bail!("--availability-zone values must be unique");
     }
 
+    let secrets_controller = match args.orchestrator {
+        Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
+            context: args.kubernetes_context,
+        },
+        Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
@@ -744,7 +731,7 @@ max log level: {max_log_level}",
         data_directory,
         persist_location,
         orchestrator,
-        secrets_controller,
+        secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
         disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,

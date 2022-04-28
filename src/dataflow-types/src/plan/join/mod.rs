@@ -27,11 +27,16 @@
 //! output column reckoning", as is what we use when reasoning about
 //! work still available to be done on the partial join results.
 
+// https://github.com/tokio-rs/prost/issues/237
+#![allow(missing_docs)]
+
 pub mod delta_join;
 pub mod linear_join;
 
 use std::collections::HashMap;
 
+use mz_repr::proto::TryFromProtoError;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
@@ -40,13 +45,42 @@ use mz_repr::{Datum, Row, RowArena};
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.join.rs"));
+
 /// A complete enumeration of possible join plans to render.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum JoinPlan {
     /// A join implemented by a linear join.
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
+}
+
+impl TryFrom<ProtoJoinPlan> for JoinPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: ProtoJoinPlan) -> Result<Self, Self::Error> {
+        use proto_join_plan::Kind;
+        let kind = value
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
+        Ok(match kind {
+            Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
+            Kind::Delta(inner) => JoinPlan::Delta(inner.try_into()?),
+        })
+    }
+}
+
+impl From<&JoinPlan> for ProtoJoinPlan {
+    fn from(repr: &JoinPlan) -> Self {
+        use proto_join_plan::Kind;
+        ProtoJoinPlan {
+            kind: Some(match repr {
+                JoinPlan::Linear(inner) => Kind::Linear(inner.into()),
+                JoinPlan::Delta(inner) => Kind::Delta(inner.into()),
+            }),
+        }
+    }
 }
 
 /// A manual closure implementation of filtering and logic application.
@@ -55,10 +89,42 @@ pub enum JoinPlan {
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: mz_expr::SafeMfpPlan,
+}
+
+impl From<&JoinClosure> for ProtoJoinClosure {
+    fn from(x: &JoinClosure) -> Self {
+        Self {
+            ready_equivalences: x
+                .ready_equivalences
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            // TODO(lluki): Implement me once #11970 is fixed
+            before: None,
+        }
+    }
+}
+
+impl TryFrom<ProtoJoinClosure> for JoinClosure {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoJoinClosure) -> Result<Self, Self::Error> {
+        Ok(Self {
+            ready_equivalences: x
+                .ready_equivalences
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, TryFromProtoError>>()?,
+
+            // TODO(lluki): Implement me once #11970 is fixed
+            before: mz_expr::safe_mfp_stub(),
+        })
+    }
 }
 
 impl JoinClosure {
@@ -339,5 +405,23 @@ impl JoinBuildState {
             permutation,
             thinned_arity_with_key,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        // TODO: This will only work once we have implemented MfpPlan #11970
+        #[test]
+        #[ignore]
+        fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }
