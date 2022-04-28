@@ -102,19 +102,19 @@ where
 ///
 /// Note that the current implementation is fairly memory inefficient.
 #[derive(Debug)]
-pub struct PortAllocator(Mutex<BTreeSet<i32>>);
+pub struct PortAllocator(Mutex<BTreeSet<u16>>);
 
 impl PortAllocator {
     /// Creates a new `PortAllocator` that will assign ports between `min` and
     /// `max`, both inclusive.
-    pub fn new(min: i32, max: i32) -> PortAllocator {
+    pub fn new(min: u16, max: u16) -> PortAllocator {
         PortAllocator(Mutex::new((min..=max).collect()))
     }
 
     /// Allocates a new port.
     ///
     /// Returns `None` if the allocator is exhausted.
-    pub fn alloc(&self) -> Option<i32> {
+    pub fn alloc(&self) -> Option<u16> {
         let mut inner = self.0.lock().expect("lock poisoned");
         let port = inner.iter().next().cloned();
         if let Some(port) = port {
@@ -127,7 +127,7 @@ impl PortAllocator {
     ///
     /// It is undefined behavior to free an port twice, or to free an port that was
     /// not allocated by this allocator.
-    pub fn free(&self, id: i32) {
+    pub fn free(&self, id: u16) {
         let mut inner = self.0.lock().expect("lock poisoned");
         let _ = inner.insert(id);
     }
@@ -135,7 +135,7 @@ impl PortAllocator {
     /// Marks a port as already allocated.
     ///
     /// Returns false if port was previously allocated and true otherwise.
-    pub fn mark_allocated(&self, port: i32) -> bool {
+    pub fn mark_allocated(&self, port: u16) -> bool {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.remove(&port)
     }

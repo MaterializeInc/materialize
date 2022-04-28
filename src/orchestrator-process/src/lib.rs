@@ -9,7 +9,7 @@
 
 pub mod port_metadata_file;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use tracing::{error, info};
 
 use crate::port_metadata_file::PortMetadataFile;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
 
 /// Configures a [`ProcessOrchestrator`].
@@ -110,7 +110,7 @@ impl Orchestrator for ProcessOrchestrator {
 struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
-    port_allocator: Arc<IdAllocator<u16>>,
+    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
     data_dir: PathBuf,
@@ -248,7 +248,7 @@ async fn supervise(
     full_id: String,
     path: PathBuf,
     args: Vec<String>,
-    port_allocator: Arc<IdAllocator<u16>>,
+    port_allocator: Arc<PortAllocator>,
     ports: HashMap<String, u16>,
     suppress_output: bool,
     port_metadata_file_location: PathBuf,

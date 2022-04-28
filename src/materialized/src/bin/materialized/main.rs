@@ -53,7 +53,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::id_gen::{IdAllocator, PortAllocator};
+use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
