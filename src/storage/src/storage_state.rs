@@ -5,32 +5,28 @@
 
 //! Worker-local state for storage timely instances.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_persist_client::write::WriteHandle;
-use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::ActivateCapability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{RenderSourcesCommand, StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_dataflow_types::client::{StorageCommand, StorageResponse};
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceDesc};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
+use mz_persist_client::{write::WriteHandle, PersistLocation};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
-use crate::boundary::StorageCapture;
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::SourceToken;
@@ -49,7 +45,7 @@ pub struct StorageState {
     /// dropped, as this is used to check for rebinding of previous identifiers.
     /// Once we have a better mechanism to avoid that, for example that identifiers
     /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, mz_dataflow_types::sources::SourceDesc>,
+    pub source_descriptions: HashMap<GlobalId, SourceDesc>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -62,6 +58,8 @@ pub struct StorageState {
         HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
     /// Persist shard ids for the reclocking collection of a source.
     pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
+    /// Handles to created sources, keyed by ID
+    pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
     /// Handles to external sources, keyed by ID.
     // TODO(guswynn): determine if this field is needed
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
@@ -93,23 +91,19 @@ pub struct TableState<T> {
     pub data: Vec<(Row, T, Diff)>,
     /// The size of `data` after the last consolidation.
     pub last_consolidated_size: usize,
-    /// Handles to the live local inputs for the table.
-    pub(crate) inputs: Vec<LocalInput>,
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
-pub struct ActiveStorageState<'a, A: Allocate, B: StorageCapture> {
+pub struct ActiveStorageState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The storage state itself.
     pub storage_state: &'a mut StorageState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<StorageResponse>,
-    /// The boundary with the Compute layer.
-    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
+impl<'a, A: Allocate> ActiveStorageState<'a, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
@@ -124,7 +118,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                                     upper: Timestamp::minimum(),
                                     data: vec![],
                                     last_consolidated_size: 0,
-                                    inputs: vec![],
                                 },
                             );
 
@@ -160,15 +153,19 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             self.storage_state.persist_handles.insert(source.id, write);
                         }
                         SourceConnector::External { .. } => {
-                            // Nothing to do at the moment, but in the future
-                            // prepare source ingestion.
-
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
                                 source.id,
                                 Rc::new(RefCell::new(Antichain::from_elem(
                                     mz_repr::Timestamp::minimum(),
                                 ))),
+                            );
+
+                            crate::render::build_storage_dataflow(
+                                self.timely_worker,
+                                self.storage_state,
+                                &source.id.to_string(),
+                                source.clone(),
                             );
                         }
                     }
@@ -188,7 +185,6 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .insert(source.id, source.storage_metadata);
                 }
             }
-            StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     if frontier.is_empty() {
@@ -200,6 +196,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
+                        self.storage_state.source_tokens.remove(&id);
                         self.storage_state.ts_source_mapping.remove(&id);
                         self.storage_state.persist_handles.remove(&id);
                     } else if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
@@ -207,90 +204,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     }
                 }
             }
-
-            StorageCommand::Append(appends) => {
-                for (id, updates, upper) in appends {
-                    let table_state = match self.storage_state.table_state.get_mut(&id) {
-                        Some(table_state) => table_state,
-                        None => panic!(
-                            "table state {} missing for insert at worker {}",
-                            id,
-                            self.timely_worker.index()
-                        ),
-                    };
-
-                    // Add the new updates to all existing renders of the table.
-                    for input in &mut table_state.inputs {
-                        if let Some(capability) = input.capability.upgrade() {
-                            let mut capability = capability.borrow_mut();
-                            let mut session = input.handle.session(capability.clone());
-                            for update in &updates {
-                                assert!(update.timestamp >= *capability.time());
-                                session.give((update.row.clone(), update.timestamp, update.diff));
-                            }
-                            capability.downgrade(&upper);
-                        }
-                    }
-
-                    assert!(upper >= table_state.upper);
-                    table_state.upper = upper;
-                    // Announce the table updates as durably recorded. This is not correct,
-                    // but it also hasn't been correct afaict.
-                    // TODO(petrosagg): correct this once STORAGE owns table durability.
-                    let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
-                    let mut joined_frontier = Antichain::new();
-                    for time1 in borrow.iter() {
-                        joined_frontier.insert(time1.join(&upper));
-                    }
-                    *borrow = joined_frontier;
-
-                    // Discard entries that are no longer active.
-                    table_state
-                        .inputs
-                        .retain(|input| input.capability.upgrade().is_some());
-
-                    // Stash the data for use by future renders of the table.
-                    table_state.data.extend(
-                        updates
-                            .into_iter()
-                            .map(|update| (update.row, update.timestamp, update.diff)),
-                    );
-
-                    // Consolidate the data in the table if it's doubled in size
-                    // since the last consolidation.
-                    if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                        for (_data, time, _diff) in &mut table_state.data {
-                            time.advance_by(table_state.since.borrow());
-                        }
-                        differential_dataflow::consolidation::consolidate_updates(
-                            &mut table_state.data,
-                        );
-                        table_state.last_consolidated_size = table_state.data.len();
-                    }
-                }
-            }
         }
     }
 
-    fn build_storage_dataflow(&mut self, dataflows: Vec<RenderSourcesCommand<Timestamp>>) {
-        for RenderSourcesCommand {
-            debug_name,
-            dataflow_id,
-            as_of,
-            source_imports,
-        } in dataflows
-        {
-            crate::render::build_storage_dataflow(
-                self.timely_worker,
-                &mut self.storage_state,
-                &debug_name,
-                as_of,
-                source_imports,
-                dataflow_id,
-                self.boundary,
-            );
-        }
-    }
     /// Emit information about write frontier progress, along with information that should
     /// be made durable for this to be the case.
     ///
@@ -375,10 +291,4 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
     }
-}
-
-pub(crate) struct LocalInput {
-    pub(crate) handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    /// A weak reference to the capability, in case all uses are dropped.
-    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }

@@ -19,8 +19,6 @@
 //! created by a `CREATE SOURCE` statement, is created by composing
 //! [`create_raw_source`] or [`create_raw_source_simple`] with
 //! decoding, `SourceEnvelope` rendering, and more.
-//! See the doc comment on [`rendering`](`crate::render::sources::render_source`)
-//! for more details.
 
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
