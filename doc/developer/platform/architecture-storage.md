@@ -116,7 +116,7 @@ There may be other auxiliary information, like the reclocking collection, that f
 
 We want source ingestion to satisfy at least these three properties:
 
-1. Definiteness: this should be provided by `persist`, and isn't meant to be something we can screw up.
+1. Definiteness: this property is provided by `persist`.
 2. "Fault tolerance": the source should produce specific output even in the presence of unspecified i. failures and restarts, ii. concurrency with other source implementations.
 3. "Bounded input reliance": the raw input data we have to keep around to provide these properties should be as limited as possible.
 
@@ -214,8 +214,8 @@ The reason we follow the recipe is because we uphold the desired three propertie
 
 1. *Definiteness.*
 
-    We get definiteness from `persist`.
-    I don't think we are able to screw this up.
+    This is provided by `persist`.
+    A recipe implementor should not be at risk of violating this property.
 
 2. *Fault Tolerance.*
 
