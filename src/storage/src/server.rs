@@ -25,8 +25,6 @@ use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
-use crate::boundary::BoundaryHook;
-use crate::boundary::StorageCapture;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::ActiveStorageState;
 use crate::storage_state::StorageState;
@@ -56,27 +54,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-///
-/// * `create_boundary`: A function to obtain the worker-local boundary components.
-pub fn serve_boundary_requests<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'static>(
-    config: Config,
-    requests: tokio::sync::mpsc::UnboundedReceiver<mz_dataflow_types::SourceInstanceRequest>,
-    create_boundary: B,
-) -> Result<(Server, BoundaryHook<LocalStorageClient>), anyhow::Error> {
-    let workers = config.workers as u64;
-    let (server, storage_client) = serve_boundary(config, create_boundary)?;
-    Ok((
-        server,
-        crate::boundary::BoundaryHook::new(storage_client, requests, workers),
-    ))
-}
-/// Initiates a timely dataflow computation, processing materialized commands.
-///
-/// * `create_boundary`: A function to obtain the worker-local boundary components.
-pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'static>(
-    config: Config,
-    create_boundary: B,
-) -> Result<(Server, LocalStorageClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -108,7 +86,6 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
         let timely_worker_peers = timely_worker.peers();
-        let storage_boundary = create_boundary(timely_worker_index);
 
         // ensure tokio primitives are available on timely workers
         let _tokio_guard = tokio_executor.enter();
@@ -130,6 +107,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
                 collection_metadata: HashMap::new(),
+                source_tokens: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
@@ -140,7 +118,6 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 timely_worker_peers,
                 connector_context: config.connector_context.clone(),
             },
-            storage_boundary,
             storage_response_tx,
         }
         .run()
@@ -162,28 +139,18 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A, SC>
-where
-    A: Allocate,
-    SC: StorageCapture,
-{
+struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<StorageCommand>,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
-    /// The boundary between storage and compute layers, storage side.
-    storage_boundary: SC,
     /// The channel over which storage responses are reported.
     storage_response_tx: mpsc::UnboundedSender<StorageResponse>,
 }
 
-impl<'w, A, SC> Worker<'w, A, SC>
-where
-    A: Allocate + 'w,
-    SC: StorageCapture,
-{
+impl<'w, A: Allocate> Worker<'w, A> {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
         let mut shutdown = false;
@@ -215,12 +182,11 @@ where
         }
     }
 
-    fn activate_storage(&mut self) -> ActiveStorageState<A, SC> {
+    fn activate_storage(&mut self) -> ActiveStorageState<A> {
         ActiveStorageState {
             timely_worker: &mut *self.timely_worker,
             storage_state: &mut self.storage_state,
             response_tx: &mut self.storage_response_tx,
-            boundary: &mut self.storage_boundary,
         }
     }
 }

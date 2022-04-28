@@ -15,7 +15,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::{pin_mut, StreamExt, TryStreamExt};
-use mz_postgres_util::TableInfo;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -28,13 +27,14 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
+use mz_postgres_util::TableInfo;
 use mz_repr::{Datum, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
+use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 
 mod metrics;
 
