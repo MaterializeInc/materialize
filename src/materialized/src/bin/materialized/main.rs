@@ -155,7 +155,7 @@ pub struct Args {
     computed_image: Option<String>,
     /// The host on which processes spawned by the process orchestrator listen
     /// for connections.
-    #[structopt(long, hide = true)]
+    #[clap(long, hide = true, env = "MZ_PROCESS_LISTEN_HOST")]
     process_listen_host: Option<String>,
     /// The image pull policy to use for services created by the Kubernetes
     /// orchestrator.
