@@ -126,7 +126,7 @@ contains:unable to automatically determine a query timestamp
 # Since sources aren't linearizable (see #11048), we need to wait out a
 # timestamp frequency interval to ensure the read timestamp for the timestamp
 # is not picked to a timestamp when the source is empty.
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1s
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 > BEGIN
 > SELECT * FROM v_materialized
 3

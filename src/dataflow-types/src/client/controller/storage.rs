@@ -23,12 +23,14 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::{GlobalId, PartitionId};
@@ -110,7 +112,7 @@ pub trait StorageController: Debug + Send {
     /// Accept write frontier updates from the compute layer.
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+        updates: &BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) -> Result<(), StorageError>;
 
     /// Applies `updates` and sends any appropriate compaction command.
@@ -378,6 +380,9 @@ where
         &mut self,
         feedback: &TimestampBindingFeedback<T>,
     ) -> Result<(), StorageError> {
+        let start = Instant::now();
+        trace!("persisting timestamp binding feedback {:?}", &feedback);
+
         for (id, bindings) in &feedback.bindings {
             let ts_binding_collection = self
                 .state
@@ -457,6 +462,11 @@ where
         }
         self.state.stash.seal_batch(&seals)?;
 
+        tracing::info!(
+            "timestamp binding feedback persisted in {:?}",
+            start.elapsed()
+        );
+
         self.update_durability_frontiers(durability_updates).await?;
 
         Ok(())
@@ -464,7 +474,7 @@ where
 
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<T>)],
+        updates: &BTreeMap<GlobalId, ChangeBatch<T>>,
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {

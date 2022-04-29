@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::iter;
+use std::mem;
 
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
@@ -28,6 +29,7 @@ use mz_repr::{Diff, Row};
 
 use crate::client::{
     ComputeCommand, ComputeResponse, GenericClient, PeekResponse, StorageCommand, StorageResponse,
+    TimestampBindingFeedback,
 };
 use crate::{DataflowDescription, TailResponse};
 
@@ -147,6 +149,10 @@ pub struct PartitionedStorageState<T> {
     parts: usize,
     /// Upper frontiers for sources.
     uppers: HashMap<GlobalId, MutableAntichain<T>>,
+    /// The timestamp bindings that are currently being absorbed.
+    pending_timestamp_bindings: TimestampBindingFeedback<T>,
+    /// The number of timestamp bindings seen.
+    seen_timestamp_bindings: usize,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -160,6 +166,8 @@ where
         PartitionedStorageState {
             parts,
             uppers: HashMap::new(),
+            pending_timestamp_bindings: TimestampBindingFeedback::default(),
+            seen_timestamp_bindings: 0,
         }
     }
 }
@@ -214,29 +222,32 @@ where
         response: StorageResponse<T>,
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
-            // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::TimestampBindings(mut feedback) => {
-                for (id, changes) in feedback.changes.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
+            // Absorb responses from each worker into a single response.
+            StorageResponse::TimestampBindings(feedback) => {
+                for (id, mut changes) in feedback.changes {
+                    if let Some(frontier) = self.uppers.get_mut(&id) {
                         let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
+                        self.pending_timestamp_bindings
+                            .changes
+                            .entry(id)
+                            .or_default()
+                            .extend(iter);
                     }
                 }
-                // The following block implements a `list.retain()` of non-empty change batches.
-                // This is more verbose than `list.retain()` because that method cannot mutate
-                // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                let mut cursor = 0;
-                while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
-                    if changes.is_empty() {
-                        feedback.changes.swap_remove(cursor);
-                    } else {
-                        cursor += 1;
-                    }
+                for (id, bindings) in feedback.bindings {
+                    self.pending_timestamp_bindings
+                        .bindings
+                        .entry(id)
+                        .or_default()
+                        .extend(bindings);
                 }
-
-                Some(Ok(StorageResponse::TimestampBindings(feedback)))
+                self.seen_timestamp_bindings += 1;
+                if self.seen_timestamp_bindings % self.parts == 0 {
+                    let response = mem::take(&mut self.pending_timestamp_bindings);
+                    Some(Ok(StorageResponse::TimestampBindings(response)))
+                } else {
+                    None
+                }
             }
             // TODO(guswynn): is this the correct implementation?
             StorageResponse::LinearizedTimestamps(feedback) => {
