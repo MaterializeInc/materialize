@@ -125,7 +125,7 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} publish=true rep
       UNION ALL SELECT COUNT(*) AS f1 FROM s9);
 
 # Make sure that s1 has been fully timestamped
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
@@ -138,49 +138,49 @@ $ set-max-tries max-tries=1
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_internal.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF NOW();
+> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000

@@ -715,7 +715,7 @@ impl Coordinator {
         {
             // An explicit SELECT or INSERT on a table will bump the table's timestamps,
             // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF now()`, TAILing views over RT sources and
+            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
             // tables). To address these, spawn a task that forces table timestamps to
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
@@ -3398,14 +3398,7 @@ impl Coordinator {
 
         if let Some(mut timestamp) = when.advance_to_timestamp() {
             let temp_storage = RowArena::new();
-            prep_scalar_expr(
-                self.catalog.state(),
-                &mut timestamp,
-                ExprPrepStyle::OneShot {
-                    logical_time: None,
-                    session,
-                },
-            )?;
+            prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
             let evaled = timestamp.eval(&[], &temp_storage)?;
             let ty = timestamp.typ(&RelationType::empty());
             let ts = match ty.scalar_type {

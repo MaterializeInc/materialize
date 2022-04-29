@@ -45,7 +45,7 @@ contains:Timestamp (0) is not valid for all inputs
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1 AS OF NOW();
+> DECLARE c CURSOR FOR TAIL t1 AS OF AT LEAST 0;
 
 > FETCH 1 c;
 <TIMESTAMP> 1 123

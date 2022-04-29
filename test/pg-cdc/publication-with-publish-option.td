@@ -41,7 +41,7 @@ CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 # Make sure that the above sources are fully instantiated so that the DML statements below
 # are sent as actual replication events post-snapshot.
 
-> SELECT COUNT(*) FROM mz_source_delete AS OF NOW();
+> SELECT COUNT(*) FROM mz_source_delete;
 0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

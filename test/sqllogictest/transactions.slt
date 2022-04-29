@@ -251,19 +251,17 @@ COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
-# Use AS OF now()+'1s' because now() has problems with tables (#11188), so
-# adding a second will probably always work.
 simple
 DECLARE c CURSOR FOR TAIL t;
 FETCH 0 c;
-SELECT * FROM t LIMIT 0 AS OF now()+'1s';
+SELECT * FROM t LIMIT 0 AS OF AT LEAST 0;
 ----
 COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
 simple
-SELECT * FROM t LIMIT 0 AS OF now()+'1s';
+SELECT * FROM t LIMIT 0 AS OF AT LEAST 0;
 DECLARE c CURSOR FOR TAIL t;
 FETCH 0 c;
 ----

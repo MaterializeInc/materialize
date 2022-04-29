@@ -107,6 +107,11 @@ pub enum CoordError {
     TailOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
+    /// The specified function cannot be called
+    UncallableFunction {
+        func: UnmaterializableFunc,
+        context: &'static str,
+    },
     /// The named cursor does not exist.
     UnknownCursor(String),
     /// The named role does not exist.
@@ -371,6 +376,9 @@ impl fmt::Display for CoordError {
                 f.write_str("TAIL in transactions must be the only read statement")
             }
             CoordError::Transform(e) => e.fmt(f),
+            CoordError::UncallableFunction { func, context } => {
+                write!(f, "cannot call {} in {}", func, context)
+            }
             CoordError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
