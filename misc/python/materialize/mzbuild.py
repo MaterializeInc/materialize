@@ -208,7 +208,8 @@ class CargoBuild(CargoPreImage):
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
         super().__init__(rd, path)
-        self.bin = config.pop("bin", None)
+        bin = config.pop("bin", [])
+        self.bins = bin if isinstance(bin, list) else [bin]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", [])
@@ -223,49 +224,54 @@ class CargoBuild(CargoPreImage):
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
             ]
             self.channel = "nightly"
-        if self.bin is None:
+        if len(self.bins) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
         cargo_build = [
-            *self.rd.cargo("build", channel=self.channel, rustflags=self.rustflags),
-            "--bin",
-            self.bin,
+            *self.rd.cargo("build", channel=self.channel, rustflags=self.rustflags)
         ]
+
+        for bin in self.bins:
+            cargo_build.extend(["--bin", bin])
+
         if self.rd.release_mode:
             cargo_build.append("--release")
         spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
-        shutil.copy(self.rd.cargo_target_dir() / cargo_profile / self.bin, self.path)
-        if self.strip:
-            # NOTE(benesch): the debug information is large enough that it slows
-            # down CI, since we're packaging these binaries up into Docker
-            # images and shipping them around. A bit unfortunate, since it'd be
-            # nice to have useful backtraces if the binary crashes.
-            spawn.runv(
-                [*self.rd.tool("strip"), "--strip-debug", self.path / self.bin],
-                cwd=self.rd.root,
-            )
-        else:
-            # Even if we've been asked not to strip the binary, remove the
-            # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
-            # indexes that speed up launching a debugger against the binary,
-            # and we're happy to have slower debugger start up in exchange for
-            # smaller binaries. Plus the sections have been obsoleted by a
-            # `.debug_names` section in DWARF 5, and so debugger support for
-            # `.debug_pubnames`/`.debug_pubtypes` is minimal anyway.
-            # See: https://github.com/rust-lang/rust/issues/46034
-            spawn.runv(
-                [
-                    *self.rd.tool("objcopy"),
-                    "-R",
-                    ".debug_pubnames",
-                    "-R",
-                    ".debug_pubtypes",
-                    self.path / self.bin,
-                ],
-                cwd=self.rd.root,
-            )
+
+        for bin in self.bins:
+            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / bin, self.path)
+
+            if self.strip:
+                # NOTE(benesch): the debug information is large enough that it slows
+                # down CI, since we're packaging these binaries up into Docker
+                # images and shipping them around. A bit unfortunate, since it'd be
+                # nice to have useful backtraces if the binary crashes.
+                spawn.runv(
+                    [*self.rd.tool("strip"), "--strip-debug", self.path / bin],
+                    cwd=self.rd.root,
+                )
+            else:
+                # Even if we've been asked not to strip the binary, remove the
+                # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
+                # indexes that speed up launching a debugger against the binary,
+                # and we're happy to have slower debugger start up in exchange for
+                # smaller binaries. Plus the sections have been obsoleted by a
+                # `.debug_names` section in DWARF 5, and so debugger support for
+                # `.debug_pubnames`/`.debug_pubtypes` is minimal anyway.
+                # See: https://github.com/rust-lang/rust/issues/46034
+                spawn.runv(
+                    [
+                        *self.rd.tool("objcopy"),
+                        "-R",
+                        ".debug_pubnames",
+                        "-R",
+                        ".debug_pubtypes",
+                        self.path / bin,
+                    ],
+                    cwd=self.rd.root,
+                )
         if self.extract:
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
@@ -295,9 +301,14 @@ class CargoBuild(CargoPreImage):
         self.build()
 
     def inputs(self) -> Set[str]:
-        crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
-        deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        inputs = super().inputs()
+
+        for bin in self.bins:
+            crate = self.rd.cargo_workspace.crate_for_bin(bin)
+            deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
+            inputs |= set(inp for dep in deps for inp in dep.inputs())
+
+        return inputs
 
 
 # TODO(benesch): make this less hardcoded and custom.

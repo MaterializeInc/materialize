@@ -10,8 +10,4 @@
 name: sqllogictest
 pre-image:
   - type: cargo-build
-    bin: storaged
-  - type: cargo-build
-    bin: computed
-  - type: cargo-build
-    bin: sqllogictest
+    bin: [storaged, computed, sqllogictest]
