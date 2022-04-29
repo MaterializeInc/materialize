@@ -173,6 +173,15 @@ fn gen_fold_element(buf: &mut CodegenBuf, binding: &str, ty: &Type) {
             let fn_name = fold_fn_name(s);
             buf.write(f!("folder.{fn_name}({binding})"));
         }
+        Type::Map { key, value } => {
+            buf.write(f!(
+                "{{ std::collections::BTreeMap::from_iter({binding}.iter().map(|(k, v)| {{("
+            ));
+            gen_fold_element(buf, "k", key);
+            buf.write(".to_owned(), ");
+            gen_fold_element(buf, "v", value);
+            buf.write(".to_owned()) }) )}")
+        }
     }
 }
 
@@ -274,6 +283,11 @@ fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &
         Type::Local(s) => {
             let fn_name = visit_fn_name(c, s);
             buf.writeln(f!("visitor.{fn_name}({binding});"));
+        }
+        Type::Map { value, .. } => {
+            buf.start_block(f!("for (_, value) in {binding}"));
+            gen_visit_element(c, buf, "value", value);
+            buf.end_block();
         }
     }
 }

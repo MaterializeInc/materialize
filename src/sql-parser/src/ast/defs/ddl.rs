@@ -21,6 +21,7 @@
 //! AST types specific to CREATE/ALTER variants of [crate::ast::Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -131,7 +132,7 @@ pub enum CsrConnector {
         connector: UnresolvedObjectName,
         url: Option<String>,
         // Vec of keys interspersed with values
-        with_options: Option<Vec<String>>,
+        with_options: Option<BTreeMap<String, String>>,
     },
 }
 
@@ -555,7 +556,7 @@ pub enum KafkaConnector {
         connector: UnresolvedObjectName,
         broker: Option<String>,
         // This vec is a sequence of keys interspersed with values,
-        with_options: Option<Vec<String>>,
+        with_options: Option<BTreeMap<String, String>>,
     },
 }
 

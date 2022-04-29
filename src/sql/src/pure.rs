@@ -19,7 +19,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
-use itertools::Itertools;
 use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -90,12 +89,7 @@ pub async fn purify_create_source(
                         }
                     };
                     let options = match with_options {
-                        Some(opt_array) => BTreeMap::from_iter(
-                            opt_array
-                                .iter()
-                                .tuples()
-                                .map(|(k, v)| (k.to_owned(), v.to_owned())),
-                        ),
+                        Some(opts) => opts,
                         None => {
                             bail!("Failed to purify source because connector remained unresolved")
                         }
@@ -106,6 +100,9 @@ pub async fn purify_create_source(
             };
             config_options = if let Some(options) = connector_options {
                 options
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect::<BTreeMap<String, String>>()
             } else {
                 // Verify that the provided security options are valid and then test them.
                 kafka_util::extract_config(&mut with_options_map)?

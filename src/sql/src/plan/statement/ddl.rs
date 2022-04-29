@@ -368,14 +368,9 @@ pub fn plan_create_source(
                     connector,
                 } => {
                     let broker_addr = broker.to_owned().expect("connector should be populated");
-                    let options = BTreeMap::from_iter(
-                        with_options
-                            .to_owned()
-                            .expect("connector should be populated")
-                            .iter()
-                            .cloned()
-                            .tuples(),
-                    );
+                    let options = with_options
+                        .to_owned()
+                        .expect("connector should be populated");
                     depends_on.push(
                         scx.catalog
                             .resolve_item(&normalize::unresolved_object_name(connector.clone())?)?
@@ -1358,11 +1353,10 @@ fn get_encoding_inner(
                                 None => unreachable!("connector must already be populated"),
                             };
                             let client_options = match with_options {
-                                Some(opts) => {
-                                    BTreeMap::from_iter(opts.iter().tuples().map(|(k, v)| {
-                                        (k.to_owned(), crate::ast::Value::String(v.to_owned()))
-                                    }))
-                                }
+                                Some(opts) => BTreeMap::from_iter(
+                                    opts.iter()
+                                        .map(|(k, v)| (k.to_owned(), Value::String(v.to_string()))),
+                                ),
                                 None => BTreeMap::new(),
                             };
                             (client_options, registry_url)
@@ -1433,11 +1427,9 @@ fn get_encoding_inner(
                                 None => unreachable!("connector must already be populated"),
                             };
                             let client_options = match with_options {
-                                Some(opts) => {
-                                    BTreeMap::from_iter(opts.iter().tuples().map(|(k, v)| {
-                                        (k.to_owned(), crate::ast::Value::String(v.to_owned()))
-                                    }))
-                                }
+                                Some(opts) => BTreeMap::from_iter(opts.iter().map(|(k, v)| {
+                                    (k.to_owned(), crate::ast::Value::String(v.to_owned()))
+                                })),
                                 None => BTreeMap::new(),
                             };
                             (client_options, registry_url)

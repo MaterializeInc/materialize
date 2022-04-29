@@ -48,13 +48,7 @@ pub fn populate_connectors<T: AstInfo>(
         *kafka_connector = KafkaConnector::Reference {
             connector: name.to_owned(),
             broker: Some(resolved_source_connector.uri()),
-            with_options: Some(
-                resolved_source_connector
-                    .options()
-                    .iter()
-                    .flat_map(|(k, v)| vec![k.to_owned(), v.to_owned()])
-                    .collect::<Vec<String>>(),
-            ),
+            with_options: Some(resolved_source_connector.options()),
         };
     };
 
@@ -137,13 +131,7 @@ fn populate_csr_connector(
     Ok(CsrConnector::Reference {
         connector: name.to_owned(),
         url: Some(resolved_csr_connector.uri()),
-        with_options: Some(
-            resolved_csr_connector
-                .options()
-                .iter()
-                .flat_map(|(k, v)| [k.to_owned(), v.to_owned()])
-                .collect::<Vec<String>>(),
-        ),
+        with_options: Some(resolved_csr_connector.options()),
     })
 }
 
