@@ -159,26 +159,27 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let (mut ok, mut err, token) = if let SourceConnector::External {
-                    connector: ExternalSourceConnector::Persist(persist_connector),
-                    ..
-                } = &source.description.connector
-                {
-                    let (ok_stream, err_stream, token) = persist_source::persist_source(
-                        region,
-                        *source_id,
-                        persist_connector.consensus_uri.clone(),
-                        persist_connector.blob_uri.clone(),
-                        persist_connector.shard_id.clone(),
-                        dataflow.as_of.clone().unwrap(),
-                    );
-
-                    (ok_stream.as_collection(), err_stream.as_collection(), token)
-                } else {
-                    // TODO(petrosagg): read the (ok, err) collections from the persist shard
-                    // specified by storage controller
-                    todo!()
+                let shard_id = match &source.description.connector {
+                    SourceConnector::External {
+                        connector: ExternalSourceConnector::Persist(persist_connector),
+                        ..
+                    } => persist_connector.shard_id.clone(),
+                    _ => source.storage_metadata.persist_shard.clone(),
                 };
+                let source_instance_id = mz_expr::SourceInstanceId {
+                    source_id: source_id.clone(),
+                    dataflow_id: context.dataflow_id,
+                };
+
+                let (ok_stream, err_stream, token) = persist_source::persist_source(
+                    region,
+                    source_instance_id,
+                    compute_state.persist_client.clone(),
+                    shard_id,
+                    dataflow.as_of.clone().unwrap(),
+                );
+
+                let (mut ok, mut err) = (ok_stream.as_collection(), err_stream.as_collection());
 
                 // We do not trust `replay` to correctly advance times.
                 use timely::dataflow::operators::Map;
