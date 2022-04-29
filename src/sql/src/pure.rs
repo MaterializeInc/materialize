@@ -372,10 +372,7 @@ async fn purify_csr_connector_proto(
             let url: Url = match connector {
                 CsrConnector::Inline { url: uri } => uri.parse()?,
                 CsrConnector::Reference { url, .. } => match url {
-                    Some(url) => {
-                        info!("parsing {} into url", url);
-                        url.parse()?
-                    }
+                    Some(url) => url.parse()?,
                     None => bail!("CSR Connector must specify a url!"),
                 },
             };

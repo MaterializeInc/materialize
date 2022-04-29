@@ -226,7 +226,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(match connector.connector {
                     ConnectorInner::Kafka { .. } => "kafka",
-                    ConnectorInner::CSR { .. } => "schema_registry",
+                    ConnectorInner::CSR { .. } => "schema registry",
                 }),
             ]),
             diff,

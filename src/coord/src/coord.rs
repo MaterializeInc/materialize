@@ -1409,7 +1409,7 @@ impl Coordinator {
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
                 let purify_fut =
-                    match mz_sql::connectors::reify_connectors(stmt, &catalog, &mut vec![]) {
+                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
                         Ok(stmt) => mz_sql::pure::purify_create_source(
                             self.now(),
                             self.catalog.config().aws_external_id.clone(),

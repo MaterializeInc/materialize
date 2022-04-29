@@ -125,8 +125,8 @@ pub enum CsrConnector {
     Inline {
         url: String,
     },
-    // The reference variant can have url and with_options populated for use in purification
-    // or any other context where
+    // The reference variant needs to be creatable by the parser with just a name
+    // but also must allow populating the values for use in purification and planning
     Reference {
         connector: UnresolvedObjectName,
         url: Option<String>,
@@ -549,6 +549,8 @@ pub enum KafkaConnector {
     Inline {
         broker: String,
     },
+    // The reference variant needs to be creatable by the parser with just a name
+    // but also must allow populating the values for use in purification and planning
     Reference {
         connector: UnresolvedObjectName,
         broker: Option<String>,

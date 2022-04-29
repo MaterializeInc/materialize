@@ -14,15 +14,13 @@ use mz_sql_parser::ast::{
     KafkaSourceConnector, ProtobufSchema, UnresolvedObjectName,
 };
 
-use crate::normalize::unresolve;
-use crate::normalize::unresolved_object_name;
-use crate::plan::PlanError;
-use crate::plan::StatementContext;
-use crate::{catalog::SessionCatalog, normalize};
+use crate::catalog::SessionCatalog;
+use crate::normalize;
+use crate::plan::{PlanError, StatementContext};
 
 /// Uses the provided catalog to populate all Connector references with the values of the connector
 /// it references allowing it to be used as if there was no indirection
-pub fn reify_connectors<T: AstInfo>(
+pub fn populate_connectors<T: AstInfo>(
     mut stmt: CreateSourceStatement<T>,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
@@ -43,14 +41,10 @@ pub fn reify_connectors<T: AstInfo>(
             KafkaConnector::Reference { connector, .. } => connector,
             _ => unreachable!(),
         };
-        let resolved_source_connector = normalize::unresolved_object_name(name.clone())
-            .map_err(anyhow::Error::new)
-            .and_then(|name| catalog.resolve_item(&name).map_err(anyhow::Error::new))
-            .and_then(|conn| {
-                let ctr = conn.catalog_connector()?;
-                depends_on.push(conn.id());
-                Ok(ctr)
-            })?;
+        let p_o_name = normalize::unresolved_object_name(name.clone())?;
+        let conn = catalog.resolve_item(&p_o_name)?;
+        let resolved_source_connector = conn.catalog_connector()?;
+        depends_on.push(conn.id());
         *kafka_connector = KafkaConnector::Reference {
             connector: name.to_owned(),
             broker: Some(resolved_source_connector.uri()),
@@ -69,7 +63,7 @@ pub fn reify_connectors<T: AstInfo>(
         ..
     } = stmt
     {
-        reify_connector_for_format(format, catalog, depends_on)?;
+        populate_connector_for_format(format, catalog, depends_on)?;
         return Ok(stmt);
     };
     if let CreateSourceStatement {
@@ -81,14 +75,14 @@ pub fn reify_connectors<T: AstInfo>(
         ..
     } = stmt
     {
-        reify_connector_for_format(key, catalog, depends_on)?;
-        reify_connector_for_format(value, catalog, depends_on)?;
+        populate_connector_for_format(key, catalog, depends_on)?;
+        populate_connector_for_format(value, catalog, depends_on)?;
     };
     Ok(stmt)
 }
 
 /// Helper function which reifies any connectors in a single [`Format`]
-fn reify_connector_for_format<T: AstInfo>(
+fn populate_connector_for_format<T: AstInfo>(
     format: &mut Format<T>,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
@@ -106,7 +100,7 @@ fn reify_connector_for_format<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector = reify_csr_connector(name, catalog, depends_on)?;
+                *csr_connector = populate_csr_connector(name, catalog, depends_on)?;
             }
             _ => {}
         },
@@ -122,7 +116,7 @@ fn reify_connector_for_format<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector = reify_csr_connector(name, catalog, depends_on)?;
+                *csr_connector = populate_csr_connector(name, catalog, depends_on)?;
             }
             _ => {}
         },
@@ -131,24 +125,20 @@ fn reify_connector_for_format<T: AstInfo>(
 }
 
 /// Helper function which reifies individual [`CsrConnector::Reference`] instances
-fn reify_csr_connector(
+fn populate_csr_connector(
     name: &UnresolvedObjectName,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
 ) -> Result<CsrConnector, anyhow::Error> {
-    let resolved_avro_connector = normalize::unresolved_object_name(name.clone())
-        .map_err(anyhow::Error::new)
-        .and_then(|name| catalog.resolve_item(&name).map_err(anyhow::Error::new))
-        .and_then(|conn| {
-            depends_on.push(conn.id());
-            let ctr = conn.catalog_connector()?;
-            Ok(ctr)
-        })?;
+    let p_o_name = normalize::unresolved_object_name(name.clone())?;
+    let conn = catalog.resolve_item(&p_o_name)?;
+    let resolved_csr_connector = conn.catalog_connector()?;
+    depends_on.push(conn.id());
     Ok(CsrConnector::Reference {
         connector: name.to_owned(),
-        url: Some(resolved_avro_connector.uri()),
+        url: Some(resolved_csr_connector.uri()),
         with_options: Some(
-            resolved_avro_connector
+            resolved_csr_connector
                 .options()
                 .iter()
                 .flat_map(|(k, v)| [k.to_owned(), v.to_owned()])
@@ -164,13 +154,11 @@ pub fn qualify_csr_connector_names<T: AstInfo>(
     scx: &StatementContext,
 ) -> Result<(), anyhow::Error> {
     match format {
-        mz_sql_parser::ast::CreateSourceFormat::None => {}
-        mz_sql_parser::ast::CreateSourceFormat::Bare(fmt) => {
-            qualify_connector_in_single_schema(fmt, scx)?
-        }
-        mz_sql_parser::ast::CreateSourceFormat::KeyValue { key, value } => {
-            qualify_connector_in_single_schema(key, scx)?;
-            qualify_connector_in_single_schema(value, scx)?;
+        CreateSourceFormat::None => {}
+        CreateSourceFormat::Bare(fmt) => qualify_connector_in_format(fmt, scx)?,
+        CreateSourceFormat::KeyValue { key, value } => {
+            qualify_connector_in_format(key, scx)?;
+            qualify_connector_in_format(value, scx)?;
         }
     }
 
@@ -178,18 +166,18 @@ pub fn qualify_csr_connector_names<T: AstInfo>(
 }
 
 /// Helper function to resolve names for connectors in a single [`Format`]
-fn qualify_connector_in_single_schema<T: AstInfo>(
-    schema: &mut Format<T>,
+fn qualify_connector_in_format<T: AstInfo>(
+    format: &mut Format<T>,
     scx: &StatementContext,
 ) -> Result<(), anyhow::Error> {
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_full_name(
-            unresolved_object_name(name.clone())?,
+        Ok(normalize::unresolve(scx.allocate_full_name(
+            normalize::unresolved_object_name(name.clone())?,
         )?))
     };
-    match schema {
-        mz_sql_parser::ast::Format::Avro(avro_schema) => match avro_schema {
-            mz_sql_parser::ast::AvroSchema::Csr {
+    match format {
+        Format::Avro(avro_schema) => match avro_schema {
+            AvroSchema::Csr {
                 csr_connector:
                     CsrConnectorAvro {
                         connector: CsrConnector::Reference { connector, .. },
@@ -200,8 +188,8 @@ fn qualify_connector_in_single_schema<T: AstInfo>(
             }
             _ => {}
         },
-        mz_sql_parser::ast::Format::Protobuf(proto_schema) => match proto_schema {
-            mz_sql_parser::ast::ProtobufSchema::Csr {
+        Format::Protobuf(proto_schema) => match proto_schema {
+            ProtobufSchema::Csr {
                 csr_connector:
                     CsrConnectorProto {
                         connector: CsrConnector::Reference { connector, .. },

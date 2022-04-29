@@ -1168,6 +1168,13 @@ pub mod sources {
                 ConnectorInner::CSR { registry, .. } => registry.to_owned(),
             }
         }
+
+        pub fn options(&self) -> BTreeMap<String, String> {
+            match self {
+                ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
+                ConnectorInner::CSR { with_options, .. } => with_options.clone(),
+            }
+        }
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
