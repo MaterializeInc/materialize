@@ -22,8 +22,7 @@ use timely::progress::Antichain;
 use tracing::trace;
 
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
-use mz_persist_client::read::ListenEvent;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{read::ListenEvent, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::source::SourceStatus;
@@ -38,8 +37,7 @@ use crate::source::YIELD_INTERVAL;
 pub fn persist_source<G>(
     scope: &G,
     source_id: GlobalId,
-    consensus_uri: String,
-    blob_uri: String,
+    persist_client: PersistClient,
     shard_id: ShardId,
     as_of: Antichain<Timestamp>,
 ) -> (
