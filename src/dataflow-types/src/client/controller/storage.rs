@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -40,7 +41,7 @@ use mz_persist_types::Codec64;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_repr::Row;
-use mz_stash::{self, Stash, StashError};
+use mz_stash::{self, Stash, StashCollection, StashError};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
@@ -142,7 +143,42 @@ pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
-    pub(super) stash: S,
+    pub(super) stash: StorageStash<S>,
+}
+
+/// Storage specific wrapper over a stash that provides type safety for the various types of
+/// collections stored in the inner Stash.
+#[derive(Debug)]
+pub struct StorageStash<S> {
+    stash: S,
+}
+
+impl<S: Stash> StorageStash<S> {
+    fn new(stash: S) -> Self {
+        Self { stash }
+    }
+
+    async fn timestamp_bindings(
+        &mut self,
+        id: &GlobalId,
+    ) -> Result<StashCollection<PartitionId, ()>, StashError> {
+        self.stash
+            .collection(&format!("timestamp-bindings-{id}"))
+            .await
+    }
+}
+
+impl<S: Stash> Deref for StorageStash<S> {
+    type Target = S;
+    fn deref(&self) -> &Self::Target {
+        &self.stash
+    }
+}
+
+impl<S: Stash> DerefMut for StorageStash<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stash
+    }
 }
 
 /// A storage controller for a storage instance.
@@ -209,7 +245,7 @@ impl<T> StorageControllerState<T> {
         Self {
             client,
             collections: BTreeMap::default(),
-            stash,
+            stash: StorageStash::new(stash),
         }
     }
 }
@@ -280,11 +316,7 @@ where
             // sources but right now we always create one. Perhaps the responsibility for creating
             // this should be moved to the `SourceConnector`, similar to how we have
             // `get_read_handle()` for the persist read handle.
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
+            let ts_binding_collection = self.state.stash.timestamp_bindings(&id).await?;
 
             let mut ts_bindings = Vec::new();
             let mut last_bindings: HashMap<_, MzOffset> = HashMap::new();
@@ -397,11 +429,7 @@ where
         feedback: &TimestampBindingFeedback<T>,
     ) -> Result<(), StorageError> {
         for (id, bindings) in &feedback.bindings {
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
+            let ts_binding_collection = self.state.stash.timestamp_bindings(id).await?;
 
             let upper = self.state.stash.upper(ts_binding_collection).await?;
 
@@ -456,11 +484,7 @@ where
         let mut durability_updates = vec![];
         let mut seals = vec![];
         for (id, _changes) in &feedback.changes {
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
+            let ts_binding_collection = self.state.stash.timestamp_bindings(id).await?;
             let collection = self.collection_mut(*id).expect("missing source id");
             let write_frontier = collection.write_frontier.frontier().to_owned();
             let seal_frontier = Antichain::from_iter(
@@ -556,11 +580,7 @@ where
                     .frontier()
                     .to_owned();
 
-                let ts_binding_collection = self
-                    .state
-                    .stash
-                    .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                    .await?;
+                let ts_binding_collection = self.state.stash.timestamp_bindings(id).await?;
 
                 let mut since = self.state.stash.since(ts_binding_collection).await?;
                 since.extend(

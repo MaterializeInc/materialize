@@ -13,7 +13,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::sync::Arc;
 
