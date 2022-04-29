@@ -3717,6 +3717,7 @@ dependencies = [
  "clap",
  "differential-dataflow",
  "futures-executor",
+ "futures-task",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",

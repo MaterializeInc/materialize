@@ -251,8 +251,12 @@ const NO_TIMEOUT: Duration = Duration::from_secs(1_000_000);
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
     use std::str::FromStr;
+    use std::task::Context;
 
+    use futures_task::noop_waker;
     use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use mz_persist::workload::DataGenerator;
     use timely::progress::Antichain;
@@ -478,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn compare_and_append() -> Result<(), Box<dyn std::error::Error>> {
-        mz_ore::test::init_logging_default("warn");
+        mz_ore::test::init_logging();
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -651,6 +655,92 @@ mod tests {
             .await?;
         let actual = read.snapshot_one(max_ts).await??.read_all().await?;
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    // Regression test for #12131. Snapshot with as_of >= upper would
+    // immediately return the data currently available instead of waiting for
+    // upper to advance past as_of.
+    #[tokio::test]
+    async fn regression_blocking_reads() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await?;
+        let (mut write, read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+
+        // Grab a listener as_of (aka gt) 1, which is not yet closed out.
+        let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(1)).await??;
+        let mut listen_next = Box::pin(listen.next(NO_TIMEOUT));
+        // Intentionally don't await the listen_next, but instead manually poke
+        // it for a while and assert that it doesn't resolve yet. See below for
+        // discussion of some alternative ways of writing this unit test.
+        for _ in 0..100 {
+            assert!(
+                Pin::new(&mut listen_next).poll(&mut cx).is_pending(),
+                "listen::next unexpectedly ready"
+            );
+        }
+
+        // Write a [0,3) batch.
+        let res = write
+            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .await??;
+        assert_eq!(res, Ok(()));
+
+        // The initial listen_next call should now be able to return data at 2.
+        // It doesn't get 1 because the as_of was 1 and listen is strictly gt.
+        assert_eq!(
+            listen_next.await?,
+            vec![
+                ListenEvent::Updates(vec![((Ok("2".to_owned()), Ok("two".to_owned())), 2, 1)]),
+                ListenEvent::Progress(Antichain::from_elem(3)),
+            ]
+        );
+
+        // Grab a snapshot as_of 3, which is not yet closed out. Intentionally
+        // don't await the snap, but instead manually poke it for a while and
+        // assert that it doesn't resolve yet.
+        //
+        // An alternative to this would be to run it in a task and poll the task
+        // with some timeout, but this would introduce a fixed test execution
+        // latency of the timeout in the happy case. Plus, it would be
+        // non-deterministic.
+        //
+        // Another alternative (that's potentially quite interesting!) would be
+        // to separate creating a snapshot immediately (which would fail if
+        // as_of was >= upper) from a bit of logic that retries until that case
+        // is ready.
+        let mut snap = Box::pin(read.snapshot_one(3));
+        for _ in 0..100 {
+            assert!(
+                Pin::new(&mut snap).poll(&mut cx).is_pending(),
+                "snapshot unexpectedly ready"
+            );
+        }
+
+        // Now add the data at 3 and also unblock the snapshot.
+        let res = write.compare_and_append_slice(&data[2..], 3, 4).await??;
+        assert_eq!(res, Ok(()));
+
+        // Read the snapshot and check that it got all the appropriate data.
+        //
+        // TODO: If we made the SeqNo of the snap and the writes available, we
+        // could assert on the ordering of them to provide additional confidence
+        // that the test hasn't rotted as things change.
+        let mut snap = snap.await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data[..], 1));
 
         Ok(())
     }
