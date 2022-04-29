@@ -23,12 +23,14 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tracing::info;
 use uuid::Uuid;
 
 use mz_expr::{GlobalId, PartitionId};
@@ -378,6 +380,8 @@ where
         &mut self,
         feedback: &TimestampBindingFeedback<T>,
     ) -> Result<(), StorageError> {
+        info!("persisting timestamp bindings: {:?}", &feedback.bindings);
+        let start = Instant::now();
         for (id, bindings) in &feedback.bindings {
             let ts_binding_collection = self
                 .state
@@ -456,6 +460,8 @@ where
             durability_updates.push((*id, write_frontier));
         }
         self.state.stash.seal_batch(&seals)?;
+
+        info!("took {:?} to persist ts bindings", start.elapsed());
 
         self.update_durability_frontiers(durability_updates).await?;
 
