@@ -160,3 +160,83 @@ contains: unknown catalog item 'does_not_exist'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR does_not_exist
   ENVELOPE DEBEZIUM UPSERT
 contains: unknown catalog item 'does_not_exist'
+
+# Test protobuf CSR connector
+# Duplicated from protobuf-import.td since once a topic has been read we can only create the source again by forcing offsets which is itself a different test case
+$ set empty-schema
+syntax = "proto3";
+
+
+$ set importee-schema
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+message Importee1 {
+    bool b = 1;
+}
+
+message Importee2 {
+    google.protobuf.Timestamp ts = 3;
+}
+
+$ set importer-schema
+syntax = "proto3";
+
+import "empty.proto";
+import "importee.proto";
+
+message Importer {
+    Importee1 importee1 = 1;
+    Importee2 importee2 = 2;
+}
+
+$ file-append path=empty.proto
+\${empty-schema}
+
+$ file-append path=importee.proto
+\${importee-schema}
+
+$ file-append path=importer.proto
+\${importer-schema}
+
+$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb
+
+$ kafka-create-topic topic=import-csr partitions=1
+
+# The Confluent toolchain publishes even schemas for well-known types, so we
+# have to do the same.
+# See: https://github.com/protocolbuffers/protobuf/blob/61e0395c89fe520ae7569aea6838313195e05ec5/src/google/protobuf/timestamp.proto
+$ schema-registry-publish subject=google/protobuf/timestamp.proto schema-type=protobuf
+syntax = "proto3";
+
+package google.protobuf;
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
+$ schema-registry-publish subject=empty.proto schema-type=protobuf
+\${empty-schema}
+
+$ schema-registry-publish subject=importee.proto schema-type=protobuf references=google/protobuf/timestamp.proto
+\${importee-schema}
+
+$ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
+\${importer-schema}
+
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true
+{"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
+
+> CREATE CONNECTOR proto_csr
+  FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE MATERIALIZED SOURCE import_connector_csr FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR proto_csr
+
+> SELECT importee1::text, importee2::text, mz_offset FROM import_connector_csr
+importee1  importee2            mz_offset
+-----------------------------------------
+(f)        "(\"(1234,5678)\")"  1

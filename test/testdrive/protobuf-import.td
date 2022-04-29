@@ -114,16 +114,3 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr
 contains:Decode error: Text: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123. See https://github.com/MaterializeInc/materialize/issues/9250
-
-# Test Protobuf Confluent Schema Registry codepath here to avoid duplicating the above complexity
-> CREATE CONNECTOR proto_csr
-  FOR CONFLUENT SCHEMA REGISTRY '{testdrive.schema-registry-url}'
-
-> CREATE MATERIALIZED SOURCE import_connector_csr FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR proto_csr
-
-> SELECT importee1::text, importee2::text, mz_offset FROM import_connector_csr
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
