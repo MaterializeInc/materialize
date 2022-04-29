@@ -13,16 +13,19 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use crate::error::{InvalidUsage, NoOp};
-use crate::r#impl::state::{ReadCapability, State, StateCollections, WriteCapability};
+use crate::r#impl::state::{
+    ReadCapability, Since, State, StateCollections, Upper, WriteCapability,
+};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::ShardId;
@@ -205,11 +208,44 @@ where
         deadline: Instant,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<String>, InvalidUsage>, ExternalError> {
-        // This unconditionally fetches the latest state and uses that to
-        // determine if we can serve `as_of`. TODO: We could instead check first
-        // and only fetch if necessary.
-        self.fetch_and_update_state(deadline).await?;
-        Ok(self.state.snapshot(as_of))
+        let mut fetches = 0;
+        loop {
+            let upper = match self.state.snapshot(as_of) {
+                Ok(Ok(x)) => return Ok(Ok(x)),
+                Ok(Err(Upper(upper))) => {
+                    // The upper isn't ready yet, fall through and try again.
+                    upper
+                }
+                Err(Since(since)) => {
+                    return Ok(Err(InvalidUsage(anyhow!(
+                        "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
+                        as_of,
+                        since
+                    ))))
+                }
+            };
+            // Only sleep after the first fetch, because the first time through
+            // maybe our state was just out of date.
+            //
+            // TODO: Some sort of backoff instead of a fixed sleep.
+            if fetches > 0 {
+                let sleep = if cfg!(test) {
+                    Duration::from_nanos(1)
+                } else {
+                    Duration::from_secs(1)
+                };
+                if Instant::now() + sleep > deadline {
+                    return Err(ExternalError::new_timeout(deadline));
+                }
+                info!(
+                    "snapshot as of {:?} not available for upper {:?} retrying in {:?}",
+                    as_of, upper, sleep
+                );
+                tokio::time::sleep(sleep).await;
+            }
+            self.fetch_and_update_state(deadline).await?;
+            fetches += 1;
+        }
     }
 
     pub async fn next_listen_batch(
@@ -225,7 +261,11 @@ where
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
                 return Ok((keys.to_owned(), desc.clone()));
             }
-            let sleep = Duration::from_secs(1);
+            let sleep = if cfg!(test) {
+                Duration::from_nanos(1)
+            } else {
+                Duration::from_secs(1)
+            };
             if Instant::now() + sleep > deadline {
                 return Err(ExternalError::new_timeout(deadline));
             }

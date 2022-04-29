@@ -273,13 +273,16 @@ where
         Ok((work_ret, new_state))
     }
 
-    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<String>, InvalidUsage> {
+    pub fn snapshot(
+        &self,
+        as_of: &Antichain<T>,
+    ) -> Result<Result<Vec<String>, Upper<T>>, Since<T>> {
         if PartialOrder::less_than(as_of, &self.collections.since) {
-            return Err(InvalidUsage(anyhow!(
-                "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
-                as_of,
-                self.collections.since
-            )));
+            return Err(Since(self.collections.since.clone()));
+        }
+        let upper = self.collections.upper();
+        if PartialOrder::less_equal(&upper, as_of) {
+            return Ok(Err(Upper(upper)));
         }
         let batches = self
             .collections
@@ -293,7 +296,7 @@ where
                 }
             })
             .collect();
-        Ok(batches)
+        Ok(Ok(batches))
     }
 
     pub fn next_listen_batch(
@@ -312,6 +315,12 @@ where
         return None;
     }
 }
+
+#[derive(Debug)]
+pub struct Since<T>(pub Antichain<T>);
+
+#[derive(Debug)]
+pub struct Upper<T>(pub Antichain<T>);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AntichainMeta(Vec<[u8; 8]>);
