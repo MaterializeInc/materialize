@@ -134,7 +134,7 @@ pub enum Type {
     /// The value will need to be visited by calling the appropriate `Visit`
     /// or `VisitMut` trait method on the value.
     Local(String),
-    /// A [`Map`] type
+    /// A BTreeMap type
     ///
     /// Each value will need to be visited.
     Map { key: Box<Type>, value: Box<Type> },
