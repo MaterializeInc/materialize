@@ -42,8 +42,8 @@ pub use relation::{
     RelationType,
 };
 pub use row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
-    RowPacker, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
+    RowArena, RowPacker, RowRef,
 };
 pub use scalar::{AsColumnType, Datum, DatumType, ProtoScalarType, ScalarBaseType, ScalarType};
 

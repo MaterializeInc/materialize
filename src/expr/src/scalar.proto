@@ -12,11 +12,505 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
+
+import "expr/src/scalar/like_pattern.proto";
+
 import "repr/src/adt/array.proto";
+import "repr/src/adt/char.proto";
+import "repr/src/adt/datetime.proto";
+import "repr/src/adt/numeric.proto";
+import "repr/src/adt/regex.proto";
+import "repr/src/adt/varchar.proto";
+import "repr/src/chrono.proto";
+import "repr/src/relation_and_scalar.proto";
+import "repr/src/row.proto";
 import "repr/src/strconv.proto";
-import "expr/src/relation/func.proto";
 
 package mz_expr.scalar;
+
+message ProtoMirScalarExpr {
+    message ProtoLiteral {
+        message ProtoLiteralData {
+            oneof result {
+                mz_repr.row.ProtoRow ok = 1;
+                ProtoEvalError err = 2;
+            }
+        }
+        ProtoLiteralData lit = 1;
+        mz_repr.relation_and_scalar.ProtoColumnType typ = 2;
+    }
+
+    message ProtoCallUnary {
+        ProtoUnaryFunc func = 1;
+        ProtoMirScalarExpr expr = 2;
+    }
+
+    message ProtoCallBinary {
+        ProtoBinaryFunc func = 1;
+        ProtoMirScalarExpr expr1 = 2;
+        ProtoMirScalarExpr expr2 = 3;
+    }
+
+    message ProtoCallVariadic {
+        ProtoVariadicFunc func = 1;
+        repeated ProtoMirScalarExpr exprs = 2;
+    }
+
+    message ProtoIf {
+        ProtoMirScalarExpr cond = 1;
+        ProtoMirScalarExpr then = 2;
+        ProtoMirScalarExpr els = 3;
+    }
+
+    oneof kind {
+        uint64 column = 1;
+        ProtoLiteral literal = 2;
+        ProtoUnmaterializableFunc call_unmaterializable = 3;
+        ProtoCallUnary call_unary = 4;
+        ProtoCallBinary call_binary = 5;
+        ProtoCallVariadic call_variadic = 6;
+        ProtoIf if = 7;
+    }
+}
+
+
+message ProtoUnmaterializableFunc {
+    oneof kind {
+        google.protobuf.Empty current_database = 1;
+        google.protobuf.Empty current_schemas_with_system = 2;
+        google.protobuf.Empty current_schemas_without_system = 3;
+        google.protobuf.Empty current_timestamp = 4;
+        google.protobuf.Empty current_user = 5;
+        google.protobuf.Empty mz_cluster_id = 6;
+        google.protobuf.Empty mz_logical_timestamp = 7;
+        google.protobuf.Empty mz_session_id = 8;
+        google.protobuf.Empty mz_uptime = 9;
+        google.protobuf.Empty mz_version = 10;
+        google.protobuf.Empty pg_backend_pid = 11;
+        google.protobuf.Empty pg_postmaster_start_time = 12;
+        google.protobuf.Empty version = 13;
+    }
+}
+
+message ProtoUnaryFunc {
+    message ProtoCastStringToChar {
+        mz_repr.adt.char.ProtoCharLength length = 1;
+        bool fail_on_len = 2;
+    }
+    message ProtoPadChar {
+        mz_repr.adt.char.ProtoCharLength length = 1;
+    }
+    message ProtoCastStringToVarChar {
+        mz_repr.adt.varchar.ProtoVarCharMaxLength length = 1;
+        bool fail_on_len = 2;
+    }
+    message ProtoTimezoneTime {
+        mz_repr.adt.datetime.ProtoTimezone tz = 1;
+        mz_repr.chrono.ProtoNaiveDateTime wall_time = 2;
+    }
+    message ProtoCastToVariableType {
+        mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
+        ProtoMirScalarExpr cast_expr = 2;
+    }
+    message ProtoCastRecord1ToRecord2 {
+        mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
+        repeated ProtoMirScalarExpr cast_exprs = 2;
+    }
+    oneof kind {
+        google.protobuf.Empty not = 1;
+        google.protobuf.Empty is_null = 2;
+        google.protobuf.Empty is_true = 121;
+        google.protobuf.Empty is_false = 92;
+        google.protobuf.Empty bit_not_int16 = 93;
+        google.protobuf.Empty bit_not_int32 = 94;
+        google.protobuf.Empty bit_not_int64 = 95;
+        google.protobuf.Empty neg_int16 = 88;
+        google.protobuf.Empty neg_int32 = 57;
+        google.protobuf.Empty neg_int64 = 83;
+        google.protobuf.Empty neg_float32 = 39;
+        google.protobuf.Empty neg_float64 = 35;
+        google.protobuf.Empty neg_numeric = 125;
+        google.protobuf.Empty neg_interval = 87;
+        google.protobuf.Empty sqrt_float64 = 103;
+        google.protobuf.Empty sqrt_numeric = 16;
+        google.protobuf.Empty cbrt_float64 = 17;
+        google.protobuf.Empty abs_int16 = 18;
+        google.protobuf.Empty abs_int32 = 19;
+        google.protobuf.Empty abs_int64 = 20;
+        google.protobuf.Empty abs_float32 = 21;
+        google.protobuf.Empty abs_float64 = 22;
+        google.protobuf.Empty abs_numeric = 23;
+        google.protobuf.Empty cast_bool_to_string = 24;
+        google.protobuf.Empty cast_bool_to_string_nonstandard = 25;
+        google.protobuf.Empty cast_bool_to_int32 = 26;
+        google.protobuf.Empty cast_int16_to_float32 = 27;
+        google.protobuf.Empty cast_int16_to_float64 = 28;
+        google.protobuf.Empty cast_int16_to_int32 = 29;
+        google.protobuf.Empty cast_int16_to_int64 = 30;
+        google.protobuf.Empty cast_int16_to_string = 31;
+        google.protobuf.Empty cast_int2_vector_to_array = 32;
+        google.protobuf.Empty cast_int32_to_bool = 33;
+        google.protobuf.Empty cast_int32_to_float32 = 34;
+        google.protobuf.Empty cast_int32_to_float64 = 12;
+        google.protobuf.Empty cast_int32_to_oid = 36;
+        google.protobuf.Empty cast_int32_to_pg_legacy_char = 37;
+        google.protobuf.Empty cast_int32_to_int16 = 38;
+        google.protobuf.Empty cast_int32_to_int64 = 11;
+        google.protobuf.Empty cast_int32_to_string = 40;
+        google.protobuf.Empty cast_oid_to_int32 = 41;
+        google.protobuf.Empty cast_oid_to_int64 = 42;
+        google.protobuf.Empty cast_oid_to_string = 43;
+        google.protobuf.Empty cast_oid_to_reg_class = 44;
+        google.protobuf.Empty cast_reg_class_to_oid = 45;
+        google.protobuf.Empty cast_oid_to_reg_proc = 46;
+        google.protobuf.Empty cast_reg_proc_to_oid = 47;
+        google.protobuf.Empty cast_oid_to_reg_type = 48;
+        google.protobuf.Empty cast_reg_type_to_oid = 49;
+        google.protobuf.Empty cast_int64_to_int16 = 50;
+        google.protobuf.Empty cast_int64_to_int32 = 51;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int16_to_numeric = 52;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int32_to_numeric = 53;
+        google.protobuf.Empty cast_int64_to_bool = 54;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_int64_to_numeric = 55;
+        google.protobuf.Empty cast_int64_to_float32 = 56;
+        google.protobuf.Empty cast_int64_to_float64 = 9;
+        google.protobuf.Empty cast_int64_to_oid = 58;
+        google.protobuf.Empty cast_int64_to_string = 59;
+        google.protobuf.Empty cast_float32_to_int16 = 60;
+        google.protobuf.Empty cast_float32_to_int32 = 61;
+        google.protobuf.Empty cast_float32_to_int64 = 62;
+        google.protobuf.Empty cast_float32_to_float64 = 63;
+        google.protobuf.Empty cast_float32_to_string = 64;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_float32_to_numeric = 65;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_float64_to_numeric = 66;
+        google.protobuf.Empty cast_float64_to_int16 = 67;
+        google.protobuf.Empty cast_float64_to_int32 = 68;
+        google.protobuf.Empty cast_float64_to_int64 = 69;
+        google.protobuf.Empty cast_float64_to_float32 = 70;
+        google.protobuf.Empty cast_float64_to_string = 71;
+        google.protobuf.Empty cast_numeric_to_float32 = 72;
+        google.protobuf.Empty cast_numeric_to_float64 = 73;
+        google.protobuf.Empty cast_numeric_to_int16 = 74;
+        google.protobuf.Empty cast_numeric_to_int32 = 75;
+        google.protobuf.Empty cast_numeric_to_int64 = 76;
+        google.protobuf.Empty cast_numeric_to_string = 77;
+        google.protobuf.Empty cast_string_to_bool = 78;
+        google.protobuf.Empty cast_string_to_pg_legacy_char = 79;
+        google.protobuf.Empty cast_string_to_bytes = 80;
+        google.protobuf.Empty cast_string_to_int16 = 81;
+        google.protobuf.Empty cast_string_to_int32 = 82;
+        google.protobuf.Empty cast_string_to_int64 = 10;
+        google.protobuf.Empty cast_string_to_int2_vector = 84;
+        google.protobuf.Empty cast_string_to_oid = 85;
+        google.protobuf.Empty cast_string_to_float32 = 86;
+        google.protobuf.Empty cast_string_to_float64 = 14;
+        google.protobuf.Empty cast_string_to_date = 8;
+        ProtoCastToVariableType cast_string_to_array = 89;
+        ProtoCastToVariableType cast_string_to_list = 90;
+        ProtoCastToVariableType cast_string_to_map = 91;
+        google.protobuf.Empty cast_string_to_time = 4;
+        google.protobuf.Empty cast_string_to_timestamp = 5;
+        google.protobuf.Empty cast_string_to_timestamp_tz = 6;
+        google.protobuf.Empty cast_string_to_interval = 7;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
+        google.protobuf.Empty cast_string_to_uuid = 97;
+        ProtoCastStringToChar cast_string_to_char = 98;
+        ProtoPadChar pad_char = 99;
+        ProtoCastStringToVarChar cast_string_to_var_char = 100;
+        google.protobuf.Empty cast_char_to_string = 101;
+        google.protobuf.Empty cast_var_char_to_string = 102;
+        google.protobuf.Empty cast_date_to_timestamp = 15;
+        google.protobuf.Empty cast_date_to_timestamp_tz = 104;
+        google.protobuf.Empty cast_date_to_string = 105;
+        google.protobuf.Empty cast_time_to_interval = 106;
+        google.protobuf.Empty cast_time_to_string = 107;
+        google.protobuf.Empty cast_interval_to_string = 108;
+        google.protobuf.Empty cast_interval_to_time = 109;
+        google.protobuf.Empty cast_timestamp_to_date = 110;
+        google.protobuf.Empty cast_timestamp_to_timestamp_tz = 111;
+        google.protobuf.Empty cast_timestamp_to_string = 112;
+        google.protobuf.Empty cast_timestamp_to_time = 113;
+        google.protobuf.Empty cast_timestamp_tz_to_date = 114;
+        google.protobuf.Empty cast_timestamp_tz_to_timestamp = 115;
+        google.protobuf.Empty cast_timestamp_tz_to_string = 116;
+        google.protobuf.Empty cast_timestamp_tz_to_time = 117;
+        google.protobuf.Empty cast_pg_legacy_char_to_string = 118;
+        google.protobuf.Empty cast_pg_legacy_char_to_int32 = 119;
+        google.protobuf.Empty cast_bytes_to_string = 120;
+
+        google.protobuf.Empty cast_string_to_jsonb = 3;
+        google.protobuf.Empty cast_jsonb_to_string = 122;
+        google.protobuf.Empty cast_jsonb_or_null_to_jsonb = 123;
+        google.protobuf.Empty cast_jsonb_to_int16 = 124;
+        google.protobuf.Empty cast_jsonb_to_int32 = 13;
+        google.protobuf.Empty cast_jsonb_to_int64 = 126;
+        google.protobuf.Empty cast_jsonb_to_float32 = 127;
+        google.protobuf.Empty cast_jsonb_to_float64 = 128;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_jsonb_to_numeric = 129;
+        google.protobuf.Empty cast_jsonb_to_bool = 130;
+        google.protobuf.Empty cast_uuid_to_string = 131;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_record_to_string = 132;
+        ProtoCastRecord1ToRecord2 cast_record1_to_record2 = 133;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_array_to_string = 134;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_list_to_string = 135;
+        ProtoCastToVariableType cast_list1_to_list2 = 136;
+        google.protobuf.Empty cast_array_to_list_one_dim = 137;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_map_to_string = 138;
+        google.protobuf.Empty cast_int2_vector_to_string = 139;
+        google.protobuf.Empty ceil_float32 = 140;
+        google.protobuf.Empty ceil_float64 = 141;
+        google.protobuf.Empty ceil_numeric = 142;
+        google.protobuf.Empty floor_float32 = 143;
+        google.protobuf.Empty floor_float64 = 144;
+        google.protobuf.Empty floor_numeric = 145;
+        google.protobuf.Empty ascii = 146;
+        google.protobuf.Empty bit_length_bytes = 147;
+        google.protobuf.Empty bit_length_string = 148;
+        google.protobuf.Empty byte_length_bytes = 149;
+        google.protobuf.Empty byte_length_string = 150;
+        google.protobuf.Empty char_length = 151;
+        google.protobuf.Empty chr = 152;
+        mz_expr.scalar.like_pattern.ProtoMatcher is_like_match = 153;
+        mz_repr.adt.regex.ProtoRegex is_regexp_match = 154;
+        mz_repr.adt.regex.ProtoRegex regexp_match = 155;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_interval = 156;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_time = 157;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_timestamp = 158;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_timestamp_tz = 159;
+        mz_repr.adt.datetime.ProtoDateTimeUnits extract_date = 160;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_interval = 161;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_time = 162;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_timestamp = 163;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_part_timestamp_tz = 164;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp = 165;
+        mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp_tz = 166;
+        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp = 167;
+        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp_tz = 168;
+        ProtoTimezoneTime timezone_time = 169;
+        google.protobuf.Empty to_timestamp = 170;
+        google.protobuf.Empty justify_days = 171;
+        google.protobuf.Empty justify_hours = 172;
+        google.protobuf.Empty justify_interval = 173;
+        google.protobuf.Empty jsonb_array_length = 174;
+        google.protobuf.Empty jsonb_typeof = 175;
+        google.protobuf.Empty jsonb_strip_nulls = 176;
+        google.protobuf.Empty jsonb_pretty = 177;
+        google.protobuf.Empty round_float32 = 178;
+        google.protobuf.Empty round_float64 = 179;
+        google.protobuf.Empty round_numeric = 180;
+        google.protobuf.Empty trim_whitespace = 181;
+        google.protobuf.Empty trim_leading_whitespace = 182;
+        google.protobuf.Empty trim_trailing_whitespace = 183;
+        uint64 record_get = 184;
+        google.protobuf.Empty list_length = 185;
+        google.protobuf.Empty map_length = 186;
+        google.protobuf.Empty upper = 187;
+        google.protobuf.Empty lower = 188;
+        google.protobuf.Empty cos = 189;
+        google.protobuf.Empty acos = 190;
+        google.protobuf.Empty cosh = 191;
+        google.protobuf.Empty acosh = 192;
+        google.protobuf.Empty sin = 193;
+        google.protobuf.Empty asin = 194;
+        google.protobuf.Empty sinh = 195;
+        google.protobuf.Empty asinh = 196;
+        google.protobuf.Empty tan = 197;
+        google.protobuf.Empty atan = 198;
+        google.protobuf.Empty tanh = 199;
+        google.protobuf.Empty atanh = 200;
+        google.protobuf.Empty cot = 201;
+        google.protobuf.Empty degrees = 202;
+        google.protobuf.Empty radians = 203;
+        google.protobuf.Empty log10 = 204;
+        google.protobuf.Empty log10_numeric = 205;
+        google.protobuf.Empty ln = 206;
+        google.protobuf.Empty ln_numeric = 207;
+        google.protobuf.Empty exp = 208;
+        google.protobuf.Empty exp_numeric = 209;
+        google.protobuf.Empty sleep = 210;
+        google.protobuf.Empty panic = 211;
+        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
+        google.protobuf.Empty pg_column_size = 213;
+        google.protobuf.Empty mz_row_size = 214;
+        google.protobuf.Empty mz_type_name = 215;
+    }
+}
+
+message ProtoBinaryFunc {
+    oneof kind {
+        google.protobuf.Empty and = 7;
+        google.protobuf.Empty or = 8;
+        google.protobuf.Empty add_int16 = 46;
+        google.protobuf.Empty add_int32 = 11;
+        google.protobuf.Empty add_int64 = 12;
+        google.protobuf.Empty add_float32 = 13;
+        google.protobuf.Empty add_float64 = 14;
+        google.protobuf.Empty add_interval = 47;
+        google.protobuf.Empty add_timestamp_interval = 15;
+        google.protobuf.Empty add_timestamp_tz_interval = 66;
+        google.protobuf.Empty add_date_interval = 67;
+        google.protobuf.Empty add_date_time = 68;
+        google.protobuf.Empty add_time_interval = 69;
+        google.protobuf.Empty add_numeric = 70;
+        google.protobuf.Empty bit_and_int16 = 71;
+        google.protobuf.Empty bit_and_int32 = 16;
+        google.protobuf.Empty bit_and_int64 = 17;
+        google.protobuf.Empty bit_or_int16 = 18;
+        google.protobuf.Empty bit_or_int32 = 19;
+        google.protobuf.Empty bit_or_int64 = 20;
+        google.protobuf.Empty bit_xor_int16 = 21;
+        google.protobuf.Empty bit_xor_int32 = 22;
+        google.protobuf.Empty bit_xor_int64 = 23;
+        google.protobuf.Empty bit_shift_left_int16 = 24;
+        google.protobuf.Empty bit_shift_left_int32 = 25;
+        google.protobuf.Empty bit_shift_left_int64 = 26;
+        google.protobuf.Empty bit_shift_right_int16 = 27;
+        google.protobuf.Empty bit_shift_right_int32 = 28;
+        google.protobuf.Empty bit_shift_right_int64 = 29;
+        google.protobuf.Empty sub_int16 = 30;
+        google.protobuf.Empty sub_int32 = 31;
+        google.protobuf.Empty sub_int64 = 32;
+        google.protobuf.Empty sub_float32 = 33;
+        google.protobuf.Empty sub_float64 = 34;
+        google.protobuf.Empty sub_interval = 35;
+        google.protobuf.Empty sub_timestamp = 36;
+        google.protobuf.Empty sub_timestamp_tz = 37;
+        google.protobuf.Empty sub_timestamp_interval = 38;
+        google.protobuf.Empty sub_timestamp_tz_interval = 39;
+        google.protobuf.Empty sub_date = 40;
+        google.protobuf.Empty sub_date_interval = 41;
+        google.protobuf.Empty sub_time = 42;
+        google.protobuf.Empty sub_time_interval = 43;
+        google.protobuf.Empty sub_numeric = 44;
+        google.protobuf.Empty mul_int16 = 45;
+        google.protobuf.Empty mul_int32 = 9;
+        google.protobuf.Empty mul_int64 = 10;
+        google.protobuf.Empty mul_float32 = 48;
+        google.protobuf.Empty mul_float64 = 49;
+        google.protobuf.Empty mul_numeric = 50;
+        google.protobuf.Empty mul_interval = 51;
+        google.protobuf.Empty div_int16 = 52;
+        google.protobuf.Empty div_int32 = 53;
+        google.protobuf.Empty div_int64 = 54;
+        google.protobuf.Empty div_float32 = 55;
+        google.protobuf.Empty div_float64 = 56;
+        google.protobuf.Empty div_numeric = 57;
+        google.protobuf.Empty div_interval = 58;
+        google.protobuf.Empty mod_int16 = 59;
+        google.protobuf.Empty mod_int32 = 60;
+        google.protobuf.Empty mod_int64 = 61;
+        google.protobuf.Empty mod_float32 = 62;
+        google.protobuf.Empty mod_float64 = 63;
+        google.protobuf.Empty mod_numeric = 64;
+        google.protobuf.Empty round_numeric = 65;
+        google.protobuf.Empty eq = 1;
+        google.protobuf.Empty not_eq = 2;
+        google.protobuf.Empty lt = 3;
+        google.protobuf.Empty lte = 4;
+        google.protobuf.Empty gt = 5;
+        google.protobuf.Empty gte = 6;
+        google.protobuf.Empty like_escape = 72;
+        bool is_like_match = 73;
+        bool is_regexp_match = 74;
+        google.protobuf.Empty to_char_timestamp = 75;
+        google.protobuf.Empty to_char_timestamp_tz = 76;
+        google.protobuf.Empty date_bin_timestamp = 77;
+        google.protobuf.Empty date_bin_timestamp_tz = 78;
+        google.protobuf.Empty extract_interval = 79;
+        google.protobuf.Empty extract_time = 80;
+        google.protobuf.Empty extract_timestamp = 81;
+        google.protobuf.Empty extract_timestamp_tz = 82;
+        google.protobuf.Empty extract_date = 83;
+        google.protobuf.Empty date_part_interval = 84;
+        google.protobuf.Empty date_part_time = 85;
+        google.protobuf.Empty date_part_timestamp = 86;
+        google.protobuf.Empty date_part_timestamp_tz = 87;
+        google.protobuf.Empty date_trunc_timestamp = 88;
+        google.protobuf.Empty date_trunc_timestamp_tz = 89;
+        google.protobuf.Empty date_trunc_interval = 90;
+        google.protobuf.Empty timezone_timestamp = 91;
+        google.protobuf.Empty timezone_timestamp_tz = 92;
+        mz_repr.chrono.ProtoNaiveDateTime timezone_time = 93;
+        google.protobuf.Empty timezone_interval_timestamp = 94;
+        google.protobuf.Empty timezone_interval_timestamp_tz = 95;
+        google.protobuf.Empty timezone_interval_time = 96;
+        google.protobuf.Empty text_concat = 97;
+        bool jsonb_get_int64 = 98;
+        bool jsonb_get_string = 99;
+        bool jsonb_get_path = 100;
+        google.protobuf.Empty jsonb_contains_string = 101;
+        google.protobuf.Empty jsonb_concat = 102;
+        google.protobuf.Empty jsonb_contains_jsonb = 103;
+        google.protobuf.Empty jsonb_delete_int64 = 104;
+        google.protobuf.Empty jsonb_delete_string = 105;
+        google.protobuf.Empty map_contains_key = 106;
+        google.protobuf.Empty map_get_value = 107;
+        google.protobuf.Empty map_get_values = 108;
+        google.protobuf.Empty map_contains_all_keys = 109;
+        google.protobuf.Empty map_contains_any_keys = 110;
+        google.protobuf.Empty map_contains_map = 111;
+        google.protobuf.Empty convert_from = 112;
+        google.protobuf.Empty left = 113;
+        google.protobuf.Empty position = 114;
+        google.protobuf.Empty right = 115;
+        google.protobuf.Empty repeat_string = 116;
+        google.protobuf.Empty trim = 117;
+        google.protobuf.Empty trim_leading = 118;
+        google.protobuf.Empty trim_trailing = 119;
+        google.protobuf.Empty encoded_bytes_char_length = 120;
+        uint64 list_length_max = 121;
+        google.protobuf.Empty array_contains = 122;
+        google.protobuf.Empty array_length = 123;
+        google.protobuf.Empty array_lower = 124;
+        google.protobuf.Empty array_remove = 125;
+        google.protobuf.Empty array_upper = 126;
+        google.protobuf.Empty array_array_concat = 127;
+        google.protobuf.Empty list_list_concat = 128;
+        google.protobuf.Empty list_element_concat = 129;
+        google.protobuf.Empty element_list_concat = 130;
+        google.protobuf.Empty list_remove = 131;
+        google.protobuf.Empty digest_string = 132;
+        google.protobuf.Empty digest_bytes = 133;
+        google.protobuf.Empty mz_render_typmod = 134;
+        google.protobuf.Empty encode = 135;
+        google.protobuf.Empty decode = 136;
+        google.protobuf.Empty log_numeric = 137;
+        google.protobuf.Empty power = 138;
+        google.protobuf.Empty power_numeric = 139;
+    }
+}
+
+message ProtoVariadicFunc {
+    message ProtoRecordCreate {
+        repeated mz_repr.relation_and_scalar.ProtoColumnName field_names = 1;
+    }
+    oneof kind {
+        google.protobuf.Empty coalesce = 1;
+        google.protobuf.Empty greatest = 2;
+        google.protobuf.Empty least = 3;
+        google.protobuf.Empty concat = 4;
+        google.protobuf.Empty make_timestamp = 5;
+        google.protobuf.Empty pad_leading = 16;
+        google.protobuf.Empty substr = 7;
+        google.protobuf.Empty replace = 8;
+        google.protobuf.Empty jsonb_build_array = 9;
+        google.protobuf.Empty jsonb_build_object = 10;
+        mz_repr.relation_and_scalar.ProtoScalarType array_create = 11;
+        mz_repr.relation_and_scalar.ProtoScalarType array_to_string = 12;
+        uint64 array_index = 13;
+        mz_repr.relation_and_scalar.ProtoScalarType list_create = 14;
+        ProtoRecordCreate record_create = 15;
+        google.protobuf.Empty list_index = 6;
+        google.protobuf.Empty list_slice_linear = 17;
+        google.protobuf.Empty split_part = 18;
+        google.protobuf.Empty regexp_match = 19;
+        google.protobuf.Empty hmac_string = 20;
+        google.protobuf.Empty hmac_bytes = 21;
+        google.protobuf.Empty error_if_null = 22;
+        google.protobuf.Empty date_bin_timestamp = 23;
+        google.protobuf.Empty date_bin_timestamp_tz = 24;
+    }
+}
 
 message ProtoDomainLimit {
     oneof kind {
@@ -118,14 +612,4 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
     }
-}
-
-message ProtoMirScalarExpr {
-    //TODO: fill me. #11740
-}
-
-message ProtoAggregateExpr {
-    mz_expr.relation.func.ProtoAggregateFunc func = 1;
-    ProtoMirScalarExpr expr = 2;
-    bool distinct = 3;
 }

@@ -26,6 +26,8 @@ pub enum TryFromProtoError {
     DateConversionError(String),
     /// A regex compilation failed
     RegexError(regex::Error),
+    /// A [crate::Row] conversion failed
+    RowConversionError(String),
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
@@ -58,6 +60,7 @@ impl std::fmt::Display for TryFromProtoError {
             CharTryFromError(error) => error.fmt(f),
             DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
             RegexError(error) => error.fmt(f),
+            RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
         }
     }
@@ -71,6 +74,7 @@ impl std::error::Error for TryFromProtoError {
             CharTryFromError(error) => Some(error),
             RegexError(error) => Some(error),
             DateConversionError(_) => None,
+            RowConversionError(_) => None,
             MissingField(_) => None,
         }
     }

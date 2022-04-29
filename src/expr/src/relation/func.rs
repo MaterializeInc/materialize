@@ -20,6 +20,9 @@ use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
+use proptest::prelude::{Arbitrary, Just};
+use proptest::prop_oneof;
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -32,7 +35,10 @@ use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound};
+use crate::relation::{
+    compare_columns, proto_aggregate_func, proto_table_func, ColumnOrder, ProtoAggregateFunc,
+    ProtoTableFunc, WindowFrame, WindowFrameBound,
+};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
@@ -819,7 +825,7 @@ pub enum LagLeadType {
     Lead,
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -902,6 +908,84 @@ pub enum AggregateFunc {
     /// Useful for removing an expensive aggregation while maintaining the shape
     /// of a reduce operator.
     Dummy,
+}
+
+/// An explicit [`Arbitrary`] implementation needed here because of a known
+/// `proptest` issue.
+///
+/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+///
+/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
+impl Arbitrary for AggregateFunc {
+    type Parameters = ();
+
+    type Strategy = Union<BoxedStrategy<Self>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        use proptest::collection::vec;
+        use proptest::prelude::any as proptest_any;
+        prop_oneof![
+            Just(AggregateFunc::MaxNumeric),
+            Just(AggregateFunc::MaxInt16),
+            Just(AggregateFunc::MaxInt32),
+            Just(AggregateFunc::MaxInt64),
+            Just(AggregateFunc::MaxFloat32),
+            Just(AggregateFunc::MaxFloat64),
+            Just(AggregateFunc::MaxBool),
+            Just(AggregateFunc::MaxString),
+            Just(AggregateFunc::MaxTimestamp),
+            Just(AggregateFunc::MaxDate),
+            Just(AggregateFunc::MaxTimestampTz),
+            Just(AggregateFunc::MinNumeric),
+            Just(AggregateFunc::MinInt16),
+            Just(AggregateFunc::MinInt32),
+            Just(AggregateFunc::MinInt64),
+            Just(AggregateFunc::MinFloat32),
+            Just(AggregateFunc::MinFloat64),
+            Just(AggregateFunc::MinBool),
+            Just(AggregateFunc::MinString),
+            Just(AggregateFunc::MinDate),
+            Just(AggregateFunc::MinTimestamp),
+            Just(AggregateFunc::MinTimestampTz),
+            Just(AggregateFunc::SumInt16),
+            Just(AggregateFunc::SumInt32),
+            Just(AggregateFunc::SumInt64),
+            Just(AggregateFunc::SumFloat32),
+            Just(AggregateFunc::SumFloat64),
+            Just(AggregateFunc::SumNumeric),
+            Just(AggregateFunc::Count),
+            Just(AggregateFunc::Any),
+            Just(AggregateFunc::All),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::JsonbAgg { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::ListConcat { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::StringAgg { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::RowNumber { order_by }),
+            vec(proptest_any::<ColumnOrder>(), 1..4)
+                .prop_map(|order_by| AggregateFunc::DenseRank { order_by }),
+            (
+                vec(proptest_any::<ColumnOrder>(), 1..4),
+                proptest_any::<LagLeadType>()
+            )
+                .prop_map(|(order_by, lag_lead)| AggregateFunc::LagLead { order_by, lag_lead }),
+            (
+                vec(proptest_any::<ColumnOrder>(), 1..4),
+                proptest_any::<WindowFrame>()
+            )
+                .prop_map(|(order_by, window_frame)| AggregateFunc::FirstValue {
+                    order_by,
+                    window_frame,
+                }),
+            Just(AggregateFunc::Dummy)
+        ]
+    }
 }
 
 impl From<&Vec<ColumnOrder>> for proto_aggregate_func::ProtoColumnOrders {

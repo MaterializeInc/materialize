@@ -28,6 +28,7 @@ use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use crate::scalar::func::parse_timezone;
+use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
 pub mod func;
@@ -77,28 +78,164 @@ pub enum MirScalarExpr {
 }
 
 impl Arbitrary for MirScalarExpr {
-    // TODO: This is just a stub. #11740
     type Parameters = ();
-    type Strategy = Just<MirScalarExpr>;
+    type Strategy = BoxedStrategy<MirScalarExpr>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![Just(MirScalarExpr::Column(0))]
+        let leaf = prop_oneof![
+            (0..10).prop_map(|i| MirScalarExpr::Column(i as usize)),
+            // TODO (#12125): add a leaf variant for MirScalarExpr::literal_ok
+            (any::<EvalError>(), any::<ScalarType>())
+                .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ)),
+            any::<UnmaterializableFunc>().prop_map(MirScalarExpr::CallUnmaterializable)
+        ];
+        leaf.prop_recursive(3, 6, 7, |inner| {
+            prop_oneof![
+                (
+                    any::<VariadicFunc>(),
+                    prop::collection::vec(inner.clone(), 1..5)
+                )
+                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs }),
+                (any::<BinaryFunc>(), inner.clone(), inner.clone()).prop_map(
+                    |(func, expr1, expr2)| MirScalarExpr::CallBinary {
+                        func,
+                        expr1: Box::new(expr1),
+                        expr2: Box::new(expr2)
+                    }
+                ),
+                (inner.clone(), inner.clone(), inner.clone()).prop_map(|(cond, then, els)| {
+                    MirScalarExpr::If {
+                        cond: Box::new(cond),
+                        then: Box::new(then),
+                        els: Box::new(els),
+                    }
+                }),
+                (any::<UnaryFunc>(), inner).prop_map(|(func, expr)| {
+                    MirScalarExpr::CallUnary {
+                        func,
+                        expr: Box::new(expr),
+                    }
+                })
+            ]
+        })
+        .boxed()
     }
 }
 
 impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
-    // TODO: This is just a stub. #11740
     type Error = TryFromProtoError;
 
-    fn try_from(_value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
-        Ok(MirScalarExpr::Column(0))
+    fn try_from(value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
+        use proto_mir_scalar_expr::Kind::*;
+        let kind = value
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
+        Ok(match kind {
+            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
+            Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
+                lit.try_into_if_some("ProtoLiteral::lit")?,
+                typ.try_into_if_some("ProtoLiteral::typ")?,
+            ),
+            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
+            CallUnary(call_unary) => MirScalarExpr::CallUnary {
+                func: call_unary.func.try_into_if_some("ProtoCallUnary::func")?,
+                expr: call_unary.expr.try_into_if_some("ProtoCallUnary::expr")?,
+            },
+            CallBinary(call_binary) => MirScalarExpr::CallBinary {
+                func: call_binary.func.try_into_if_some("ProtoCallBinary::func")?,
+                expr1: call_binary
+                    .expr1
+                    .try_into_if_some("ProtoCallBinary::expr1")?,
+                expr2: call_binary
+                    .expr2
+                    .try_into_if_some("ProtoCallBinary::expr2")?,
+            },
+            CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
+                func: func.try_into_if_some("ProtoCallVariadic::func")?,
+                exprs: exprs
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            If(if_struct) => MirScalarExpr::If {
+                cond: if_struct.cond.try_into_if_some("ProtoIf::cond")?,
+                then: if_struct.then.try_into_if_some("ProtoIf::then")?,
+                els: if_struct.els.try_into_if_some("ProtoIf::els")?,
+            },
+        })
+    }
+}
+
+impl TryFrom<Box<ProtoMirScalarExpr>> for Box<MirScalarExpr> {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: Box<ProtoMirScalarExpr>) -> Result<Self, Self::Error> {
+        Ok(Box::new((*value).try_into()?))
     }
 }
 
 impl From<&MirScalarExpr> for ProtoMirScalarExpr {
-    // TODO: This is just a stub. #11740
-    fn from(_: &MirScalarExpr) -> Self {
-        ProtoMirScalarExpr {}
+    fn from(value: &MirScalarExpr) -> Self {
+        use proto_mir_scalar_expr::Kind::*;
+        ProtoMirScalarExpr {
+            kind: Some(match value {
+                MirScalarExpr::Column(i) => Column(i.into_proto()),
+                MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
+                    lit: Some(lit.into()),
+                    typ: Some(typ.into()),
+                }),
+                MirScalarExpr::CallUnmaterializable(func) => CallUnmaterializable(func.into()),
+                MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
+                    func: Some(Box::new(func.into())),
+                    expr: Some(Box::new((&**expr).into())),
+                })),
+                MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                    CallBinary(Box::new(ProtoCallBinary {
+                        func: Some(func.into()),
+                        expr1: Some(Box::new((&**expr1).into())),
+                        expr2: Some(Box::new((&**expr2).into())),
+                    }))
+                }
+                MirScalarExpr::CallVariadic { func, exprs } => CallVariadic(ProtoCallVariadic {
+                    func: Some(func.into()),
+                    exprs: exprs.iter().map(Into::into).collect(),
+                }),
+                MirScalarExpr::If { cond, then, els } => If(Box::new(ProtoIf {
+                    cond: Some(Box::new((&**cond).into())),
+                    then: Some(Box::new((&**then).into())),
+                    els: Some(Box::new((&**els).into())),
+                })),
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: proto_literal::ProtoLiteralData) -> Result<Self, Self::Error> {
+        use proto_literal::proto_literal_data::Result::*;
+        match value.result {
+            Some(Ok(row)) => Result::Ok(Result::Ok(
+                (&row)
+                    .try_into()
+                    .map_err(TryFromProtoError::RowConversionError)?,
+            )),
+            Some(Err(err)) => Result::Ok(Result::Err(err.try_into()?)),
+            None => Result::Err(TryFromProtoError::missing_field("ProtoLiteralData::result")),
+        }
+    }
+}
+
+impl From<&Result<Row, EvalError>> for proto_literal::ProtoLiteralData {
+    fn from(x: &Result<Row, EvalError>) -> Self {
+        use proto_literal::proto_literal_data::Result::*;
+        proto_literal::ProtoLiteralData {
+            result: Some(match x {
+                Result::Ok(row) => Ok(row.into()),
+                Result::Err(err) => Err(err.into()),
+            }),
+        }
     }
 }
 
@@ -1510,9 +1647,9 @@ impl From<TypeFromOidError> for EvalError {
 
 impl From<&EvalError> for ProtoEvalError {
     fn from(error: &EvalError) -> Self {
+        use proto_eval_error::Kind::*;
         use proto_eval_error::*;
         use proto_incompatible_array_dimensions::*;
-        use Kind::*;
         let kind = match error {
             EvalError::CharacterNotValidForEncoding(v) => CharacterNotValidForEncoding(*v),
             EvalError::CharacterTooLargeForEncoding(v) => CharacterTooLargeForEncoding(*v),
@@ -1813,6 +1950,15 @@ mod tests {
                 actual,
                 tc.output
             );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
+            let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 

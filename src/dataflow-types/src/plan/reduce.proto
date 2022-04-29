@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 import "expr/src/scalar.proto";
-import "expr/src/relation/func.proto";
+import "expr/src/relation.proto";
 
 package mz_dataflow_types.plan.reduce;
 
@@ -32,10 +32,10 @@ message ProtoAccumulablePlan {
     message ProtoAggr {
         uint64 index_agg = 1;
         uint64 index_inp = 2;
-        mz_expr.scalar.ProtoAggregateExpr expr = 3;
+        mz_expr.relation.ProtoAggregateExpr expr = 3;
     }
 
-    repeated mz_expr.scalar.ProtoAggregateExpr full_agrs = 1;
+    repeated mz_expr.relation.ProtoAggregateExpr full_agrs = 1;
     repeated ProtoAggr simple_aggrs = 2;
     repeated ProtoAggr distinct_aggrs = 3;
 }
@@ -48,13 +48,13 @@ message ProtoHierarchicalPlan {
 }
 
 message ProtoMonotonicPlan {
-    repeated mz_expr.relation.func.ProtoAggregateFunc aggr_funcs = 1;
+    repeated mz_expr.relation.ProtoAggregateFunc aggr_funcs = 1;
     repeated uint64 skips = 2;
 }
 
 
 message ProtoBucketedPlan {
-    repeated mz_expr.relation.func.ProtoAggregateFunc aggr_funcs = 1;
+    repeated mz_expr.relation.ProtoAggregateFunc aggr_funcs = 1;
     repeated uint64 skips = 2;
     repeated uint64 buckets = 3;
 }
@@ -62,7 +62,7 @@ message ProtoBucketedPlan {
 message ProtoBasicPlan {
     message ProtoSingleBasicPlan {
         uint64 index = 1;
-        mz_expr.scalar.ProtoAggregateExpr expr = 2;
+        mz_expr.relation.ProtoAggregateExpr expr = 2;
     };
 
     message ProtoMultipleBasicPlan {

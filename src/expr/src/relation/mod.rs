@@ -27,7 +27,6 @@ use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
-use super::scalar::ProtoAggregateExpr;
 use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
 use crate::{

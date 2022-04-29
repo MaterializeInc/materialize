@@ -11,76 +11,9 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-import "expr/src/relation.proto";
-import "repr/src/relation_and_scalar.proto";
 import "repr/src/adt/regex.proto";
 
 package mz_expr.relation.func;
-
-message ProtoAggregateFunc {
-
-    message ProtoColumnOrders {
-        repeated mz_expr.relation.ProtoColumnOrder orders = 1;
-    };
-
-    message ProtoLagLead {
-        ProtoColumnOrders order_by = 1;
-        oneof lag_lead {
-            google.protobuf.Empty lag = 2;
-            google.protobuf.Empty lead = 3;
-        }
-    };
-
-    message ProtoFirstValue {
-        ProtoColumnOrders order_by = 1;
-        mz_expr.relation.ProtoWindowFrame window_frame = 2;
-    }
-
-    oneof kind {
-        google.protobuf.Empty max_numeric = 1;
-        google.protobuf.Empty max_int16 = 2;
-        google.protobuf.Empty max_int32 = 3;
-        google.protobuf.Empty max_int64 = 4;
-        google.protobuf.Empty max_float32 = 5;
-        google.protobuf.Empty max_float64 = 6;
-        google.protobuf.Empty max_bool = 7;
-        google.protobuf.Empty max_string = 8;
-        google.protobuf.Empty max_date = 9;
-        google.protobuf.Empty max_timestamp = 10;
-        google.protobuf.Empty max_timestamp_tz = 11;
-        google.protobuf.Empty min_numeric = 12;
-        google.protobuf.Empty min_int16 = 13;
-        google.protobuf.Empty min_int32 = 14;
-        google.protobuf.Empty min_int64 = 15;
-        google.protobuf.Empty min_float32 = 16;
-        google.protobuf.Empty min_float64 = 17;
-        google.protobuf.Empty min_bool = 18;
-        google.protobuf.Empty min_string = 19;
-        google.protobuf.Empty min_date = 20;
-        google.protobuf.Empty min_timestamp = 21;
-        google.protobuf.Empty min_timestamp_tz = 22;
-        google.protobuf.Empty sum_int16 = 23;
-        google.protobuf.Empty sum_int32 = 24;
-        google.protobuf.Empty sum_int64 = 25;
-        google.protobuf.Empty sum_float32 = 26;
-        google.protobuf.Empty sum_float64 = 27;
-        google.protobuf.Empty sum_numeric = 28;
-        google.protobuf.Empty count = 29;
-        google.protobuf.Empty any = 30;
-        google.protobuf.Empty all = 31;
-        ProtoColumnOrders jsonb_agg = 32;
-        ProtoColumnOrders jsonb_object_agg  = 33;
-        ProtoColumnOrders array_concat  = 34;
-        ProtoColumnOrders list_concat  = 35;
-        ProtoColumnOrders string_agg  = 36;
-        ProtoColumnOrders row_number  = 37;
-        ProtoColumnOrders dense_rank  = 38;
-        ProtoLagLead lag_lead  = 39;
-        google.protobuf.Empty dummy = 40;
-        ProtoFirstValue first_value = 41;
-    }
-}
 
 message ProtoCaptureGroupDesc {
     uint32 index = 1;
@@ -91,28 +24,4 @@ message ProtoCaptureGroupDesc {
 message ProtoAnalyzedRegex {
     mz_repr.adt.regex.ProtoRegex regex = 1;
     repeated ProtoCaptureGroupDesc groups = 2;
-}
-
-message ProtoTableFunc {
-    message ProtoWrap {
-        repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
-        uint64 width = 2;
-    }
-
-    oneof kind {
-        bool jsonb_each = 1;
-        google.protobuf.Empty jsonb_object_keys = 2;
-        bool jsonb_array_elements = 3;
-        ProtoAnalyzedRegex regexp_extract = 4;
-        uint64 csv_extract = 5;
-        google.protobuf.Empty generate_series_int32 = 6;
-        google.protobuf.Empty generate_series_int64 = 7;
-        google.protobuf.Empty generate_series_timestamp = 8;
-        google.protobuf.Empty generate_series_timestamp_tz = 9;
-        google.protobuf.Empty repeat = 10;
-        mz_repr.relation_and_scalar.ProtoScalarType unnest_array = 11;
-        mz_repr.relation_and_scalar.ProtoScalarType unnest_list = 12;
-        ProtoWrap wrap = 13;
-        google.protobuf.Empty generate_subscripts_array = 14;
-    }
 }
