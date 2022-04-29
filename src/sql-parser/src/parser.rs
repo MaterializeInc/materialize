@@ -1767,6 +1767,7 @@ impl<'a> Parser<'a> {
 
     fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
         let connector = if self.peek_keyword(CONNECTOR) {
+            let _ = self.expect_keyword(CONNECTOR);
             CsrConnector::Reference {
                 connector: self.parse_object_name()?,
                 url: None,

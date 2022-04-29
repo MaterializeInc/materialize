@@ -67,7 +67,7 @@ contains:unknown catalog item 'connector_source'
 
 # Setup kafka topic with schema
 # must be a subset of the keys in the rows
-$ set avro_key_schema={
+$ set keyschema={
     "type": "record",
     "name": "Key",
     "fields": [
@@ -75,7 +75,7 @@ $ set avro_key_schema={
     ]
   }
 
-$ set avro_schema={
+$ set schema={
     "type" : "record",
     "name" : "envelope",
     "fields" : [
@@ -107,7 +107,7 @@ $ set avro_schema={
 
 $ kafka-create-topic topic=csr_test partitions=1
 
-$ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${avro_key_schema} schema=${avro_schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
