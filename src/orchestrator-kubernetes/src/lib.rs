@@ -41,14 +41,20 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: HashMap<String, String>,
+    /// Node selector to install on every service created by the orchestrator.
+    pub service_node_selector: HashMap<String, String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
 }
 
+/// Specifies whether Kubernetes should pull Docker images when creating pods.
 #[derive(ArgEnum, Debug, Clone, Copy)]
 pub enum KubernetesImagePullPolicy {
+    /// Always pull the Docker image from the registry.
     Always,
+    /// Pull the Docker image only if the image is not present.
     IfNotPresent,
+    /// Never pull the Docker image.
     Never,
 }
 
@@ -67,6 +73,7 @@ pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
     service_labels: HashMap<String, String>,
+    service_node_selector: BTreeMap<String, String>,
     image_pull_policy: KubernetesImagePullPolicy,
 }
 
@@ -100,6 +107,7 @@ impl KubernetesOrchestrator {
             client,
             kubernetes_namespace,
             service_labels: config.service_labels,
+            service_node_selector: config.service_node_selector.into_iter().collect(),
             image_pull_policy: config.image_pull_policy,
         })
     }
@@ -117,6 +125,7 @@ impl Orchestrator for KubernetesOrchestrator {
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             service_labels: self.service_labels.clone(),
+            service_node_selector: self.service_node_selector.clone(),
             image_pull_policy: self.image_pull_policy,
         })
     }
@@ -130,6 +139,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     service_labels: HashMap<String, String>,
+    service_node_selector: BTreeMap<String, String>,
     image_pull_policy: KubernetesImagePullPolicy,
 }
 
@@ -139,6 +149,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("kubernetes_namespace", &self.kubernetes_namespace)
             .field("namespace", &self.namespace)
             .field("service_labels", &self.service_labels)
+            .field("service_node_selector", &self.service_node_selector)
             .field("image_pull_policy", &self.image_pull_policy)
             .finish()
     }
@@ -245,8 +256,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<HashMap<_, _>>();
-        let node_selector = availability_zone
-            .map(|az| BTreeMap::from([("materialize.cloud/availability-zone".to_string(), az)]));
+        let mut node_selector = self.service_node_selector.clone();
+        if let Some(availability_zone) = availability_zone {
+            node_selector.insert(
+                "materialize.cloud/availability-zone".to_string(),
+                availability_zone,
+            );
+        }
         let hosts_ports = hosts
             .iter()
             .map(|host| (host.clone(), ports.clone()))
@@ -285,7 +301,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 }],
                 volumes: Some(vec![secrets_volume]),
-                node_selector,
+                node_selector: Some(node_selector),
                 ..Default::default()
             }),
         };

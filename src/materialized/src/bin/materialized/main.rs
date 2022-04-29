@@ -127,10 +127,12 @@ pub struct Args {
     orchestrator: Orchestrator,
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
-    ///
-    /// Only valid when `--orchestrator` is specified.
     #[structopt(long, hide = true)]
-    orchestrator_service_label: Vec<OrchestratorLabel>,
+    orchestrator_service_label: Vec<KeyValue>,
+    /// Node selector to apply to all services created by the orchestrator in
+    /// the form `KEY=VALUE`.
+    #[structopt(long, hide = true)]
+    orchestrator_service_node_selector: Vec<KeyValue>,
     /// The Kubernetes context to use with the Kubernetes orchestrator.
     ///
     /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
@@ -419,20 +421,20 @@ impl Orchestrator {
 }
 
 #[derive(Debug)]
-struct OrchestratorLabel {
+struct KeyValue {
     key: String,
     value: String,
 }
 
-impl FromStr for OrchestratorLabel {
+impl FromStr for KeyValue {
     type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<OrchestratorLabel, anyhow::Error> {
+    fn from_str(s: &str) -> Result<KeyValue, anyhow::Error> {
         let mut parts = s.splitn(2, '=');
         let key = parts.next().expect("always one part");
         let value = parts
             .next()
             .ok_or_else(|| anyhow!("must have format KEY=VALUE"))?;
-        Ok(OrchestratorLabel {
+        Ok(KeyValue {
             key: key.into(),
             value: value.into(),
         })
@@ -575,6 +577,11 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     context: args.kubernetes_context.clone(),
                     service_labels: args
                         .orchestrator_service_label
+                        .into_iter()
+                        .map(|l| (l.key, l.value))
+                        .collect(),
+                    service_node_selector: args
+                        .orchestrator_service_node_selector
                         .into_iter()
                         .map(|l| (l.key, l.value))
                         .collect(),
