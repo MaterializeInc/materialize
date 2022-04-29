@@ -29,13 +29,14 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_persist_client::read::ReadHandle;
+use mz_persist_client::{read::ReadHandle, PersistLocation};
 use mz_persist_types::Codec64;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
@@ -62,6 +63,9 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+
+    /// Returns the necessary metadata to read a collection
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError>;
 
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
@@ -133,6 +137,12 @@ pub trait StorageController: Debug + Send {
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
 }
 
+/// Metadata required by a storage instance to read a storage collection
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionMetadata {
+    pub persist_location: PersistLocation,
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
@@ -149,6 +159,8 @@ pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
 #[derive(Debug)]
 pub struct Controller<T> {
     state: StorageControllerState<T>,
+    /// The persist location where all storage collections are being written to
+    persist_location: PersistLocation,
 }
 
 #[derive(Debug)]
@@ -237,6 +249,12 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
+    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+        Ok(CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+        })
+    }
+
     async fn create_sources(
         &mut self,
         mut bindings: Vec<(GlobalId, (SourceDesc, Antichain<T>))>,
@@ -309,11 +327,14 @@ where
                 CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
             self.state.collections.insert(id, collection_state);
 
+            let storage_metadata = self.collection_metadata(id)?;
+
             let command = CreateSourceCommand {
                 id,
                 desc,
                 since,
                 ts_bindings,
+                storage_metadata,
             };
 
             dataflow_commands.push(command);
@@ -625,9 +646,14 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
     /// Create a new storage controller from a client it should wrap.
-    pub fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
+    pub fn new(
+        client: Box<dyn StorageClient<T>>,
+        state_dir: PathBuf,
+        persist_location: PersistLocation,
+    ) -> Self {
         Self {
             state: StorageControllerState::new(client, state_dir),
+            persist_location,
         }
     }
 

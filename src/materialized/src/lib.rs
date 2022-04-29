@@ -350,6 +350,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
         storage_client,
         config.data_directory,
+        config.persist_location,
     );
     let dataflow_controller =
         mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
