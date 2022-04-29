@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use mz_persist_client::{PersistClient, PersistLocation};
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
@@ -162,12 +163,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     info!("starting persist client...");
     let persist_client = {
-        let location = mz_persist_client::Location {
+        let location = PersistLocation {
             blob_uri: args.persist_blob_url.to_string(),
             consensus_uri: args.persist_consensus_url.to_string(),
         };
         let (blob, consensus) = location.open(Duration::from_secs(30)).await?;
-        mz_persist_client::Client::new(Duration::from_secs(30), blob, consensus).await?
+        PersistClient::new(Duration::from_secs(30), blob, consensus).await?
     };
 
     let config = mz_storage::Config {

@@ -468,7 +468,7 @@ where
     /// This snapshot may be split into a number of splits, each of which may be
     /// exchanged (including over the network) to load balance the processing of
     /// this snapshot. These splits are usable by anyone with access to the
-    /// shard's [crate::Location]. The `len()` of the returned `Vec` is
+    /// shard's [crate::PersistLocation]. The `len()` of the returned `Vec` is
     /// `num_splits`. If a 1:1 mapping between splits and (e.g. dataflow
     /// workers) is used, then the work of replaying the snapshot will be
     /// roughly balanced.

@@ -25,7 +25,7 @@ use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDeta
 use mz_expr::SourceInstanceId;
 use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
-use mz_persist_client::Location;
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, Row, Timestamp};
 
 use crate::source::SourceStatus;
@@ -42,7 +42,7 @@ pub fn persist_source<G>(
     instance_id: SourceInstanceId,
     consensus_uri: String,
     blob_uri: String,
-    shard_id: mz_persist_client::ShardId,
+    shard_id: ShardId,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -75,7 +75,7 @@ where
 
         let timeout = Duration::from_secs(60);
 
-        let persist_location = Location {
+        let persist_location = PersistLocation {
             consensus_uri: consensus_uri,
             blob_uri: blob_uri,
         };
@@ -83,7 +83,7 @@ where
         let (blob, consensus) = persist_location.open(timeout).await?;
 
         let persist_client =
-            mz_persist_client::Client::new(timeout, blob, consensus).await?;
+            PersistClient::new(timeout, blob, consensus).await?;
 
 
         let (_write, read) =

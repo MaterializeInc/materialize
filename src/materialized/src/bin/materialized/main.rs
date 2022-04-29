@@ -40,6 +40,7 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
+use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, Origin};
 use url::Url;
@@ -613,7 +614,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
     let cwd = env::current_dir().context("retrieving current working directory")?;
-    let persist_location = mz_persist_client::Location {
+    let persist_location = PersistLocation {
         blob_uri: match args.persist_blob_url {
             // TODO: need to handle non-UTF-8 paths here.
             None => format!(

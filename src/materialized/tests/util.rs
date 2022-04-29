@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
+use mz_persist_client::PersistLocation;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -144,7 +145,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
-        persist_location: mz_persist_client::Location {
+        persist_location: PersistLocation {
             blob_uri: format!("file://{}/persist/blob", data_directory.display()),
             consensus_uri: format!("sqlite://{}/persist/consensus", data_directory.display()),
         },

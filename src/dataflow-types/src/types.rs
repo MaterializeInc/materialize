@@ -413,7 +413,7 @@ pub mod sources {
     use globset::Glob;
     use http::Uri;
     use mz_persist_client::read::ReadHandle;
-    use mz_persist_client::ShardId;
+    use mz_persist_client::{PersistClient, PersistLocation, ShardId};
     use mz_persist_types::Codec64;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
@@ -1259,7 +1259,7 @@ pub mod sources {
                     connector: ExternalSourceConnector::Persist(persist_connector),
                     ..
                 } => {
-                    let location = mz_persist_client::Location {
+                    let location = PersistLocation {
                         blob_uri: persist_connector.blob_uri.clone(),
                         consensus_uri: persist_connector.consensus_uri.clone(),
                     };
@@ -1268,8 +1268,7 @@ pub mod sources {
 
                     let (blob, consensus) = location.open(timeout).await?;
 
-                    let persist_client =
-                        mz_persist_client::Client::new(timeout, blob, consensus).await?;
+                    let persist_client = PersistClient::new(timeout, blob, consensus).await?;
 
                     let (_write, read) = persist_client
                         .open::<Row, Row, T, mz_repr::Diff>(timeout, persist_connector.shard_id)

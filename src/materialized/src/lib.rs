@@ -32,6 +32,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_persist_client::PersistLocation;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -91,7 +92,7 @@ pub struct Config {
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
     /// Where the persist library should store its data.
-    pub persist_location: mz_persist_client::Location,
+    pub persist_location: PersistLocation,
 
     // === Platform options. ===
     /// Configuration of service orchestration.
