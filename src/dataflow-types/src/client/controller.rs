@@ -276,6 +276,8 @@ where
                 let response = response?;
                 match &response {
                     Some(StorageResponse::TimestampBindings(feedback)) => {
+                        println!("got feedback {:?}", feedback);
+
                         self.storage_controller
                             .update_write_frontiers(&feedback.changes)
                             .await?;

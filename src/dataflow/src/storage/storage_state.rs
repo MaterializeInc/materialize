@@ -382,8 +382,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
         if self.storage_state.last_bindings_feedback.elapsed() < TS_BINDING_FEEDBACK_INTERVAL {
             return;
         }
-        let mut changes = Vec::new();
-        let mut bindings = Vec::new();
+        let mut feedback = TimestampBindingFeedback::default();
         let mut new_frontier = Antichain::new();
 
         // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
@@ -410,13 +409,16 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 }
                 change_batch.compact();
                 if !change_batch.is_empty() {
-                    changes.push((*id, change_batch));
+                    feedback
+                        .changes
+                        .entry(*id)
+                        .or_default()
+                        .extend(change_batch.drain());
                 }
                 // Add all timestamp bindings we know about between the old and new frontier.
-                bindings.push((
-                    *id,
+                feedback.bindings.entry(*id).or_default().extend(
                     history.get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow()),
-                ));
+                );
                 prev_frontier.clone_from(&new_frontier);
             }
         }
@@ -444,17 +446,17 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                     change_batch.update(time.clone(), 1);
                 }
                 if !change_batch.is_empty() {
-                    changes.push((*id, change_batch));
+                    feedback
+                        .changes
+                        .entry(*id)
+                        .or_default()
+                        .extend(change_batch.drain());
                 }
                 reported_frontier.clone_from(&observed_frontier);
             }
         }
 
-        if !changes.is_empty() || !bindings.is_empty() {
-            self.send_storage_response(StorageResponse::TimestampBindings(
-                TimestampBindingFeedback { changes, bindings },
-            ));
-        }
+        self.send_storage_response(StorageResponse::TimestampBindings(feedback));
         self.storage_state.last_bindings_feedback = Instant::now();
     }
     /// Instruct all real-time sources managed by the worker to close their current

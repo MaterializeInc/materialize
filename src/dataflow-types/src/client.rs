@@ -397,9 +397,18 @@ pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// Durability frontier changes
-    pub changes: Vec<(GlobalId, ChangeBatch<T>)>,
+    pub changes: BTreeMap<GlobalId, ChangeBatch<T>>,
     /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
+    pub bindings: BTreeMap<GlobalId, Vec<(PartitionId, T, MzOffset)>>,
+}
+
+impl<T> Default for TimestampBindingFeedback<T> {
+    fn default() -> TimestampBindingFeedback<T> {
+        TimestampBindingFeedback {
+            changes: BTreeMap::new(),
+            bindings: BTreeMap::new(),
+        }
+    }
 }
 
 /// Responses that the worker/dataflow can provide back to the coordinator.
