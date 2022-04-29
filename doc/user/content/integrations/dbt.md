@@ -25,10 +25,6 @@ While dbt is a great fit for **batch** transformations, it can only **approximat
 
 Setting up a dbt project with Materialize is similar to setting it up with any other database that requires a non-native adapter. To get up and running, you need to:
 
-1. Install dbt by following the instructions in the [official documentation](https://docs.getdbt.com/dbt-cli/installation).
-
-    **Note:** If you're completely new to dbt, we also recommend going through their [getting started guide](https://docs.getdbt.com/tutorial/create-a-project-dbt-cli#create-a-project) to get familiar with the CLI and core concepts.
-
 1. Install the [`dbt-materialize` plugin](https://pypi.org/project/dbt-materialize/) (optionally using a virtual environment):
 
     ```bash
@@ -37,7 +33,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
     pip install dbt-materialize      # install the adapter
     ```
 
-    To check that the plugin was successfully installed, run:
+    The installation will include `dbt-core` and the `dbt-postgres` dependency. To check that the plugin was successfully installed, run:
 
     ```bash
     dbt --version
@@ -45,7 +41,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-1. Last but not least, make sure you have Materialize [installed and running](/install/). You can also use the `dbt-materialize` adapter with [Materialize Cloud](/cloud/get-started-with-cloud/#sign-up).
+1. To get started, make sure you have Materialize [installed and running](/install/). You can also use the `dbt-materialize` adapter with [Materialize Cloud](/cloud/get-started-with-cloud/#sign-up).
 
 ## Create and configure a dbt project
 
