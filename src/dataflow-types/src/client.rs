@@ -704,6 +704,7 @@ pub mod tcp {
     use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
     use tokio_util::codec::LengthDelimitedCodec;
+    use tracing::error;
 
     use crate::client::GenericClient;
 
@@ -810,7 +811,12 @@ pub mod tcp {
             if let TcpConn::Connected(connection) = &mut self.connection {
                 match connection.next().await {
                     Some(Ok(response)) => Ok(Some(response)),
-                    _ => {
+                    other => {
+                        match other {
+                            Some(Ok(_)) => unreachable!("handled above"),
+                            None => error!("connection unexpectedly terminated cleanly"),
+                            Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
+                        }
                         self.connection = TcpConn::Disconnected;
                         self.connect().await;
                         Err(anyhow::anyhow!("Connection severed; reconnected"))
