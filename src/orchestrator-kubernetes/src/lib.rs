@@ -43,6 +43,8 @@ pub struct KubernetesOrchestratorConfig {
     pub service_labels: HashMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
     pub service_node_selector: HashMap<String, String>,
+    /// The service account that each service should run as, if any.
+    pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
 }
@@ -72,9 +74,7 @@ impl fmt::Display for KubernetesImagePullPolicy {
 pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
-    service_labels: HashMap<String, String>,
-    service_node_selector: BTreeMap<String, String>,
-    image_pull_policy: KubernetesImagePullPolicy,
+    config: KubernetesOrchestratorConfig,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -89,7 +89,7 @@ impl KubernetesOrchestrator {
         config: KubernetesOrchestratorConfig,
     ) -> Result<KubernetesOrchestrator, anyhow::Error> {
         let kubeconfig_options = KubeConfigOptions {
-            context: Some(config.context),
+            context: Some(config.context.clone()),
             ..Default::default()
         };
         let kubeconfig = match Config::from_kubeconfig(&kubeconfig_options).await {
@@ -106,9 +106,7 @@ impl KubernetesOrchestrator {
         Ok(KubernetesOrchestrator {
             client,
             kubernetes_namespace,
-            service_labels: config.service_labels,
-            service_node_selector: config.service_node_selector.into_iter().collect(),
-            image_pull_policy: config.image_pull_policy,
+            config,
         })
     }
 }
@@ -124,9 +122,7 @@ impl Orchestrator for KubernetesOrchestrator {
             pod_api: Api::default_namespaced(self.client.clone()),
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
-            service_labels: self.service_labels.clone(),
-            service_node_selector: self.service_node_selector.clone(),
-            image_pull_policy: self.image_pull_policy,
+            config: self.config.clone(),
         })
     }
 }
@@ -138,9 +134,7 @@ struct NamespacedKubernetesOrchestrator {
     pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
-    service_labels: HashMap<String, String>,
-    service_node_selector: BTreeMap<String, String>,
-    image_pull_policy: KubernetesImagePullPolicy,
+    config: KubernetesOrchestratorConfig,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -148,9 +142,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
         f.debug_struct("NamespacedKubernetesOrchestrator")
             .field("kubernetes_namespace", &self.kubernetes_namespace)
             .field("namespace", &self.namespace)
-            .field("service_labels", &self.service_labels)
-            .field("service_node_selector", &self.service_node_selector)
-            .field("image_pull_policy", &self.image_pull_policy)
+            .field("config", &self.config)
             .finish()
     }
 }
@@ -193,7 +185,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "materialized.materialize.cloud/service-id".into(),
             id.into(),
         );
-        for (key, value) in &self.service_labels {
+        for (key, value) in &self.config.service_labels {
             labels.insert(key.clone(), value.clone());
         }
         let mut limits = BTreeMap::new();
@@ -256,7 +248,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<HashMap<_, _>>();
-        let mut node_selector = self.service_node_selector.clone();
+        let mut node_selector: BTreeMap<String, String> = self
+            .config
+            .service_node_selector
+            .clone()
+            .into_iter()
+            .collect();
         if let Some(availability_zone) = availability_zone {
             node_selector.insert(
                 "materialize.cloud/availability-zone".to_string(),
@@ -278,7 +275,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     name: "default".into(),
                     image: Some(image),
                     args: Some(args(&hosts_ports, &ports, None)),
-                    image_pull_policy: Some(self.image_pull_policy.to_string()),
+                    image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
                             .iter()
@@ -302,6 +299,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }],
                 volumes: Some(vec![secrets_volume]),
                 node_selector: Some(node_selector),
+                service_account: self.config.service_account.clone(),
                 ..Default::default()
             }),
         };

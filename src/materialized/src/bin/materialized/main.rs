@@ -133,6 +133,8 @@ pub struct Args {
     /// the form `KEY=VALUE`.
     #[structopt(long, hide = true)]
     orchestrator_service_node_selector: Vec<KeyValue>,
+    #[structopt(long)]
+    kubernetes_service_account: Option<String>,
     /// The Kubernetes context to use with the Kubernetes orchestrator.
     ///
     /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
@@ -585,6 +587,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .into_iter()
                         .map(|l| (l.key, l.value))
                         .collect(),
+                    service_account: args.kubernetes_service_account,
                     image_pull_policy: args.kubernetes_image_pull_policy,
                 })
             }
