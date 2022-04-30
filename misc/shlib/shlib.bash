@@ -28,17 +28,6 @@ run() {
    "$@"
 }
 
-# runv PROGRAM [ARGS...]
-#
-# Like run, but prints a more verbose informational message to stderr of the
-# form "🚀$ PROGRAM ARGS...".
-runv() {
-    printf "🚀>$ " >&2
-    printf "%q " "$@" >&2
-    printf "\n" >&2
-    "$@"
-}
-
 # command_exists PROGRAM
 #
 # Returns successfully if PROGRAM exists in $PATH, or unsuccessfully otherwise.
@@ -192,50 +181,9 @@ arch_go() {
     esac
 }
 
-########################################
-# Text-Coloring commands
-
-# [m]essage-[s]uccess: message to the user that something went well
-ms() {
-    green "$@"
-}
-
-# [u]sage-[s]ubcommand: Paint the argument as a subcmd
+# red [ARGS...]
 #
-# In usage text, write: "usage: $0 `us CMD`"
-us() {
-    blue "$@"
-}
-
-# [u]sage-[f]lag: Paint the argument as a flag
-#
-# In usage text, write: "usage: $0 `uf --FLAG`"
-uf() {
-    green "$@"
-}
-
-# [u]sage-[o]ption: Paint the argument as an option
-#
-# In usage text, write: "usage: $0 `uf --FLAG` `uo OPT`"
-uo() {
-    green "$@"
-}
-
-# [u]sage-[w]arn: Paint the argument as a warning
-#
-# In usage text, write: "usage: $0 `uw WILL DELETE EVERYTHING`"
-uw() {
-    red "$@"
-}
-
+# Prints the provided text in red.
 red() {
     echo -ne "\e[31m$*\e[0m"
-}
-
-blue() {
-    echo -ne "\e[34m$*\e[0m"
-}
-
-green() {
-    echo -ne "\e[32m$*\e[0m"
 }
