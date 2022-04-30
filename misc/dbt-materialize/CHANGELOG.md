@@ -2,7 +2,7 @@
 
 ## 1.1.0 - 2022-04-30
 
-* Upgrade to `dbt-postgres` v.1.1.0.
+* Upgrade to `dbt-postgres` v1.1.0.
 
 ## 1.0.5 - 2022-04-26
 
