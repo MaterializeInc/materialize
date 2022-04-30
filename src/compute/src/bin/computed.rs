@@ -113,7 +113,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     if let Err(err) = run(mz_ore::cli::parse_args()).await {
-        eprintln!("computed: {:#}", err);
+        eprintln!("computed: fatal: {:#}", err);
         process::exit(1);
     }
 }
