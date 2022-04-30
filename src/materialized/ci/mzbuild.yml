@@ -10,11 +10,5 @@
 name: materialized
 pre-image:
   - type: cargo-build
-    bin: storaged
-    strip: false
-  - type: cargo-build
-    bin: computed
-    strip: false
-  - type: cargo-build
-    bin: materialized
+    bin: [storaged, computed, materialized]
     strip: false

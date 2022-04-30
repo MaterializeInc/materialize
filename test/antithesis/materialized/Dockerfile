@@ -14,6 +14,6 @@ RUN apt-get update && apt-get -qy install ca-certificates
 COPY libvoidstar.so /usr/lib
 RUN ldconfig
 
-COPY materialized /usr/local/bin/
+COPY materialized computed storaged /usr/local/bin/
 
 ENTRYPOINT ["materialized", "--log-file=stderr"]
