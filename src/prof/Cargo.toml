@@ -13,7 +13,7 @@ axum = { version = "0.5.3", features = ["headers"] }
 backtrace = "0.3.64"
 cfg-if = "1.0.0"
 headers = "0.3.7"
-http = "0.2.6"
+http = "0.2.7"
 include_dir = "0.7.2"
 lazy_static = "1.4.0"
 mime = "0.3.16"
