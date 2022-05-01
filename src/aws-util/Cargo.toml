@@ -12,7 +12,7 @@ aws-sdk-s3 = { version = "0.10.1", default-features = false, features = ["native
 aws-sdk-sqs = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
 aws-smithy-client = { version = "0.40.2", default-features = false }
-aws-types = "0.10.1"
+aws-types = "0.11.0"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 hyper-tls = { version = "0.5.0" }
 
