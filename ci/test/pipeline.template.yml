@@ -262,6 +262,15 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
+    # Materialize versions v0.7.1 - v0.9.2 no longer run on our CI agents due to
+    # a bug in procfs v0.9.1 [0] which causes it to fail to parse kernel patch
+    # versions that are larger than 256. So we just disable this test.
+    # Unfortunate, but qe continue to have decent upgrade coverage via the
+    # upgrade test, and we're not planning to backport anything that touches the
+    # catalog persistence code to v0.26.
+    #
+    # [0]: https://github.com/eminence/procfs/issues/136
+    soft_fail: true
     plugins:
       - ./ci/plugins/mzcompose:
           composition: catalog-compat
