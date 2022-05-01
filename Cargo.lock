@@ -114,9 +114,9 @@ dependencies = [
 
 [[package]]
 name = "arrow2"
-version = "0.10.1"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e387b20dd573a96f36b173d9027483898f944d696521afd74e2caa3c813d86e"
+checksum = "35994323132313169feb0bfac20a5f30dedeaebf238d10589eb676fbed3be0f2"
 dependencies = [
  "arrow-format",
  "base64",
@@ -4634,21 +4634,20 @@ dependencies = [
 
 [[package]]
 name = "parquet-format-async-temp"
-version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/parquet-format-rs?branch=main#52ef597df1a4067f1d8b12766661ca9b32fd7310"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488c8b5f43521d019fade4bcc0ce88cce5da5fd26eb1d38b933807041f5930bf"
 dependencies = [
  "async-trait",
- "byteorder",
  "futures",
  "integer-encoding",
- "ordered-float",
 ]
 
 [[package]]
 name = "parquet2"
-version = "0.10.3"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b085f9e78e4842865151b693f6d94bdf7b280af66daa6e3587adeb3106a07e9"
+checksum = "98f99f9724402d81faadd9cfa1e8dc78055fd0ddfdbefb7adab3a3a13e893408"
 dependencies = [
  "async-stream",
  "bitpacking",
@@ -7047,3 +7046,8 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[patch.unused]]
+name = "parquet-format-async-temp"
+version = "0.2.0"
+source = "git+https://github.com/MaterializeInc/parquet-format-rs?branch=main#52ef597df1a4067f1d8b12766661ca9b32fd7310"
