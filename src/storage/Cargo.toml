@@ -59,7 +59,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.7.1", features = ["codec", "io"] }
 tracing = "0.1.34"
-thiserror = { version = "1.0.30", optional = true }
+thiserror = { version = "1.0.31", optional = true }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [features]
