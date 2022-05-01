@@ -642,7 +642,7 @@ pre {
         background-color: #70F2A3;
     }
 }
-td > .default_button {
+td > .notify_button {
     margin-top: 6px;
 }
 
@@ -722,10 +722,16 @@ td > .default_button {
 .copy_button {
     display: none;
     position: absolute;
-    top: 10px;
-    right: 10px;
     font-family: 'Encode Sans Expanded';
     font-size: 0.8rem;
+    background-color: $grey-light;
+    height: 26px;
+    padding: 0 12px;
+    cursor: pointer;
+    border-radius: $border-radius;
+    white-space: nowrap;
+    top: 10px;
+    right: 10px;
     line-height: 2;
     &.success {
         opacity:0.8;
