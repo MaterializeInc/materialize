@@ -2527,9 +2527,9 @@ dependencies = [
 
 [[package]]
 name = "junit-report"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42b056c67be8e1fe9cb76b1649fba3f02bd238f384649878b814fdf9db40aace"
+checksum = "a6396ba8050c58c3e5c7dc5886b629a00e8f1ffbf7d255945646a50a1fc92b2d"
 dependencies = [
  "derive-getters",
  "strip-ansi-escapes",

@@ -12,7 +12,7 @@ bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.1.12", features = ["derive"] }
 fallible-iterator = "0.2.0"
-junit-report = "0.7.0"
+junit-report = "0.7.1"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized", default-features = false }
 md-5 = "0.10.1"
