@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-s3 = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
-aws-sdk-sqs = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
+aws-sdk-sqs = { version = "0.11.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.10.1", default-features = false, features = ["native-tls"], optional = true }
 aws-smithy-client = { version = "0.40.2", default-features = false }
 aws-types = "0.10.1"
