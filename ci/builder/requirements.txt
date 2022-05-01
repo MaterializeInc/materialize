@@ -16,7 +16,7 @@ flake8==4.0.1
 humanize==4.0.0
 isort==5.10.1
 junit-xml==1.9
-mypy==0.942
+mypy==0.950
 numpy==1.22.3
 pandas==1.4.2
 parameterized==0.8.1
