@@ -47,7 +47,7 @@ mz-persist-types = { path = "../persist-types" }
 prost = "0.10.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rusqlite = { version = "0.27.0", features = ["bundled"] }
-semver = "1.0.7"
+semver = "1.0.9"
 serde = { version = "1.0.136", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
