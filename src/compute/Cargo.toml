@@ -38,7 +38,7 @@ mz-timely-util = { path = "../timely-util" }
 prometheus = { version = "0.13.0", default-features = false }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 scopeguard = "1.1.0"
-serde = { version = "1.0.136", features = ["derive"] }
+serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["fs", "rt", "sync"] }
 tracing = "0.1.34"

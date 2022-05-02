@@ -18,7 +18,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof", features = [ "jemalloc" ] }
 mz-storage = { path = "../storage", features = ["server"] }
-serde = "1.0.136"
+serde = "1.0.137"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", features = ["net"] }
 tracing = "0.1.34"
