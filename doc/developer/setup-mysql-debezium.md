@@ -126,7 +126,7 @@ answer in their once you solve it.
         "database.server.name": "tpch",
         "database.server.id": "184054",
         "database.history.kafka.bootstrap.servers": "localhost:9092",
-        "database.history.kafka.topic": "tpch-history",
+        "database.history.kafka.topic": "tpch-history"
         }
     }'
     ```
