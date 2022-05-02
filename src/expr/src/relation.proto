@@ -116,6 +116,7 @@ message ProtoAggregateFunc {
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
         ProtoWindowFrame first_value = 41;
+        ProtoWindowFrame last_value = 42;
     }
 }
 
