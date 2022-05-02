@@ -93,5 +93,3 @@ debug = 1
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
-# Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
-parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }

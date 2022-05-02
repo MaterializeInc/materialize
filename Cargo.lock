@@ -7046,8 +7046,3 @@ dependencies = [
  "cc",
  "libc",
 ]
-
-[[patch.unused]]
-name = "parquet-format-async-temp"
-version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/parquet-format-rs?branch=main#52ef597df1a4067f1d8b12766661ca9b32fd7310"

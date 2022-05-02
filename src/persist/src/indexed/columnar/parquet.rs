@@ -13,7 +13,7 @@ use std::io::{Read, Seek, Write};
 
 use arrow2::io::parquet::read::{read_metadata, FileReader};
 use arrow2::io::parquet::write::{
-    Compression, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
+    CompressionOptions, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
 };
 use differential_dataflow::trace::Description;
 use timely::progress::{Antichain, Timestamp};
@@ -122,7 +122,7 @@ fn encode_parquet_kvtd<W: Write>(
 
     let options = WriteOptions {
         write_statistics: false,
-        compression: Compression::Uncompressed,
+        compression: CompressionOptions::Uncompressed,
         version: Version::V2,
     };
     let row_groups = RowGroupIterator::try_new(
@@ -144,8 +144,7 @@ fn encode_parquet_kvtd<W: Write>(
     let mut writer = FileWriter::try_new(w, (**SCHEMA_ARROW_KVTD).clone(), options)?;
     writer.start().map_err(|err| err.to_string())?;
     for group in row_groups {
-        let (group, len) = group?;
-        writer.write(group, len).map_err(|err| err.to_string())?;
+        writer.write(group?).map_err(|err| err.to_string())?;
     }
     writer.end(Some(metadata)).map_err(|err| err.to_string())?;
 
