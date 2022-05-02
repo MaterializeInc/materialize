@@ -1,5 +1,17 @@
 # Maintainer instructions
 
+## Versioning
+
+The `dbt-materialize` adapter should always match **major** and **minor** releases of `dbt-core` (i.e. if `dbt-core` v1.2.x is released, we should also bump `dbt-materialize` to v1.2.x). For patch releases, version numbers might differ and we should follow our own release cadence (i.e. if `dbt-core` v1.1.1 is released and `dbt-materialize` is on v1.1.5, that's legit).
+
+The following line in [`setup.py`](./setup.py#L42) guarantees that the adapter always installs the latest patch version of `dbt-postgres` and `dbt-core`:
+
+```
+ install_requires=["dbt-postgres~=1.1.0"],
+```
+
+See the [dbt documentation](https://docs.getdbt.com/docs/core-versions#how-we-version-adapter-plugins) for more details on versioning.
+
 ## Running tests locally
 
 1. Enter the `misc/dbt-materialize` directory:
@@ -39,18 +51,18 @@
    pytest
    ```
 
-7. Remember to re-install (`pip install .`) if you change the dbt-materialize
+7. Remember to re-install (`pip install .`) if you change the `dbt-materialize`
    Python code.
 
-## Tips and tricks
+### Tips and tricks
 
-All-in-one command to run after making a change to dbt-materialize:
+All-in-one command to run after making a change to `dbt-materialize`:
 
 ```shell
 pip install . && pytest
 ```
 
-If you want to test dbt-materialize against the latest changes to
+If you want to test `dbt-materialize` against the latest changes to
 `materialized`, build `materialized` from source:
 
 ```shell
@@ -83,7 +95,7 @@ pytest --no-drop-schema
 psql -h localhost -p 6875 -U materialize materialize
 ```
 
-Run dbt-materialize test suite via [mzcompose](../../doc/developer/mzbuild.md#mzcompose)
+Run the `dbt-materialize` test suite via [mzcompose](../../doc/developer/mzbuild.md#mzcompose)
 to match how it is run in CI:
 
 ```shell
