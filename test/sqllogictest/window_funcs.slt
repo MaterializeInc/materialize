@@ -3025,7 +3025,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 # ROWS BETWEEN x FOLLOWING AND 0 FOLLOWING
-# TODO(andrioni): this one is wrong, should be all nulls
 query ITII
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
@@ -3043,7 +3042,6 @@ ORDER BY f2, f3, f1, first_value
 3  c  9  NULL
 7  d  10  NULL
 
-# TODO(andrioni): this one is wrong, should be all nulls
 query ITII
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND 0 FOLLOWING)
@@ -3114,7 +3112,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 # ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x > y
-# TODO(andrioni): this one is wrong, should be all nulls
 query ITII
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
@@ -3132,7 +3129,6 @@ ORDER BY f2, f3, f1, first_value
 3  c  9  NULL
 7  d  10  NULL
 
-# TODO(andrioni): this one is wrong, should be all nulls
 query ITII
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
@@ -3359,7 +3355,7 @@ ORDER BY f2, f3, f1, first_value
 3  c  9  NULL
 7  d  10  NULL
 
-#reduce_elision code path
+# reduce_elision code path
 statement ok
 CREATE TABLE t5 (f1 INTEGER)
 ----

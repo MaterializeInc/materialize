@@ -1772,7 +1772,7 @@ impl AggregateExpr {
                 }
             }
 
-            // The input type for LagLead is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for FirstValue is a ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::FirstValue { window_frame, .. } => {
                 let tuple = self
                     .expr
