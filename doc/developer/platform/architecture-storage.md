@@ -117,7 +117,7 @@ There may be other auxiliary information, like the reclocking collection, that f
 We want source ingestion to satisfy at least these three properties:
 
 1. Definiteness: this property is provided by `persist`.
-2. "Fault tolerance": the source should produce specific output even in the presence of unspecified i. failures and restarts, ii. concurrency with other source implementations.
+2. "Fault tolerance": The source pipeline should produce equivalent `persist` output when run when run with arbitrary unclean shutdowns and restarts, and arbitrary concurrent instances, as when it is run uninterrupted".
 3. "Bounded input reliance": the raw input data we have to keep around to provide these properties should be as limited as possible.
 
 ## A recipe for source ingestion
