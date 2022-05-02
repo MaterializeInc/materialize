@@ -14,13 +14,13 @@ use differential_dataflow::lattice::Lattice;
 
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Concat, OkErr, Operator};
+use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
     sources::{UpsertEnvelope, UpsertStyle},
-    DataflowError, LinearOperator,
+    DataflowError, DecodeError, LinearOperator,
 };
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
@@ -224,67 +224,31 @@ where
             // This is a BTreeMap because we want to ensure that if we receive (key1, value1, time
             // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
             // value2, time 7)
-            let mut to_send = BTreeMap::<_, (_, HashMap<_, UpsertSourceData>)>::new();
+            let mut pending_values =
+                BTreeMap::<Timestamp, (Capability<Timestamp>, HashMap<_, UpsertSourceData>)>::new();
             // this is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along
             let mut current_values = HashMap::new();
 
-            let mut vector = Vec::new();
+            // Intermediate structures re-used to limit allocations
+            let mut scratch_vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
-                    data.swap(&mut vector);
-                    for DecodeResult {
-                        key,
-                        value: new_value,
-                        position: new_position,
-                        upstream_time_millis: _,
-                        partition: _,
-                        metadata,
-                    } in vector.drain(..)
-                    {
-                        let mut time = cap.time().clone();
-                        time.advance_by(as_of_frontier.borrow());
-                        if key.is_none() {
-                            error!(?new_value, "Encountered empty key for value");
-                            continue;
-                        }
-
-                        let entry = to_send
-                            .entry(time)
-                            .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
-                            .1
-                            .entry(key);
-
-                        let new_entry = UpsertSourceData {
-                            value: new_value.map(ResultExt::err_into),
-                            position: new_position,
-                            // upsert sources don't have a column for this, so setting it to
-                            // `None` is fine.
-                            upstream_time_millis: None,
-                            metadata,
-                        };
-
-                        match entry {
-                            std::collections::hash_map::Entry::Occupied(mut e) => {
-                                // If the time is equal, toss out the row with the
-                                // lower offset
-                                if e.get().position < new_position {
-                                    e.insert(new_entry);
-                                }
-                            }
-                            std::collections::hash_map::Entry::Vacant(e) => {
-                                e.insert(new_entry);
-                            }
-                        }
-                    }
+                    data.swap(&mut scratch_vector);
+                    process_new_data(
+                        &mut scratch_vector,
+                        &mut pending_values,
+                        &cap,
+                        &as_of_frontier,
+                    );
                 });
 
                 let mut removed_times = Vec::new();
-                for (time, (cap, map)) in to_send.iter_mut() {
+                for (time, (cap, map)) in pending_values.iter_mut() {
                     if input.frontier.less_equal(time) {
                         // because this is a BTreeMap, the rest of the times in
                         // the map will be greater than this time. So if the
@@ -292,127 +256,225 @@ where
                         // it will be less than the times in the rest of the map
                         break;
                     }
-                    let mut session = output.session(cap);
-                    removed_times.push(time.clone());
-                    for (key, data) in map.drain() {
-                        // decode key and value, and apply predicates/projections to they combined key/value
-                        //
-                        // TODO(mcsherry): we could record key decoding errors as the value
-                        // which would allow us to recover from key decoding errors by a
-                        // later retraction of the key (it will never decode correctly, but
-                        // we could produce and then remove the error from the output).
-                        if let Some(decoded_key) = key {
-                            let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
-                                match (decoded_key, data.value) {
-                                    (Err(key_decode_error), _) => {
-                                        (
-                                            Err(key_decode_error.clone()),
-                                            // `DecodeError` converted to a `DataflowError`
-                                            // that we will eventually emit later below
-                                            Err(key_decode_error.into()),
-                                        )
-                                    }
-                                    (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
-                                    (Ok(decoded_key), Some(value)) => {
-                                        let decoded_value =
-                                            value.and_then(|row| {
-                                                build_datum_vec_for_evaluation(
-                                                    &upsert_envelope.style,
-                                                    source_arity,
-                                                    &row,
-                                                    &decoded_key,
-                                                )
-                                                .map_or(Ok(None), |mut datums| {
-                                                    datums.extend(data.metadata.iter());
-                                                    evaluate(
-                                                        &datums,
-                                                        &predicates,
-                                                        &position_or,
-                                                        &mut row_packer,
-                                                    )
-                                                    .map_err(DataflowError::from)
-                                                })
-                                            });
-                                        (Ok(decoded_key), decoded_value)
-                                    }
-                                };
-
-                            // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
-                            // We store errors as well as non-None values, so that they can be
-                            // retracted if new rows show up for the same key.
-                            let new_value = decoded_value.transpose();
-
-                            let old_value = if let Some(new_value) = &new_value {
-                                // Thin out the row to not contain a copy of the
-                                // key columns, cloning when need-be
-                                let thinned_value = new_value
-                                    .as_ref()
-                                    .map(|full_row| {
-                                        thin(
-                                            &upsert_envelope.key_indices,
-                                            &full_row,
-                                            &mut row_packer,
-                                        )
-                                    })
-                                    .map_err(|e| e.clone());
-                                current_values
-                                    .insert(decoded_key.clone(), thinned_value)
-                                    .map(|res| {
-                                        res.map(|v| {
-                                            rehydrate(
-                                                &upsert_envelope.key_indices,
-                                                // The value is never `Ok`
-                                                // unless the key is also
-                                                decoded_key.as_ref().unwrap(),
-                                                &v,
-                                                &mut row_packer,
-                                            )
-                                        })
-                                    })
-                            } else {
-                                current_values.remove(&decoded_key).map(|res| {
-                                    res.map(|v| {
-                                        rehydrate(
-                                            &upsert_envelope.key_indices,
-                                            // The value is never `Ok`
-                                            // unless the key is also
-                                            decoded_key.as_ref().unwrap(),
-                                            &v,
-                                            &mut row_packer,
-                                        )
-                                    })
-                                })
-                            };
-
-                            if let Some(old_value) = old_value {
-                                // Ensure we put the source in a permanently error'd state
-                                // than to keep on trucking with wrong results.
-                                //
-                                // TODO(guswynn): consider changing the key-type of
-                                // the `current_values` map to allow us to retract
-                                // errors. Currently, the `DecodeError` key type would
-                                // retract unrelated errors with the same message.
-                                if !decoded_key.is_err() {
-                                    // retract old value
-                                    session.give((old_value, cap.time().clone(), -1));
-                                }
-                            }
-                            if let Some(new_value) = new_value {
-                                // give new value
-                                session.give((new_value, cap.time().clone(), 1));
-                            }
-                        }
-                    }
+                    process_pending_values_batch(
+                        time,
+                        cap,
+                        map,
+                        &mut current_values,
+                        &mut row_packer,
+                        &upsert_envelope,
+                        source_arity,
+                        &predicates,
+                        &position_or,
+                        &mut removed_times,
+                        output,
+                    )
                 }
                 // Discard entries, capabilities for complete times.
                 for time in removed_times {
-                    to_send.remove(&time);
+                    pending_values.remove(&time);
                 }
             }
         },
     );
 
     result_stream
+}
+
+/// This function fills `pending_values` with new data
+/// from the timely operator input.
+fn process_new_data(
+    new_data: &mut Vec<DecodeResult>,
+    pending_values: &mut BTreeMap<
+        Timestamp,
+        (
+            Capability<Timestamp>,
+            HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+        ),
+    >,
+    cap: &CapabilityRef<Timestamp>,
+    as_of_frontier: &Antichain<Timestamp>,
+) {
+    for DecodeResult {
+        key,
+        value: new_value,
+        position: new_position,
+        upstream_time_millis: _,
+        partition: _,
+        metadata,
+    } in new_data.drain(..)
+    {
+        let mut time = cap.time().clone();
+        time.advance_by(as_of_frontier.borrow());
+        if key.is_none() {
+            error!(?new_value, "Encountered empty key for value");
+            continue;
+        }
+
+        let entry = pending_values
+            .entry(time)
+            .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+            .1
+            .entry(key);
+
+        let new_entry = UpsertSourceData {
+            value: new_value.map(ResultExt::err_into),
+            position: new_position,
+            // upsert sources don't have a column for this, so setting it to
+            // `None` is fine.
+            upstream_time_millis: None,
+            metadata,
+        };
+
+        match entry {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                // If the time is equal, toss out the row with the
+                // lower offset
+                if e.get().position < new_position {
+                    e.insert(new_entry);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(new_entry);
+            }
+        }
+    }
+}
+
+/// This function processes a batch of ready (i.e. whose time is below the current
+/// input frontier) values and evaluate them against the intermediate upsert
+/// data (`current_values`) and output issues and retractions for the output timely
+/// stream. It is used exclusively by `upsert_core`
+fn process_pending_values_batch(
+    // The time, capability, and map of data at that time we
+    // are processing in this call.
+    time: &u64,
+    cap: &mut Capability<Timestamp>,
+    map: &mut HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+    // The current map of values we use to perform the upsert comparision
+    current_values: &mut HashMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
+    // A shared row used to pack new rows for evaluation and output
+    row_packer: &mut Row,
+    // Additional source properties used to correctly inter
+    upsert_envelope: &UpsertEnvelope,
+    source_arity: usize,
+    // Additional information used to pre-evaluate predicates that reduces the output
+    // stream size
+    predicates: &[MirScalarExpr],
+    position_or: &[Option<usize>],
+    // An out parameter of times that must be removed from the `to_send` map
+    // as we are done processing them.
+    removed_times: &mut Vec<Timestamp>,
+    // The output handle to output processed values into the output timely stream.
+    output: &mut timely::dataflow::operators::generic::OutputHandle<
+        '_,
+        Timestamp,
+        (Result<Row, DataflowError>, u64, Diff),
+        timely::dataflow::channels::pushers::tee::Tee<
+            Timestamp,
+            (Result<Row, DataflowError>, u64, Diff),
+        >,
+    >,
+) {
+    let mut session = output.session(cap);
+    removed_times.push(time.clone());
+    for (key, data) in map.drain() {
+        // decode key and value, and apply predicates/projections to they combined key/value
+        //
+        // TODO(mcsherry): we could record key decoding errors as the value
+        // which would allow us to recover from key decoding errors by a
+        // later retraction of the key (it will never decode correctly, but
+        // we could produce and then remove the error from the output).
+        if let Some(decoded_key) = key {
+            let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
+                match (decoded_key, data.value) {
+                    (Err(key_decode_error), _) => {
+                        (
+                            Err(key_decode_error.clone()),
+                            // `DecodeError` converted to a `DataflowError`
+                            // that we will eventually emit later below
+                            Err(key_decode_error.into()),
+                        )
+                    }
+                    (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
+                    (Ok(decoded_key), Some(value)) => {
+                        let decoded_value = value.and_then(|row| {
+                            build_datum_vec_for_evaluation(
+                                &upsert_envelope.style,
+                                source_arity,
+                                &row,
+                                &decoded_key,
+                            )
+                            .map_or(Ok(None), |mut datums| {
+                                datums.extend(data.metadata.iter());
+                                evaluate(&datums, &predicates, &position_or, row_packer)
+                                    .map_err(DataflowError::from)
+                            })
+                        });
+                        (Ok(decoded_key), decoded_value)
+                    }
+                };
+
+            // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
+            // We store errors as well as non-None values, so that they can be
+            // retracted if new rows show up for the same key.
+            let new_value = decoded_value.transpose();
+
+            let old_value = if let Some(new_value) = &new_value {
+                // Thin out the row to not contain a copy of the
+                // key columns, cloning when need-be
+                let thinned_value = new_value
+                    .as_ref()
+                    .map(|full_row| thin(&upsert_envelope.key_indices, &full_row, row_packer))
+                    .map_err(|e| e.clone());
+                current_values
+                    .insert(decoded_key.clone(), thinned_value)
+                    .map(|res| {
+                        res.map(|v| {
+                            rehydrate(
+                                &upsert_envelope.key_indices,
+                                // The value is never `Ok`
+                                // unless the key is also
+                                decoded_key.as_ref().unwrap(),
+                                &v,
+                                row_packer,
+                            )
+                        })
+                    })
+            } else {
+                current_values.remove(&decoded_key).map(|res| {
+                    res.map(|v| {
+                        rehydrate(
+                            &upsert_envelope.key_indices,
+                            // The value is never `Ok`
+                            // unless the key is also
+                            decoded_key.as_ref().unwrap(),
+                            &v,
+                            row_packer,
+                        )
+                    })
+                })
+            };
+
+            if let Some(old_value) = old_value {
+                // Ensure we put the source in a permanently error'd state
+                // than to keep on trucking with wrong results.
+                //
+                // TODO(guswynn): consider changing the key-type of
+                // the `current_values` map to allow us to retract
+                // errors. Currently, the `DecodeError` key type would
+                // retract unrelated errors with the same message.
+                if !decoded_key.is_err() {
+                    // retract old value
+                    session.give((old_value, cap.time().clone(), -1));
+                }
+            }
+            if let Some(new_value) = new_value {
+                // give new value
+                session.give((new_value, cap.time().clone(), 1));
+            }
+        }
+    }
 }
 
 fn build_datum_vec_for_evaluation<'row>(
@@ -429,11 +491,7 @@ fn build_datum_vec_for_evaluation<'row>(
                 Some(datums)
             }
             Datum::Null => None,
-            d => panic!(
-                "type error: expected record, \
-                                                                        found {:?}",
-                d
-            ),
+            d => panic!("type error: expected record, found {:?}", d),
         },
         UpsertStyle::Default(_) => {
             let mut datums = Vec::with_capacity(source_arity);
