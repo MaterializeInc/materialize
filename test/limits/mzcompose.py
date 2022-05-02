@@ -175,7 +175,8 @@ class KafkaPartitions(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=120s")
+        # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
+        print("$ set-sql-timeout duration=360s")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
