@@ -285,164 +285,123 @@ where
 
                 let mut removed_times = Vec::new();
                 for (time, (cap, map)) in to_send.iter_mut() {
-                    if !input.frontier.less_equal(time) {
-                        let mut session = output.session(cap);
-                        removed_times.push(time.clone());
-                        for (key, data) in map.drain() {
-                            // decode key and value, and apply predicates/projections to they combined key/value
-                            //
-                            // TODO(mcsherry): we could record key decoding errors as the value
-                            // which would allow us to recover from key decoding errors by a
-                            // later retraction of the key (it will never decode correctly, but
-                            // we could produce and then remove the error from the output).
-                            match key {
-                                Some(decoded_key) => {
-                                    let (decoded_key, decoded_value): (
-                                        _,
-                                        Result<_, DataflowError>,
-                                    ) = match decoded_key {
-                                        Err(key_decode_error) => {
-                                            (
-                                                Err(key_decode_error.clone()),
-                                                // `DecodeError` converted to a `DataflowError`
-                                                // that we will eventually emit later below
-                                                Err(key_decode_error.into()),
-                                            )
-                                        }
-                                        Ok(decoded_key) => match data.value {
-                                            None => (Ok(decoded_key), Ok(None)),
-                                            Some(value) => {
-                                                let decoded_value = match value {
-                                                    Ok(row) => {
-                                                        let envelope_value = match upsert_envelope
-                                                            .style
-                                                        {
-                                                            UpsertStyle::Debezium { after_idx } => {
-                                                                match row
-                                                                    .iter()
-                                                                    .nth(after_idx)
-                                                                    .unwrap()
-                                                                {
-                                                                    Datum::List(after) => {
-                                                                        let mut datums =
-                                                                            Vec::with_capacity(
-                                                                                source_arity,
-                                                                            );
-                                                                        datums.extend(after.iter());
-                                                                        Some(datums)
-                                                                    }
-                                                                    Datum::Null => None,
-                                                                    d => panic!(
-                                                                    "type error: expected record, \
-                                                                        found {:?}",
-                                                                    d
-                                                                ),
-                                                                }
-                                                            }
-                                                            UpsertStyle::Default(_) => {
-                                                                let mut datums = Vec::with_capacity(
-                                                                    source_arity,
-                                                                );
-                                                                datums.extend(decoded_key.iter());
-                                                                datums.extend(row.iter());
-                                                                Some(datums)
-                                                            }
-                                                        };
-
-                                                        if let Some(mut datums) = envelope_value {
-                                                            datums.extend(data.metadata.iter());
-                                                            evaluate(
-                                                                &datums,
-                                                                &predicates,
-                                                                &position_or,
-                                                                &mut row_packer,
-                                                            )
-                                                            .map_err(DataflowError::from)
-                                                        } else {
-                                                            Ok(None)
-                                                        }
-                                                    }
-                                                    Err(err) => Err(err),
-                                                };
-                                                (Ok(decoded_key), decoded_value)
-                                            }
-                                        },
-                                    };
-
-                                    // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
-                                    // We store errors as well as non-None values, so that they can be
-                                    // retracted if new rows show up for the same key.
-                                    let new_value = decoded_value.transpose();
-
-                                    let old_value = if let Some(new_value) = &new_value {
-                                        // Thin out the row to not contain a copy of the
-                                        // key columns, cloning when need-be
-                                        let thinned_value = new_value
-                                            .as_ref()
-                                            .map(|full_row| {
-                                                thin(
-                                                    &upsert_envelope.key_indices,
-                                                    &full_row,
-                                                    &mut row_packer,
-                                                )
-                                            })
-                                            .map_err(|e| e.clone());
-                                        current_values
-                                            .insert(decoded_key.clone(), thinned_value)
-                                            .map(|res| {
-                                                res.map(|v| {
-                                                    rehydrate(
-                                                        &upsert_envelope.key_indices,
-                                                        // The value is never `Ok`
-                                                        // unless the key is also
-                                                        decoded_key.as_ref().unwrap(),
-                                                        &v,
-                                                        &mut row_packer,
-                                                    )
-                                                })
-                                            })
-                                    } else {
-                                        current_values.remove(&decoded_key).map(|res| {
-                                            res.map(|v| {
-                                                rehydrate(
-                                                    &upsert_envelope.key_indices,
-                                                    // The value is never `Ok`
-                                                    // unless the key is also
-                                                    decoded_key.as_ref().unwrap(),
-                                                    &v,
-                                                    &mut row_packer,
-                                                )
-                                            })
-                                        })
-                                    };
-
-                                    if let Some(old_value) = old_value {
-                                        // Ensure we put the source in a permanently error'd state
-                                        // than to keep on trucking with wrong results.
-                                        //
-                                        // TODO(guswynn): consider changing the key-type of
-                                        // the `current_values` map to allow us to retract
-                                        // errors. Currently, the `DecodeError` key type would
-                                        // retract unrelated errors with the same message.
-                                        if !decoded_key.is_err() {
-                                            // retract old value
-                                            session.give((old_value, cap.time().clone(), -1));
-                                        }
-                                    }
-                                    if let Some(new_value) = new_value {
-                                        // give new value
-                                        session.give((new_value, cap.time().clone(), 1));
-                                    }
-                                }
-                                None => {}
-                            }
-                        }
-                    } else {
+                    if input.frontier.less_equal(time) {
                         // because this is a BTreeMap, the rest of the times in
                         // the map will be greater than this time. So if the
                         // input_frontier is less than or equal to this time,
                         // it will be less than the times in the rest of the map
                         break;
+                    }
+                    let mut session = output.session(cap);
+                    removed_times.push(time.clone());
+                    for (key, data) in map.drain() {
+                        // decode key and value, and apply predicates/projections to they combined key/value
+                        //
+                        // TODO(mcsherry): we could record key decoding errors as the value
+                        // which would allow us to recover from key decoding errors by a
+                        // later retraction of the key (it will never decode correctly, but
+                        // we could produce and then remove the error from the output).
+                        if let Some(decoded_key) = key {
+                            let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
+                                match (decoded_key, data.value) {
+                                    (Err(key_decode_error), _) => {
+                                        (
+                                            Err(key_decode_error.clone()),
+                                            // `DecodeError` converted to a `DataflowError`
+                                            // that we will eventually emit later below
+                                            Err(key_decode_error.into()),
+                                        )
+                                    }
+                                    (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
+                                    (Ok(decoded_key), Some(value)) => {
+                                        let decoded_value =
+                                            value.and_then(|row| {
+                                                build_datum_vec_for_evaluation(
+                                                    &upsert_envelope.style,
+                                                    source_arity,
+                                                    &row,
+                                                    &decoded_key,
+                                                )
+                                                .map_or(Ok(None), |mut datums| {
+                                                    datums.extend(data.metadata.iter());
+                                                    evaluate(
+                                                        &datums,
+                                                        &predicates,
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
+                                                })
+                                            });
+                                        (Ok(decoded_key), decoded_value)
+                                    }
+                                };
+
+                            // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
+                            // We store errors as well as non-None values, so that they can be
+                            // retracted if new rows show up for the same key.
+                            let new_value = decoded_value.transpose();
+
+                            let old_value = if let Some(new_value) = &new_value {
+                                // Thin out the row to not contain a copy of the
+                                // key columns, cloning when need-be
+                                let thinned_value = new_value
+                                    .as_ref()
+                                    .map(|full_row| {
+                                        thin(
+                                            &upsert_envelope.key_indices,
+                                            &full_row,
+                                            &mut row_packer,
+                                        )
+                                    })
+                                    .map_err(|e| e.clone());
+                                current_values
+                                    .insert(decoded_key.clone(), thinned_value)
+                                    .map(|res| {
+                                        res.map(|v| {
+                                            rehydrate(
+                                                &upsert_envelope.key_indices,
+                                                // The value is never `Ok`
+                                                // unless the key is also
+                                                decoded_key.as_ref().unwrap(),
+                                                &v,
+                                                &mut row_packer,
+                                            )
+                                        })
+                                    })
+                            } else {
+                                current_values.remove(&decoded_key).map(|res| {
+                                    res.map(|v| {
+                                        rehydrate(
+                                            &upsert_envelope.key_indices,
+                                            // The value is never `Ok`
+                                            // unless the key is also
+                                            decoded_key.as_ref().unwrap(),
+                                            &v,
+                                            &mut row_packer,
+                                        )
+                                    })
+                                })
+                            };
+
+                            if let Some(old_value) = old_value {
+                                // Ensure we put the source in a permanently error'd state
+                                // than to keep on trucking with wrong results.
+                                //
+                                // TODO(guswynn): consider changing the key-type of
+                                // the `current_values` map to allow us to retract
+                                // errors. Currently, the `DecodeError` key type would
+                                // retract unrelated errors with the same message.
+                                if !decoded_key.is_err() {
+                                    // retract old value
+                                    session.give((old_value, cap.time().clone(), -1));
+                                }
+                            }
+                            if let Some(new_value) = new_value {
+                                // give new value
+                                session.give((new_value, cap.time().clone(), 1));
+                            }
+                        }
                     }
                 }
                 // Discard entries, capabilities for complete times.
@@ -454,6 +413,35 @@ where
     );
 
     result_stream
+}
+
+fn build_datum_vec_for_evaluation<'row>(
+    upsert_style: &UpsertStyle,
+    source_arity: usize,
+    row: &'row Row,
+    key: &'row Row,
+) -> Option<Vec<Datum<'row>>> {
+    match upsert_style {
+        UpsertStyle::Debezium { after_idx } => match row.iter().nth(*after_idx).unwrap() {
+            Datum::List(after) => {
+                let mut datums = Vec::with_capacity(source_arity);
+                datums.extend(after.iter());
+                Some(datums)
+            }
+            Datum::Null => None,
+            d => panic!(
+                "type error: expected record, \
+                                                                        found {:?}",
+                d
+            ),
+        },
+        UpsertStyle::Default(_) => {
+            let mut datums = Vec::with_capacity(source_arity);
+            datums.extend(key.iter());
+            datums.extend(row.iter());
+            Some(datums)
+        }
+    }
 }
 
 /// `thin` uses information from the source description to find which indexes in the row
