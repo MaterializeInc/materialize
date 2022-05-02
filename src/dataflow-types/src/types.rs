@@ -1149,11 +1149,15 @@ pub mod sources {
         !is_avro && !is_stateless_dbz
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
     pub enum ConnectorInner {
         Kafka {
             broker: KafkaAddrs,
             config_options: BTreeMap<String, String>,
+        },
+        CSR {
+            registry: String,
+            with_options: BTreeMap<String, String>,
         },
     }
 
@@ -1161,6 +1165,14 @@ pub mod sources {
         pub fn uri(&self) -> String {
             match self {
                 ConnectorInner::Kafka { broker, .. } => broker.to_string(),
+                ConnectorInner::CSR { registry, .. } => registry.to_owned(),
+            }
+        }
+
+        pub fn options(&self) -> BTreeMap<String, String> {
+            match self {
+                ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
+                ConnectorInner::CSR { with_options, .. } => with_options.clone(),
             }
         }
     }

@@ -21,6 +21,7 @@
 //! AST types specific to CREATE/ALTER variants of [crate::ast::Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -121,22 +122,45 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrConnector {
+    Inline {
+        url: String,
+    },
+    // The reference variant needs to be creatable by the parser with just a name
+    // but also must allow populating the values for use in purification and planning
+    Reference {
+        connector: UnresolvedObjectName,
+        url: Option<String>,
+        with_options: Option<BTreeMap<String, String>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
-    pub url: String,
+    pub connector: CsrConnector,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
-        f.write_node(&display::escape_single_quote_string(&self.url));
-        f.write_str("'");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        match &self.connector {
+            CsrConnector::Inline { url: uri, .. } => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(uri));
+                f.write_str("'");
+            }
+            CsrConnector::Reference { connector, .. } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
         }
-        if !self.with_options.is_empty() {
+        if !&self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
@@ -147,21 +171,32 @@ impl_display_t!(CsrConnectorAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorProto<T: AstInfo> {
-    pub url: String,
+    pub connector: CsrConnector,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
-        f.write_node(&display::escape_single_quote_string(&self.url));
-        f.write_str("'");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        match &self.connector {
+            CsrConnector::Inline { url: uri, .. } => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(uri));
+                f.write_str("'");
+            }
+            CsrConnector::Reference { connector, .. } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
+
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
         }
-        if !self.with_options.is_empty() {
+
+        if !&self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
@@ -469,6 +504,10 @@ pub enum CreateConnector<T: AstInfo> {
         broker: String,
         with_options: Vec<WithOption<T>>,
     },
+    CSR {
+        registry: String,
+        with_options: Vec<WithOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateConnector<T> {
@@ -487,6 +526,19 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                     f.write_str(")");
                 }
             }
+            Self::CSR {
+                registry,
+                with_options,
+            } => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY '");
+                f.write_node(&display::escape_single_quote_string(registry));
+                f.write_str("'");
+                if with_options.len() > 0 {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_str(")");
+                }
+            }
         }
     }
 }
@@ -494,8 +546,16 @@ impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector {
-    Inline { broker: String },
-    Reference { connector: UnresolvedObjectName },
+    Inline {
+        broker: String,
+    },
+    // The reference variant needs to be creatable by the parser with just a name
+    // but also must allow populating the values for use in purification and planning
+    Reference {
+        connector: UnresolvedObjectName,
+        broker: Option<String>,
+        with_options: Option<BTreeMap<String, String>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -569,7 +629,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                         f.write_node(&display::escape_single_quote_string(broker));
                         f.write_str("'");
                     }
-                    KafkaConnector::Reference { connector } => {
+                    KafkaConnector::Reference { connector, .. } => {
                         f.write_str("CONNECTOR ");
                         f.write_node(connector);
                     }

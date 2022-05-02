@@ -324,7 +324,7 @@ pub fn create_statement(
             col_names: _,
             connector,
             with_options,
-            format: _,
+            format,
             include_metadata: _,
             envelope: _,
             if_not_exists,
@@ -344,12 +344,14 @@ pub fn create_statement(
                 }
             }
             if let mz_sql_parser::ast::CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector: KafkaConnector::Reference { connector },
+                connector: KafkaConnector::Reference { connector, .. },
                 ..
             }) = connector
             {
                 *connector = allocate_name(connector)?;
             };
+
+            crate::connectors::qualify_csr_connector_names(format, scx)?;
         }
 
         Statement::CreateTable(CreateTableStatement {

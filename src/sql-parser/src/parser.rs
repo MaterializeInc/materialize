@@ -1722,8 +1722,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
-        let url = self.parse_literal_string()?;
-
+        let connector = if self.peek_keyword(CONNECTOR) {
+            let _ = self.expect_keyword(CONNECTOR);
+            CsrConnector::Reference {
+                connector: self.parse_object_name()?,
+                url: None,
+                with_options: None,
+            }
+        } else {
+            CsrConnector::Inline {
+                url: self.parse_literal_string()?,
+            }
+        };
         let seed = if self.parse_keyword(SEED) {
             let key_schema = if self.parse_keyword(KEY) {
                 self.expect_keyword(SCHEMA)?;
@@ -1748,16 +1758,26 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-
         Ok(CsrConnectorAvro {
-            url,
+            connector,
             seed,
             with_options,
         })
     }
 
     fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
-        let url = self.parse_literal_string()?;
+        let connector = if self.peek_keyword(CONNECTOR) {
+            let _ = self.expect_keyword(CONNECTOR);
+            CsrConnector::Reference {
+                connector: self.parse_object_name()?,
+                url: None,
+                with_options: None,
+            }
+        } else {
+            CsrConnector::Inline {
+                url: self.parse_literal_string()?,
+            }
+        };
 
         let seed = if self.parse_keyword(SEED) {
             if self.parse_keyword(COMPILED) {
@@ -1811,7 +1831,7 @@ impl<'a> Parser<'a> {
         };
 
         Ok(CsrConnectorProto {
-            url,
+            connector,
             seed,
             with_options,
         })
@@ -1867,13 +1887,22 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connector = match self.expect_one_of_keywords(&[KAFKA])? {
+        let connector = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
                 CreateConnector::Kafka {
                     broker,
+                    with_options,
+                }
+            }
+            Keyword::Confluent => {
+                self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                let registry = self.parse_literal_string()?;
+                let with_options = self.parse_opt_with_options()?;
+                CreateConnector::CSR {
+                    registry,
                     with_options,
                 }
             }
@@ -2115,6 +2144,8 @@ impl<'a> Parser<'a> {
                     },
                     CONNECTOR => KafkaConnector::Reference {
                         connector: self.parse_object_name()?,
+                        broker: None,
+                        with_options: None,
                     },
                     _ => unreachable!(),
                 };

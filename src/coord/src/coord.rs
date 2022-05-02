@@ -1408,12 +1408,15 @@ impl Coordinator {
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
-                let purify_fut = mz_sql::pure::purify_create_source(
-                    self.now(),
-                    self.catalog.config().aws_external_id.clone(),
-                    stmt,
-                    &catalog,
-                );
+                let purify_fut =
+                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
+                        Ok(stmt) => mz_sql::pure::purify_create_source(
+                            self.now(),
+                            self.catalog.config().aws_external_id.clone(),
+                            stmt,
+                        ),
+                        Err(e) => return tx.send(Err(e.into()), session),
+                    };
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx

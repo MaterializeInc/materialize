@@ -12,7 +12,6 @@
 //! See the [crate-level documentation](crate) for details.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -20,11 +19,10 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use csv::ReaderBuilder;
-use mz_sql_parser::ast::{KafkaConnector, KafkaSourceConnector};
+use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -33,7 +31,8 @@ use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
-use mz_dataflow_types::sources::{AwsConfig, AwsExternalId, ConnectorInner};
+use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
+
 use mz_repr::strconv;
 
 use crate::ast::{
@@ -42,7 +41,6 @@ use crate::ast::{
     CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, Value, WithOption,
     WithOptionValue,
 };
-use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -55,172 +53,151 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
 /// locking access to the catalog for an unbounded amount of time.
-pub fn purify_create_source(
+pub async fn purify_create_source(
     now: u64,
     aws_external_id: AwsExternalId,
     mut stmt: CreateSourceStatement<Raw>,
-    catalog: &dyn SessionCatalog,
-) -> impl Future<Output = Result<CreateSourceStatement<Raw>, anyhow::Error>> {
-    // For a kafka source using a connector we need to resolve the connector and pull data from it to perform purification
-    // since we need to connect to a broker and get partition offsets from it
-    // Interacting with the catalog must be done before the async block since otherwise it could remain locked for
-    // indeterminate periods of time while we wait for external systems
-    let resolved_connector = if let CreateSourceStatement {
-        connector:
-            CreateSourceConnector::Kafka(
-                KafkaSourceConnector {
-                    connector:
-                        KafkaConnector::Reference {
-                            connector: connector_name,
-                        },
-                    ..
-                },
-                ..,
-            ),
+) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
+    let CreateSourceStatement {
+        connector,
+        format,
+        envelope,
+        with_options,
+        include_metadata: _,
         ..
-    } = &stmt
-    {
-        normalize::unresolved_object_name(connector_name.clone())
-            .map_err(anyhow::Error::new)
-            .and_then(|name| catalog.resolve_item(&name).map_err(anyhow::Error::new))
-            .and_then(|conn| {
-                let connector = conn.catalog_connector()?;
-                Ok(ConnectorInner::Kafka {
-                    broker: connector.uri().parse()?,
-                    config_options: connector.options(),
-                })
-            })
-    } else {
-        Err(anyhow!(
-            "SQL statement does not contain a valid connector reference"
-        ))
-    };
-    async move {
-        let CreateSourceStatement {
-            connector,
-            format,
-            envelope,
-            with_options,
-            include_metadata: _,
-            ..
-        } = &mut stmt;
+    } = &mut stmt;
 
-        let mut with_options_map = normalize::options(with_options);
-        let mut config_options = BTreeMap::new();
+    let mut with_options_map = normalize::options(with_options);
+    let mut config_options = BTreeMap::new();
 
-        let mut file = None;
-        match connector {
-            CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector, topic, ..
-            }) => {
-                let (broker, connector_options) = match connector {
-                    KafkaConnector::Reference { .. } => match resolved_connector? {
-                        ConnectorInner::Kafka {
-                            broker,
-                            config_options,
-                        } => (broker.to_string(), Some(config_options)),
-                    },
-                    KafkaConnector::Inline { broker } => (broker.to_string(), None),
-                };
-                config_options = if let Some(options) = connector_options {
-                    options
-                } else {
-                    // Verify that the provided security options are valid and then test them.
-                    kafka_util::extract_config(&mut with_options_map)?
-                };
-                let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                    .await
-                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
-
-                // Translate `kafka_time_offset` to `start_offset`.
-                match kafka_util::lookup_start_offsets(
-                    Arc::clone(&consumer),
-                    &topic,
-                    &with_options_map,
-                    now,
-                )
-                .await?
-                {
-                    Some(start_offsets) => {
-                        // Drop `kafka_time_offset`
-                        with_options.retain(|val| match val {
-                            WithOption { key, .. } => key.as_str() != "kafka_time_offset",
-                        });
-                        info!("add start_offset {:?}", start_offsets);
-                        // Add `start_offset`
-                        with_options.push(WithOption {
-                            key: Ident::new("start_offset"),
-                            value: Some(WithOptionValue::Value(Value::Array(
-                                start_offsets
-                                    .iter()
-                                    .map(|offset| Value::Number(offset.to_string()))
-                                    .collect(),
-                            ))),
-                        });
-                    }
-                    None => {}
+    let mut file = None;
+    match connector {
+        CreateSourceConnector::Kafka(KafkaSourceConnector {
+            connector, topic, ..
+        }) => {
+            let (broker, connector_options) = match connector {
+                KafkaConnector::Reference {
+                    broker,
+                    with_options,
+                    connector,
+                } => {
+                    let broker_url = match broker {
+                        Some(url) => url.to_owned(),
+                        None => {
+                            bail!("Unable to find connector named {}", connector.to_string())
+                        }
+                    };
+                    let options = match with_options {
+                        Some(opts) => opts,
+                        None => {
+                            bail!("Unable to find connector named {}", connector.to_string())
+                        }
+                    };
+                    (broker_url, Some(options))
                 }
-            }
-            // Report an error if a file cannot be opened, or if it is a directory.
-            CreateSourceConnector::File { path, .. } => {
-                let f = File::open(&path).await?;
-                if f.metadata().await?.is_dir() {
-                    bail!("Expected a regular file, but {} is a directory.", path);
+                KafkaConnector::Inline { broker } => (broker.to_string(), None),
+            };
+            config_options = if let Some(options) = connector_options {
+                options
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect::<BTreeMap<String, String>>()
+            } else {
+                // Verify that the provided security options are valid and then test them.
+                kafka_util::extract_config(&mut with_options_map)?
+            };
+            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                .await
+                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+
+            // Translate `kafka_time_offset` to `start_offset`.
+            match kafka_util::lookup_start_offsets(
+                Arc::clone(&consumer),
+                &topic,
+                &with_options_map,
+                now,
+            )
+            .await?
+            {
+                Some(start_offsets) => {
+                    // Drop `kafka_time_offset`
+                    with_options.retain(|val| match val {
+                        WithOption { key, .. } => key.as_str() != "kafka_time_offset",
+                    });
+                    info!("add start_offset {:?}", start_offsets);
+                    // Add `start_offset`
+                    with_options.push(WithOption {
+                        key: Ident::new("start_offset"),
+                        value: Some(WithOptionValue::Value(Value::Array(
+                            start_offsets
+                                .iter()
+                                .map(|offset| Value::Number(offset.to_string()))
+                                .collect(),
+                        ))),
+                    });
                 }
-                file = Some(f);
+                None => {}
             }
-            CreateSourceConnector::S3 { .. } => {
-                let aws_config = normalize::aws_config(&mut with_options_map, None)?;
-                validate_aws_credentials(&aws_config, aws_external_id).await?;
-            }
-            CreateSourceConnector::Kinesis { arn } => {
-                let region = arn
-                    .parse::<ARN>()
-                    .context("Unable to parse provided ARN")?
-                    .region
-                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
-                let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
-                validate_aws_credentials(&aws_config, aws_external_id).await?;
-            }
-            CreateSourceConnector::Postgres {
-                conn,
-                publication,
-                slot,
-                details,
-            } => {
-                slot.get_or_insert_with(|| {
-                    format!(
-                        "materialize_{}",
-                        Uuid::new_v4().to_string().replace('-', "")
-                    )
-                });
-
-                // verify that we can connect upstream and snapshot publication metadata
-                let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
-
-                let details_proto = PostgresSourceDetails {
-                    tables: tables.into_iter().map(|t| t.into()).collect(),
-                    slot: slot.clone().expect("slot must exist"),
-                };
-                *details = Some(hex::encode(details_proto.encode_to_vec()));
-            }
-            CreateSourceConnector::PubNub { .. } => (),
-            CreateSourceConnector::Persist { .. } => (),
         }
+        // Report an error if a file cannot be opened, or if it is a directory.
+        CreateSourceConnector::File { path, .. } => {
+            let f = File::open(&path).await?;
+            if f.metadata().await?.is_dir() {
+                bail!("Expected a regular file, but {} is a directory.", path);
+            }
+            file = Some(f);
+        }
+        CreateSourceConnector::S3 { .. } => {
+            let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+            validate_aws_credentials(&aws_config, aws_external_id).await?;
+        }
+        CreateSourceConnector::Kinesis { arn } => {
+            let region = arn
+                .parse::<ARN>()
+                .context("Unable to parse provided ARN")?
+                .region
+                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-        purify_source_format(
-            format,
-            connector,
-            envelope,
-            file,
-            &config_options,
-            with_options,
-        )
-        .await?;
+            let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+            validate_aws_credentials(&aws_config, aws_external_id).await?;
+        }
+        CreateSourceConnector::Postgres {
+            conn,
+            publication,
+            slot,
+            details,
+        } => {
+            slot.get_or_insert_with(|| {
+                format!(
+                    "materialize_{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                )
+            });
 
-        Ok(stmt)
+            // verify that we can connect upstream and snapshot publication metadata
+            let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
+
+            let details_proto = PostgresSourceDetails {
+                tables: tables.into_iter().map(|t| t.into()).collect(),
+                slot: slot.clone().expect("slot must exist"),
+            };
+            *details = Some(hex::encode(details_proto.encode_to_vec()));
+        }
+        CreateSourceConnector::PubNub { .. } => (),
+        CreateSourceConnector::Persist { .. } => (),
     }
+
+    purify_source_format(
+        format,
+        connector,
+        &envelope,
+        file,
+        &config_options,
+        with_options,
+    )
+    .await?;
+
+    Ok(stmt)
 }
 
 async fn purify_source_format(
@@ -382,13 +359,19 @@ async fn purify_csr_connector_proto(
     };
 
     let CsrConnectorProto {
-        url,
+        connector,
         seed,
         with_options: ccsr_options,
     } = csr_connector;
     match seed {
         None => {
-            let url: Url = url.parse()?;
+            let url = match connector {
+                CsrConnector::Inline { url } => url,
+                CsrConnector::Reference { url, .. } => url
+                    .as_ref()
+                    .expect("CSR Connector must specify Registry URL"),
+            }
+            .parse()?;
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
@@ -434,12 +417,18 @@ async fn purify_csr_connector_avro(
     };
 
     let CsrConnectorAvro {
-        url,
+        connector,
         seed,
         with_options: ccsr_options,
     } = csr_connector;
     if seed.is_none() {
-        let url = url.parse()?;
+        let url = match connector {
+            CsrConnector::Inline { url } => url,
+            CsrConnector::Reference { url, .. } => url
+                .as_ref()
+                .expect("CSR Connector must specify Registry URL"),
+        }
+        .parse()?;
 
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(

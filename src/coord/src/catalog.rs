@@ -3322,15 +3322,11 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
 
 impl mz_sql::catalog::CatalogConnector for Connector {
     fn uri(&self) -> String {
-        match &self.connector {
-            ConnectorInner::Kafka { broker, .. } => broker.to_string(),
-        }
+        self.connector.uri()
     }
 
     fn options(&self) -> std::collections::BTreeMap<String, String> {
-        match &self.connector {
-            ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
-        }
+        self.connector.options()
     }
 }
 

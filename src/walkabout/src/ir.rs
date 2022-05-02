@@ -134,6 +134,10 @@ pub enum Type {
     /// The value will need to be visited by calling the appropriate `Visit`
     /// or `VisitMut` trait method on the value.
     Local(String),
+    /// A BTreeMap type
+    ///
+    /// Each value will need to be visited.
+    Map { key: Box<Type>, value: Box<Type> },
 }
 
 /// Analyzes the provided items and produces an IR.
@@ -315,6 +319,29 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                     "Vec" => container(Type::Vec),
                     "Option" => container(Type::Option),
                     "Box" => container(Type::Box),
+                    "BTreeMap" => match &segment.arguments {
+                        syn::PathArguments::None => bail!("Map type missing arguments"),
+                        syn::PathArguments::AngleBracketed(args) if args.args.len() == 2 => {
+                            let key = match &args.args[0] {
+                                syn::GenericArgument::Type(t) => t,
+                                _ => bail!("Invalid argument to map container, should be a Type"),
+                            };
+                            let value = match &args.args[1] {
+                                syn::GenericArgument::Type(t) => t,
+                                _ => bail!("Invalid argument to map container, should be a Type"),
+                            };
+                            Ok(Type::Map {
+                                key: Box::new(analyze_type(key)?),
+                                value: Box::new(analyze_type(value)?),
+                            })
+                        }
+                        &syn::PathArguments::AngleBracketed(_) => {
+                            bail!("wrong type of arguments for map container")
+                        }
+                        syn::PathArguments::Parenthesized(_) => {
+                            bail!("wrong type of arguments for map container")
+                        }
+                    },
                     _ => Ok(Type::Local(segment_name)),
                 }
             }
