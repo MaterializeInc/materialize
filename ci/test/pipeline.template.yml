@@ -187,7 +187,7 @@ steps:
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: billing
+          composition: billing-demo
           args: [--message-count=100, --partitions=10, --check-sink]
     agents:
       queue: linux-x86_64

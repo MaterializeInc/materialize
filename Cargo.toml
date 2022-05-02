@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "demo/billing",
     "fuzz",
     "src/avro-derive",
     "src/avro",
     "src/aws-util",
+    "src/billing-demo",
     "src/build-info",
     "src/ccsr",
     "src/compute",
