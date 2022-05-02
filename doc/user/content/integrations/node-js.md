@@ -9,7 +9,7 @@ menu:
     name: "Node.js"
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that Node.js applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the  [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue PostgreSQL commands.
+Materialize is **PostgreSQL-compatible**, which means that Node.js applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue PostgreSQL commands.
 
 ## Connect
 
