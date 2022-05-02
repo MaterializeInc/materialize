@@ -163,6 +163,13 @@ pub enum ReducePlan {
     Collation(CollationPlan),
 }
 
+/// To avoid stack overflow, this limits the arbitrarily-generated test
+/// `ReducePlan`s to involve at most 8 aggregations.
+///
+/// To have better coverage of realistic expected group sizes, the
+/// expected group size is not evenly distributed across all potential
+/// values of `usize`: Instead it goes from 0 to 4B and then jumps to
+/// [usize::MAX] approximately 5% of the time.
 impl Arbitrary for ReducePlan {
     type Parameters = ();
 
@@ -756,12 +763,8 @@ impl ReducePlan {
                     let mut current = 16;
 
                     // Plan for 4B records in the expected case if the user
-                    // didn't specify a group size. Make sure specified group
-                    // size does not usize::MAX/16.
-                    let limit = std::cmp::min(
-                        expected_group_size.unwrap_or(4_000_000_000),
-                        usize::MAX >> 4,
-                    );
+                    // didn't specify a group size.
+                    let limit = expected_group_size.unwrap_or(4_000_000_000);
 
                     // Distribute buckets in powers of 16, so that we can strike
                     // a balance between how many inputs each layer gets from
@@ -769,7 +772,7 @@ impl ReducePlan {
                     // layers.
                     while current < limit {
                         buckets.push(current as u64);
-                        current *= 16;
+                        current = current.saturating_mul(16);
                     }
                     // We need to store the bucket numbers in decreasing order.
                     buckets.reverse();
