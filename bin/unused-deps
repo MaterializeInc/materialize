@@ -9,13 +9,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# san — prints (possible) unused dependencies for all members of the workspace
-#
-# Example usages:
-#
-#     $ bin/unused-deps
+# unused-deps — prints unused dependencies for all Rust crates.
 
-# Requires https://github.com/est31/cargo-udeps and a (working) nightly toolchain
+# Requires https://github.com/est31/cargo-udeps and a working nightly toolchain.
+#
+# cargo-udeps occasionally produces false positives, especially with
+# dependencies that are used only on certain platforms. To ignore these
+# dependencies, see:
+# https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies.
 
 set -euo pipefail
 
