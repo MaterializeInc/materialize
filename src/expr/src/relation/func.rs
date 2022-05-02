@@ -28,7 +28,7 @@ use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound};
+use crate::relation::{compare_columns, ColumnOrder, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
@@ -803,6 +803,129 @@ where
     })
 }
 
+// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+fn last_value<'a, I>(
+    datums: I,
+    temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
+    // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
+    let datums = order_aggregate_datums_with_rank(datums, order_by);
+
+    // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
+    let datums = datums
+        .into_iter()
+        .map(|(d, order_by_row)| {
+            let mut iter = d.unwrap_list().iter();
+            let original_row = iter.next().unwrap();
+            let input_value = iter.next().unwrap();
+
+            (input_value, original_row, order_by_row)
+        })
+        .collect_vec();
+
+    let length = datums.len();
+    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
+    for (idx, (current_datum, original_row, order_by_row)) in datums.iter().enumerate() {
+        let last_value = match &window_frame.end_bound {
+            WindowFrameBound::CurrentRow => match &window_frame.units {
+                // Always return the current value when in ROWS mode
+                WindowFrameUnits::Rows => *current_datum,
+                WindowFrameUnits::Range => {
+                    // When in RANGE mode, return the last value of the peer group
+                    // The peer group is the group of rows with the same ORDER BY value
+                    // Note: Range is only supported for the default window frame (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+                    // which is why it does not appear in the other branches
+                    datums[idx..]
+                        .iter()
+                        .take_while(|(_, _, row)| row == order_by_row)
+                        .last()
+                        .unwrap()
+                        .0
+                }
+                // GROUPS is not supported, and forbidden during planning
+                WindowFrameUnits::Groups => unreachable!(),
+            },
+            WindowFrameBound::UnboundedFollowing => {
+                if let WindowFrameBound::OffsetFollowing(start_offset) = &window_frame.start_bound {
+                    let start_offset = usize::cast_from(*start_offset);
+
+                    // If the frame starts after the last row of the window, return null
+                    if idx + start_offset > length - 1 {
+                        Datum::Null
+                    } else {
+                        datums[length - 1].0
+                    }
+                } else {
+                    datums[length - 1].0
+                }
+            }
+            WindowFrameBound::OffsetFollowing(offset) => {
+                let end_offset = usize::cast_from(*offset);
+                let end_idx = idx.saturating_add(end_offset);
+                if let WindowFrameBound::OffsetFollowing(start_offset) = &window_frame.start_bound {
+                    let start_offset = usize::cast_from(*start_offset);
+                    let start_idx = idx.saturating_add(start_offset);
+
+                    // If the frame is empty or starts after the last row of the window, return null
+                    if end_offset < start_offset || start_idx >= length {
+                        Datum::Null
+                    } else {
+                        // Return the last valid element in the window
+                        datums
+                            .get(end_idx)
+                            .map(|d| d.0)
+                            .unwrap_or(datums[length - 1].0)
+                    }
+                } else {
+                    datums
+                        .get(end_idx)
+                        .map(|d| d.0)
+                        .unwrap_or(datums[length - 1].0)
+                }
+            }
+            WindowFrameBound::OffsetPreceding(offset) => {
+                let end_offset = usize::cast_from(*offset);
+                let end_idx = idx.saturating_sub(end_offset);
+                if idx < end_offset {
+                    // If the frame ends before the first row, return null
+                    Datum::Null
+                } else if let WindowFrameBound::OffsetPreceding(start_offset) =
+                    &window_frame.start_bound
+                {
+                    // If the frame is empty, return null
+                    if offset > start_offset {
+                        Datum::Null
+                    } else {
+                        datums[end_idx].0
+                    }
+                } else {
+                    datums[end_idx].0
+                }
+            }
+            // Forbidden during planning
+            WindowFrameBound::UnboundedPreceding => unreachable!(),
+        };
+
+        result.push((last_value, *original_row));
+    }
+
+    let result = result.into_iter().map(|(lag, original_row)| {
+        temp_storage.make_datum(|packer| {
+            packer.push_list(vec![lag, original_row]);
+        })
+    });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
+
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -889,6 +1012,10 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
     },
+    LastValue {
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -950,6 +1077,10 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => first_value(datums, temp_storage, order_by, window_frame),
+            AggregateFunc::LastValue {
+                order_by,
+                window_frame,
+            } => last_value(datums, temp_storage, order_by, window_frame),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -979,6 +1110,7 @@ impl AggregateFunc {
             AggregateFunc::DenseRank { .. } => Datum::empty_list(),
             AggregateFunc::LagLead { .. } => Datum::empty_list(),
             AggregateFunc::FirstValue { .. } => Datum::empty_list(),
+            AggregateFunc::LastValue { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -1095,6 +1227,28 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from("?first_value?"), value_type),
+                            (ColumnName::from("?record?"), original_row_type),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                }
+            }
+            AggregateFunc::LastValue { .. } => {
+                // The input type for LastValue is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let value_type = fields[0].unwrap_record_element_type()[1]
+                    .clone()
+                    .nullable(true);
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?record?"), original_row_type),
                         ],
                         custom_oid: None,
@@ -1400,6 +1554,7 @@ impl fmt::Display for AggregateFunc {
                 ..
             } => f.write_str("lead"),
             AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
+            AggregateFunc::LastValue { .. } => f.write_str("last_value"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
