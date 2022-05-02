@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::Location;
+use mz_persist_client::{PersistClient, PersistLocation};
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
@@ -216,7 +216,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             connector: ExternalSourceConnector::Persist(persist_connector),
                             ..
                         } => {
-                            let location = Location {
+                            let location = PersistLocation {
                                 blob_uri: persist_connector.blob_uri.clone(),
                                 consensus_uri: persist_connector.consensus_uri.clone(),
                             };
@@ -227,9 +227,9 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             let (blob, consensus) =
                                 futures_executor::block_on(location.open(timeout)).unwrap();
 
-                            let persist_client = futures_executor::block_on(
-                                mz_persist_client::Client::new(timeout, blob, consensus),
-                            )
+                            let persist_client = futures_executor::block_on(PersistClient::new(
+                                timeout, blob, consensus,
+                            ))
                             .unwrap();
 
                             let (write, _read) = futures_executor::block_on(

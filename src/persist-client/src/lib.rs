@@ -85,7 +85,7 @@ pub(crate) mod r#impl {
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Location {
+pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: String,
 
@@ -93,7 +93,7 @@ pub struct Location {
     pub consensus_uri: String,
 }
 
-impl Location {
+impl PersistLocation {
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
     pub async fn open(
         &self,
@@ -170,14 +170,14 @@ impl ShardId {
 }
 
 /// A handle for interacting with the set of persist shard made durable at a
-/// single [Location].
+/// single [PersistLocation].
 #[derive(Debug, Clone)]
-pub struct Client {
+pub struct PersistClient {
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
 }
 
-impl Client {
+impl PersistClient {
     /// Returns a new client for interfacing with persist shards made durable to
     /// the given `location`.
     ///
@@ -197,7 +197,7 @@ impl Client {
         );
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
-        Ok(Client { blob, consensus })
+        Ok(PersistClient { blob, consensus })
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -267,10 +267,10 @@ mod tests {
 
     use super::*;
 
-    async fn new_test_client() -> Result<Client, ExternalError> {
+    async fn new_test_client() -> Result<PersistClient, ExternalError> {
         let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
-        Client::new(NO_TIMEOUT, blob, consensus).await
+        PersistClient::new(NO_TIMEOUT, blob, consensus).await
     }
 
     fn all_ok<'a, K, V, T, D, I>(

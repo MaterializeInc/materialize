@@ -22,7 +22,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_dataflow_types::sinks::{PersistSinkConnector, SinkDesc};
-use mz_persist_client::Location;
+use mz_persist_client::{PersistClient, PersistLocation};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -75,7 +75,7 @@ where
         // TODO(aljoscha): Configurable timeout? Or no timeout in the persist API?
         let timeout = Duration::from_secs(60);
 
-        let persist_location = Location {
+        let persist_location = PersistLocation {
             consensus_uri: self.consensus_uri.clone(),
             blob_uri: self.blob_uri.clone(),
         };
@@ -90,7 +90,7 @@ where
             .expect("cannot open persist location");
 
         let persist_client =
-            futures_executor::block_on(mz_persist_client::Client::new(timeout, blob, consensus))
+            futures_executor::block_on(PersistClient::new(timeout, blob, consensus))
                 .expect("cannot open client");
 
         let (write, _read) =

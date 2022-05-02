@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{Client, Location, ShardId};
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 
 use crate::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -111,12 +111,12 @@ fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let location = Location {
+    let location = PersistLocation {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
     let (blob, consensus) = location.open(NO_TIMEOUT).await?;
-    let persist = Client::new(NO_TIMEOUT, blob, consensus).await?;
+    let persist = PersistClient::new(NO_TIMEOUT, blob, consensus).await?;
 
     let num_records_total = args.records_per_second * args.runtime_seconds;
     let data_generator =
@@ -393,14 +393,14 @@ mod raw_persist_benchmark {
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::write::WriteHandle;
-    use mz_persist_client::{Client, ShardId};
+    use mz_persist_client::{PersistClient, ShardId};
     use timely::progress::Antichain;
 
     use crate::api::{BenchmarkReader, BenchmarkWriter};
     use crate::NO_TIMEOUT;
 
     pub async fn setup_raw_persist(
-        persist: Client,
+        persist: PersistClient,
         id: ShardId,
         num_writers: usize,
         num_readers: usize,

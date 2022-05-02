@@ -44,6 +44,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use mz_persist_client::PersistLocation;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -559,7 +560,7 @@ impl Runner {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
             data_directory: temp_dir.path().to_path_buf(),
-            persist_location: mz_persist_client::Location {
+            persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                 consensus_uri: format!("sqlite://{}/persist/consensus", temp_dir.path().display()),
             },

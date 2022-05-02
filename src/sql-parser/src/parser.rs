@@ -24,6 +24,7 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
+use mz_persist_client::ShardId;
 use tracing::warn;
 
 use mz_ore::collections::CollectionExt;
@@ -2246,7 +2247,7 @@ impl<'a> Parser<'a> {
                     // to. Also, the lifecycle of collections created by a sink should be tracked
                     // separate from the sink. And we can expose something like a `mz_collections`
                     // to allow querying them.
-                    let shard_id = mz_persist_client::ShardId::new();
+                    let shard_id = ShardId::new();
                     format!("{}", shard_id)
                 };
 
