@@ -1896,11 +1896,9 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
-                CreateConnector::Kafka {
-                    broker,
-                    with_options,
-                }
+                self.expect_keyword(SECURITY)?;
+                let security = self.parse_kafka_security()?;
+                CreateConnector::KafkaNew { broker, security }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
@@ -1918,6 +1916,65 @@ impl<'a> Parser<'a> {
             connector,
             if_not_exists,
         }))
+    }
+
+    fn parse_kafka_security(&mut self) -> Result<KafkaSecurityOptions, ParserError> {
+        Ok(match self.expect_one_of_keywords(&[SSL, SASL, SASLSSL])? {
+            Keyword::Ssl => {
+                let (mut key_file, mut certificate_file, mut key_password) = (None, None, None);
+                while let Ok(keyword) = self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD]) {
+                    match keyword {
+                        Keyword::Key => {
+                            key_file = Some(self.parse_literal_string()?);
+                        }
+                        Keyword::Certificate => {
+                            certificate_file = Some(self.parse_literal_string()?);
+                        }
+                        Keyword::Password => {
+                            key_password = Some(self.parse_literal_string()?);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                KafkaSecurityOptions::SSL {
+                    key_file,
+                    certificate_file,
+                    key_password,
+                }
+            }
+            Keyword::Sasl => self.parse_kafka_sasl(false)?,
+            Keyword::SaslSsl => self.parse_kafka_sasl(true)?,
+            _ => unreachable!(),
+        })
+    }
+
+    fn parse_kafka_sasl(&mut self, ssl: bool) -> Result<KafkaSecurityOptions, ParserError> {
+        self.expect_keyword(MECHANISM)?;
+        let mechanism = match self.expect_one_of_keywords(&[PLAIN, SCRAMSHA256, SCRAMSHA512])? {
+            Keyword::Plain => "PLAIN".to_string(),
+            Keyword::ScramSha256 => "SCRAM-SHA-256".to_string(),
+            Keyword::ScramSha512 => "SCRAM-SHA-512".to_string(),
+            _ => unreachable!(),
+        };
+        let (mut username, mut password) = (None, None);
+        while let Ok(keyword) = self.expect_one_of_keywords(&[USERNAME, PASSWORD]) {
+            match keyword {
+                Keyword::Username => {
+                    username = Some(self.parse_literal_string()?);
+                }
+                Keyword::Password => {
+                    password = Some(self.parse_literal_string()?);
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok(KafkaSecurityOptions::SASL {
+            mechanism,
+            username,
+            password,
+            ssl,
+            certificate: None,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -497,6 +497,66 @@ impl AstDisplay for DbzMode {
 }
 impl_display!(DbzMode);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaSecurityOptions {
+    SSL {
+        key_file: Option<String>,
+        certificate_file: Option<String>,
+        key_password: Option<String>,
+    },
+    SASL {
+        mechanism: String,
+        ssl: bool,
+        certificate: Option<String>,
+        username: Option<String>,
+        password: Option<String>,
+    },
+}
+
+impl AstDisplay for KafkaSecurityOptions {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            KafkaSecurityOptions::SSL {
+                key_file,
+                certificate_file,
+                key_password,
+            } => f.write_str(""),
+            KafkaSecurityOptions::SASL {
+                mechanism,
+                ssl,
+                username,
+                password,
+                ..
+            } => {
+                match ssl {
+                    true => f.write_str(" SASL_SSL "),
+                    false => f.write_str(" SASL "),
+                }
+                f.write_str("MECHANISM ");
+                f.write_str(mechanism);
+                match username {
+                    Some(username) => {
+                        f.write_str(" USERNAME '");
+                        f.write_node(&display::escape_single_quote_string(username));
+                        f.write_str("'");
+                    }
+                    None => {}
+                }
+                match password {
+                    Some(password) => {
+                        f.write_str(" PASSWORD '");
+                        f.write_node(&display::escape_single_quote_string(password));
+                        f.write_str("'");
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+}
+
+impl_display!(KafkaSecurityOptions);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
 pub enum CreateConnector<T: AstInfo> {
@@ -504,9 +564,18 @@ pub enum CreateConnector<T: AstInfo> {
         broker: String,
         with_options: Vec<WithOption<T>>,
     },
+    KafkaNew {
+        broker: String,
+        security: KafkaSecurityOptions,
+    },
     CSR {
         registry: String,
         with_options: Vec<WithOption<T>>,
+    },
+    CSRNew {
+        registry: String,
+        username: Option<String>,
+        password: Option<String>,
     },
 }
 
@@ -539,6 +608,37 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                     f.write_str(")");
                 }
             }
+            Self::KafkaNew { broker, security } => {
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+                f.write_str(" SECURITY");
+                f.write_node(security);
+            }
+            Self::CSRNew {
+                registry,
+                username,
+                password,
+            } => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY '");
+                f.write_node(&display::escape_single_quote_string(registry));
+                f.write_str("'");
+                match username {
+                    Some(username) => {
+                        f.write_str(" USERNAME ");
+                        f.write_node(&display::escape_single_quote_string(username));
+                    }
+                    None => {}
+                }
+                match password {
+                    Some(password) => {
+                        f.write_str(" PASSWORD ");
+                        f.write_node(&display::escape_single_quote_string(password));
+                    }
+                    None => {}
+                }
+            }
+            _ => unreachable!(),
         }
     }
 }
