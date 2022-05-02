@@ -101,8 +101,7 @@ use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
-    Update,
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -253,6 +252,17 @@ pub struct Config {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
+}
+
+/// The response from a `Peek`, with row multiplicities represented in unary.
+///
+/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
+/// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekResponseUnary {
+    Rows(Vec<Row>),
+    Error(String),
+    Canceled,
 }
 
 /// State provided to a catalog transaction closure.
@@ -4953,12 +4963,11 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::ComputeInstanceId;
-    use mz_dataflow_types::PeekResponseUnary;
     use std::collections::BTreeSet;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
-    use crate::coord::PendingPeek;
+    use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::CoordError;
     use mz_expr::{EvalError, Id, MirScalarExpr};
     use mz_repr::{Diff, GlobalId, Row};

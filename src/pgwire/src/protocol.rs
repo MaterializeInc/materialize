@@ -29,8 +29,7 @@ use mz_coord::session::{
     row_future_to_stream, EndTransactionAction, InProgressRows, Portal, PortalState,
     RowBatchStream, Session, TransactionStatus,
 };
-use mz_coord::ExecuteResponse;
-use mz_dataflow_types::PeekResponseUnary;
+use mz_coord::{ExecuteResponse, PeekResponseUnary};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -1341,7 +1340,7 @@ where
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     _ = self.coord_client.canceled() => FetchResult::Canceled,
                     batch = rows.remaining.recv() => match batch {
-                        None=>FetchResult::Rows(None),
+                        None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,

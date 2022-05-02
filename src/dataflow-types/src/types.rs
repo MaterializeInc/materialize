@@ -36,17 +36,6 @@ pub enum PeekResponse {
     Canceled,
 }
 
-/// The response from a `Peek`, with row multiplicities represented in unary.
-///
-/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
-/// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum PeekResponseUnary {
-    Rows(Vec<Row>),
-    Error(String),
-    Canceled,
-}
-
 impl PeekResponse {
     pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
         match self {

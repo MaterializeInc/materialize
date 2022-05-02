@@ -17,7 +17,6 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use mz_dataflow_types::PeekResponseUnary;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
@@ -28,7 +27,7 @@ use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
 use crate::command::RowsFuture;
-use crate::coord::CoordTimestamp;
+use crate::coord::{CoordTimestamp, PeekResponseUnary};
 use crate::error::CoordError;
 
 mod vars;

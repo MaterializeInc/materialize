@@ -9,10 +9,12 @@
 
 //! Implementations around supporting the TAIL protocol with the dataflow layer
 
-use mz_dataflow_types::{PeekResponseUnary, TailResponse};
+use mz_dataflow_types::TailResponse;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 use tokio::sync::mpsc;
+
+use crate::coord::PeekResponseUnary;
 
 /// A description of a pending tail from coord's perspective
 pub(crate) struct PendingTail {
