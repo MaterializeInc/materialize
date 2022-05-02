@@ -23,7 +23,6 @@ use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -80,18 +79,18 @@ pub async fn purify_create_source(
                 KafkaConnector::Reference {
                     broker,
                     with_options,
-                    ..
+                    connector,
                 } => {
                     let broker_url = match broker {
                         Some(url) => url.to_owned(),
                         None => {
-                            bail!("Failed to purify source because connector remained unresolved")
+                            bail!("Unable to find connector named {}", connector.to_string())
                         }
                     };
                     let options = match with_options {
                         Some(opts) => opts,
                         None => {
-                            bail!("Failed to purify source because connector remained unresolved")
+                            bail!("Unable to find connector named {}", connector.to_string())
                         }
                     };
                     (broker_url, Some(options))
@@ -366,13 +365,13 @@ async fn purify_csr_connector_proto(
     } = csr_connector;
     match seed {
         None => {
-            let url: Url = match connector {
-                CsrConnector::Inline { url: uri } => uri.parse()?,
-                CsrConnector::Reference { url, .. } => match url {
-                    Some(url) => url.parse()?,
-                    None => bail!("CSR Connector must specify a url!"),
-                },
-            };
+            let url = match connector {
+                CsrConnector::Inline { url } => url,
+                CsrConnector::Reference { url, .. } => url
+                    .as_ref()
+                    .expect("CSR Connector must specify Registry URL"),
+            }
+            .parse()?;
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
@@ -424,12 +423,12 @@ async fn purify_csr_connector_avro(
     } = csr_connector;
     if seed.is_none() {
         let url = match connector {
-            CsrConnector::Inline { url } => url.parse()?,
-            CsrConnector::Reference { url, .. } => match url {
-                Some(url) => url.parse()?,
-                None => bail!("CSR Connector must specify url!"),
-            },
-        };
+            CsrConnector::Inline { url } => url,
+            CsrConnector::Reference { url, .. } => url
+                .as_ref()
+                .expect("CSR Connector must specify Registry URL"),
+        }
+        .parse()?;
 
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(

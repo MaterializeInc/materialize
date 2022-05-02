@@ -322,11 +322,11 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                     "BTreeMap" => match &segment.arguments {
                         syn::PathArguments::None => bail!("Map type missing arguments"),
                         syn::PathArguments::AngleBracketed(args) if args.args.len() == 2 => {
-                            let key = match args.args.first().unwrap() {
+                            let key = match &args.args[0] {
                                 syn::GenericArgument::Type(t) => t,
                                 _ => bail!("Invalid argument to map container, should be a Type"),
                             };
-                            let value = match args.args.last().unwrap() {
+                            let value = match &args.args[1] {
                                 syn::GenericArgument::Type(t) => t,
                                 _ => bail!("Invalid argument to map container, should be a Type"),
                             };

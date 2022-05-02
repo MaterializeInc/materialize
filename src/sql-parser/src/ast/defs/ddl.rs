@@ -131,7 +131,6 @@ pub enum CsrConnector {
     Reference {
         connector: UnresolvedObjectName,
         url: Option<String>,
-        // Vec of keys interspersed with values
         with_options: Option<BTreeMap<String, String>>,
     },
 }
@@ -555,7 +554,6 @@ pub enum KafkaConnector {
     Reference {
         connector: UnresolvedObjectName,
         broker: Option<String>,
-        // This vec is a sequence of keys interspersed with values,
         with_options: Option<BTreeMap<String, String>>,
     },
 }
