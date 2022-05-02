@@ -1268,14 +1268,12 @@ pub mod sources {
                         consensus_uri: persist_connector.consensus_uri.clone(),
                     };
 
-                    let timeout = Duration::from_secs(60);
+                    let (blob, consensus) = location.open().await?;
 
-                    let (blob, consensus) = location.open(timeout).await?;
-
-                    let persist_client = PersistClient::new(timeout, blob, consensus).await?;
+                    let persist_client = PersistClient::new(blob, consensus).await?;
 
                     let (_write, read) = persist_client
-                        .open::<Row, Row, T, mz_repr::Diff>(timeout, persist_connector.shard_id)
+                        .open::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
                         .await?;
 
                     Some(read)

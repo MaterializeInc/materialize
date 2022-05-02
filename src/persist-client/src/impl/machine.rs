@@ -55,11 +55,10 @@ where
     D: Semigroup + Codec64,
 {
     pub async fn new(
-        deadline: Instant,
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
     ) -> Result<Self, ExternalError> {
-        let state = Self::maybe_init_state(deadline, consensus.as_ref(), shard_id).await?;
+        let state = Self::maybe_init_state(consensus.as_ref(), shard_id).await?;
         Ok(Machine { consensus, state })
     }
 
@@ -67,19 +66,18 @@ where
         self.state.shard_id()
     }
 
-    pub async fn upper(&mut self, deadline: Instant) -> Result<Antichain<T>, ExternalError> {
-        self.fetch_and_update_state(deadline).await?;
+    pub async fn upper(&mut self) -> Result<Antichain<T>, ExternalError> {
+        self.fetch_and_update_state().await?;
         Ok(self.state.upper())
     }
 
     pub async fn register(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         reader_id: &ReaderId,
     ) -> Result<(WriteCapability<T>, ReadCapability<T>), ExternalError> {
         let (seqno, (write_cap, read_cap)) = self
-            .apply_unbatched_cmd::<_, (), _>(deadline, |seqno, state| {
+            .apply_unbatched_cmd::<_, (), _>(|seqno, state| {
                 Ok(state.register(seqno, writer_id, reader_id))
             })
             .await?
@@ -92,11 +90,10 @@ where
 
     pub async fn clone_reader(
         &mut self,
-        deadline: Instant,
         new_reader_id: &ReaderId,
     ) -> Result<ReadCapability<T>, ExternalError> {
         let (seqno, read_cap) = self
-            .apply_unbatched_cmd::<_, (), _>(deadline, |seqno, state| {
+            .apply_unbatched_cmd::<_, (), _>(|seqno, state| {
                 Ok(state.clone_reader(seqno, new_reader_id))
             })
             .await?
@@ -109,13 +106,12 @@ where
 
     pub async fn append(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
         let res = self
-            .apply_unbatched_cmd(deadline, |_, state| state.append(writer_id, keys, desc))
+            .apply_unbatched_cmd(|_, state| state.append(writer_id, keys, desc))
             .await?;
         let (seqno, res) = match res {
             Ok(x) => x,
@@ -130,15 +126,12 @@ where
 
     pub async fn compare_and_append(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
         let res = self
-            .apply_unbatched_cmd(deadline, |_, state| {
-                state.compare_and_append(writer_id, keys, desc)
-            })
+            .apply_unbatched_cmd(|_, state| state.compare_and_append(writer_id, keys, desc))
             .await?;
         let (seqno, res) = match res {
             Ok(x) => x,
@@ -153,14 +146,11 @@ where
 
     pub async fn downgrade_since(
         &mut self,
-        deadline: Instant,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
     ) -> Result<Result<SeqNo, InvalidUsage>, ExternalError> {
         let res = self
-            .apply_unbatched_cmd(deadline, |_, state| {
-                state.downgrade_since(reader_id, new_since)
-            })
+            .apply_unbatched_cmd(|_, state| state.downgrade_since(reader_id, new_since))
             .await?;
         let (seqno, _) = match res {
             Ok(x) => x,
@@ -169,15 +159,9 @@ where
         Ok(Ok(seqno))
     }
 
-    pub async fn expire_writer(
-        &mut self,
-        deadline: Instant,
-        writer_id: &WriterId,
-    ) -> Result<SeqNo, ExternalError> {
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> Result<SeqNo, ExternalError> {
         let res = self
-            .apply_unbatched_cmd(deadline, |seqno, state| {
-                state.expire_writer(seqno, writer_id)
-            })
+            .apply_unbatched_cmd(|seqno, state| state.expire_writer(seqno, writer_id))
             .await?;
         let seqno = match res {
             Ok((seqno, ())) => seqno,
@@ -186,15 +170,9 @@ where
         Ok(seqno)
     }
 
-    pub async fn expire_reader(
-        &mut self,
-        deadline: Instant,
-        reader_id: &ReaderId,
-    ) -> Result<SeqNo, ExternalError> {
+    pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> Result<SeqNo, ExternalError> {
         let res = self
-            .apply_unbatched_cmd(deadline, |seqno, state| {
-                state.expire_reader(seqno, reader_id)
-            })
+            .apply_unbatched_cmd(|seqno, state| state.expire_reader(seqno, reader_id))
             .await?;
         let seqno = match res {
             Ok((seqno, ())) => seqno,
@@ -205,7 +183,6 @@ where
 
     pub async fn snapshot(
         &mut self,
-        deadline: Instant,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<(String, Description<T>)>, InvalidUsage>, ExternalError> {
         let mut fetches = 0;
@@ -234,30 +211,26 @@ where
                 } else {
                     Duration::from_secs(1)
                 };
-                if Instant::now() + sleep > deadline {
-                    return Err(ExternalError::new_timeout(deadline));
-                }
                 info!(
                     "snapshot as of {:?} not available for upper {:?} retrying in {:?}",
                     as_of, upper, sleep
                 );
                 tokio::time::sleep(sleep).await;
             }
-            self.fetch_and_update_state(deadline).await?;
+            self.fetch_and_update_state().await?;
             fetches += 1;
         }
     }
 
     pub async fn next_listen_batch(
         &mut self,
-        deadline: Instant,
         frontier: &Antichain<T>,
     ) -> Result<(Vec<String>, Description<T>), ExternalError> {
         // This unconditionally fetches the latest state and uses that to
         // determine if we can serve `as_of`. TODO: We could instead check first
         // and only fetch if necessary.
         loop {
-            self.fetch_and_update_state(deadline).await?;
+            self.fetch_and_update_state().await?;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
                 return Ok((keys.to_owned(), desc.clone()));
             }
@@ -266,9 +239,6 @@ where
             } else {
                 Duration::from_secs(1)
             };
-            if Instant::now() + sleep > deadline {
-                return Err(ExternalError::new_timeout(deadline));
-            }
             // Wait a bit and try again.
             //
             // TODO: See if we can watch for changes in Consensus to be more
@@ -283,7 +253,6 @@ where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
     >(
         &mut self,
-        deadline: Instant,
         mut work_fn: WorkFn,
     ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
         let path = self.shard_id().to_string();
@@ -302,7 +271,12 @@ where
             let new = VersionedData::from((new_state.seqno(), &new_state));
             let cas_res = self
                 .consensus
-                .compare_and_set(deadline, &path, Some(self.state.seqno()), new)
+                .compare_and_set(
+                    Instant::now() + FOREVER,
+                    &path,
+                    Some(self.state.seqno()),
+                    new,
+                )
                 .await
                 .map_err(|err| {
                     debug!("apply_unbatched_cmd errored: {}", err);
@@ -324,7 +298,7 @@ where
                     // in #12223.
                     let () = self
                         .consensus
-                        .truncate(deadline, &path, self.state.seqno())
+                        .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
                         .await?;
 
                     return Ok(Ok((self.state.seqno(), work_ret)));
@@ -335,13 +309,9 @@ where
                         self.state.seqno(),
                         current.as_ref().map(|x| x.seqno)
                     );
-                    self.update_state(deadline, current).await?;
+                    self.update_state(current).await?;
 
                     // TODO: Some sort of exponential backoff here?
-                    let sleep = Duration::from_secs(0);
-                    if Instant::now() + sleep > deadline {
-                        return Err(ExternalError::new_timeout(deadline));
-                    }
                     continue;
                 }
             }
@@ -351,17 +321,13 @@ where
     // TODO: This is fairly duplicative of apply_unbatched_cmd. Unclear if
     // there's anything to do here...
     async fn maybe_init_state(
-        deadline: Instant,
         consensus: &(dyn Consensus + Send + Sync),
         shard_id: ShardId,
     ) -> Result<State<K, V, T, D>, ExternalError> {
-        debug!(
-            "Machine::maybe_init_state deadline={:?} shard_id={}",
-            deadline, shard_id
-        );
+        debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();
-        let mut current = consensus.head(deadline, &path).await?;
+        let mut current = consensus.head(Instant::now() + FOREVER, &path).await?;
 
         loop {
             // First, check if the shard has already been initialized.
@@ -381,12 +347,8 @@ where
                 state
             );
             let cas_res = consensus
-                .compare_and_set(deadline, &path, None, new)
-                .await
-                .map_err(|err| {
-                    debug!("maybe_init_state errored: {}", err);
-                    err
-                })?;
+                .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
+                .await?;
             match cas_res {
                 Ok(()) => {
                     trace!(
@@ -411,24 +373,22 @@ where
         }
     }
 
-    async fn fetch_and_update_state(&mut self, deadline: Instant) -> Result<(), ExternalError> {
+    async fn fetch_and_update_state(&mut self) -> Result<(), ExternalError> {
         let shard_id = self.shard_id();
-        let current = self.consensus.head(deadline, &shard_id.to_string()).await?;
-        self.update_state(deadline, current).await
+        let current = self
+            .consensus
+            .head(Instant::now() + FOREVER, &shard_id.to_string())
+            .await?;
+        self.update_state(current).await
     }
 
-    async fn update_state(
-        &mut self,
-        deadline: Instant,
-        current: Option<VersionedData>,
-    ) -> Result<(), ExternalError> {
+    async fn update_state(&mut self, current: Option<VersionedData>) -> Result<(), ExternalError> {
         let current = match current {
             Some(x) => x,
             None => {
                 // This seems a little wonky...
                 self.state =
-                    Self::maybe_init_state(deadline, self.consensus.as_ref(), self.shard_id())
-                        .await?;
+                    Self::maybe_init_state(self.consensus.as_ref(), self.shard_id()).await?;
                 return Ok(());
             }
         };
@@ -440,10 +400,12 @@ where
     }
 }
 
+pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
+
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
-    use crate::{ShardId, NO_TIMEOUT};
+    use crate::ShardId;
 
     use super::*;
 
@@ -453,7 +415,7 @@ mod tests {
 
         let (mut write, _) = new_test_client()
             .await?
-            .open::<String, (), u64, i64>(NO_TIMEOUT, ShardId::new())
+            .open::<String, (), u64, i64>(ShardId::new())
             .await?;
         let consensus = Arc::clone(&write.machine.consensus);
 
@@ -463,7 +425,6 @@ mod tests {
         for idx in 0..NUM_BATCHES {
             write
                 .compare_and_append(
-                    NO_TIMEOUT,
                     [((idx.to_string(), ()), idx, 1)],
                     Antichain::from_elem(idx),
                     Antichain::from_elem(idx + 1),
@@ -473,7 +434,7 @@ mod tests {
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
-            .scan(Instant::now() + NO_TIMEOUT, &key, SeqNo::minimum())
+            .scan(Instant::now() + FOREVER, &key, SeqNo::minimum())
             .await?;
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);

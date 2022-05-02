@@ -12,7 +12,7 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -28,7 +28,7 @@ use tracing::{info, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::Machine;
+use crate::r#impl::machine::{Machine, FOREVER};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 ///
@@ -59,6 +59,19 @@ impl WriterId {
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
+///
+/// All async methods on ReadHandle retry for as long as they are able, but the
+/// returned [std::future::Future]s implement "cancel on drop" semantics. This
+/// means that callers can add a timeout using [tokio::time::timeout] or
+/// [tokio::time::timeout_at].
+///
+/// ```rust,no_run
+/// # let mut write: mz_persist_client::write::WriteHandle<String, String, u64, i64> = unimplemented!();
+/// # let timeout: std::time::Duration = unimplemented!();
+/// # async {
+/// tokio::time::timeout(timeout, write.fetch_recent_upper()).await
+/// # };
+/// ```
 #[derive(Debug)]
 pub struct WriteHandle<K, V, T, D>
 where
@@ -95,14 +108,9 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
-    pub async fn fetch_recent_upper(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Antichain<T>, ExternalError> {
-        trace!("WriteHandle::fetch_recent_upper timeout={:?}", timeout,);
-        let deadline = Instant::now() + timeout;
-        let upper = self.machine.upper(deadline).await?;
-
+    pub async fn fetch_recent_upper(&mut self) -> Result<Antichain<T>, ExternalError> {
+        trace!("WriteHandle::fetch_recent_upper");
+        let upper = self.machine.upper().await?;
         Ok(upper)
     }
 
@@ -145,7 +153,6 @@ where
     /// overhead.
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
-        timeout: Duration,
         updates: I,
         new_upper: Antichain<T>,
     ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
@@ -157,12 +164,7 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!(
-            "WriteHandle::append timeout={:?} new_upper={:?}",
-            timeout,
-            new_upper
-        );
-        let deadline = Instant::now() + timeout;
+        trace!("WriteHandle::append new_upper={:?}", new_upper);
 
         let lower = self.upper.clone();
         let upper = new_upper;
@@ -178,17 +180,19 @@ where
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
             self.blob
-                .set(deadline, &key, value, Atomicity::RequireAtomic)
+                .set(
+                    Instant::now() + FOREVER,
+                    &key,
+                    value,
+                    Atomicity::RequireAtomic,
+                )
                 .await?;
             vec![key]
         } else {
             vec![]
         };
 
-        let res = self
-            .machine
-            .append(deadline, &self.writer_id, &keys, &desc)
-            .await?;
+        let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
             Ok(Err(current_upper)) => {
@@ -230,7 +234,6 @@ where
     /// the caller. See <http://sled.rs/errors.html> for details.
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
-        timeout: Duration,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
@@ -243,12 +246,7 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!(
-            "WriteHandle::write_batch timeout={:?} new_upper={:?}",
-            timeout,
-            new_upper
-        );
-        let deadline = Instant::now() + timeout;
+        trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
 
         let lower = expected_upper;
         let upper = new_upper;
@@ -264,7 +262,12 @@ where
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
             self.blob
-                .set(deadline, &key, value, Atomicity::RequireAtomic)
+                .set(
+                    Instant::now() + FOREVER,
+                    &key,
+                    value,
+                    Atomicity::RequireAtomic,
+                )
                 .await?;
             vec![key]
         } else {
@@ -273,7 +276,7 @@ where
 
         let res = self
             .machine
-            .compare_and_append(deadline, &self.writer_id, &keys, &desc)
+            .compare_and_append(&self.writer_id, &keys, &desc)
             .await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
@@ -314,8 +317,8 @@ where
             trace!("writing update {:?}", ((k, v), t, d));
             key_buf.clear();
             val_buf.clear();
-            k.encode(&mut key_buf);
-            v.encode(&mut val_buf);
+            K::encode(k, &mut key_buf);
+            V::encode(v, &mut val_buf);
             // TODO: Get rid of the from_le_bytes.
             let t = u64::from_le_bytes(T::encode(t));
             let d = i64::from_le_bytes(D::encode(d));
@@ -381,9 +384,8 @@ where
     D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
         // TODO: Use tokio instead of futures_executor.
-        let res = futures_executor::block_on(self.machine.expire_writer(deadline, &self.writer_id));
+        let res = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
         if let Err(err) = res {
             info!(
                 "drop failed to expire writer {}, falling back to lease timeout: {:?}",
@@ -396,7 +398,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
-    use crate::{ShardId, NO_TIMEOUT};
+    use crate::ShardId;
 
     use super::*;
 
@@ -412,25 +414,24 @@ mod tests {
 
         let (mut write, _) = new_test_client()
             .await?
-            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
+            .open::<String, String, u64, i64>(ShardId::new())
             .await?;
         let blob = Arc::clone(&write.blob);
 
         // Write an initial batch.
         let mut upper = 3;
         write
-            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(upper))
+            .append(&data[..2], Antichain::from_elem(upper))
             .await??
             .expect("invalid current upper");
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
-        let blob_count_before = blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len();
+        let blob_count_before = blob.list_keys(Instant::now() + FOREVER).await?.len();
         for _ in 0..5 {
             let new_upper = upper + 1;
             const EMPTY: &[((String, String), u64, i64)] = &[];
             write
                 .compare_and_append(
-                    NO_TIMEOUT,
                     EMPTY,
                     Antichain::from_elem(upper),
                     Antichain::from_elem(new_upper),
@@ -440,7 +441,7 @@ mod tests {
             upper = new_upper;
         }
         assert_eq!(
-            blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len(),
+            blob.list_keys(Instant::now() + FOREVER).await?.len(),
             blob_count_before
         );
 

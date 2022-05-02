@@ -24,7 +24,6 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -753,7 +752,7 @@ struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
 impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
     async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
         self.read_handle
-            .downgrade_since(Duration::from_secs(60), since)
+            .downgrade_since(since)
             .await
             .map_err(|e| StorageError::ClientError(anyhow!("external persist error: {:?}", e)))?
             .expect("invalid usage");

@@ -18,7 +18,6 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -97,7 +96,6 @@ impl PersistLocation {
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
     pub async fn open(
         &self,
-        timeout: Duration,
     ) -> Result<
         (
             Arc<dyn BlobMulti + Send + Sync>,
@@ -105,18 +103,17 @@ impl PersistLocation {
         ),
         ExternalError,
     > {
-        let deadline = Instant::now() + timeout;
         debug!(
-            "Location::open timeout={:?} blob={} consensus={}",
-            timeout, self.blob_uri, self.consensus_uri,
+            "Location::open blob={} consensus={}",
+            self.blob_uri, self.consensus_uri,
         );
         let blob = BlobMultiConfig::try_from(&self.blob_uri)
             .await?
-            .open(deadline)
+            .open()
             .await?;
         let consensus = ConsensusConfig::try_from(&self.consensus_uri)
             .await?
-            .open(deadline)
+            .open()
             .await?;
         Ok((blob, consensus))
     }
@@ -171,6 +168,20 @@ impl ShardId {
 
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
+///
+/// All async methods on PersistClient retry for as long as they are able, but
+/// the returned [std::future::Future]s implement "cancel on drop" semantics.
+/// This means that callers can add a timeout using [tokio::time::timeout] or
+/// [tokio::time::timeout_at].
+///
+/// ```rust,no_run
+/// # let client: mz_persist_client::PersistClient = unimplemented!();
+/// # let timeout: std::time::Duration = unimplemented!();
+/// # let id = mz_persist_client::ShardId::new();
+/// # async {
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id)).await
+/// # };
+/// ```
 #[derive(Debug, Clone)]
 pub struct PersistClient {
     blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -185,16 +196,10 @@ impl PersistClient {
     /// Concurrent usage is subject to the constraints documented on individual
     /// methods (mostly [WriteHandle::append]).
     pub async fn new(
-        timeout: Duration,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
     ) -> Result<Self, ExternalError> {
-        trace!(
-            "Client::new timeout={:?} blob={:?} consensus={:?}",
-            timeout,
-            blob,
-            consensus
-        );
+        trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
         Ok(PersistClient { blob, consensus })
@@ -215,7 +220,6 @@ impl PersistClient {
     /// of `Antichain::from_elem(T::minimum())`.
     pub async fn open<K, V, T, D>(
         &self,
-        timeout: Duration,
         shard_id: ShardId,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), ExternalError>
     where
@@ -224,11 +228,10 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        trace!("Client::open timeout={:?} shard_id={:?}", timeout, shard_id);
-        let deadline = Instant::now() + timeout;
-        let mut machine = Machine::new(deadline, shard_id, Arc::clone(&self.consensus)).await?;
+        trace!("Client::open shard_id={:?}", shard_id);
+        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
-        let (write_cap, read_cap) = machine.register(deadline, &writer_id, &reader_id).await?;
+        let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await?;
         let writer = WriteHandle {
             writer_id,
             machine: machine.clone(),
@@ -245,9 +248,6 @@ impl PersistClient {
         Ok((writer, reader))
     }
 }
-
-#[cfg(test)]
-const NO_TIMEOUT: Duration = Duration::from_secs(1_000_000);
 
 #[cfg(test)]
 mod tests {
@@ -270,7 +270,7 @@ mod tests {
     pub async fn new_test_client() -> Result<PersistClient, ExternalError> {
         let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
-        PersistClient::new(NO_TIMEOUT, blob, consensus).await
+        PersistClient::new(blob, consensus).await
     }
 
     pub fn all_ok<'a, K, V, T, D, I>(
@@ -306,28 +306,28 @@ mod tests {
 
         let (mut write, mut read) = new_test_client()
             .await?
-            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
+            .open::<String, String, u64, i64>(ShardId::new())
             .await?;
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
         write
-            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(3))
+            .append(&data[..2], Antichain::from_elem(3))
             .await??
             .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 2.
         let mut snap = read.snapshot_one(1).await??;
-        let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(1)).await??;
+        let mut listen = read.listen(Antichain::from_elem(1)).await??;
 
         // Snapshot should only have part of what we wrote.
         assert_eq!(snap.read_all().await?, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
         write
-            .append(NO_TIMEOUT, &data[2..], Antichain::from_elem(4))
+            .append(&data[2..], Antichain::from_elem(4))
             .await??
             .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(4));
@@ -342,8 +342,7 @@ mod tests {
         assert_eq!(listen.read_until(&4).await?, expected_events);
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
-        read.downgrade_since(NO_TIMEOUT, Antichain::from_elem(2))
-            .await??;
+        read.downgrade_since(Antichain::from_elem(2)).await??;
         assert_eq!(read.since(), &Antichain::from_elem(2));
 
         Ok(())
@@ -363,32 +362,20 @@ mod tests {
         let client = new_test_client().await?;
 
         let (mut write1, read1) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
+            .open::<String, String, u64, i64>(ShardId::new())
             .await?;
 
         // Different types, so that checks would fail in case we were not separating these
         // collections internally.
-        let (mut write2, read2) = client
-            .open::<String, (), u64, i64>(NO_TIMEOUT, ShardId::new())
-            .await?;
+        let (mut write2, read2) = client.open::<String, (), u64, i64>(ShardId::new()).await?;
 
         let res = write1
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data1[..],
-                Antichain::from_elem(0),
-                Antichain::from_elem(3),
-            )
+            .compare_and_append(&data1[..], Antichain::from_elem(0), Antichain::from_elem(3))
             .await??;
         assert_eq!(res, Ok(()));
 
         let res = write2
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data2[..],
-                Antichain::from_elem(0),
-                Antichain::from_elem(3),
-            )
+            .compare_and_append(&data2[..], Antichain::from_elem(0), Antichain::from_elem(3))
             .await??;
         assert_eq!(res, Ok(()));
 
@@ -414,24 +401,15 @@ mod tests {
 
         let shard_id = ShardId::new();
 
-        let (mut write1, _read1) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
-            .await?;
+        let (mut write1, _read1) = client.open::<String, String, u64, i64>(shard_id).await?;
 
-        let (mut write2, _read2) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
-            .await?;
+        let (mut write2, _read2) = client.open::<String, String, u64, i64>(shard_id).await?;
 
-        let res = write1
-            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
-            .await?;
+        let res = write1.append(&data[..], Antichain::from_elem(3)).await?;
         assert_eq!(res, Ok(Ok(())));
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
-        assert_eq!(
-            write2.fetch_recent_upper(NO_TIMEOUT).await?,
-            Antichain::from_elem(3)
-        );
+        assert_eq!(write2.fetch_recent_upper().await?, Antichain::from_elem(3));
 
         // The writer-local upper should not advance if another writer advances the frontier.
         assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
@@ -452,19 +430,13 @@ mod tests {
 
         let shard_id = ShardId::new();
 
-        let (mut write, _read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
-            .await?;
+        let (mut write, _read) = client.open::<String, String, u64, i64>(shard_id).await?;
 
-        let res = write
-            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
-            .await?;
+        let res = write.append(&data[..], Antichain::from_elem(3)).await?;
         assert_eq!(res, Ok(Ok(())));
 
         write.upper = Antichain::from_elem(0);
-        let res = write
-            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
-            .await?;
+        let res = write.append(&data[..], Antichain::from_elem(3)).await?;
         assert_eq!(res, Ok(Err(Antichain::from_elem(3))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
@@ -486,7 +458,7 @@ mod tests {
         let client = new_test_client().await?;
 
         let (write, read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
+            .open::<String, String, u64, i64>(ShardId::new())
             .await?;
 
         assert!(is_send_sync(client));
@@ -508,13 +480,9 @@ mod tests {
 
         let id = ShardId::new();
         let client = new_test_client().await?;
-        let (mut write1, read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (mut write1, read) = client.open::<String, String, u64, i64>(id).await?;
 
-        let (mut write2, _read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (mut write2, _read) = client.open::<String, String, u64, i64>(id).await?;
 
         assert_eq!(write1.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(write2.upper(), &Antichain::from_elem(u64::minimum()));
@@ -522,12 +490,7 @@ mod tests {
 
         // Write a [0,3) batch.
         let res = write1
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data[..2],
-                Antichain::from_elem(0),
-                Antichain::from_elem(3),
-            )
+            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
             .await??;
         assert_eq!(res, Ok(()));
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
@@ -537,12 +500,7 @@ mod tests {
 
         // Try and write with the expected upper.
         let res = write2
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data[..2],
-                Antichain::from_elem(0),
-                Antichain::from_elem(3),
-            )
+            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
             .await??;
         assert_eq!(res, Err(Antichain::from_elem(3)));
 
@@ -552,12 +510,7 @@ mod tests {
 
         // Try again with a good expected upper.
         let res = write2
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data[2..],
-                Antichain::from_elem(3),
-                Antichain::from_elem(4),
-            )
+            .compare_and_append(&data[2..], Antichain::from_elem(3), Antichain::from_elem(4))
             .await??;
         assert_eq!(res, Ok(()));
 
@@ -584,34 +537,26 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await?;
 
-        let (mut write1, read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (mut write1, read) = client.open::<String, String, u64, i64>(id).await?;
 
-        let (mut write2, _read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (mut write2, _read) = client.open::<String, String, u64, i64>(id).await?;
 
         // Grab a listener before we do any writing
-        let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(0)).await??;
+        let mut listen = read.listen(Antichain::from_elem(0)).await??;
 
         // Write a [0,3) batch.
-        let res = write1
-            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(3))
-            .await??;
+        let res = write1.append(&data[..2], Antichain::from_elem(3)).await??;
         assert_eq!(res, Ok(()));
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         // Write a [0,5) batch with the second writer.
-        let res = write2
-            .append(NO_TIMEOUT, &data[..4], Antichain::from_elem(5))
-            .await??;
+        let res = write2.append(&data[..4], Antichain::from_elem(5)).await??;
         assert_eq!(res, Ok(()));
         assert_eq!(write2.upper(), &Antichain::from_elem(5));
 
         // Write a [3,6) batch with the first writer.
         let res = write1
-            .append(NO_TIMEOUT, &data[2..5], Antichain::from_elem(6))
+            .append(&data[2..5], Antichain::from_elem(6))
             .await??;
         assert_eq!(res, Ok(()));
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
@@ -697,9 +642,7 @@ mod tests {
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client
-                    .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
-                    .await?;
+                let (mut write, _) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
                         Some((_, max_ts, _)) => Antichain::from_elem(max_ts + 1),
@@ -727,7 +670,7 @@ mod tests {
                         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
                         .collect::<Vec<_>>();
                     write
-                        .append(NO_TIMEOUT, updates, new_upper)
+                        .append(updates, new_upper)
                         .await??
                         .expect("invalid current upper");
                 }
@@ -745,9 +688,7 @@ mod tests {
             .map(|((k, v), t, d)| ((Ok(k), Ok(v)), t, d))
             .collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
-        let (_, read) = client
-            .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (_, read) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
         let actual = read.snapshot_one(max_ts).await??.read_all().await?;
         assert_eq!(actual, expected);
 
@@ -771,13 +712,11 @@ mod tests {
 
         let id = ShardId::new();
         let client = new_test_client().await?;
-        let (mut write, read) = client
-            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
-            .await?;
+        let (mut write, read) = client.open::<String, String, u64, i64>(id).await?;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(1)).await??;
-        let mut listen_next = Box::pin(listen.next(NO_TIMEOUT));
+        let mut listen = read.listen(Antichain::from_elem(1)).await??;
+        let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for
         // discussion of some alternative ways of writing this unit test.
@@ -790,12 +729,7 @@ mod tests {
 
         // Write a [0,3) batch.
         let res = write
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data[..2],
-                Antichain::from_elem(0),
-                Antichain::from_elem(3),
-            )
+            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
             .await??;
         assert_eq!(res, Ok(()));
 
@@ -832,12 +766,7 @@ mod tests {
 
         // Now add the data at 3 and also unblock the snapshot.
         let res = write
-            .compare_and_append(
-                NO_TIMEOUT,
-                &data[2..],
-                Antichain::from_elem(3),
-                Antichain::from_elem(4),
-            )
+            .compare_and_append(&data[2..], Antichain::from_elem(3), Antichain::from_elem(4))
             .await??;
         assert_eq!(res, Ok(()));
 

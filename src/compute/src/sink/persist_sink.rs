@@ -12,7 +12,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::time::Duration;
 
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
@@ -72,9 +71,6 @@ where
         let mut input =
             persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
 
-        // TODO(aljoscha): Configurable timeout? Or no timeout in the persist API?
-        let timeout = Duration::from_secs(60);
-
         let persist_location = PersistLocation {
             consensus_uri: self.consensus_uri.clone(),
             blob_uri: self.blob_uri.clone(),
@@ -86,15 +82,14 @@ where
         // "real" async context (such as our nice operator implementation below) because we need to
         // create the write handle before creating the operator because we want to share the handle
         // between the drop guard (which acts as the sink token) and the operator implementation.
-        let (blob, consensus) = futures_executor::block_on(persist_location.open(timeout))
+        let (blob, consensus) = futures_executor::block_on(persist_location.open())
             .expect("cannot open persist location");
 
-        let persist_client =
-            futures_executor::block_on(PersistClient::new(timeout, blob, consensus))
-                .expect("cannot open client");
+        let persist_client = futures_executor::block_on(PersistClient::new(blob, consensus))
+            .expect("cannot open client");
 
         let (write, _read) = futures_executor::block_on(
-            persist_client.open::<Row, Row, Timestamp, Diff>(timeout, self.shard_id),
+            persist_client.open::<Row, Row, Timestamp, Diff>(self.shard_id),
         )
         .expect("could not open persist shard");
 
@@ -171,7 +166,7 @@ where
                     // also advances the frontier.
                     // TODO(aljoscha): Figure out how errors from this should be reported.
                     write
-                        .append(timeout, updates, frontier.clone())
+                        .append(updates, frontier.clone())
                         .await
                         .expect("cannot append updates")
                         .expect("cannot append updates")
