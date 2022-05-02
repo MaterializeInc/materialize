@@ -24,9 +24,6 @@ mod linear;
 mod relation;
 mod scalar;
 
-// TODO(lluki): Remove me once #11970 is implemented
-pub use linear::plan::safe_mfp_stub;
-
 pub mod explain;
 pub mod visit;
 
@@ -37,7 +34,7 @@ pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},
     util::{join_permutations, permutation_for_arrangement},
-    MapFilterProject,
+    MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
 pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};

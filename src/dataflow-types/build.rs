@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
+        .extern_path(".mz_expr.linear", "::mz_expr")
         .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")

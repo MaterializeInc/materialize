@@ -34,7 +34,7 @@ use crate::{
     sources::{MzOffset, SourceDesc},
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
-use mz_expr::{safe_mfp_stub, PartitionId, RowSetFinishing};
+use mz_expr::{PartitionId, RowSetFinishing};
 use mz_repr::{GlobalId, Row};
 
 pub mod controller;
@@ -125,6 +125,7 @@ impl From<&Peek> for ProtoPeek {
             uuid: Some(x.uuid.into_proto()),
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
+            map_filter_project: Some((&x.map_filter_project).into()),
         }
     }
 }
@@ -142,8 +143,9 @@ impl TryFrom<ProtoPeek> for Peek {
             )?,
             timestamp: x.timestamp,
             finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
-            // TODO(lluki): Replace this function with some TryFrom<Proto..> once #11970 is fixed
-            map_filter_project: safe_mfp_stub(),
+            map_filter_project: x
+                .map_filter_project
+                .try_into_if_some("ProtoPeek::map_filter_project")?,
         })
     }
 }

@@ -1,0 +1,37 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// See https://developers.google.com/protocol-buffers for what's going on here.
+
+syntax = "proto3";
+
+import "expr/src/scalar.proto";
+
+package mz_expr.linear;
+
+message ProtoMapFilterProject {
+    message ProtoPredicate {
+        uint64 column_to_apply = 1;
+        mz_expr.scalar.ProtoMirScalarExpr predicate = 2;
+    }
+    repeated mz_expr.scalar.ProtoMirScalarExpr expressions = 1;
+    repeated ProtoPredicate predicates = 2;
+    repeated uint64 projection = 3;
+    uint64 input_arity = 4;
+}
+
+message ProtoSafeMfpPlan {
+    ProtoMapFilterProject mfp = 1;
+}
+
+message ProtoMfpPlan {
+    ProtoSafeMfpPlan mfp = 1;
+    repeated mz_expr.scalar.ProtoMirScalarExpr lower_bounds = 2;
+    repeated mz_expr.scalar.ProtoMirScalarExpr upper_bounds = 3;
+}
