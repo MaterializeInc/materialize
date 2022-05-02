@@ -78,7 +78,7 @@ openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
 opentelemetry-otlp = { version = "0.10.0" }
-os_info = "3.2.0"
+os_info = "3.3.0"
 prometheus = { version = "0.13.0", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 reqwest = { version = "0.11.10", features = ["json"] }
