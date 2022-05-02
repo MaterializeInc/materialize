@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "fuzz",
     "src/avro-derive",
     "src/avro",
     "src/aws-util",
