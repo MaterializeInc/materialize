@@ -119,6 +119,13 @@ message ProtoAggregateFunc {
     }
 }
 
+message ProtoRowSetFinishing {
+    repeated ProtoColumnOrder order_by = 1;
+    optional uint64 limit = 2;
+    uint64 offset = 3;
+    repeated uint64 project = 4;
+}
+
 message ProtoTableFunc {
     message ProtoWrap {
         repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;

@@ -47,7 +47,7 @@ pub use relation::{
     MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame, WindowFrameBound,
     WindowFrameUnits, RECURSION_LIMIT,
 };
-pub use relation::{ProtoAggregateFunc, ProtoColumnOrder};
+pub use relation::{ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing};
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 pub use scalar::{ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};

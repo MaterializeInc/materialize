@@ -11,6 +11,7 @@
 
 use mz_ore::cast::CastFrom;
 use std::{char::CharTryFromError, num::TryFromIntError};
+use uuid::Uuid;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.proto.rs"));
 
@@ -152,6 +153,21 @@ impl ProtoRepr for u128 {
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
         Ok((repr.hi as u128) << 64 | (repr.lo as u128))
+    }
+}
+
+impl ProtoRepr for Uuid {
+    type Repr = ProtoUuid;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        let val = self.as_u128();
+        let lo = (val & (u64::MAX as u128)) as u64;
+        let hi = (val >> 64) as u64;
+        ProtoUuid { hi, lo }
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        Ok(Uuid::from_u128((repr.hi as u128) << 64 | (repr.lo as u128)))
     }
 }
 

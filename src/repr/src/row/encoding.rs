@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::adt::array::ArrayDimension;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
+use crate::proto::TryFromProtoError;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
@@ -291,6 +292,16 @@ impl TryFrom<&ProtoRow> for Row {
             packer.try_push_proto(d)?;
         }
         Ok(row)
+    }
+}
+
+impl TryFrom<ProtoRow> for Row {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRow) -> Result<Self, Self::Error> {
+        //TODO(lluki): Revisit this when we fix #12125
+        (&x).try_into()
+            .map_err(TryFromProtoError::RowConversionError)
     }
 }
 
