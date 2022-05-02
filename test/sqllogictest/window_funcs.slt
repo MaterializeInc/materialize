@@ -3573,3 +3573,1372 @@ FROM t5
 GROUP BY f1
 ----
 1 NULL
+
+## last_value
+
+# Default frame (RANGE BETWEEN UNBOUNDED FOLLOWING AND CURRENT ROW)
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+# Default frame with large peer group
+# Warning: there are multiple valid results of this query
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f3) OVER (PARTITION BY f2 ORDER BY f1)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  3
+2  a  3  3
+3  a  4  4
+4  b  5  6
+4  b  6  6
+1  c  7  7
+2  c  8  8
+3  c  9  9
+7  d  10  10
+
+# ROWS BETWEEN x FOLLOWING AND UNBOUNDED FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  NULL
+4  b  6  4
+1  c  7  NULL
+2  c  8  1
+3  c  9  1
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  1
+3  a  4  1
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  1
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN x PRECEDING AND UNBOUNDED FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN x FOLLOWING AND 0 FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN 0 FOLLOWING AND x FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  2
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 10 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN y FOLLOWING AND x FOLLOWING, where x < y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN y FOLLOWING AND x FOLLOWING, where x > y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  2
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  1
+2  a  3  1
+3  a  4  2
+4  b  5  NULL
+4  b  6  4
+1  c  7  NULL
+2  c  8  1
+3  c  9  1
+7  d  10  NULL
+
+# ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x == y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  NULL
+4  b  6  4
+1  c  7  NULL
+2  c  8  1
+3  c  9  2
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  1
+3  a  4  2
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  1
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND 10 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN CURRENT ROW AND x FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  2
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 10 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN x PRECEDING AND x FOLLOWING
+# Equivalent to ROWS BETWEEN CURRENT ROW AND x FOLLOWING for last_value
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  2
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND x FOLLOWING
+# Equivalent to ROWS BETWEEN CURRENT ROW AND x FOLLOWING for last_value
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 0 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  2
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  2
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  2
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 10 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  1
+2  a  3  1
+3  a  4  1
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  1
+3  c  9  1
+7  d  10  7
+
+# ROWS BETWEEN CURRENT ROW AND CURRENT ROW
+# Always returns current row
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+# ROWS BETWEEN x PRECEDING AND CURRENT ROW
+# Always returns current row
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+# Always returns current row
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+# ROWS BETWEEN x PRECEDING AND 0 PRECEDING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+# ROWS BETWEEN 0 PRECEDING AND x PRECEDING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 2 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 10 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN y PRECEDING AND x PRECEDING, where x < y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  2
+2  a  2  2
+2  a  3  3
+3  a  4  NULL
+4  b  5  4
+4  b  6  NULL
+1  c  7  2
+2  c  8  3
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN y PRECEDING AND x PRECEDING, where x > y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 2 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN y PRECEDING AND x PRECEDING, where x == y
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  2
+2  a  2  2
+2  a  3  3
+3  a  4  NULL
+4  b  5  4
+4  b  6  NULL
+1  c  7  2
+2  c  8  3
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 2 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  2
+2  a  2  3
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  3
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND 10 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND x PRECEDING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  1
+2  a  2  2
+2  a  3  2
+3  a  4  3
+4  b  5  4
+4  b  6  4
+1  c  7  1
+2  c  8  2
+3  c  9  3
+7  d  10  7
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  2
+2  a  2  2
+2  a  3  3
+3  a  4  NULL
+4  b  5  4
+4  b  6  NULL
+1  c  7  2
+2  c  8  3
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  2
+2  a  2  3
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  3
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 10 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# Test near-overflow behavior on offsets
+# u64::MAX FOLLOWING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# u64::MAX PRECEDING
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# reduce_elision code path
+# Using the same table as first_value
+
+# Default frame, includes current row
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at UNBOUNDED FOLLOWING
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at 1 FOLLOWING
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at 0 FOLLOWING
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN CURRENT ROW AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND 0 FOLLOWING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at CURRENT ROW
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND CURRENT ROW)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at 0 PRECEDING
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND 0 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 1
+
+# Frame ending at 1 PRECEDING
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
+
+query II
+SELECT f1, last_value(f1) OVER (PARTITION BY f1 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+FROM t5
+GROUP BY f1
+----
+1 NULL
