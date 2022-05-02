@@ -28,9 +28,6 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [debugging.md](debugging.md) is a guide to debugging Materialize using
   rust-gdb / rust-lldb.
 
-* [demos.md](demos.md) explains the two tiers of demos in this codebase and
-  how to add a new one.
-
 * Our diagnostics guide is a work in progress. The sections we have so far are
   themselves works in progress. Feel free to add to them if you think up of
   something useful.
@@ -56,6 +53,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
+
+* [publishing.md](publishing.md) details how to publish packages, like Rust
+  crates or Docker images.
 
 * [reading.md](reading.md) contains a reading list.
 

@@ -2,21 +2,12 @@
 
 This guide details what you'll need to contribute to Materialize.
 
-Materialize is a collection of services written in [Rust] that should compile on
-any recent stable version.
+Materialize consists of several services written in [Rust] that are orchestrated
+by [Kubernetes]. Supporting build and test tools are written in a combination of
+Rust, [Python], and [Bash]. Tests often use [Docker Compose] rather than
+Kubernetes to orchestrate interactions with other systems, like [Apache Kafka].
 
-Materialize can be connected to many different types of event sources:
-
-* Custom Kafka topics, where events are encoded with Protobuf or Avro, with
-  support for additional encoding formats coming soon.
-* Kafka topics managed by a CDC tool like Debezium, where events adhere to a
-  particular "envelope" format that distinguishes updates from insertions and
-  deletions.
-* PostgreSQL tables, where events are read from PostgreSQL's replication log.
-* Streaming HTTP sources? Apache Pulsar sources? With a bit of elbow grease,
-  support for any message bus can be added to Materialize!
-
-## Installing
+## Install build and test dependencies
 
 ### C components
 
@@ -53,64 +44,6 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
-### Editors and IDEs
-
-In principle, any text editor can be used to edit Rust code. There is nothing
-special about Materialize's codebase: any general Rust development setup should
-work fine.
-
-By default, we recomend that developers without a strong preference of editor use
-Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
-setup for developing Materialize, and the one for which you are the most likely
-to be able to get help if something goes wrong. It's important to note that you
-**should not** install the "Rust" plugin, as it is known to
-conflict with Rust-Analyzer; the latter has far more advanced code navigation
-features and is the de-facto standard for developing Rust. If you use
-Rust-Analyzer, you may wish to change the target directory so it does not
-conflict with other cargo commands.  You can do this by adding to the cargo
-check extra args "--target-dir" and "$NEWTARGET".
-
-Visual Studio Code also works well for editing Python; to work on the Python code
-in the Materialize repository, install the official Python extension from Microsoft
-and add the following to your `settings.json`.
-
-``` json
-{
-  "python.linting.mypyEnabled": true,
-  "python.analysis.extraPaths": [
-      "misc/python"
-  ],
-  "python.defaultInterpreterPath": "misc/python/venv/bin/python"
-}
-```
-
-If you prefer to use another editor, such as Vim or Emacs, we recommend that
-you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
-of this document; if you have any issues, ask in one of the engineering channels
-on Slack.
-
-Besides Rust-Analyzer, the only other known tool with good code navigation features
-is CLion along with its Rust plugin. This is a good choice for developers who prefer
-the JetBrains ecosystem, but we no longer recommend it by default, since
-Rust-Analyzer has long since caught up to it in maturity. If you are a
-Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
-JetBrains license. If you're not yet sure you want to use CLion, you can
-use the 30-day free trial.
-
-### Debugging
-
-The standard debuggers for Rust code are `rust-lldb` on macOS, and `rust-gdb` on GNU/Linux.
-(It is also possible to run `rust-lldb` on GNU/Linux if necessary for whatever reason).
-These are wrappers around `lldb` and `gdb`, respectively, that endow them with slightly
-improved capabilities for pretty-printing Rust data structures. Visual Studio Code
-users may want to try the [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
-plugin.
-
-Unfortunately, you will soon find that these programs work less well than the equivalent
-tools for some other mainstream programming languages. In particular, inspecting
-complex data structures is often tedious and difficult. For this reason, most developers routinely use
-`println!` statements for debugging, in addition to (or instead of) these standard debuggers.
-
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
@@ -118,12 +51,12 @@ several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
 management of these services.
 
-**Confluent Platform is not be required for changes that don't need
-Kafka integration**. If your changes don't affect integration with external systems
-and can be fully exercised by SQL logic tests, we recommend not installing
-the Confluent Platform, as it is a rather heavy dependency. Most Materialize employees,
-or other major contributors, will probably need to run the full test suite and
-should therefore install the Confluent Platform.
+**Confluent Platform is not required for changes that don't need Kafka
+integration**. If your changes don't affect integration with external systems
+and can be fully exercised by SQL logic tests, we recommend not installing the
+Confluent Platform, as it is a rather heavy dependency. Most Materialize
+employees, or other major contributors, will probably need to run the full test
+suite and should therefore install the Confluent Platform.
 
 #### All platforms
 
@@ -184,21 +117,27 @@ writing, only Java 8 and 11 are supported.
 
 ## Building Materialize
 
-Materialize is a collection of several Rust services that need to be built
-together. Each service can be built individually via Cargo, but we recommend
-using the `bin/materialized` script to drive the process:
+First, clone this repository:
 
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
-cd materialize
-bin/materialized [--release] [<materialized arg>...]
 ```
 
 Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
 
-## Prepping Confluent
+Then you can build Materialize. Because Materialize is a collection of several
+Rust services that need to be built together, each service can be built
+individually via Cargo, but we recommend using the `bin/materialized` script to
+drive the process:
+
+```shell
+cd materialize
+bin/materialized [--release] [<materialized arg>...]
+```
+
+## Running Confluent Platform
 
 As mentioned above, **Confluent Platform is only required need to test Kafka
 sources and sinks against a *local* Kafka installation.** If possible, we
@@ -209,8 +148,7 @@ If you do need the Confluent Platform running locally, execute the following
 commands:
 
 ```shell
-confluent local services kafka start     # Also starts Zookeeper.
-confluent local services schema-registry start
+confluent local services schema-registry start  # Also starts ZooKeeper and Kafka.
 ```
 
 You can also use the included `confluent` CLI command to start and stop
@@ -268,84 +206,50 @@ own document. See [Developer guide: testing](guide-testing.md).
 
 ## Style
 
-CI performs the lawful evil task of ensuring "good code style" with the
-following tools:
+We use the following tools to perform automatic code style checks:
 
-Tool                  | Use                     | Run locally with
-----------------------|-------------------------|-------------------
-[Clippy]              | Rust semantic nits      | `./bin/check`
-[rustfmt]             | Rust code formatter     | `cargo fmt`
-Linter                | General formatting nits | `./bin/lint`
-[Unused dependencies] | Check for unused deps   | `./bin/unused-deps`
+Tool                  | Use                                | Run locally with
+----------------------|------------------------------------|------------------
+[Clippy]              | Rust semantic nits                 | `bin/check`
+[rustfmt]             | Rust code formatter                | `cargo fmt`
+Linter                | General formatting nits            | `bin/lint`
+[cargo-udeps]         | Check for unused Rust dependencies | `bin/unused-deps`
 
-See also the [style guide](style.md) for some additional soft
-recommendations.
-
-### Unused dependencies
-
-Use `bin/unused-deps` to find unused dependencies in Cargo.toml manifests.
-
-This script is run in CI, though due to a bug in Cargo failures in the script do
-not fail the build. If necessary, you can [ignore false
-positives][udeps-false-positives], which commonly occur with dependencies that
-are used only on certain platforms.
+See the [style guide](style.md) for additional recommendations on code style.
 
 ## Submitting and reviewing changes
 
 See [Developer guide: submitting and reviewing changes](guide-changes.md).
 
-## Publishing code changes
-
-### crates.io
-
-Before publishing internal Rust crates to `crates.io`(https://crates.io/), be sure to
-indicate that `MaterializeInc` is the reponsible maintainer by running the following
-command:
-
-```shell
-cargo owner --rm <your personal login>
-cargo owner --add github:MaterializeInc:crate-owners
-```
-
-### PyPI
-
-Use the [`materializeinc`](https://pypi.org/user/materializeinc/) PyPI user to upload
-and update Materialize's Python packages on PyPI. Login information can be found in the
-shared 1Password account.
-
-## Other repositories
-
-Where possible, we prefer to keep things in the main repository (a "monorepo"
-approach). There are a few exceptions:
-
-  * **[rust-dec]**, libdecnumber bindings for Rust
-  * **[materialize-dbt-utils]**, data build tool (dbt) utilities for Materialize
-  * Many Pulumi providers
-
-Don't add to this list without good reason! Separate repositories are
-acceptable for:
-
-  * Rapid iteration on new Materialize plugins or integrations, where the CI
-    time or code quality requirements in the main repository would be
-    burdensome. When the code is more stable, the repository should be
-    integrated into the main Materialize repository.
-
-  * External requirements that require a separate repository. For example,
-    Pulumi providers are conventionally developed each in their own repository.
-    Similarly, materialize-dbt-utils can only appear on [dbt hub] if it is
-    developed in a standalone repository.
-
-  * Stable foundational components where community contribution is desirable.
-    For example, rust-dec is a very small package, and asking contributors
-    to clone the entire Materialize repository would be a large barrier to
-    entry. Changes to Materialize very rarely require changes in rust-dec, so
-    maintaining the two separately does not introduce much overhead.
-
 ## Code organization
 
-We break our code into crates primarily to promote organization of code by team,
-thereby introducing ownership and autonomy. As such, many crates are owned by a
-specific team (which does not preclude the existence of shared, cross-team
+### Repository structure
+
+This repository has the following basic structure:
+
+  * **`bin`** contains scripts for contributor use.
+  * **`ci`** contains configuration and scripts for [CI](/ci/README.md).
+  * **`doc/developer`** contains documentation for Materialize contributors,
+    including this document.
+  * **`doc/user`** contains the user-facing documentation, which is published to
+    <https://materialize.com/docs>.
+  * **`misc`** contains a variety of supporting tools and projects. Some
+    highlights:
+    * **`misc/dbt-materialize` contains the Materialize [dbt] adapter.
+    * **`misc/python`** contains Python developer tools, like
+      [mzbuild](mzbuild.md).
+    * **`misc/nix`** contains an experimental [Nix] configuration for
+      developing Materialize.
+    * **`misc/www`** contains the source code for <https://dev.materialize.com>.
+  * **`src`** contains the primary Rust crates that comprise Materialize.
+  * **`test`** contains test suites, which are described in
+    [Developer guide: testing](guide-testing.md).
+
+### Rust crate structure
+
+We break our Rust code into crates primarily to promote organization of code by
+team, thereby introducing ownership and autonomy. As such, many crates are owned
+by a specific team (which does not preclude the existence of shared, cross-team
 crates).
 
 Although the primary unit of code organization at the inter-team level is the
@@ -366,10 +270,98 @@ specifying the `--roots` flag with a comma separated list of crates:
 bin/crate-diagram --roots mz-sql,mz-dataflow
 ```
 
+## Other repositories
+
+Where possible, we prefer to keep things in the main repository (a "monorepo"
+approach). There are a few exceptions:
+
+  * **[demos]**, which showcases several use cases for Materialize
+  * **[rust-dec]**, libdecnumber bindings for Rust
+  * **[materialize-dbt-utils]**, data build tool (dbt) utilities for Materialize
+  * [Several custom Pulumi providers](https://github.com/MaterializeInc?q=pulumi)
+
+Don't add to this list without good reason! Separate repositories are
+acceptable for:
+
+  * Rapid iteration on new Materialize plugins or integrations, where the CI
+    time or code quality requirements in the main repository would be
+    burdensome. When the code is more stable, the repository should be
+    integrated into the main Materialize repository.
+
+  * External requirements that require a separate repository. For example,
+    Pulumi providers are conventionally developed each in their own repository.
+    Similarly, materialize-dbt-utils can only appear on [dbt hub] if it is
+    developed in a standalone repository.
+
+  * Stable foundational components where community contribution is desirable.
+    For example, rust-dec is a very small package, and asking contributors
+    to clone the entire Materialize repository would be a large barrier to
+    entry. Changes to Materialize very rarely require changes in rust-dec, so
+    maintaining the two separately does not introduce much overhead.
+
 ## Developer tools
 
-The repository contains several useful scripts that can improve your development
-experience.
+### Editors and IDEs
+
+In principle, any text editor can be used to edit Rust code.
+
+By default, we recomend that developers without a strong preference of editor use
+Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+setup for developing Materialize, and the one for which you are the most likely
+to be able to get help if something goes wrong. It's important to note that you
+**should not** install the "Rust" plugin, as it is known to
+conflict with Rust-Analyzer; the latter has far more advanced code navigation
+features and is the de-facto standard for developing Rust. If you use
+Rust-Analyzer, you may wish to change the target directory so it does not
+conflict with other cargo commands.  You can do this by adding to the cargo
+check extra args "--target-dir" and "$NEWTARGET".
+
+Visual Studio Code also works well for editing Python; to work on the Python code
+in the Materialize repository, install the official Python extension from Microsoft
+and add the following to your `settings.json`.
+
+``` json
+{
+  "python.linting.mypyEnabled": true,
+  "python.analysis.extraPaths": [
+      "misc/python"
+  ],
+  "python.defaultInterpreterPath": "misc/python/venv/bin/python"
+}
+```
+
+If you prefer to use another editor, such as Vim or Emacs, we recommend that
+you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
+of this document; if you have any issues, ask in one of the engineering channels
+on Slack.
+
+Besides Rust-Analyzer, the only other known tool with good code navigation features
+is CLion along with its Rust plugin. This is a good choice for developers who prefer
+the JetBrains ecosystem, but we no longer recommend it by default, since
+Rust-Analyzer has long since caught up to it in maturity. If you are a
+Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
+JetBrains license. If you're not yet sure you want to use CLion, you can
+use the 30-day free trial.
+
+### Editor add-ons
+
+A few editor-specific add-ons and configurations have been authored to improve the editing of
+Materialize-specific code. Check `misc/editor` for add-ons that may be relevant for your editor
+of choice.
+
+### Debugging
+
+The standard debuggers for Rust code are `rust-lldb` on macOS, and `rust-gdb` on GNU/Linux.
+(It is also possible to run `rust-lldb` on GNU/Linux if necessary for whatever reason).
+These are wrappers around `lldb` and `gdb`, respectively, that endow them with slightly
+improved capabilities for pretty-printing Rust data structures. Visual Studio Code
+users may want to try the [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+plugin.
+
+Unfortunately, you will soon find that these programs work less well than the equivalent
+tools for some other mainstream programming languages. In particular, inspecting
+complex data structures is often tedious and difficult. For this reason, most developers routinely use
+`println!` statements for debugging, in addition to (or instead of) these standard debuggers.
 
 ### Automatic style checks
 
@@ -398,16 +390,11 @@ For zsh, add the follow to your `~/.zshrc`:
 source /path/to/materialize/misc/completions/zsh/*
 ```
 
-### Editor add-ons
-
-A few editor-specific add-ons and configurations have been authored to improve the editing of
-Materialize-specific code. Check `misc/editor` for add-ons that may be relevant for your editor
-of choice.
-
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
-[dbt hub]: https://hub.getdbt.com
+[Bash]: https://www.gnu.org/software/bash/
+[cargo-udeps]: https://github.com/est31/cargo-udeps
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [CMake]: https://cmake.org
 [Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
@@ -415,14 +402,19 @@ of choice.
 [Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
 [Control Center]: https://www.confluent.io/confluent-control-center/
+[dbt]: https://getdbt.com
+[dbt hub]: https://hub.getdbt.com
 [dbt-materialize]: https://github.com/materializeInc/dbt-materialize
+[demos]: https://github.com/MaterializeInc/demos
+[Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [Homebrew]: https://brew.sh
-[rust-dec]: https://github.com/MaterializeInc/rust-dec
+[Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
+[Nix]: https://nixos.org
+[Python]: https://www.python.org
+[rust-dec]: https://github.com/MaterializeInc/rust-dec
 [Rust]: https://www.rust-lang.org
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
-[udeps-false-positives]: https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies
-[Unused dependencies]: https://github.com/est31/cargo-udeps

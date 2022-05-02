@@ -36,7 +36,7 @@ The unit/integration test suite uses the standard test framework that ships with
 Cargo. You can run the full test suite like so:
 
 ```shell
-$ cargo test
+$ bin/cargo-test
 ```
 
 Some of the packages have tests that depend on ZooKeeper, Kafka, and the
@@ -77,7 +77,7 @@ runs the tests that match the specified pattern. For example, to only run tests
 with `avro` in their name:
 
 ```shell
-$ cargo test -- avro
+$ bin/cargo-test -- avro
 ```
 
 As mentioned above, the Rust unit/integration tests follow the standard
