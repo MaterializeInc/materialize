@@ -1474,7 +1474,8 @@ pub mod monoids {
             | AggregateFunc::RowNumber { .. }
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
-            | AggregateFunc::FirstValue { .. } => None,
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. } => None,
         }
     }
 }

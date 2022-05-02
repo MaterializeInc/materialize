@@ -911,7 +911,8 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::RowNumber { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. }
-        | AggregateFunc::FirstValue { .. } => ReductionType::Basic,
+        | AggregateFunc::FirstValue { .. }
+        | AggregateFunc::LastValue { .. } => ReductionType::Basic,
     }
 }
 

@@ -372,6 +372,10 @@ impl ValueWindowExpr {
                 order_by: self.order_by,
                 window_frame: self.window_frame,
             },
+            ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
+                order_by: self.order_by,
+                window_frame: self.window_frame,
+            },
         }
     }
 }
@@ -382,6 +386,7 @@ pub enum ValueWindowFunc {
     Lag,
     Lead,
     FirstValue,
+    LastValue,
 }
 
 impl ValueWindowFunc {
@@ -393,7 +398,9 @@ impl ValueWindowFunc {
                     .clone()
                     .nullable(true)
             }
-            ValueWindowFunc::FirstValue => input_type.scalar_type.nullable(true),
+            ValueWindowFunc::FirstValue | ValueWindowFunc::LastValue => {
+                input_type.scalar_type.nullable(true)
+            }
         }
     }
 }

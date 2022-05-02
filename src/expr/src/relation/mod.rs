@@ -1772,7 +1772,7 @@ impl AggregateExpr {
                 }
             }
 
-            // The input type for LagLead is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for FirstValue is a ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::FirstValue { window_frame, .. } => {
                 let tuple = self
                     .expr
@@ -1810,6 +1810,52 @@ impl AggregateExpr {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
                                 ColumnName::from("?first_value?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
+            // The input type for LastValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            AggregateFunc::LastValue { window_frame, .. } => {
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let last_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                // If the window frame includes the current (single) row, return its value, null otherwise
+                let value = if window_frame.includes_current_row() {
+                    expr
+                } else {
+                    MirScalarExpr::literal_null(last_value_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?last_value?"),
                                 ColumnName::from("?record?"),
                             ],
                         },

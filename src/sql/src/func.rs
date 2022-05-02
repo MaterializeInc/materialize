@@ -2572,6 +2572,9 @@ lazy_static! {
             "first_value" => ValueWindow {
                 params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
             },
+            "last_value" => ValueWindow {
+                params!(Any) => ValueWindowFunc::LastValue => Any, 3113;
+            },
 
             // Table functions.
             "generate_series" => Table {
