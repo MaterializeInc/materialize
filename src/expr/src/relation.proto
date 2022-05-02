@@ -69,7 +69,7 @@ message ProtoAggregateFunc {
         }
     };
 
-    message ProtoFirstValue {
+    message ProtoWindowFrame {
         ProtoColumnOrders order_by = 1;
         mz_expr.relation.ProtoWindowFrame window_frame = 2;
     }
@@ -115,7 +115,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
-        ProtoFirstValue first_value = 41;
+        ProtoWindowFrame first_value = 41;
     }
 }
 

@@ -1064,7 +1064,7 @@ impl From<&AggregateFunc> for ProtoAggregateFunc {
                 AggregateFunc::FirstValue {
                     order_by,
                     window_frame,
-                } => Kind::FirstValue(proto_aggregate_func::ProtoFirstValue {
+                } => Kind::FirstValue(proto_aggregate_func::ProtoWindowFrame {
                     order_by: Some(order_by.into()),
                     window_frame: Some(window_frame.into()),
                 }),
@@ -1152,10 +1152,10 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
                 },
             },
             Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
-                order_by: pfv.order_by.try_into_if_some("ProtoFirstValue::order_by")?,
+                order_by: pfv.order_by.try_into_if_some("ProtoWindowFrame::order_by")?,
                 window_frame: pfv
                     .window_frame
-                    .try_into_if_some("ProtoFirstValue::window_frame")?,
+                    .try_into_if_some("ProtoWindowFrame::window_frame")?,
             },
             Kind::Dummy(()) => AggregateFunc::Dummy,
         })
