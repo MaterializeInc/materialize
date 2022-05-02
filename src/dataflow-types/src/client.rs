@@ -19,6 +19,9 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
+use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use proptest::prelude::*;
+use proptest_derive::Arbitrary;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -31,7 +34,7 @@ use crate::{
     sources::{MzOffset, SourceDesc},
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
-use mz_expr::{PartitionId, RowSetFinishing};
+use mz_expr::{safe_mfp_stub, PartitionId, RowSetFinishing};
 use mz_repr::{GlobalId, Row};
 
 pub mod controller;
@@ -41,6 +44,8 @@ use self::controller::ClusterReplicaSizeConfig;
 
 pub mod partitioned;
 pub mod replicated;
+
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 
 /// An abstraction allowing us to name difference compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
@@ -78,7 +83,7 @@ pub enum InstanceConfig {
 /// Subsequent commands may arbitrarily compact the arrangements;
 /// the dataflow runners are responsible for ensuring that they can
 /// correctly answer the `Peek`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize)]
 pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
@@ -87,6 +92,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of this peek request.
     ///
     /// Used in responses and cancellation requests.
+    #[proptest(strategy = "any_uuid()")]
     pub uuid: Uuid,
     /// The logical timestamp at which the arrangement is queried.
     pub timestamp: T,
@@ -94,6 +100,52 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
+}
+
+impl<T: PartialEq> PartialEq for Peek<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.key == other.key
+            && self.uuid == other.uuid
+            && self.timestamp == other.timestamp
+            && self.finishing == other.finishing
+            && self.map_filter_project == other.map_filter_project
+    }
+}
+
+fn any_uuid() -> impl Strategy<Value = Uuid> {
+    (0..u128::MAX).prop_map(Uuid::from_u128)
+}
+
+impl From<&Peek> for ProtoPeek {
+    fn from(x: &Peek) -> Self {
+        ProtoPeek {
+            id: Some((&x.id).into()),
+            key: x.key.clone().map(|x| (&x).into()),
+            uuid: Some(x.uuid.into_proto()),
+            timestamp: x.timestamp,
+            finishing: Some((&x.finishing).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoPeek> for Peek {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: x.id.try_into_if_some("ProtoPeek::id")?,
+            key: x.key.map(|x| x.try_into()).transpose()?,
+            uuid: Uuid::from_proto(
+                x.uuid
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,
+            )?,
+            timestamp: x.timestamp,
+            finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
+            // TODO(lluki): Replace this function with some TryFrom<Proto..> once #11970 is fixed
+            map_filter_project: safe_mfp_stub(),
+        })
+    }
 }
 
 /// Commands related to the computation and maintenance of views.
@@ -874,5 +926,22 @@ pub mod tcp {
             tokio_util::codec::Framed::new(conn, length_delimited_codec()),
             Bincode::default(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+
+    proptest! {
+        // TODO: This will only work once we have implemented MfpPlan #11970
+        #[test]
+        #[ignore]
+        fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

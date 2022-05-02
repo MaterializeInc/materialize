@@ -1902,7 +1902,7 @@ impl Default for JoinImplementation {
 /// keywords), whereas much of the rest of SQL is defined in terms of unordered
 /// multisets. But as it turns out, the same idea can be used to optimize
 /// trivial peeks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RowSetFinishing {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
@@ -1912,6 +1912,43 @@ pub struct RowSetFinishing {
     pub offset: usize,
     /// Include only given columns.
     pub project: Vec<usize>,
+}
+
+impl From<&RowSetFinishing> for ProtoRowSetFinishing {
+    fn from(x: &RowSetFinishing) -> Self {
+        ProtoRowSetFinishing {
+            order_by: x.order_by.iter().map(Into::into).collect(),
+            limit: x.limit.clone().map(usize::into_proto),
+            offset: x.offset.into_proto(),
+            project: x
+                .project
+                .clone()
+                .into_iter()
+                .map(usize::into_proto)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoRowSetFinishing> for RowSetFinishing {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRowSetFinishing) -> Result<Self, Self::Error> {
+        Ok(RowSetFinishing {
+            order_by: x
+                .order_by
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+            limit: x.limit.map(usize::from_proto).transpose()?,
+            offset: usize::from_proto(x.offset)?,
+            project: x
+                .project
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 impl RowSetFinishing {
