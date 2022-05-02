@@ -216,7 +216,7 @@ pub fn any_matcher() -> impl Strategy<Value = Matcher> {
     // order of its appearance in the regex):
     // * Alphanumeric characters, both upper and lower-case.
     // * Control characters.
-    // * Punctuation.
+    // * Punctuation minus the escape character.
     // * Space characters.
     // * Multi-byte characters.
     // * _ and %, which are special characters for a like pattern.
@@ -226,7 +226,7 @@ pub fn any_matcher() -> impl Strategy<Value = Matcher> {
     // Syntax reference for LIKE here:
     // https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-LIKE
     (
-        r"([[:alnum:]]|[[:cntrl:]]|[[:punct:]]|[[:space:]]|华|_|%|(\\_)|(\\%)|(\\\\)){0, 50}",
+        r"([[:alnum:]]|[[:cntrl:]]|([[[:punct:]]&&[^\\]])|[[:space:]]|华|_|%|(\\_)|(\\%)|(\\\\)){0, 50}",
         bool::arbitrary(),
     )
         .prop_map(|(pattern, case_insensitive)| compile(&pattern, case_insensitive).unwrap())
