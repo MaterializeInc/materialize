@@ -12,7 +12,7 @@ fstrings = "0.2.3"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false }
 quote = "1.0.18"
-syn = { version = "1.0.91", features = ["extra-traits", "full", "parsing"] }
+syn = { version = "1.0.92", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"
