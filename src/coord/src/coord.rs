@@ -269,12 +269,16 @@ pub struct CatalogTxn<'a, T> {
 fn concretize_replica_config(
     config: ReplicaConfig,
     replica_sizes: &ClusterReplicaSizeMap,
+    availability_zones: &[String],
 ) -> Result<ConcreteComputeInstanceReplicaConfig, CoordError> {
     let config = match config {
         ReplicaConfig::Remote { replicas } => {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas }
         }
-        ReplicaConfig::Managed { size } => {
+        ReplicaConfig::Managed {
+            size,
+            availability_zone,
+        } => {
             let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
                 let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
                 entries.sort_by_key(
@@ -288,8 +292,18 @@ fn concretize_replica_config(
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
                 CoordError::InvalidReplicaSize { size, expected }
             })?;
+
+            if let Some(az) = &availability_zone {
+                if !availability_zones.contains(az) {
+                    return Err(CoordError::InvalidClusterReplicaAz {
+                        az: az.to_string(),
+                        expected: availability_zones.to_vec(),
+                    });
+                }
+            }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config: *size_config,
+                availability_zone,
             }
         }
     };
@@ -353,6 +367,8 @@ pub struct Coordinator<S> {
     secrets_controller: Box<dyn SecretsController>,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
+    /// Valid availability zones for replicas.
+    availability_zones: Vec<String>,
 }
 
 /// Metadata about an active connection.
@@ -1972,7 +1988,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         for (replica_name, config) in replicas {
-            let config = concretize_replica_config(config, &self.replica_sizes)?;
+            let config =
+                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
@@ -2005,7 +2022,8 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let config = concretize_replica_config(config, &self.replica_sizes)?;
+        let config =
+            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
@@ -4742,7 +4760,7 @@ pub async fn serve<S: Append + 'static>(
         now,
         secrets_controller,
         replica_sizes,
-        availability_zones: _,
+        availability_zones,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4794,6 +4812,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
                 replica_sizes,
+                availability_zones,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

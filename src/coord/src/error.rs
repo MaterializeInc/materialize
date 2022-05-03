@@ -71,6 +71,11 @@ pub enum CoordError {
         reason: String,
     },
     /// No such cluster replica size has been configured.
+    InvalidClusterReplicaAz {
+        az: String,
+        expected: Vec<String>,
+    },
+    /// No such cluster replica size has been configured.
     InvalidReplicaSize {
         size: String,
         expected: Vec<String>,
@@ -278,6 +283,13 @@ impl CoordError {
                     doc_page
                 ))
             }
+            CoordError::InvalidClusterReplicaAz { expected, az: _ } => {
+                Some(if expected.is_empty() {
+                    "No availability zones configured; do not specify AVAILABILITY ZONE".into()
+                } else {
+                    format!("Valid availability zones are: {}", expected.join(", "))
+                })
+            }
             CoordError::InvalidReplicaSize { expected, size: _ } => {
                 Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
             }
@@ -344,8 +356,11 @@ impl fmt::Display for CoordError {
                 value.quoted(),
                 reason,
             ),
+            CoordError::InvalidClusterReplicaAz { az, expected: _ } => {
+                write!(f, "unknown cluster replica availability zone {az}",)
+            }
             CoordError::InvalidReplicaSize { size, expected: _ } => {
-                write!(f, "unknown cluster size {size}",)
+                write!(f, "unknown replica size {size}",)
             }
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")

@@ -195,7 +195,10 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_name, client).await;
             }
-            ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
+            ConcreteComputeInstanceReplicaConfig::Managed {
+                size_config,
+                availability_zone,
+            } => {
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,
@@ -251,7 +254,7 @@ where
                                     "cluster-id".into() => instance_id.to_string(),
                                     "type".into() => "cluster".into(),
                                 },
-                                availability_zone: None,
+                                availability_zone,
                             },
                         )
                         .await?;
@@ -278,6 +281,7 @@ where
         let replica_name = generate_replica_service_name(instance_id, replica_id);
         if let ConcreteComputeInstanceReplicaConfig::Managed {
             size_config: _size_config,
+            availability_zone: _az,
         } = config
         {
             let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;

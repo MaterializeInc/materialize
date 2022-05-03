@@ -361,3 +361,22 @@ SELECT * FROM t1;
 
 statement error unknown cluster
 DROP CLUSTER REPLICA no_such_cluster.bar
+
+# Availability zones
+# Note that we don't support availability zones configured with slt, so they
+# can't be meaningfully specified
+
+statement error unknown cluster replica availability zone a
+CREATE CLUSTER REPLICA default.replica SIZE '1', AVAILABILITY ZONE 'a'
+
+statement error AVAILABILITY ZONE specified more than once
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ('host1')
