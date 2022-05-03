@@ -146,7 +146,7 @@ impl Action for SqlAction {
                 .factor(state.backoff_factor)
                 .max_duration(state.timeout)
                 .max_tries(state.max_tries),
-            false => Retry::default().max_tries(1),
+            false => Retry::default().max_duration(state.timeout).max_tries(1),
         }
         .retry_async_canceling(|retry_state| async move {
             match self.try_redo(state, &query).await {
@@ -345,6 +345,35 @@ impl ErrorMatcher {
             ErrorMatcher::Regex(r) => r.as_str(),
         }
     }
+
+    fn match_string(&self, err_string: &String) -> Result<(), anyhow::Error> {
+        match &self {
+            ErrorMatcher::Contains(s) => {
+                if !err_string.contains(s) {
+                    bail!(
+                        "expected error containing '{}', but got '{}'",
+                        s,
+                        err_string
+                    );
+                }
+            }
+            ErrorMatcher::Exact(s) => {
+                if err_string != s {
+                    bail!("expected exact error '{}', but got '{}'", s, err_string);
+                }
+            }
+            ErrorMatcher::Regex(r) => {
+                if !r.is_match(err_string) {
+                    bail!(
+                        "expected error matching regex '{}', but got '{}'",
+                        r.as_str(),
+                        err_string
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Error> {
@@ -399,14 +428,14 @@ impl Action for FailSqlAction {
         };
 
         let state = &state;
-        match should_retry {
+        let res = match should_retry {
             true => Retry::default()
                 .initial_backoff(state.initial_backoff)
                 .factor(state.backoff_factor)
                 .max_duration(state.timeout)
                 .max_tries(state.max_tries),
-            false => Retry::default().max_tries(1),
-        }.retry_async(|retry_state| async move {
+            false => Retry::default().max_duration(state.timeout).max_tries(1),
+        }.retry_async_canceling(|retry_state| async move {
             match self.try_redo(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -428,7 +457,13 @@ impl Action for FailSqlAction {
                     Err(e)
                 }
             }
-        }).await?;
+        }).await;
+
+        // Check the error again in order to detech 'deadline has elapsed' timeout errors
+        if let Err(err) = res {
+            self.check_error(state, &err.to_string())?;
+        }
+
         Ok(ControlFlow::Continue)
     }
 }
@@ -441,46 +476,21 @@ impl FailSqlAction {
                 self.expected_error.as_str()
             ),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
-                Some(err) => {
-                    let mut err_string = err.message().to_string();
-
-                    if let Some(regex) = &state.regex {
-                        err_string = regex
-                            .replace_all(&err_string, state.regex_replacement.as_str())
-                            .to_string();
-                    }
-
-                    match &self.expected_error {
-                        ErrorMatcher::Contains(s) => {
-                            if !err_string.contains(s) {
-                                bail!(
-                                    "expected error containing '{}', but got '{}'",
-                                    s,
-                                    err_string
-                                );
-                            }
-                        }
-                        ErrorMatcher::Exact(s) => {
-                            if &err_string != s {
-                                bail!("expected exact error '{}', but got '{}'", s, err_string);
-                            }
-                        }
-                        ErrorMatcher::Regex(r) => {
-                            if !r.is_match(&err_string) {
-                                bail!(
-                                    "expected error matching regex '{}', but got '{}'",
-                                    r.as_str(),
-                                    err_string
-                                );
-                            }
-                        }
-                    }
-
-                    Ok(())
-                }
+                Some(err) => self.check_error(state, &err.message().to_string()),
                 None => Err(err.into()),
             },
         }
+    }
+
+    fn check_error(&self, state: &State, err_string: &String) -> Result<(), anyhow::Error> {
+        let mut err_string = err_string.clone();
+
+        if let Some(regex) = &state.regex {
+            err_string = regex
+                .replace_all(&err_string, state.regex_replacement.as_str())
+                .to_string();
+        }
+        self.expected_error.match_string(&err_string)
     }
 }
 
