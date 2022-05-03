@@ -1290,18 +1290,18 @@ CREATE CLUSTER cluster SIZE = 'small'
                        ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICA a REMOTE ('host1')
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 ----
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
+CREATE CLUSTER cluster REPLICA a SIZE '1'
 ----
-error: Expected REPLICA, found SIZE
-CREATE CLUSTER cluster REPLICA a REMOTE ('host1'), SIZE '1'
-                                                   ^
+error: Expected left parenthesis, found SIZE
+CREATE CLUSTER cluster REPLICA a SIZE '1'
+                                 ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
@@ -1325,18 +1325,18 @@ CREATE CLUSTER REPLICA replica SIZE 'small'
                                ^
 
 parse-statement
-CREATE CLUSTER REPLICA replica SIZE 'small', REMOTE ('host1')
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
 ----
 error: Expected FOR, found SIZE
-CREATE CLUSTER REPLICA replica SIZE 'small', REMOTE ('host1')
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
                                ^
 
 parse-statement
-CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', REMOTE ('host1')
+CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', (REMOTE ('host1'))
 ----
-CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', REMOTE ('host1')
-=>
-CreateClusterReplica(CreateClusterReplicaStatement { definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small"))), Remote { hosts: [Value(String("host1"))] }] }, if_not_exists: false, for_cluster: Ident("cluster") })
+error: Expected one of REMOTE or SIZE, found left parenthesis
+CREATE CLUSTER REPLICA replica FOR cluster SIZE 'small', (REMOTE ('host1'))
+                                                         ^
 
 parse-statement
 DROP CLUSTER cluster

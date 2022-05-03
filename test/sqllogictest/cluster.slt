@@ -20,16 +20,16 @@ DROP CLUSTER foo
 # Creating cluster w/ remote replica works.
 
 statement ok
-CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234')
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234'))
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234')
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234'))
 
 statement error cannot create multiple replicas with the same name 'r1' or same service name 'cluster-bar-r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICA r1 REMOTE ('localhost:1234'), REPLICA r1 REMOTE ('localhost:1234')
+CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1234'), REPLICA r1 REMOTE ('localhost:1234'))
 
 statement ok
-CREATE CLUSTER bar REPLICA r1 REMOTE ('localhost:1235'), REPLICA r2 REMOTE ('localhost:1236')
+CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1235'), REPLICA r2 REMOTE ('localhost:1236'))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -56,7 +56,7 @@ statement error Expected INTROSPECTION, found SIZE
 CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
 
 statement error Expected REPLICA, found SIZE
-CREATE CLUSTER baz REPLICA r1 REMOTE ('localhost:1234'), SIZE 'small'
+CREATE CLUSTER baz REPLICA r1 (REMOTE ('localhost:1234'), SIZE 'small')
 
 # Test `cluster` session variable.
 
@@ -172,7 +172,7 @@ statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER baz REPLICA r1 REMOTE ('localhost:1234')
+CREATE CLUSTER baz REPLICA r1 (REMOTE ('localhost:1234'))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -189,19 +189,19 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
 
 statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
 
 statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER foo REPLICA r1 REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
 
 # Test that bad cluster sizes don't cause a crash
 

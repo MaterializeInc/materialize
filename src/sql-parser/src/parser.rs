@@ -2597,13 +2597,9 @@ impl<'a> Parser<'a> {
     fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
         self.expect_keyword(REPLICA)?;
         let name = self.parse_identifier()?;
-        let options = if self.consume_token(&Token::LParen) {
-            let options = self.parse_comma_separated(Parser::parse_replica_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![self.parse_replica_option()?]
-        };
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        self.expect_token(&Token::RParen)?;
         Ok(ReplicaDefinition { name, options })
     }
 
