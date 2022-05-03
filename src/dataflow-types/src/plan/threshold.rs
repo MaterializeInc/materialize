@@ -23,20 +23,110 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
+// https://github.com/tokio-rs/prost/issues/237
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use super::AvailableCollections;
 
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_dataflow_types.plan.threshold.rs"
+));
+
 /// A plan describing how to compute a threshold operation.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
     /// Retractions threshold maintains all negative inputs.
     Retractions(RetractionsThresholdPlan),
+}
+
+impl From<&ThresholdPlan> for ProtoThresholdPlan {
+    fn from(x: &ThresholdPlan) -> Self {
+        use proto_threshold_plan::Kind;
+        Self {
+            kind: Some(match x {
+                ThresholdPlan::Basic(p) => Kind::Basic((&p.ensure_arrangement).into()),
+                ThresholdPlan::Retractions(p) => Kind::Retractions((&p.ensure_arrangement).into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoThresholdPlan> for ThresholdPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoThresholdPlan) -> Result<Self, Self::Error> {
+        use proto_threshold_plan::Kind;
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoThresholdPlan::kind"))?;
+        Ok(match kind {
+            Kind::Basic(p) => ThresholdPlan::Basic(BasicThresholdPlan {
+                ensure_arrangement: p.try_into()?,
+            }),
+            Kind::Retractions(p) => ThresholdPlan::Retractions(RetractionsThresholdPlan {
+                ensure_arrangement: p.try_into()?,
+            }),
+        })
+    }
+}
+
+impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>
+    for ProtoThresholdPlanArrangement
+{
+    fn from(x: &(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)) -> Self {
+        use proto_threshold_plan_arrangement::ProtoThresholdPlanArrangementPermutation;
+        Self {
+            all_columns: x.0.iter().map(Into::into).collect(),
+            permutation: x
+                .1
+                .iter()
+                .map(|x| ProtoThresholdPlanArrangementPermutation {
+                    key: x.0.into_proto(),
+                    val: x.1.into_proto(),
+                })
+                .collect(),
+            thinning: x.2.iter().map(|x| x.into_proto()).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoThresholdPlanArrangement>
+    for (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)
+{
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoThresholdPlanArrangement) -> Result<Self, Self::Error> {
+        let perm: Result<HashMap<usize, usize>, TryFromProtoError> = x
+            .permutation
+            .iter()
+            .map(|x| {
+                let key = usize::from_proto(x.key);
+                let val = usize::from_proto(x.val);
+                Ok((key?, val?))
+            })
+            .collect();
+        Ok((
+            x.all_columns
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+            perm?,
+            x.thinning
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
 }
 
 impl ThresholdPlan {
@@ -56,7 +146,7 @@ impl ThresholdPlan {
 }
 
 /// A plan to maintain all inputs with positive counts.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
@@ -64,7 +154,7 @@ pub struct BasicThresholdPlan {
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
@@ -100,5 +190,21 @@ impl ThresholdPlan {
             })
         };
         (plan, ensure_arrangement)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+       #[test]
+        fn scalar_type_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

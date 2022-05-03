@@ -26,6 +26,7 @@ fn main() {
                 "dataflow-types/src/postgres_source.proto",
                 "dataflow-types/src/plan/join.proto",
                 "dataflow-types/src/plan/reduce.proto",
+                "dataflow-types/src/plan/threshold.proto",
                 "dataflow-types/src/plan/top_k.proto",
             ],
             &[".."],
