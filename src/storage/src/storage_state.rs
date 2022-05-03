@@ -12,12 +12,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::ActivateCapability;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -101,8 +98,6 @@ pub struct TableState<T> {
     pub data: Vec<(Row, T, Diff)>,
     /// The size of `data` after the last consolidation.
     pub last_consolidated_size: usize,
-    /// Handles to the live local inputs for the table.
-    pub(crate) inputs: Vec<LocalInput>,
 }
 
 /// A wrapper around [StorageState] with a live timely worker and response channel.
@@ -199,7 +194,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                                     upper: Timestamp::minimum(),
                                     data: vec![],
                                     last_consolidated_size: 0,
-                                    inputs: vec![],
                                 },
                             );
 
@@ -236,8 +230,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             self.storage_state.persist_handles.insert(source.id, write);
                         }
                         SourceConnector::External { .. } => {
-                            // Nothing to do at the moment, but in the future
-                            // prepare source ingestion.
                             self.setup_timestamp_binding_state(&source);
 
                             // Initialize shared frontier tracking.
@@ -297,66 +289,66 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                 }
             }
 
-            StorageCommand::Append(appends) => {
-                for (id, updates, upper) in appends {
-                    let table_state = match self.storage_state.table_state.get_mut(&id) {
-                        Some(table_state) => table_state,
-                        None => panic!(
-                            "table state {} missing for insert at worker {}",
-                            id,
-                            self.timely_worker.index()
-                        ),
-                    };
+            StorageCommand::Append(_appends) => {
+                // for (id, updates, upper) in appends {
+                //     let table_state = match self.storage_state.table_state.get_mut(&id) {
+                //         Some(table_state) => table_state,
+                //         None => panic!(
+                //             "table state {} missing for insert at worker {}",
+                //             id,
+                //             self.timely_worker.index()
+                //         ),
+                //     };
 
-                    // Add the new updates to all existing renders of the table.
-                    for input in &mut table_state.inputs {
-                        if let Some(capability) = input.capability.upgrade() {
-                            let mut capability = capability.borrow_mut();
-                            let mut session = input.handle.session(capability.clone());
-                            for update in &updates {
-                                assert!(update.timestamp >= *capability.time());
-                                session.give((update.row.clone(), update.timestamp, update.diff));
-                            }
-                            capability.downgrade(&upper);
-                        }
-                    }
+                //     // Add the new updates to all existing renders of the table.
+                //     for input in &mut table_state.inputs {
+                //         if let Some(capability) = input.capability.upgrade() {
+                //             let mut capability = capability.borrow_mut();
+                //             let mut session = input.handle.session(capability.clone());
+                //             for update in &updates {
+                //                 assert!(update.timestamp >= *capability.time());
+                //                 session.give((update.row.clone(), update.timestamp, update.diff));
+                //             }
+                //             capability.downgrade(&upper);
+                //         }
+                //     }
 
-                    assert!(upper >= table_state.upper);
-                    table_state.upper = upper;
-                    // Announce the table updates as durably recorded. This is not correct,
-                    // but it also hasn't been correct afaict.
-                    // TODO(petrosagg): correct this once STORAGE owns table durability.
-                    let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
-                    let mut joined_frontier = Antichain::new();
-                    for time1 in borrow.iter() {
-                        joined_frontier.insert(time1.join(&upper));
-                    }
-                    *borrow = joined_frontier;
+                //     assert!(upper >= table_state.upper);
+                //     table_state.upper = upper;
+                //     // Announce the table updates as durably recorded. This is not correct,
+                //     // but it also hasn't been correct afaict.
+                //     // TODO(petrosagg): correct this once STORAGE owns table durability.
+                //     let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
+                //     let mut joined_frontier = Antichain::new();
+                //     for time1 in borrow.iter() {
+                //         joined_frontier.insert(time1.join(&upper));
+                //     }
+                //     *borrow = joined_frontier;
 
-                    // Discard entries that are no longer active.
-                    table_state
-                        .inputs
-                        .retain(|input| input.capability.upgrade().is_some());
+                //     // Discard entries that are no longer active.
+                //     table_state
+                //         .inputs
+                //         .retain(|input| input.capability.upgrade().is_some());
 
-                    // Stash the data for use by future renders of the table.
-                    for update in updates {
-                        table_state
-                            .data
-                            .push((update.row, update.timestamp, update.diff));
-                    }
+                //     // Stash the data for use by future renders of the table.
+                //     for update in updates {
+                //         table_state
+                //             .data
+                //             .push((update.row, update.timestamp, update.diff));
+                //     }
 
-                    // Consolidate the data in the table if it's doubled in size
-                    // since the last consolidation.
-                    if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                        for (_data, time, _diff) in &mut table_state.data {
-                            time.advance_by(table_state.since.borrow());
-                        }
-                        differential_dataflow::consolidation::consolidate_updates(
-                            &mut table_state.data,
-                        );
-                        table_state.last_consolidated_size = table_state.data.len();
-                    }
-                }
+                //     // Consolidate the data in the table if it's doubled in size
+                //     // since the last consolidation.
+                //     if table_state.data.len() > table_state.last_consolidated_size * 2 {
+                //         for (_data, time, _diff) in &mut table_state.data {
+                //             time.advance_by(table_state.since.borrow());
+                //         }
+                //         differential_dataflow::consolidation::consolidate_updates(
+                //             &mut table_state.data,
+                //         );
+                //         table_state.last_consolidated_size = table_state.data.len();
+                //     }
+                // }
             }
 
             StorageCommand::DurabilityFrontierUpdates(list) => {
@@ -369,16 +361,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
         }
     }
 
-    // fn build_storage_dataflow(&mut self, dataflows: Vec<RenderSourcesCommand<Timestamp>>) {
-    //     for RenderSourcesCommand {
-    //         debug_name,
-    //         dataflow_id,
-    //         as_of,
-    //         source_imports,
-    //     } in dataflows
-    //     {
-    //     }
-    // }
     /// Emit information about write frontier progress, along with information that should
     /// be made durable for this to be the case.
     ///
@@ -514,10 +496,4 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
     }
-}
-
-pub(crate) struct LocalInput {
-    pub(crate) handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    /// A weak reference to the capability, in case all uses are dropped.
-    pub capability: std::rc::Weak<RefCell<ActivateCapability<Timestamp>>>,
 }
