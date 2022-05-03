@@ -101,17 +101,25 @@
 //! if/when the errors are retracted.
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_dataflow_types::sources::SourceDesc;
-use mz_repr::GlobalId;
+use mz_dataflow_types::{sources::SourceDesc, client::controller::storage::CollectionMetadata, DataflowError};
+use mz_ore::collections::CollectionExt as IteratorExt;
+use mz_persist_client::ShardId;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::storage_state::StorageState;
 
@@ -129,6 +137,7 @@ pub fn build_storage_dataflow<A: Allocate>(
     debug_name: &str,
     as_of: Option<Antichain<mz_repr::Timestamp>>,
     source_import: (GlobalId, SourceDesc),
+    persist_shard: ShardId,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
@@ -147,7 +156,7 @@ pub fn build_storage_dataflow<A: Allocate>(
             // If `as_of` is `None`, the rendering request is invalid. We still need to satisfy it,
             // but we will do this with an empty source.
             let valid = storage_state.source_uppers.contains_key(src_id);
-            let ((_ok, _err), _token) = if valid {
+            let ((ok, err), token) = if valid {
                 let ((ok, err), token) = crate::render::sources::render_source(
                     &debug_name,
                     &as_of,
@@ -236,8 +245,99 @@ pub fn build_storage_dataflow<A: Allocate>(
                 ((ok, err), Arc::new(tokens) as Arc<dyn Any + Send + Sync>)
             };
 
-            // TODO(petrosagg): write the (ok, err) combined collection to the persist shard
-            // specified by the storage controller
+            storage_state.source_tokens.insert(source_import.0, token);
+
+            //TODO handle err collection too
+            let sinked_collection = ok.map(Ok).concat(&err.map(Err));
+            let operator_name = format!("persist_sink({})", persist_shard);
+            let mut persist_op = OperatorBuilder::new(operator_name, region.clone());
+
+            // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
+            // if other workers from replicated clusters write the same data, though. In the real
+            // implementation, we would use a storage client that transparently handles writing to
+            // multiple shards. One shard would then only be written to by one worker but we get
+            // parallelism from the sharding.
+            // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
+            // multiple persist shards. Then we should set it up such that each worker can write to one
+            // shard.
+            let hashed_id = source_import.0.hashed();
+            let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+
+            let mut input =
+                persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
+
+            // TODO(aljoscha): Configurable timeout? Or no timeout in the persist API?
+            let timeout = Duration::from_secs(60);
+
+            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+
+            let (write, _read) = futures_executor::block_on(
+                storage_state.persist_client.open(timeout, persist_shard),
+            )
+            .expect("could not open persist shard");
+
+            let write = Rc::new(RefCell::new(Some(write)));
+
+            persist_op.build_async(
+                region.clone(),
+                move |mut capabilities, frontiers, scheduler| async move {
+                    capabilities.clear();
+                    let mut buffer = Vec::new();
+                    let mut stash: HashMap<
+                        Timestamp,
+                        Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
+                    > = HashMap::new();
+
+                    while scheduler.notified().await {
+                        let frontier = frontiers.borrow()[0].clone();
+
+                        if !active_write_worker {
+                            return;
+                        }
+
+                        let mut write = write.borrow_mut();
+                        let write = match &mut *write {
+                            Some(write) => write,
+                            None => {
+                                // We have been cancelled!
+                                return;
+                            }
+                        };
+
+                        while let Some((_cap, data)) = input.next() {
+                            data.swap(&mut buffer);
+
+                            for (row, ts, diff) in buffer.drain(..) {
+                                stash.entry(ts).or_default().push((row, ts, diff));
+                            }
+                        }
+
+                        let empty = Vec::new();
+                        let updates = stash
+                            .iter()
+                            .flat_map(|(ts, updates)| {
+                                if !frontier.less_equal(ts) {
+                                    updates.iter()
+                                } else {
+                                    empty.iter()
+                                }
+                            })
+                            .map(|&(ref row, ref ts, ref diff)| ((&(), row), ts, diff));
+
+                        // We always append, even in case we don't have any updates, because appending
+                        // also advances the frontier.
+                        // TODO(aljoscha): Figure out how errors from this should be reported.
+                        write
+                            .append(timeout, updates, frontier.clone())
+                            .await
+                            .expect("cannot append updates")
+                            .expect("cannot append updates")
+                            .expect("invalid/outdated upper");
+
+                        stash.retain(|ts, _updates| frontier.less_equal(ts));
+                    }
+                },
+            )
         })
     });
 }
