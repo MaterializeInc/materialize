@@ -1925,12 +1925,15 @@ impl<'a> Parser<'a> {
                 while let Ok(keyword) = self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD]) {
                     match keyword {
                         Keyword::Key => {
+                            self.expect_keyword(FILE)?;
                             key_file = Some(self.parse_literal_string()?);
                         }
                         Keyword::Certificate => {
+                            self.expect_keyword(FILE)?;
                             certificate_file = Some(self.parse_literal_string()?);
                         }
                         Keyword::Password => {
+                            self.expect_keyword(FILE)?;
                             key_password = Some(self.parse_literal_string()?);
                         }
                         _ => unreachable!(),
