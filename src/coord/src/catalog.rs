@@ -2420,8 +2420,11 @@ impl Catalog {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
-                    tx.remove_compute_instance(&name)?;
+                    let introspection_source_index_ids = tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
+                    for id in introspection_source_index_ids {
+                        builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+                    }
                     vec![Action::DropComputeInstance { name }]
                 }
                 Op::DropItem(id) => {
@@ -2622,10 +2625,15 @@ impl Catalog {
                     introspection_sources,
                 } => {
                     info!("create cluster {}", name);
+                    let introspection_source_index_ids: Vec<GlobalId> =
+                        introspection_sources.iter().map(|(_, id)| *id).collect();
                     state
                         .insert_compute_instance(id, name.clone(), config, introspection_sources)
                         .await;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
+                    for id in introspection_source_index_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
                 }
 
                 Action::CreateItem {

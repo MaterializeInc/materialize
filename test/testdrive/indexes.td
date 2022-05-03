@@ -228,7 +228,7 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 
 > CREATE CLUSTER clstr REMOTE r1 ('localhost:1234')
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
-> SHOW INDEXES IN CLUSTER clstr
+> SHOW INDEXES IN CLUSTER clstr WHERE on_name = 'foo'
 clstr foo  foo_primary_idx1   1  a       <null>                     false  true
 clstr foo  foo_primary_idx1   2  b       <null>                     true   true
 clstr foo  foo_primary_idx1   3  z       <null>                     true   true

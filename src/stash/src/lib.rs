@@ -886,13 +886,13 @@ where
         }
     }
 
-    /// Deletes items for which `f` returns true. Returns the keys of the deleted
-    /// entries.
-    pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<K> {
+    /// Deletes items for which `f` returns true. Returns the keys and values of
+    /// the deleted entries.
+    pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<(K, V)> {
         let mut deleted = Vec::new();
         self.for_values_mut(|p, k, v| {
             if f(k, v) {
-                deleted.push(k.clone());
+                deleted.push((k.clone(), v.clone()));
                 p.insert(k.clone(), None);
             }
         });

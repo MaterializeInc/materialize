@@ -146,7 +146,7 @@ statement error cannot drop cluster with active indexes or sinks
 DROP CLUSTER bar
 
 query TTTTTTTT
-SHOW INDEXES IN CLUSTER bar;
+SHOW INDEXES IN CLUSTER bar WHERE on_name = 'v';
 ----
 bar v v_primary_idx 1 ?column? NULL false true
 bar v v_primary_idx1 1 ?column? NULL false true
@@ -207,3 +207,41 @@ CREATE CLUSTER foo2 SIZE '32'
 
 statement ok
 CREATE CLUSTER foo3 SIZE '2-2'
+
+# Test that introspection source indexes are created and dropped correctly
+
+statement ok
+DROP CLUSTER foo;
+
+statement ok
+DROP CLUSTER foo2;
+
+statement ok
+DROP CLUSTER foo3;
+
+# There are 17 introspection sources
+query I
+SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 1;
+----
+17
+
+query I
+SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 1;
+----
+0
+
+statement ok
+CREATE CLUSTER test size '1';
+
+query I
+SELECT COUNT(name) FROM mz_indexes;
+----
+34
+
+statement ok
+DROP CLUSTER test;
+
+query T
+SELECT COUNT(name) FROM mz_indexes;
+----
+17
