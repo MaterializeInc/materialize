@@ -82,7 +82,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_load_test(c: Composition) -> None:
     """Run CH-benCHmark with a selected amount of load against Materialize."""
-    c.up("prometheus-sql-exporter")
     c.workflow(
         "default",
         "--peek-conns=1",
