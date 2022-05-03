@@ -29,6 +29,7 @@ use timely::progress::Timestamp;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
+use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
@@ -213,7 +214,7 @@ impl PersistClient {
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
-    ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), ExternalError>
+    ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -221,11 +222,9 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus))
-            .await?
-            .expect("codec mismatch");
+        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
-        let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await?;
+        let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await;
         let writer = WriteHandle {
             writer_id,
             machine: machine.clone(),
@@ -240,6 +239,22 @@ impl PersistClient {
         };
 
         Ok((writer, reader))
+    }
+
+    /// Test helper for a [Self::open] call that is expected to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_open<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> (WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>)
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        self.open(shard_id).await.expect("codec mismatch")
     }
 }
 
@@ -262,10 +277,12 @@ mod tests {
 
     use super::*;
 
-    pub async fn new_test_client() -> Result<PersistClient, ExternalError> {
+    pub async fn new_test_client() -> PersistClient {
         let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
-        PersistClient::new(blob, consensus).await
+        PersistClient::new(blob, consensus)
+            .await
+            .expect("client construction failed")
     }
 
     pub fn all_ok<'a, K, V, T, D, I>(
@@ -290,7 +307,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sanity_check() -> Result<(), Box<dyn std::error::Error>> {
+    async fn sanity_check() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -300,9 +317,9 @@ mod tests {
         ];
 
         let (mut write, mut read) = new_test_client()
-            .await?
-            .open::<String, String, u64, i64>(ShardId::new())
-            .await?;
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
@@ -310,12 +327,9 @@ mod tests {
         write.expect_append(&data[..2], 3).await;
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
-        // Grab a snapshot and listener as_of 2.
+        // Grab a snapshot and listener as_of 1.
         let mut snap = read.expect_snapshot(1).await;
-        let mut listen = read
-            .listen(Antichain::from_elem(1))
-            .await?
-            .expect("cannot serve requested as_of");
+        let mut listen = read.expect_listen(1).await;
 
         // Snapshot should only have part of what we wrote.
         assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
@@ -336,12 +350,10 @@ mod tests {
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn multiple_shards() -> Result<(), Box<dyn std::error::Error>> {
+    async fn multiple_shards() {
         mz_ore::test::init_logging();
 
         let data1 = vec![
@@ -351,15 +363,17 @@ mod tests {
 
         let data2 = vec![(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
 
-        let client = new_test_client().await?;
+        let client = new_test_client().await;
 
         let (mut write1, read1) = client
-            .open::<String, String, u64, i64>(ShardId::new())
-            .await?;
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
 
         // Different types, so that checks would fail in case we were not separating these
         // collections internally.
-        let (mut write2, read2) = client.open::<String, (), u64, i64>(ShardId::new()).await?;
+        let (mut write2, read2) = client
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
 
         write1
             .expect_compare_and_append(&data1[..], u64::minimum(), 3)
@@ -374,12 +388,10 @@ mod tests {
 
         let mut snap = read2.expect_snapshot(2).await;
         assert_eq!(snap.read_all().await, all_ok(&data2[..], 1));
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn fetch_upper() -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_upper() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -387,27 +399,29 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let client = new_test_client().await?;
+        let client = new_test_client().await;
 
         let shard_id = ShardId::new();
 
-        let (mut write1, _read1) = client.open::<String, String, u64, i64>(shard_id).await?;
+        let (mut write1, _read1) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
 
-        let (mut write2, _read2) = client.open::<String, String, u64, i64>(shard_id).await?;
+        let (mut write2, _read2) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
 
         write1.expect_append(&data[..], 3).await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
-        assert_eq!(write2.fetch_recent_upper().await?, Antichain::from_elem(3));
+        assert_eq!(write2.fetch_recent_upper().await, Antichain::from_elem(3));
 
         // The writer-local upper should not advance if another writer advances the frontier.
         assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn append_with_invalid_upper() -> Result<(), Box<dyn std::error::Error>> {
+    async fn append_with_invalid_upper() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -415,11 +429,13 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let client = new_test_client().await?;
+        let client = new_test_client().await;
 
         let shard_id = ShardId::new();
 
-        let (mut write, _read) = client.open::<String, String, u64, i64>(shard_id).await?;
+        let (mut write, _read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
 
         write.expect_append(&data[..], 3).await;
 
@@ -429,35 +445,31 @@ mod tests {
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
-
-        Ok(())
     }
 
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
     // NOTE: This is a compile-time only test. If it compiles, we're good.
     #[allow(unused)]
-    async fn sync_send() -> Result<(), Box<dyn std::error::Error>> {
+    async fn sync_send() {
         mz_ore::test::init_logging();
 
         fn is_send_sync<T: Send + Sync>(_x: T) -> bool {
             true
         }
 
-        let client = new_test_client().await?;
+        let client = new_test_client().await;
 
         let (write, read) = client
-            .open::<String, String, u64, i64>(ShardId::new())
-            .await?;
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
 
         assert!(is_send_sync(client));
         assert!(is_send_sync(write));
         assert!(is_send_sync(read));
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn compare_and_append() -> Result<(), Box<dyn std::error::Error>> {
+    async fn compare_and_append() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -467,10 +479,10 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await?;
-        let (mut write1, read) = client.open::<String, String, u64, i64>(id).await?;
+        let client = new_test_client().await;
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
 
-        let (mut write2, _read) = client.open::<String, String, u64, i64>(id).await?;
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         assert_eq!(write1.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(write2.upper(), &Antichain::from_elem(u64::minimum()));
@@ -506,12 +518,10 @@ mod tests {
 
         let mut snap = read.expect_snapshot(3).await;
         assert_eq!(snap.read_all().await, all_ok(&data, 1));
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn overlapping_append() -> Result<(), Box<dyn std::error::Error>> {
+    async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
         let data = vec![
@@ -523,17 +533,14 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await?;
+        let client = new_test_client().await;
 
-        let (mut write1, read) = client.open::<String, String, u64, i64>(id).await?;
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
 
-        let (mut write2, _read) = client.open::<String, String, u64, i64>(id).await?;
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener before we do any writing
-        let mut listen = read
-            .listen(Antichain::from_elem(0))
-            .await?
-            .expect("cannot serve requested as_of");
+        let mut listen = read.expect_listen(0).await;
 
         // Write a [0,3) batch.
         write1.expect_append(&data[..2], 3).await;
@@ -559,8 +566,6 @@ mod tests {
             ListenEvent::Progress(Antichain::from_elem(6)),
         ];
         assert_eq!(listen.read_until(&6).await, expected_events);
-
-        Ok(())
     }
 
     #[test]
@@ -616,19 +621,19 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn concurrency() -> Result<(), Box<dyn std::error::Error>> {
+    async fn concurrency() {
         mz_ore::test::init_logging();
 
         let data = DataGenerator::small();
 
         const NUM_WRITERS: usize = 2;
         let id = ShardId::new();
-        let client = new_test_client().await?;
-        let mut handles = Vec::<JoinHandle<Result<(), anyhow::Error>>>::new();
+        let client = new_test_client().await;
+        let mut handles = Vec::<JoinHandle<()>>::new();
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
                         Some((_, max_ts, _)) => max_ts + 1,
@@ -657,13 +662,12 @@ mod tests {
                         .collect::<Vec<_>>();
                     write.expect_append(&updates, new_upper).await;
                 }
-                Ok(())
             });
             handles.push(handle);
         }
 
         for handle in handles {
-            let () = handle.await??;
+            let () = handle.await.expect("task failed");
         }
 
         let expected = data
@@ -671,18 +675,16 @@ mod tests {
             .map(|((k, v), t, d)| ((Ok(k), Ok(v)), t, d))
             .collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
-        let (_, read) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+        let (_, read) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
         let actual = read.expect_snapshot(max_ts).await.read_all().await;
         assert_eq!(actual, expected);
-
-        Ok(())
     }
 
     // Regression test for #12131. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[tokio::test]
-    async fn regression_blocking_reads() -> Result<(), Box<dyn std::error::Error>> {
+    async fn regression_blocking_reads() {
         mz_ore::test::init_logging();
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -694,14 +696,11 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await?;
-        let (mut write, read) = client.open::<String, String, u64, i64>(id).await?;
+        let client = new_test_client().await;
+        let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read
-            .listen(Antichain::from_elem(1))
-            .await?
-            .expect("cannot serve requested as_of");
+        let mut listen = read.expect_listen(1).await;
         let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for
@@ -721,7 +720,7 @@ mod tests {
         // The initial listen_next call should now be able to return data at 2.
         // It doesn't get 1 because the as_of was 1 and listen is strictly gt.
         assert_eq!(
-            listen_next.await?,
+            listen_next.await,
             vec![
                 ListenEvent::Updates(vec![((Ok("2".to_owned()), Ok("two".to_owned())), 2, 1)]),
                 ListenEvent::Progress(Antichain::from_elem(3)),
@@ -759,7 +758,5 @@ mod tests {
         // that the test hasn't rotted as things change.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 1));
-
-        Ok(())
     }
 }

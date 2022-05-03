@@ -58,46 +58,40 @@ where
     pub async fn new(
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
-    ) -> Result<Result<Self, InvalidUsage<T>>, ExternalError> {
-        let state = match Self::maybe_init_state(consensus.as_ref(), shard_id).await? {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Machine { consensus, state }))
+    ) -> Result<Self, InvalidUsage<T>> {
+        let state = Self::maybe_init_state(consensus.as_ref(), shard_id).await?;
+        Ok(Machine { consensus, state })
     }
 
     pub fn shard_id(&self) -> ShardId {
         self.state.shard_id()
     }
 
-    pub async fn upper(&mut self) -> Result<Antichain<T>, ExternalError> {
-        self.fetch_and_update_state().await?;
-        Ok(self.state.upper())
+    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+        self.fetch_and_update_state().await;
+        self.state.upper()
     }
 
     pub async fn register(
         &mut self,
         writer_id: &WriterId,
         reader_id: &ReaderId,
-    ) -> Result<(WriteCapability<T>, ReadCapability<T>), ExternalError> {
+    ) -> (WriteCapability<T>, ReadCapability<T>) {
         let (seqno, (write_cap, read_cap)) = self
             .apply_unbatched_idempotent_cmd(|seqno, state| {
                 state.register(seqno, writer_id, reader_id)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
-        Ok((write_cap, read_cap))
+        (write_cap, read_cap)
     }
 
-    pub async fn clone_reader(
-        &mut self,
-        new_reader_id: &ReaderId,
-    ) -> Result<ReadCapability<T>, ExternalError> {
+    pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
         let (seqno, read_cap) = self
             .apply_unbatched_idempotent_cmd(|seqno, state| state.clone_reader(seqno, new_reader_id))
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
-        Ok(read_cap)
+        read_cap
     }
 
     pub async fn append(
@@ -157,16 +151,16 @@ where
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<(String, Description<T>)>, Since<T>>, ExternalError> {
+    ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
         let mut fetches = 0;
         loop {
             let upper = match self.state.snapshot(as_of) {
-                Ok(Ok(x)) => return Ok(Ok(x)),
+                Ok(Ok(x)) => return Ok(x),
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
                     upper
                 }
-                Err(Since(since)) => return Ok(Err(Since(since))),
+                Err(Since(since)) => return Err(Since(since)),
             };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
@@ -184,7 +178,7 @@ where
                 );
                 tokio::time::sleep(sleep).await;
             }
-            self.fetch_and_update_state().await?;
+            self.fetch_and_update_state().await;
             fetches += 1;
         }
     }
@@ -192,14 +186,14 @@ where
     pub async fn next_listen_batch(
         &mut self,
         frontier: &Antichain<T>,
-    ) -> Result<(Vec<String>, Description<T>), ExternalError> {
+    ) -> (Vec<String>, Description<T>) {
         // This unconditionally fetches the latest state and uses that to
         // determine if we can serve `as_of`. TODO: We could instead check first
         // and only fetch if necessary.
         loop {
-            self.fetch_and_update_state().await?;
+            self.fetch_and_update_state().await;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
-                return Ok((keys.to_owned(), desc.clone()));
+                return (keys.to_owned(), desc.clone());
             }
             let sleep = if cfg!(test) {
                 Duration::from_nanos(1)
@@ -258,6 +252,11 @@ where
             );
 
             let new = VersionedData::from((new_state.seqno(), &new_state));
+            // SUBTLE! Unlike the other consensus and blob uses, we can't
+            // automatically retry here, because ExternalError is indeterminate.
+            // However, if the state change itself is _idempotent_, then we're
+            // free to retry even indeterminate errors. See
+            // [Self::apply_unbatched_idempotent_cmd].
             let cas_res = self
                 .consensus
                 .compare_and_set(
@@ -281,14 +280,12 @@ where
                     self.state = new_state;
 
                     // Bound the number of entries in consensus.
-                    //
-                    // It's weird that this will return an error for the whole
-                    // request after we know it's successful, but this goes away
-                    // in #12223.
-                    let () = self
-                        .consensus
-                        .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
-                        .await?;
+                    let () = retry_external("apply_unbatched_cmd::truncate", || async {
+                        self.consensus
+                            .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
+                            .await
+                    })
+                    .await;
 
                     return Ok((self.state.seqno(), Ok(work_ret)));
                 }
@@ -312,21 +309,24 @@ where
     async fn maybe_init_state(
         consensus: &(dyn Consensus + Send + Sync),
         shard_id: ShardId,
-    ) -> Result<Result<State<K, V, T, D>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<State<K, V, T, D>, InvalidUsage<T>> {
         debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();
-        let mut current = consensus.head(Instant::now() + FOREVER, &path).await?;
+        let mut current = retry_external("maybe_init_state::head", || async {
+            consensus.head(Instant::now() + FOREVER, &path).await
+        })
+        .await;
 
         loop {
             // First, check if the shard has already been initialized.
             if let Some(current) = current.as_ref() {
                 let current_state = match State::decode(&current.data) {
                     Ok(x) => x,
-                    Err(err) => return Ok(Err(err)),
+                    Err(err) => return Err(err),
                 };
                 debug_assert_eq!(current.seqno, current_state.seqno());
-                return Ok(Ok(current_state));
+                return Ok(current_state);
             }
 
             // It hasn't been initialized, try initializing it.
@@ -337,9 +337,14 @@ where
                 new.seqno,
                 state
             );
-            let cas_res = consensus
-                .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
-                .await?;
+            let cas_res = retry_external("maybe_init_state::cas", || async {
+                // If Consensus::compare_and_set took new as a ref, then we
+                // wouldn't have to clone here.
+                consensus
+                    .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
+                    .await
+            })
+            .await;
             match cas_res {
                 Ok(()) => {
                     trace!(
@@ -347,7 +352,7 @@ where
                         state.seqno(),
                         state
                     );
-                    return Ok(Ok(state));
+                    return Ok(state);
                 }
                 Err(x) => {
                     // We lost a CaS race, use the value included in the CaS
@@ -364,14 +369,15 @@ where
         }
     }
 
-    async fn fetch_and_update_state(&mut self) -> Result<(), ExternalError> {
+    async fn fetch_and_update_state(&mut self) {
         let shard_id = self.shard_id();
-        let current = self
-            .consensus
-            .head(Instant::now() + FOREVER, &shard_id.to_string())
-            .await?;
+        let current = retry_external("fetch_and_update_state::head", || async {
+            self.consensus
+                .head(Instant::now() + FOREVER, &shard_id.to_string())
+                .await
+        })
+        .await;
         self.update_state(current).await;
-        Ok(())
     }
 
     async fn update_state(&mut self, current: Option<VersionedData>) {
@@ -397,6 +403,22 @@ where
 
 pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
 
+pub async fn retry_external<R, F, WorkFn>(name: &str, mut work_fn: WorkFn) -> R
+where
+    F: std::future::Future<Output = Result<R, ExternalError>>,
+    WorkFn: FnMut() -> F,
+{
+    loop {
+        match work_fn().await {
+            Ok(x) => return x,
+            Err(err @ ExternalError { .. }) => {
+                info!("external operation {} failed, retrying: {}", name, err)
+                // TODO: Some sort of backoff.
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
@@ -405,13 +427,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn apply_unbatched_cmd_truncate() -> Result<(), Box<dyn std::error::Error>> {
+    async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
         let (mut write, _) = new_test_client()
-            .await?
-            .open::<String, (), u64, i64>(ShardId::new())
-            .await?;
+            .await
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
         let consensus = Arc::clone(&write.machine.consensus);
 
         // Write a bunch of batches. This should result in a bounded number of
@@ -425,7 +447,8 @@ mod tests {
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
             .scan(Instant::now() + FOREVER, &key, SeqNo::minimum())
-            .await?;
+            .await
+            .expect("scan failed");
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);
         // Make sure the number of entries is bounded.
@@ -439,7 +462,5 @@ mod tests {
             max_entries,
             consensus_entries.len()
         );
-
-        Ok(())
     }
 }

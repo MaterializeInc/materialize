@@ -419,7 +419,7 @@ mod raw_persist_benchmark {
             let (_, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
             let listen = reader
                 .listen(Antichain::from_elem(0))
-                .await?
+                .await
                 .expect("cannot serve requested as_of");
             readers.push(Box::new(listen) as Box<dyn BenchmarkReader + Send + Sync>);
         }
@@ -455,7 +455,7 @@ mod raw_persist_benchmark {
             // record with the record count to avoid having to actually count
             // the number of records..
             let mut count = 0;
-            let events = self.next().await?;
+            let events = self.next().await;
 
             for event in events {
                 if let ListenEvent::Progress(t) = event {

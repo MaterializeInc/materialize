@@ -474,8 +474,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 .expect("Reported frontier missing!");
 
             // TODO: Make these parts of the code async?
-            let observed_frontier =
-                futures_executor::block_on(write_handle.fetch_recent_upper()).unwrap();
+            let observed_frontier = futures_executor::block_on(write_handle.fetch_recent_upper());
 
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.

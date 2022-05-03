@@ -1254,10 +1254,7 @@ pub mod sources {
         /// shard. Returns `None` if this type of connector doesn't write to persist.
         pub async fn get_read_handle<T: Timestamp + Lattice + Codec64>(
             &self,
-        ) -> Result<
-            Option<ReadHandle<Row, Row, T, mz_repr::Diff>>,
-            mz_persist::location::ExternalError,
-        > {
+        ) -> Result<Option<ReadHandle<Row, Row, T, mz_repr::Diff>>, anyhow::Error> {
             let result = match self {
                 SourceConnector::External {
                     connector: ExternalSourceConnector::Persist(persist_connector),

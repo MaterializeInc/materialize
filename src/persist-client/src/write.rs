@@ -27,7 +27,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::{Machine, FOREVER};
+use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::state::Upper;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -108,10 +108,9 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
-    pub async fn fetch_recent_upper(&mut self) -> Result<Antichain<T>, ExternalError> {
+    pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
-        let upper = self.machine.upper().await?;
-        Ok(upper)
+        self.machine.fetch_upper().await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -144,8 +143,8 @@ where
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
     /// us.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
     /// TODO: Introduce an AsyncIterator (futures::Stream) variant of this. Or,
     /// given that the AsyncIterator version would be strictly more general,
@@ -179,14 +178,19 @@ where
         };
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
-            self.blob
-                .set(
-                    Instant::now() + FOREVER,
-                    &key,
-                    value,
-                    Atomicity::RequireAtomic,
-                )
-                .await?;
+            let () = retry_external("append::set", || async {
+                // If MultiBlob::set took value as a ref, then we wouldn't have
+                // to clone here.
+                self.blob
+                    .set(
+                        Instant::now() + FOREVER,
+                        &key,
+                        value.clone(),
+                        Atomicity::RequireAtomic,
+                    )
+                    .await
+            })
+            .await;
             vec![key]
         } else {
             vec![]
@@ -231,8 +235,15 @@ where
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
     /// us.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// SUBTLE! Unlike the other methods on WriteHandle, it is not always safe
+    /// to retry [ExternalError]s in compare_and_append (depends on the usage
+    /// pattern). We should be able to structure timestamp binding, source, and
+    /// sink code so it is always safe to retry [ExternalError]s, but SQL txns
+    /// will have to pass the error back to the user (or risk double committing
+    /// the txn).
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -262,14 +273,19 @@ where
         };
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
-            self.blob
-                .set(
-                    Instant::now() + FOREVER,
-                    &key,
-                    value,
-                    Atomicity::RequireAtomic,
-                )
-                .await?;
+            let () = retry_external("compare_and_append::set", || async {
+                // If MultiBlob::set took value as a ref, then we wouldn't have
+                // to clone here.
+                self.blob
+                    .set(
+                        Instant::now() + FOREVER,
+                        &key,
+                        value.clone(),
+                        Atomicity::RequireAtomic,
+                    )
+                    .await
+            })
+            .await;
             vec![key]
         } else {
             vec![]
@@ -388,7 +404,7 @@ where
         .expect("unexpected writer-local upper");
     }
 
-    /// Test helper for a [Self::compare_and_append] call this is expected to
+    /// Test helper for a [Self::compare_and_append] call that is expected to
     /// succeed.
     #[cfg(test)]
     #[track_caller]
@@ -433,7 +449,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn empty_batches() -> Result<(), Box<dyn std::error::Error>> {
+    async fn empty_batches() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -443,9 +459,9 @@ mod tests {
         ];
 
         let (mut write, _) = new_test_client()
-            .await?
-            .open::<String, String, u64, i64>(ShardId::new())
-            .await?;
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
         let blob = Arc::clone(&write.blob);
 
         // Write an initial batch.
@@ -453,17 +469,22 @@ mod tests {
         write.expect_append(&data[..2], upper).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
-        let blob_count_before = blob.list_keys(Instant::now() + FOREVER).await?.len();
+        let blob_count_before = blob
+            .list_keys(Instant::now() + FOREVER)
+            .await
+            .expect("list_keys failed")
+            .len();
         for _ in 0..5 {
             let new_upper = upper + 1;
             write.expect_compare_and_append(&[], upper, new_upper).await;
             upper = new_upper;
         }
         assert_eq!(
-            blob.list_keys(Instant::now() + FOREVER).await?.len(),
+            blob.list_keys(Instant::now() + FOREVER)
+                .await
+                .expect("list_keys failed")
+                .len(),
             blob_count_before
         );
-
-        Ok(())
     }
 }

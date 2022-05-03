@@ -23,7 +23,6 @@ use tracing::trace;
 
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
-use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, Row, Timestamp};
@@ -89,12 +88,12 @@ where
 
             let mut snapshot_iter = read
                 .snapshot(as_of.clone())
-                .await?
-                .expect("invalid usage");
+                .await
+                .expect("cannot serve requested as_of");
 
 
             // First, yield all the updates from the snapshot.
-            while let Some(next) = snapshot_iter.next().await? {
+            while let Some(next) = snapshot_iter.next().await {
                 yield ListenEvent::Updates(next);
             }
 
@@ -102,11 +101,11 @@ where
             // finish.
             let mut listen = read
                 .listen(as_of)
-                .await?
-                .expect("invalid usage");
+                .await
+                .expect("cannot serve requested as_of");
 
             loop {
-                let next = listen.next().await?;
+                let next = listen.next().await;
                 for event in next {
                     yield event;
                 }
@@ -159,7 +158,7 @@ where
                                 }
                             }
                         },
-                        Some(Err::<_, ExternalError>(e)) => {
+                        Some(Err::<_, anyhow::Error>(e)) => {
                             let cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give(Err((format!("{}", e), current_ts, 1)));
