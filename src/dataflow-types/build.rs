@@ -24,6 +24,7 @@ fn main() {
                 "dataflow-types/src/client.proto",
                 "dataflow-types/src/logging.proto",
                 "dataflow-types/src/postgres_source.proto",
+                "dataflow-types/src/plan.proto",
                 "dataflow-types/src/plan/join.proto",
                 "dataflow-types/src/plan/reduce.proto",
                 "dataflow-types/src/plan/threshold.proto",

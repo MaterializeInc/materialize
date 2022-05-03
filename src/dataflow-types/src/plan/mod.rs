@@ -9,13 +9,18 @@
 
 //! An explicit representation of a rendering plan for provided dataflows.
 
-#![warn(missing_debug_implementations, missing_docs)]
+// https://github.com/tokio-rs/prost/issues/237
+#![allow(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use mz_ore::soft_panic_or_log;
+use mz_repr::proto::ProtoRepr;
+use mz_repr::proto::TryFromProtoError;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use mz_expr::{
@@ -34,6 +39,8 @@ pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.rs"));
 
 // This function exists purely to convert the HashMap into a BTreeMap,
 // so that the value will be stable, for the benefit of tests
@@ -86,7 +93,7 @@ fn serialize_arranged<S: Serializer>(
 /// when creating arrangements, and permute by the hashmap when reading them,
 /// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
 /// ensures that the correct values will be read.
-#[derive(Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Arbitrary, Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -94,6 +101,77 @@ pub struct AvailableCollections {
     /// column permutation mapping
     #[serde(serialize_with = "serialize_arranged")]
     pub arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+}
+
+impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> for ProtoArrangement {
+    fn from(x: &(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)) -> Self {
+        use proto_arrangement::ProtoArrangementPermutation;
+        Self {
+            all_columns: x.0.iter().map(Into::into).collect(),
+            permutation: x
+                .1
+                .iter()
+                .map(|x| ProtoArrangementPermutation {
+                    key: x.0.into_proto(),
+                    val: x.1.into_proto(),
+                })
+                .collect(),
+            thinning: x.2.iter().map(|x| x.into_proto()).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoArrangement> for (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>) {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoArrangement) -> Result<Self, Self::Error> {
+        let perm: Result<HashMap<usize, usize>, TryFromProtoError> = x
+            .permutation
+            .iter()
+            .map(|x| {
+                let key = usize::from_proto(x.key);
+                let val = usize::from_proto(x.val);
+                Ok((key?, val?))
+            })
+            .collect();
+        Ok((
+            x.all_columns
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<_, _>>()?,
+            perm?,
+            x.thinning
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+}
+
+impl From<&AvailableCollections> for ProtoAvailableCollections {
+    fn from(x: &AvailableCollections) -> Self {
+        Self {
+            raw: x.raw,
+            arranged: x.arranged.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoAvailableCollections> for AvailableCollections {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoAvailableCollections) -> Result<Self, Self::Error> {
+        Ok({
+            Self {
+                raw: x.raw,
+                arranged: x
+                    .arranged
+                    .into_iter()
+                    .map(TryFrom::try_from)
+                    .collect::<Result<_, _>>()?,
+            }
+        })
+    }
 }
 
 impl AvailableCollections {
@@ -1259,4 +1337,20 @@ pub fn linear_to_mfp(
         .filter(predicates)
         .map(dummies)
         .project(demand_projection)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+       #[test]
+       fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }

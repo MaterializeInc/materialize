@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::TryFromProtoError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -77,55 +77,6 @@ impl TryFrom<ProtoThresholdPlan> for ThresholdPlan {
                 ensure_arrangement: p.try_into()?,
             }),
         })
-    }
-}
-
-impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>
-    for ProtoThresholdPlanArrangement
-{
-    fn from(x: &(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)) -> Self {
-        use proto_threshold_plan_arrangement::ProtoThresholdPlanArrangementPermutation;
-        Self {
-            all_columns: x.0.iter().map(Into::into).collect(),
-            permutation: x
-                .1
-                .iter()
-                .map(|x| ProtoThresholdPlanArrangementPermutation {
-                    key: x.0.into_proto(),
-                    val: x.1.into_proto(),
-                })
-                .collect(),
-            thinning: x.2.iter().map(|x| x.into_proto()).collect(),
-        }
-    }
-}
-
-impl TryFrom<ProtoThresholdPlanArrangement>
-    for (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)
-{
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoThresholdPlanArrangement) -> Result<Self, Self::Error> {
-        let perm: Result<HashMap<usize, usize>, TryFromProtoError> = x
-            .permutation
-            .iter()
-            .map(|x| {
-                let key = usize::from_proto(x.key);
-                let val = usize::from_proto(x.val);
-                Ok((key?, val?))
-            })
-            .collect();
-        Ok((
-            x.all_columns
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
-            perm?,
-            x.thinning
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<_, _>>()?,
-        ))
     }
 }
 
@@ -201,7 +152,7 @@ mod tests {
 
     proptest! {
        #[test]
-        fn scalar_type_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
+        fn threshold_plan_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
