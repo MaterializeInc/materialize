@@ -14,7 +14,6 @@ use const_format::concatcp;
 use lazy_static::lazy_static;
 use uncased::UncasedStr;
 
-use crate::catalog::builtin::{MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
 
@@ -115,14 +114,7 @@ const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
 };
 
 lazy_static! {
-    static ref DEFAULT_SEARCH_PATH: [String; 4] = {
-        [
-            MZ_CATALOG_SCHEMA.to_owned(),
-            PG_CATALOG_SCHEMA.to_owned(),
-            DEFAULT_SCHEMA.to_owned(),
-            MZ_TEMP_SCHEMA.to_owned(),
-        ]
-    };
+    static ref DEFAULT_SEARCH_PATH: [String; 1] = [DEFAULT_SCHEMA.to_owned(),];
     static ref SEARCH_PATH: ServerVar<[String]> = ServerVar {
         name: static_uncased_str!("search_path"),
         value: &*DEFAULT_SEARCH_PATH,

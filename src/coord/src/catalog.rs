@@ -3579,21 +3579,8 @@ mod tests {
             SchemaSpecifier::Temporary,
         );
 
-        // mz_catalog, pg_catalog and mz_temp are already contained in the default search_path
+        // Behavior with the default search_schema (public)
         let session = Session::dummy();
-        let conn_catalog = catalog.for_session(&session);
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-
-        // mz_catalog and pg_catalog are added when missing
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "public", false)?;
         let conn_catalog = catalog.for_session(&session);
         assert_ne!(
             conn_catalog.effective_search_path(false),
@@ -3684,14 +3671,14 @@ mod tests {
         assert_eq!(
             conn_catalog.effective_search_path(false),
             vec![
-                pg_catalog_schema.clone(),
                 mz_catalog_schema.clone(),
+                pg_catalog_schema.clone(),
                 mz_temp_schema.clone()
             ]
         );
         assert_eq!(
             conn_catalog.effective_search_path(true),
-            vec![pg_catalog_schema, mz_catalog_schema, mz_temp_schema]
+            vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
         );
 
         Ok(())
