@@ -25,6 +25,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -39,7 +40,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_persist_client::{read::ReadHandle, PersistLocation};
+use mz_persist_client::{read::ReadHandle, write::WriteHandle, PersistLocation, PersistClient, ShardId};
 use mz_persist_types::Codec64;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
@@ -52,7 +53,7 @@ use crate::client::{
     TimestampBindingFeedback,
 };
 use crate::sources::SourceDesc;
-use crate::Update;
+use crate::{DataflowError, Update};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -191,13 +192,14 @@ impl Arbitrary for CollectionMetadata {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
+pub struct StorageControllerState<T: Timestamp + Lattice + Codec64, S = mz_stash::Sqlite> {
     pub(super) client: Box<dyn StorageClient<T>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
+    pub(super) persist_handles: BTreeMap<GlobalId, PersistHandles<T>>,
     pub(super) stash: StorageStash<S>,
 }
 
@@ -236,10 +238,12 @@ impl<S: Stash> DerefMut for StorageStash<S> {
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T> {
+pub struct Controller<T: Timestamp + Lattice + Codec64> {
     state: StorageControllerState<T>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
+    /// A persist client used to write to storage collections
+    persist_client: PersistClient,
 }
 
 #[derive(Debug)]
@@ -302,13 +306,14 @@ impl From<StashError> for StorageError {
     }
 }
 
-impl<T> StorageControllerState<T> {
+impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
     pub(super) fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
         let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
             .expect("unable to create storage stash");
         Self {
             client,
             collections: BTreeMap::default(),
+            persist_handles: BTreeMap::default(),
             stash: StorageStash::new(stash),
         }
     }
@@ -370,18 +375,6 @@ where
 
         // Install collection state for each bound source.
         for (id, (desc, since)) in bindings {
-            let read_handle = desc.connector.get_read_handle::<T>().await.map_err(|e| {
-                StorageError::ClientError(anyhow!("external persist error: {:?}", e))
-            })?;
-
-            // If we got a persist read handle the since we get from coord is meaningless. It's
-            // most likely `T::minimum()`, which is just the coordinator telling us that it _hopes_
-            // that this is the since. We can go to the source (ha!) of the information.
-            let since = read_handle
-                .as_ref()
-                .map(|read| read.since().clone())
-                .unwrap_or(since);
-
             // TODO(aljoscha): We don't need a timestamp bindings collection for all types of
             // sources but right now we always create one. Perhaps the responsibility for creating
             // this should be moved to the `SourceConnector`, similar to how we have
@@ -402,13 +395,21 @@ where
                 prev_offset.offset += diff;
             }
 
-            let read_handle = read_handle.map(|read| {
-                Box::new(ReadHandleWrapper { read_handle: read })
-                    as Box<dyn CollectionReadHandle<T>>
-            });
+            let timeout = Duration::from_secs(60);
+            // TODO(petrosagg): durably record the persist shard we mint here
+            let persist_shard = ShardId::new();
+            let (write, read) = self
+                .persist_client
+                .open(timeout, persist_shard)
+                .await
+                .expect("TODO(petrosagg");
+            self.state
+                .persist_handles
+                .insert(id, PersistHandles { read, write });
 
             let collection_state =
-                CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
+                CollectionState::new(desc.clone(), since.clone(), last_bindings, persist_shard);
+
             self.state.collections.insert(id, collection_state);
 
             let storage_metadata = self.collection_metadata(id)?;
@@ -447,18 +448,31 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
-        for (id, updates, upper) in commands.iter() {
-            for update in updates {
-                if !update.timestamp.less_than(upper) {
+        for (id, updates, upper) in commands {
+            for update in &updates {
+                if !update.timestamp.less_than(&upper) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }
+            let handles = self
+                .state
+                .persist_handles
+                .get_mut(&id)
+                .expect("unknown collection id");
+
+            let updates = updates
+                .into_iter()
+                .map(|u| (((), Ok(u.row)), u.timestamp, u.diff));
+            let timeout = Duration::from_secs(60);
+            handles
+                .write
+                .append(timeout, updates, Antichain::from_elem(upper))
+                .await
+                .expect("cannot append updates")
+                .expect("cannot append updates")
+                .expect("invalid/outdated upper");
         }
-        self.state
-            .client
-            .send(StorageCommand::Append(commands))
-            .await
-            .map_err(StorageError::from)
+        Ok(())
     }
 
     async fn update_durability_frontiers(
@@ -672,10 +686,16 @@ where
                 stash_consolidations.push(ts_binding_collection);
                 compaction_commands.push((*id, frontier.clone()));
 
-                let collection = self.collection_mut(*id).unwrap();
-                if let Some(read) = collection.read_handle.as_mut() {
-                    read.downgrade_since(frontier).await?;
-                }
+                let handles = self.state.persist_handles.get_mut(id).unwrap();
+
+                handles
+                    .read
+                    .downgrade_since(Duration::from_secs(60), frontier)
+                    .await
+                    .map_err(|e| {
+                        StorageError::ClientError(anyhow!("external persist error: {:?}", e))
+                    })?
+                    .expect("invalid usage");
             }
         }
         self.state.stash.compact_batch(&stash_compactions).await?;
@@ -725,14 +745,19 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
     /// Create a new storage controller from a client it should wrap.
-    pub fn new(
+    pub async fn new(
         client: Box<dyn StorageClient<T>>,
         state_dir: PathBuf,
         persist_location: PersistLocation,
     ) -> Self {
+        let timeout = Duration::from_secs(60);
+        let (blob, consensus) = config.persist_location.open(timeout).await.unwrap();
+        let persist_client = PersistClient::new(timeout, blob, consensus).await.unwrap();
+
         Self {
             state: StorageControllerState::new(client, state_dir),
             persist_location,
+            persist_client,
         }
     }
 
@@ -772,11 +797,16 @@ pub struct CollectionState<T> {
     /// This is used to differentialize timestamp bindings received before storing them in stash
     pub(super) last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
 
+    /// The persist shard containing the contents of this storage collection
+    pub persist_shard: ShardId,
+}
+
+#[derive(Debug)]
+pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
     /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
     /// since frontier and we need to downgrade that when the read capabilities change.
-    // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
-    // being optional
-    pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+    read: ReadHandle<(), Result<Row, DataflowError>, T, Diff>,
+    write: WriteHandle<(), Result<Row, DataflowError>, T, Diff>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -784,7 +814,6 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: SourceDesc,
         since: Antichain<T>,
-        read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -796,29 +825,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             last_reported_ts_bindings,
-            read_handle,
+            persist_shard,
         }
-    }
-}
-
-/// A type that hides the details of a real persist read handle and only exposes the methods that
-/// the controller needs to know about.
-#[async_trait]
-pub trait CollectionReadHandle<T>: Send + Sync + Debug {
-    /// Forwards the since frontier of this handle, giving up the ability to
-    /// read at times not greater or equal to `new_since`.
-    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError>;
-}
-
-#[derive(Debug)]
-struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
-    read_handle: ReadHandle<Row, Row, T, Diff>,
-}
-
-#[async_trait]
-impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
-    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
-        self.read_handle.downgrade_since(since).await;
-        Ok(())
     }
 }

@@ -25,30 +25,33 @@ use std::{env, fs};
 
 use anyhow::{anyhow, Context};
 use futures::StreamExt;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use tokio::net::TcpListener;
+use tokio_postgres::{self, NoTls};
+use tokio_stream::wrappers::TcpListenerStream;
+use tokio::sync::oneshot;
+use tower_http::cors::{AnyOr, Origin};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use tower_http::cors::AllowOrigin;
+
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
+use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_persist_client::PersistLocation;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::AllowOrigin;
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
+use mz_persist_client::PersistLocation;
 use mz_pid_file::PidFile;
-use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
+use mz_secrets::SecretsController;
 
 use crate::mux::Mux;
 
@@ -372,11 +375,12 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         client.connect().await;
         client
     });
+
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
         storage_client,
         config.data_directory,
         config.persist_location,
-    );
+    ).await;
     let dataflow_controller =
         mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
 

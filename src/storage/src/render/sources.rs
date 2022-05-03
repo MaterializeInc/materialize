@@ -34,7 +34,6 @@ use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader, SourceToken,
 };
-use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -200,13 +199,6 @@ where
                 }
             }
             table.capability.borrow_mut().downgrade(&table_state.upper);
-
-            table_state.inputs.push(LocalInput {
-                handle: table.handle,
-                // Hand off our a `Weak` to the core capability, so that
-                // it is correctly dropped if the token is dropped.
-                capability: Rc::downgrade(&table.capability),
-            });
 
             ((table.ok_collection, table.err_collection), table.token)
         }
