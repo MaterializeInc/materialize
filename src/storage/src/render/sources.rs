@@ -11,18 +11,19 @@
 //!
 //! See [`render_source`] for more details.
 
+<<<<<<< HEAD
 use std::any::Any;
 use std::cell::RefCell;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
+=======
+>>>>>>> d93000da5 (transit table data through persist)
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::{ActivateCapability, Map, OkErr, Operator, UnorderedInput};
+use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::Scope;
 
 use mz_dataflow_types::sources::{encoding::*, *};
@@ -33,9 +34,8 @@ use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader, SourceToken,
+    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
-use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -51,83 +51,6 @@ enum SourceType<Delimited, ByteStream, RowSource> {
     /// and skips any `render_decode` stream
     /// adapters
     Row(RowSource),
-}
-
-/// A description of a table imported by [`render_table`].
-struct RenderedTable<G>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    /// The collection containing the records from the table.
-    ok_collection: Collection<G, Row, Diff>,
-    /// The collection containing errors from the etable.
-    err_collection: Collection<G, DataflowError, Diff>,
-    /// A handle for inserting records into the table.
-    handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    /// The initial capability associated with the insert handle.
-    capability: Rc<RefCell<ActivateCapability<Timestamp>>>,
-    /// A type-erased `SourceToken` that, upon drop,
-    /// shuts down the table psesudo-source.
-    token: Arc<dyn Any + Send + Sync>,
-}
-
-/// Imports a table (non-durable, local source of input).
-fn render_table<G>(
-    as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    scope: &mut G,
-) -> RenderedTable<G>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let ((handle, capability), ok_stream) = scope.new_unordered_input::<(Row, Timestamp, Diff)>();
-    // Convert to reference counted, so that users can downgrade it and allow the
-    // following code to destroy it later on.
-    let capability = Rc::new(RefCell::new(capability));
-    let err_collection = Collection::empty(scope);
-
-    let as_of_frontier = as_of_frontier.clone();
-    let mut vector = Vec::new();
-    let mut token = None;
-
-    // Note: this `unary` operator is adapted from `Operator::map_in_place`.
-    // It forwards the data along, but adds a way to drop the operator's input capability,
-    // if the returned, thread-safe `SourceToken` is dropped.
-    let ok_collection = ok_stream
-        .unary(Pipeline, "MapInPlaceWithSyncToken", |_, operator_info| {
-            let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
-            let drop_activator_weak = Arc::downgrade(&drop_activator);
-
-            let mut local_cap = Some(Rc::clone(&capability));
-
-            token = Some(SourceToken {
-                activator: drop_activator,
-            });
-
-            move |input, output| {
-                // Drop cap and early exit if the source-token is dropped
-                if drop_activator_weak.upgrade().is_none() {
-                    local_cap.take();
-                    return;
-                }
-
-                input.for_each(|time, data| {
-                    data.swap(&mut vector);
-                    output.session(&time).give_vec(&mut vector);
-                })
-            }
-        })
-        .map_in_place(move |(_, time, _)| {
-            time.advance_by(as_of_frontier.borrow());
-        })
-        .as_collection();
-
-    RenderedTable {
-        ok_collection,
-        err_collection,
-        handle,
-        capability,
-        token: Arc::new(token.unwrap()),
-    }
 }
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -177,40 +100,7 @@ where
     match src.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
-        SourceConnector::Local { .. } => {
-            let mut table = render_table(as_of_frontier, scope);
-
-            let table_state = match storage_state.table_state.get_mut(&src_id) {
-                Some(table_state) => table_state,
-                None => panic!(
-                    "table state {} missing for source creation at worker {}",
-                    src_id,
-                    scope.index()
-                ),
-            };
-
-            // Make the new local input reflect the latest table state, then add the
-            // local input to the table state.
-            {
-                let mut session = table.handle.session(table.capability.borrow().clone());
-                for (row, time, diff) in &table_state.data {
-                    let mut time = *time;
-                    time.advance_by(table_state.since.borrow());
-                    assert!(time >= *table.capability.borrow().time());
-                    session.give((row.clone(), time, *diff));
-                }
-            }
-            table.capability.borrow_mut().downgrade(&table_state.upper);
-
-            table_state.inputs.push(LocalInput {
-                handle: table.handle,
-                // Hand off our a `Weak` to the core capability, so that
-                // it is correctly dropped if the token is dropped.
-                capability: Rc::downgrade(&table.capability),
-            });
-
-            ((table.ok_collection, table.err_collection), table.token)
-        }
+        SourceConnector::Local { .. } => unreachable!(),
 
         SourceConnector::External {
             connector,

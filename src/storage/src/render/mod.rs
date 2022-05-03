@@ -271,7 +271,12 @@ pub fn build_storage_dataflow<A: Allocate>(
             // TODO(aljoscha): We need to figure out what to do with error results from these calls.
 
             let (write, _read) = futures_executor::block_on(
-                storage_state.persist_client.open(timeout, persist_shard),
+                storage_state
+                    .persist_client
+                    .open::<(), Result<Row, DataflowError>, mz_repr::Timestamp, mz_repr::Diff>(
+                        timeout,
+                        persist_shard,
+                    ),
             )
             .expect("could not open persist shard");
 

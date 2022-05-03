@@ -36,7 +36,7 @@ use mz_repr::{GlobalId, Row};
 use crate::logging::LoggingConfig;
 use crate::{
     sources::{MzOffset, SourceDesc},
-    DataflowDescription, PeekResponse, TailResponse, Update,
+    DataflowDescription, PeekResponse, TailResponse,
 };
 
 pub mod controller;
