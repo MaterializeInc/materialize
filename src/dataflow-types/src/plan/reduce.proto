@@ -12,8 +12,9 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "expr/src/scalar.proto";
+import "expr/src/linear.proto";
 import "expr/src/relation.proto";
+import "expr/src/scalar.proto";
 
 package mz_dataflow_types.plan.reduce;
 
@@ -89,4 +90,9 @@ message ProtoReductionType {
         google.protobuf.Empty hierarchical = 2;
         google.protobuf.Empty basic = 3;
     }
+}
+
+message ProtoKeyValPlan {
+    mz_expr.linear.ProtoSafeMfpPlan key_plan = 1;
+    mz_expr.linear.ProtoSafeMfpPlan val_plan = 2;
 }

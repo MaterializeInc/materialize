@@ -793,6 +793,26 @@ pub struct KeyValPlan {
     pub val_plan: mz_expr::SafeMfpPlan,
 }
 
+impl From<&KeyValPlan> for ProtoKeyValPlan {
+    fn from(x: &KeyValPlan) -> Self {
+        Self {
+            key_plan: Some((&x.key_plan).into()),
+            val_plan: Some((&x.key_plan).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoKeyValPlan> for KeyValPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoKeyValPlan) -> Result<Self, Self::Error> {
+        Ok(Self {
+            key_plan: x.key_plan.try_into_if_some("ProtoKeyValPlan::key_plan")?,
+            val_plan: x.val_plan.try_into_if_some("ProtoKeyValPlan::val_plan")?,
+        })
+    }
+}
+
 impl KeyValPlan {
     /// Create a new [KeyValPlan] from aggregation arguments.
     pub fn new(

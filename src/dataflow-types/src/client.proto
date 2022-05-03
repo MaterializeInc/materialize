@@ -12,6 +12,7 @@ syntax = "proto3";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "repr/src/proto.proto";
+import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 
 package mz_dataflow_types.client;
@@ -22,5 +23,5 @@ message ProtoPeek {
     mz_repr.proto.ProtoUuid uuid = 3;
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
-    // TODO(lluki): Add MFP once #11970 is in
+    mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
 }

@@ -12,6 +12,7 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
+import "expr/src/linear.proto";
 import "expr/src/scalar.proto";
 
 package mz_dataflow_types.plan.join;
@@ -32,9 +33,7 @@ message ProtoJoinClosureEquivalents {
 }
 message ProtoJoinClosure {
     repeated ProtoMirScalarVec ready_equivalences = 1;
-    // TODO(lluki): Uncomment when #11970 is fixed
-    // ProtoSafeMfpPlan before = 2;
-    google.protobuf.Empty before = 2;
+    mz_expr.linear.ProtoSafeMfpPlan before = 2;
 }
 
 message ProtoLinearStagePlan {

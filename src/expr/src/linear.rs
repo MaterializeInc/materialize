@@ -11,10 +11,13 @@ use std::collections::{HashMap, HashSet};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Datum, Row};
 
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
+
+include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -55,6 +58,54 @@ pub struct MapFilterProject {
     /// This is needed to enure correct identification of newly formed
     /// columns in the output.
     pub input_arity: usize,
+}
+
+impl TryFrom<ProtoMapFilterProject> for MapFilterProject {
+    type Error = TryFromProtoError;
+
+    fn try_from(value: ProtoMapFilterProject) -> Result<Self, Self::Error> {
+        Ok(MapFilterProject {
+            expressions: value
+                .expressions
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            predicates: value
+                .predicates
+                .into_iter()
+                .map::<Result<(usize, MirScalarExpr), Self::Error>, _>(|x| {
+                    Ok((
+                        usize::from_proto(x.column_to_apply)?,
+                        x.predicate.try_into_if_some("ProtoPredicate::predicate")?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            projection: value
+                .projection
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            input_arity: usize::from_proto(value.input_arity)?,
+        })
+    }
+}
+
+impl From<&MapFilterProject> for ProtoMapFilterProject {
+    fn from(value: &MapFilterProject) -> Self {
+        ProtoMapFilterProject {
+            expressions: value.expressions.iter().map(Into::into).collect(),
+            predicates: value
+                .predicates
+                .iter()
+                .map(|(col, pred)| proto_map_filter_project::ProtoPredicate {
+                    column_to_apply: col.into_proto(),
+                    predicate: Some(pred.into()),
+                })
+                .collect(),
+            projection: value.projection.iter().map(|i| i.into_proto()).collect(),
+            input_arity: value.input_arity.into_proto(),
+        }
+    }
 }
 
 impl MapFilterProject {
@@ -1244,10 +1295,11 @@ pub mod plan {
     use serde::{Deserialize, Serialize};
 
     use crate::{
-        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc,
-        UnmaterializableFunc,
+        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
+        ProtoSafeMfpPlan, UnaryFunc, UnmaterializableFunc,
     };
     use mz_repr::adt::numeric::Numeric;
+    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1256,15 +1308,21 @@ pub mod plan {
         mfp: MapFilterProject,
     }
 
-    // TODO(lluki): Replace this function with some TryFrom<Proto..> once #11970 is fixed
-    pub fn safe_mfp_stub() -> SafeMfpPlan {
-        SafeMfpPlan {
-            mfp: MapFilterProject {
-                expressions: vec![],
-                predicates: vec![],
-                projection: vec![],
-                input_arity: 0,
-            },
+    impl TryFrom<ProtoSafeMfpPlan> for SafeMfpPlan {
+        type Error = TryFromProtoError;
+
+        fn try_from(value: ProtoSafeMfpPlan) -> Result<Self, Self::Error> {
+            Ok(SafeMfpPlan {
+                mfp: value.mfp.try_into_if_some("ProtoSafeMfpPlan::mfp")?,
+            })
+        }
+    }
+
+    impl From<&SafeMfpPlan> for ProtoSafeMfpPlan {
+        fn from(value: &SafeMfpPlan) -> Self {
+            ProtoSafeMfpPlan {
+                mfp: Some((&value.mfp).into()),
+            }
         }
     }
 
@@ -1366,7 +1424,7 @@ pub mod plan {
     /// They must directly constrain `MzLogicalTimestamp` from below or above,
     /// by expressions that do not themselves contain `MzLogicalTimestamp`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Clone, Debug)]
+    #[derive(Arbitrary, Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
@@ -1374,6 +1432,36 @@ pub mod plan {
         lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzLogicalTimestamp`.
         upper_bounds: Vec<MirScalarExpr>,
+    }
+
+    impl TryFrom<ProtoMfpPlan> for MfpPlan {
+        type Error = TryFromProtoError;
+
+        fn try_from(value: ProtoMfpPlan) -> Result<Self, Self::Error> {
+            Ok(MfpPlan {
+                mfp: value.mfp.try_into_if_some("ProtoMfpPlan::mfp")?,
+                lower_bounds: value
+                    .lower_bounds
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
+                upper_bounds: value
+                    .upper_bounds
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        }
+    }
+
+    impl From<&MfpPlan> for ProtoMfpPlan {
+        fn from(value: &MfpPlan) -> Self {
+            ProtoMfpPlan {
+                mfp: Some((&value.mfp).into()),
+                lower_bounds: value.lower_bounds.iter().map(Into::into).collect(),
+                upper_bounds: value.upper_bounds.iter().map(Into::into).collect(),
+            }
+        }
     }
 
     impl MfpPlan {
@@ -1677,6 +1765,23 @@ pub mod plan {
             } else {
                 None.into_iter().chain(None.into_iter())
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plan::*;
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

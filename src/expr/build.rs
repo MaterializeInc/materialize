@@ -24,6 +24,7 @@ fn main() {
         .compile_protos(
             &[
                 "expr/src/id.proto",
+                "expr/src/linear.proto",
                 "expr/src/relation.proto",
                 "expr/src/relation/func.proto",
                 "expr/src/scalar.proto",

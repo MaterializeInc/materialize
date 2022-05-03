@@ -35,7 +35,7 @@ pub mod linear_join;
 
 use std::collections::HashMap;
 
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -121,8 +121,7 @@ impl TryFrom<ProtoJoinClosure> for JoinClosure {
                 .map(TryFrom::try_from)
                 .collect::<Result<_, TryFromProtoError>>()?,
 
-            // TODO(lluki): Implement me once #11970 is fixed
-            before: mz_expr::safe_mfp_stub(),
+            before: x.before.try_into_if_some("ProtoJoinClosure::before")?,
         })
     }
 }
