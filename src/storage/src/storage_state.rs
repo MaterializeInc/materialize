@@ -5,10 +5,11 @@
 
 //! Worker-local state for storage timely instances.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
@@ -61,8 +62,11 @@ pub struct StorageState {
         HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
     /// Persist shard ids for the reclocking collection of a source.
     pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
+    /// Handles to created sources, keyed by ID
+    pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
     /// Handles to external sources, keyed by ID.
     // TODO(guswynn): determine if this field is needed
+    /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
@@ -160,20 +164,21 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             // Nothing to do at the moment, but in the future
                             // prepare source ingestion.
 
-                            crate::render::build_storage_dataflow(
-                                self.timely_worker,
-                                &mut self.storage_state,
-                                "foobar",
-                                Some(Antichain::from_elem(0)),
-                                (source.id, source.desc.clone()),
-                            );
-
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
                                 source.id,
                                 Rc::new(RefCell::new(Antichain::from_elem(
                                     mz_repr::Timestamp::minimum(),
                                 ))),
+                            );
+
+                            crate::render::build_storage_dataflow(
+                                self.timely_worker,
+                                self.storage_state,
+                                "foobar",
+                                Some(Antichain::from_elem(0)),
+                                (source.id, source.desc.clone()),
+                                source.persist_shard,
                             );
                         }
                     }
@@ -204,6 +209,7 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
+                        self.storage_state.source_tokens.remove(&id);
                         self.storage_state.ts_source_mapping.remove(&id);
                         self.storage_state.persist_handles.remove(&id);
                     } else if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
