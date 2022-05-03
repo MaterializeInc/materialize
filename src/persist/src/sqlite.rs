@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::{named_params, params, Connection, Error as SqliteError, OptionalExtension};
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
@@ -96,7 +96,7 @@ impl Consensus for SqliteConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        let conn = self.conn.lock().await;
+        let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT sequence_number, data FROM consensus
                  WHERE shard = $shard ORDER BY sequence_number DESC LIMIT 1",
@@ -126,7 +126,7 @@ impl Consensus for SqliteConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            let conn = self.conn.lock().await;
+            let conn = self.conn.lock().unwrap();
 
             // Only insert the new row if:
             // - sequence number expected is already present
@@ -152,7 +152,7 @@ impl Consensus for SqliteConsensus {
                 "$expected": expected,
             })?
         } else {
-            let conn = self.conn.lock().await;
+            let conn = self.conn.lock().unwrap();
 
             // Insert the new row as long as no other row exists for the same shard.
             let mut stmt = conn.prepare_cached(
@@ -189,7 +189,7 @@ impl Consensus for SqliteConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let conn = self.conn.lock().await;
+        let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare_cached(
             "SELECT sequence_number, data FROM consensus
                  WHERE shard = $shard AND sequence_number >= $from
@@ -220,7 +220,7 @@ impl Consensus for SqliteConsensus {
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
         let result = {
-            let conn = self.conn.lock().await;
+            let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare_cached(
             "DELETE FROM consensus
              WHERE shard = $shard AND sequence_number < $sequence_number AND
