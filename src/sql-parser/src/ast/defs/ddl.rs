@@ -576,7 +576,7 @@ pub enum CreateConnector<T: AstInfo> {
     CSRNew {
         registry: String,
         username: Option<String>,
-        password: Option<String>,
+        password: Option<UnresolvedObjectName>,
     },
 }
 
@@ -626,15 +626,16 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                 f.write_str("'");
                 match username {
                     Some(username) => {
-                        f.write_str(" USERNAME ");
+                        f.write_str(" USERNAME '");
                         f.write_node(&display::escape_single_quote_string(username));
+                        f.write_str("'");
                     }
                     None => {}
                 }
                 match password {
                     Some(password) => {
                         f.write_str(" PASSWORD ");
-                        f.write_node(&display::escape_single_quote_string(password));
+                        f.write_node(password);
                     }
                     None => {}
                 }
