@@ -500,16 +500,15 @@ impl_display!(DbzMode);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaSecurityOptions {
     SSL {
-        key_file: Option<String>,
-        certificate_file: Option<String>,
-        key_password: Option<String>,
+        key: Option<UnresolvedObjectName>,
+        certificate: Option<UnresolvedObjectName>,
+        passphrase: Option<UnresolvedObjectName>,
     },
     SASL {
         mechanism: String,
         ssl: bool,
-        certificate: Option<String>,
-        username: Option<String>,
-        password: Option<String>,
+        username: String,
+        password: UnresolvedObjectName,
     },
 }
 
@@ -517,25 +516,22 @@ impl AstDisplay for KafkaSecurityOptions {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             KafkaSecurityOptions::SSL {
-                key_file,
-                certificate_file,
-                key_password,
+                key,
+                certificate,
+                passphrase,
             } => {
                 f.write_str(" SSL");
-                if let Some(key_file) = key_file {
-                    f.write_str(" KEY FILE '");
-                    f.write_node(&display::escape_single_quote_string(key_file));
-                    f.write_str("'");
+                if let Some(secret_name) = key {
+                    f.write_str(" KEY ");
+                    f.write_node(secret_name);
                 }
-                if let Some(certificate_file) = certificate_file {
-                    f.write_str(" CERTIFICATE FILE '");
-                    f.write_node(&display::escape_single_quote_string(certificate_file));
-                    f.write_str("'");
+                if let Some(secret_name) = certificate {
+                    f.write_str(" CERTIFICATE ");
+                    f.write_node(secret_name);
                 }
-                if let Some(key_password) = key_password {
-                    f.write_str(" KEY PASSWORD '");
-                    f.write_node(&display::escape_single_quote_string(key_password));
-                    f.write_str("'");
+                if let Some(secret_name) = passphrase {
+                    f.write_str(" PASSPHRASE ");
+                    f.write_node(secret_name);
                 }
             }
             KafkaSecurityOptions::SASL {
@@ -543,7 +539,6 @@ impl AstDisplay for KafkaSecurityOptions {
                 ssl,
                 username,
                 password,
-                ..
             } => {
                 match ssl {
                     true => f.write_str(" SASL_SSL "),
@@ -551,22 +546,11 @@ impl AstDisplay for KafkaSecurityOptions {
                 }
                 f.write_str("MECHANISM ");
                 f.write_str(mechanism);
-                match username {
-                    Some(username) => {
-                        f.write_str(" USERNAME '");
-                        f.write_node(&display::escape_single_quote_string(username));
-                        f.write_str("'");
-                    }
-                    None => {}
-                }
-                match password {
-                    Some(password) => {
-                        f.write_str(" PASSWORD '");
-                        f.write_node(&display::escape_single_quote_string(password));
-                        f.write_str("'");
-                    }
-                    None => {}
-                }
+                f.write_str(" USERNAME '");
+                f.write_node(&display::escape_single_quote_string(username));
+                f.write_str("'");
+                f.write_str(" PASSWORD ");
+                f.write_node(password);
             }
         }
     }

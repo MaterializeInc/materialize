@@ -1921,28 +1921,25 @@ impl<'a> Parser<'a> {
     fn parse_kafka_security(&mut self) -> Result<KafkaSecurityOptions, ParserError> {
         Ok(match self.expect_one_of_keywords(&[SSL, SASL, SASLSSL])? {
             Keyword::Ssl => {
-                let (mut key_file, mut certificate_file, mut key_password) = (None, None, None);
+                let (mut key, mut certificate, mut passphrase) = (None, None, None);
                 while let Ok(keyword) = self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD]) {
                     match keyword {
                         Keyword::Key => {
-                            self.expect_keyword(FILE)?;
-                            key_file = Some(self.parse_literal_string()?);
+                            key = Some(self.parse_object_name()?);
                         }
                         Keyword::Certificate => {
-                            self.expect_keyword(FILE)?;
-                            certificate_file = Some(self.parse_literal_string()?);
+                            certificate = Some(self.parse_object_name()?);
                         }
                         Keyword::Password => {
-                            self.expect_keyword(FILE)?;
-                            key_password = Some(self.parse_literal_string()?);
+                            passphrase = Some(self.parse_object_name()?);
                         }
                         _ => unreachable!(),
                     }
                 }
                 KafkaSecurityOptions::SSL {
-                    key_file,
-                    certificate_file,
-                    key_password,
+                    key,
+                    certificate,
+                    passphrase,
                 }
             }
             Keyword::Sasl => self.parse_kafka_sasl(false)?,
@@ -1959,14 +1956,14 @@ impl<'a> Parser<'a> {
             Keyword::ScramSha512 => "SCRAM-SHA-512".to_string(),
             _ => unreachable!(),
         };
-        let (mut username, mut password) = (None, None);
+        let (mut username, mut password) = ("".to_string(), UnresolvedObjectName::unqualified(""));
         while let Ok(keyword) = self.expect_one_of_keywords(&[USERNAME, PASSWORD]) {
             match keyword {
                 Keyword::Username => {
-                    username = Some(self.parse_literal_string()?);
+                    username = self.parse_literal_string()?;
                 }
                 Keyword::Password => {
-                    password = Some(self.parse_literal_string()?);
+                    password = self.parse_object_name()?;
                 }
                 _ => unreachable!(),
             }
@@ -1976,7 +1973,6 @@ impl<'a> Parser<'a> {
             username,
             password,
             ssl,
-            certificate: None,
         })
     }
 
