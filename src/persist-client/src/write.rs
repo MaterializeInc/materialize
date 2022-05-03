@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -161,21 +160,25 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        // TODO: Instead construct a Vec of blob keys here so it can be empty
-        // (if there are no updates) and bounded memory usage (if updates is
-        // large).
-        let key = Uuid::new_v4().to_string();
-        let mut value = Vec::new();
-        if let Err(err) = Self::encode_batch(&mut value, &desc, updates) {
-            return Ok(Err(err));
-        }
-        self.blob
-            .set(deadline, &key, value, Atomicity::RequireAtomic)
-            .await?;
+        // TODO: Instead construct a Vec of batches here so it can be bounded
+        // memory usage (if updates is large).
+        let value = match Self::encode_batch(&desc, updates) {
+            Ok(x) => x,
+            Err(err) => return Ok(Err(err)),
+        };
+        let keys = if let Some(value) = value {
+            let key = Uuid::new_v4().to_string();
+            self.blob
+                .set(deadline, &key, value, Atomicity::RequireAtomic)
+                .await?;
+            vec![key]
+        } else {
+            vec![]
+        };
 
         let res = self
             .machine
-            .append(deadline, &self.writer_id, &[key], &desc)
+            .append(deadline, &self.writer_id, &keys, &desc)
             .await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
@@ -235,21 +238,25 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        // TODO: Instead construct a Vec of blob keys here so it can be empty
-        // (if there are no updates) and bounded memory usage (if updates is
-        // large).
-        let key = Uuid::new_v4().to_string();
-        let mut value = Vec::new();
-        if let Err(err) = Self::encode_batch(&mut value, &desc, updates) {
-            return Ok(Err(err));
-        }
-        self.blob
-            .set(deadline, &key, value, Atomicity::RequireAtomic)
-            .await?;
+        // TODO: Instead construct a Vec of batches here so it can be bounded
+        // memory usage (if updates is large).
+        let value = match Self::encode_batch(&desc, updates) {
+            Ok(x) => x,
+            Err(err) => return Ok(Err(err)),
+        };
+        let keys = if let Some(value) = value {
+            let key = Uuid::new_v4().to_string();
+            self.blob
+                .set(deadline, &key, value, Atomicity::RequireAtomic)
+                .await?;
+            vec![key]
+        } else {
+            vec![]
+        };
 
         let res = self
             .machine
-            .compare_and_append(deadline, &self.writer_id, &[key], &desc)
+            .compare_and_append(deadline, &self.writer_id, &keys, &desc)
             .await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
@@ -259,13 +266,11 @@ where
         Ok(Ok(Ok(())))
     }
 
-    fn encode_batch<'a, B, I>(
-        buf: &mut B,
+    fn encode_batch<'a, I>(
         desc: &Description<T>,
         updates: I,
-    ) -> Result<(), InvalidUsage>
+    ) -> Result<Option<Vec<u8>>, InvalidUsage>
     where
-        B: BufMut,
         I: IntoIterator<Item = ((&'a K, &'a V), &'a T, &'a D)>,
     {
         let iter = updates.into_iter();
@@ -332,8 +337,13 @@ where
             updates: builder.finish(),
             index: 0,
         };
-        batch.encode(buf);
-        Ok(())
+        if batch.updates.len() == 0 {
+            return Ok(None);
+        }
+
+        let mut buf = Vec::new();
+        batch.encode(&mut buf);
+        Ok(Some(buf))
     }
 
     /// Test helper for [Self::append]-ing a slice of owned updates.
@@ -392,5 +402,54 @@ where
                 self.writer_id, err
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::new_test_client;
+    use crate::{ShardId, NO_TIMEOUT};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_batches() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let (mut write, _) = new_test_client()
+            .await?
+            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
+            .await?;
+        let blob = Arc::clone(&write.blob);
+
+        // Write an initial batch.
+        let mut upper = 3;
+        write
+            .append_slice(&data[..2], upper)
+            .await??
+            .expect("invalid current upper");
+
+        // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
+        let blob_count_before = blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len();
+        for _ in 0..5 {
+            let new_upper = upper + 1;
+            write
+                .compare_and_append_slice(&[], upper, new_upper)
+                .await??
+                .expect("invalid current upper");
+            upper = new_upper;
+        }
+        assert_eq!(
+            blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len(),
+            blob_count_before
+        );
+
+        Ok(())
     }
 }

@@ -316,6 +316,17 @@ where
                         new_state
                     );
                     self.state = new_state;
+
+                    // Bound the number of entries in consensus.
+                    //
+                    // It's weird that this will return an error for the whole
+                    // request after we know it's successful, but this goes away
+                    // in #12223.
+                    let () = self
+                        .consensus
+                        .truncate(deadline, &path, self.state.seqno())
+                        .await?;
+
                     return Ok(Ok((self.state.seqno(), work_ret)));
                 }
                 Err(current) => {
@@ -425,6 +436,55 @@ where
         debug_assert_eq!(current_seqno, current_state.seqno());
         debug_assert!(self.state.seqno() <= current.seqno);
         self.state = current_state;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::new_test_client;
+    use crate::{ShardId, NO_TIMEOUT};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn apply_unbatched_cmd_truncate() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging();
+
+        let (mut write, _) = new_test_client()
+            .await?
+            .open::<String, (), u64, i64>(NO_TIMEOUT, ShardId::new())
+            .await?;
+        let consensus = Arc::clone(&write.machine.consensus);
+
+        // Write a bunch of batches. This should result in a bounded number of
+        // live entries in consensus.
+        const NUM_BATCHES: u64 = 100;
+        for idx in 0..NUM_BATCHES {
+            let updates = vec![((idx.to_string(), ()), idx, 1)];
+            write
+                .compare_and_append_slice(&updates, idx, idx + 1)
+                .await??
+                .expect("invalid current upper");
+        }
+        let key = write.machine.shard_id().to_string();
+        let consensus_entries = consensus
+            .scan(Instant::now() + NO_TIMEOUT, &key, SeqNo::minimum())
+            .await?;
+        // Make sure we constructed the key correctly.
+        assert!(consensus_entries.len() > 0);
+        // Make sure the number of entries is bounded.
+        //
+        // TODO: When we implement incremental state, this will be something
+        // like log(NUM_BATCHES).
+        let max_entries = 1;
+        assert!(
+            consensus_entries.len() <= max_entries,
+            "expected at most {} entries got {}",
+            max_entries,
+            consensus_entries.len()
+        );
+
         Ok(())
     }
 }
