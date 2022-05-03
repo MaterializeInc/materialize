@@ -400,6 +400,7 @@ impl ErrorResponse {
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
+            CoordError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,

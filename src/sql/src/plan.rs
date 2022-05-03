@@ -519,6 +519,40 @@ pub enum QueryWhen {
     ///
     /// The expression may have any type.
     AtTimestamp(MirScalarExpr),
+    /// Same as Immediately, but will also advance to at least the specified
+    /// expression.
+    AtLeastTimestamp(MirScalarExpr),
+}
+
+impl QueryWhen {
+    /// Returns a timestamp to which the candidate must be advanced.
+    pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
+        match self {
+            QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
+            QueryWhen::Immediately => None,
+        }
+    }
+    /// Returns whether the candidate must be advanced to the since.
+    pub fn advance_to_since(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
+            QueryWhen::AtTimestamp(_) => false,
+        }
+    }
+    /// Returns whether the candidate must be advanced to the upper.
+    pub fn advance_to_upper(&self, uses_tables: bool) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => !uses_tables,
+            QueryWhen::AtTimestamp(_) => false,
+        }
+    }
+    /// Returns whether the candidate must be advanced to the global table timestamp.
+    pub fn advance_to_table_ts(&self, uses_tables: bool) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => uses_tables,
+            QueryWhen::AtTimestamp(_) => false,
+        }
+    }
 }
 
 #[derive(Debug)]

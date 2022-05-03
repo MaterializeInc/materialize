@@ -56,11 +56,11 @@ use mz_repr::{
 
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction,
-    Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
-    Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
-    TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    AsOf, Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
+    Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition,
+    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
+    Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -747,31 +747,37 @@ where
 }
 
 /// Plans an expression in the AS OF position of a `SELECT` or `TAIL` statement.
-pub fn plan_as_of(scx: &StatementContext, expr: Option<Expr<Aug>>) -> Result<QueryWhen, PlanError> {
-    let mut expr = match expr {
-        None => return Ok(QueryWhen::Immediately),
-        Some(expr) => expr,
-    };
-
-    let scope = Scope::empty();
-    let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-
-    transform_ast::transform_expr(scx, &mut expr)?;
-
-    let ecx = &ExprContext {
-        qcx: &qcx,
-        name: "AS OF",
-        scope: &scope,
-        relation_type: &desc.typ(),
-        allow_aggregates: false,
-        allow_subqueries: false,
-        allow_windows: false,
-    };
-    let expr = plan_expr(ecx, &expr)?
-        .type_as_any(ecx)?
-        .lower_uncorrelated()?;
-    Ok(QueryWhen::AtTimestamp(expr))
+pub fn plan_as_of(
+    scx: &StatementContext,
+    as_of: Option<AsOf<Aug>>,
+) -> Result<QueryWhen, PlanError> {
+    match as_of {
+        None => Ok(QueryWhen::Immediately),
+        Some(mut as_of) => match as_of {
+            AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
+                let scope = Scope::empty();
+                let desc = RelationDesc::empty();
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                transform_ast::transform_expr(scx, expr)?;
+                let ecx = &ExprContext {
+                    qcx: &qcx,
+                    name: "AS OF",
+                    scope: &scope,
+                    relation_type: &desc.typ(),
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                    allow_windows: false,
+                };
+                let expr = plan_expr(ecx, &expr)?
+                    .type_as_any(ecx)?
+                    .lower_uncorrelated()?;
+                match as_of {
+                    AsOf::At(_) => Ok(QueryWhen::AtTimestamp(expr)),
+                    AsOf::AtLeast(_) => Ok(QueryWhen::AtLeastTimestamp(expr)),
+                }
+            }
+        },
+    }
 }
 
 /// Plans an expression in the AS position of a `CREATE SECRET`.

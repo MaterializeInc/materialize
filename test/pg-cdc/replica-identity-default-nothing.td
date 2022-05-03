@@ -42,7 +42,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 # Make sure that the above sources are fully instantiated so that the DML statements below
 # are sent as actual replication events post-snapshot.
 
-> SELECT COUNT(*) FROM mz_source AS OF NOW();
+> SELECT COUNT(*) FROM mz_source;
 0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

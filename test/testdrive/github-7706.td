@@ -25,9 +25,6 @@ $ set schema={
 ! SELECT * FROM s AS OF 0
 contains:Timestamp (0) is not valid for all inputs
 
-! SELECT * FROM s AS OF now() - '10s'::interval
-contains:Timestamp (<TIMESTAMP>) is not valid for all inputs
-
 # Although not the original issue, also test that AS OF does work on an
 # unmaterialized source if the timestamp is queryable.
-> SELECT * FROM s AS OF now()
+> SELECT * FROM s AS OF AT LEAST 0

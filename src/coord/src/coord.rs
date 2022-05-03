@@ -725,7 +725,7 @@ impl Coordinator {
         {
             // An explicit SELECT or INSERT on a table will bump the table's timestamps,
             // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF now()`, TAILing views over RT sources and
+            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
             // tables). To address these, spawn a task that forces table timestamps to
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
@@ -3420,91 +3420,64 @@ impl Coordinator {
 
         let since = self.least_valid_read(&id_bundle, compute_instance);
 
-        // First determine the candidate timestamp, which is either the explicitly requested
-        // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp: Timestamp = match when {
-            // Explicitly requested timestamps should be respected.
-            QueryWhen::AtTimestamp(mut timestamp) => {
-                let temp_storage = RowArena::new();
-                prep_scalar_expr(
-                    self.catalog.state(),
-                    &mut timestamp,
-                    ExprPrepStyle::OneShot {
-                        logical_time: None,
-                        session,
-                    },
-                )?;
-                let evaled = timestamp.eval(&[], &temp_storage)?;
-                let ty = timestamp.typ(&RelationType::empty());
-                match ty.scalar_type {
-                    ScalarType::Numeric { .. } => {
-                        let n = evaled.unwrap_numeric().0;
-                        u64::try_from(n)?
-                    }
-                    ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
-                    ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
-                    ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-                    ScalarType::TimestampTz => {
-                        evaled.unwrap_timestamptz().timestamp_millis().try_into()?
-                    }
-                    ScalarType::Timestamp => {
-                        evaled.unwrap_timestamp().timestamp_millis().try_into()?
-                    }
-                    _ => coord_bail!(
-                        "can't use {} as a timestamp for AS OF",
-                        self.catalog.for_session(session).humanize_column_type(&ty)
-                    ),
+        // Initialize candidate to the minimum correct time.
+        let mut candidate = Timestamp::minimum();
+
+        if let Some(mut timestamp) = when.advance_to_timestamp() {
+            let temp_storage = RowArena::new();
+            prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
+            let evaled = timestamp.eval(&[], &temp_storage)?;
+            let ty = timestamp.typ(&RelationType::empty());
+            let ts = match ty.scalar_type {
+                ScalarType::Numeric { .. } => {
+                    let n = evaled.unwrap_numeric().0;
+                    u64::try_from(n)?
                 }
-            }
+                ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
+                ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
+                ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+                ScalarType::TimestampTz => {
+                    evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+                }
+                ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
+                _ => coord_bail!(
+                    "can't use {} as a timestamp for AS OF",
+                    self.catalog.for_session(session).humanize_column_type(&ty)
+                ),
+            };
+            candidate.join_assign(&ts);
+        }
 
-            // These two strategies vary in terms of which traces drive the
-            // timestamp determination process: either the trace itself or the
-            // original sources on which they depend.
-            QueryWhen::Immediately => {
-                // Initialize candidate to the minimum correct time.
-                let mut candidate = Timestamp::minimum();
-                candidate.advance_by(since.borrow());
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
+        }
+        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
+        if when.advance_to_table_ts(uses_tables) {
+            candidate.join_assign(&self.get_local_read_ts());
+        }
+        if when.advance_to_upper(uses_tables) {
+            let upper = self.least_valid_write(&id_bundle, compute_instance);
 
-                // Compute a timestamp to which we should advance the candidate (if it is in
-                // advance).
-                let advance_to = if id_bundle.iter().any(|id| self.catalog.uses_tables(id)) {
-                    // If the view depends on any tables, we enforce linearizability by choosing
-                    // the latest input time.  If the candidate is already advanced past read_ts
-                    // due to the since work above (if joined with some other view), a peek will
-                    // be put into pending until something closes the table timestamp. That
-                    // occurs if a user does certain table operations, or otherwise by the
-                    // advance_local_inputs_loop task (and so the pending peek could wait up to 1
-                    // second before the table timestamp is closed). We do not need to worry about
-                    // telling the table linearizability stuff about this future timestamp because
-                    // by the time the read is served the table linearizability time will have
-                    // advanced already.
-                    self.get_local_read_ts()
-                } else {
-                    let upper = self.least_valid_write(&id_bundle, compute_instance);
-
-                    // We peek at the largest element not in advance of `upper`, which
-                    // involves a subtraction. If `upper` contains a zero timestamp there
-                    // is no "prior" answer, and we do not want to peek at it as it risks
-                    // hanging awaiting the response to data that may never arrive.
-                    if let Some(candidate) = upper.as_option() {
-                        candidate.step_back().unwrap_or_else(Timestamp::minimum)
-                    } else {
-                        // A complete trace can be read in its final form with this time.
-                        //
-                        // This should only happen for literals that have no sources or sources that
-                        // are known to have completed (non-tailed files for example).
-                        Timestamp::MAX
-                    }
-                };
-                candidate.join_assign(&advance_to);
-                candidate
-            }
-        };
+            // We peek at the largest element not in advance of `upper`, which
+            // involves a subtraction. If `upper` contains a zero timestamp there
+            // is no "prior" answer, and we do not want to peek at it as it risks
+            // hanging awaiting the response to data that may never arrive.
+            let upper = if let Some(upper) = upper.as_option() {
+                upper.step_back().unwrap_or_else(Timestamp::minimum)
+            } else {
+                // A complete trace can be read in its final form with this time.
+                //
+                // This should only happen for literals that have no sources or sources that
+                // are known to have completed (non-tailed files for example).
+                Timestamp::MAX
+            };
+            candidate.join_assign(&upper);
+        }
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
-        if since.less_equal(&timestamp) {
-            Ok(timestamp)
+        if since.less_equal(&candidate) {
+            Ok(candidate)
         } else {
             let invalid_indexes = id_bundle
                 .compute_ids
@@ -3519,7 +3492,7 @@ impl Coordinator {
                         .read_capabilities
                         .frontier()
                         .to_owned();
-                    if since.less_equal(&timestamp) {
+                    if since.less_equal(&candidate) {
                         None
                     } else {
                         Some(since)
@@ -3535,7 +3508,7 @@ impl Coordinator {
                     .read_capabilities
                     .frontier()
                     .to_owned();
-                if since.less_equal(&timestamp) {
+                if since.less_equal(&candidate) {
                     None
                 } else {
                     Some(since)
@@ -3547,7 +3520,7 @@ impl Coordinator {
                 .collect::<Vec<_>>();
             coord_bail!(
                 "Timestamp ({}) is not valid for all inputs: {:?}",
-                timestamp,
+                candidate,
                 invalid
             );
         }

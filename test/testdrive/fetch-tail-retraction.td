@@ -45,7 +45,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
 INSERT INTO deletes VALUES (123), (123), (NULL), (999);
-SELECT * FROM v1 AS OF NOW();
+SELECT * FROM v1;
 
 > FETCH ALL c;
 <TIMESTAMP> -2 123

@@ -24,8 +24,11 @@ SELECT * FROM data
 2 1
 3 1
 
-query II
+query error cannot call current_timestamp in AS OF
 SELECT * FROM data AS OF now()
+
+query II
+SELECT * FROM data ORDER BY a, b AS OF AT LEAST 1
 ----
 1 1
 1 2
@@ -55,5 +58,27 @@ SELECT * FROM data AS OF 1E38;
 query error decimal cannot be expressed in target primitive type
 SELECT * FROM data AS OF 1.2;
 
-query error cannot call mz_logical_timestamp in this context
+query error cannot call mz_logical_timestamp in AS OF
 SELECT * FROM data AS OF mz_logical_timestamp();
+
+statement ok
+CREATE TABLE t (i INT);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+statement ok
+INSERT INTO t VALUES (1);
+
+query I
+SELECT * FROM t;
+----
+1
+
+query error Timestamp \(1\) is not valid for all inputs
+SELECT * FROM t AS OF 1
+
+query I
+SELECT * FROM t AS OF AT LEAST 1
+----
+1

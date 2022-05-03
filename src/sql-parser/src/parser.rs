@@ -4546,13 +4546,24 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse `AS OF`, if present.
-    fn parse_optional_as_of(&mut self) -> Result<Option<Expr<Raw>>, ParserError> {
+    fn parse_optional_as_of(&mut self) -> Result<Option<AsOf<Raw>>, ParserError> {
         if self.parse_keyword(AS) {
             self.expect_keyword(OF)?;
-            match self.parse_expr() {
-                Ok(expr) => Ok(Some(expr)),
-                Err(e) => {
-                    self.expected(e.pos, "a timestamp value after 'AS OF'", self.peek_token())
+            if self.parse_keywords(&[AT, LEAST]) {
+                match self.parse_expr() {
+                    Ok(expr) => Ok(Some(AsOf::AtLeast(expr))),
+                    Err(e) => self.expected(
+                        e.pos,
+                        "a timestamp value after 'AS OF AT LEAST'",
+                        self.peek_token(),
+                    ),
+                }
+            } else {
+                match self.parse_expr() {
+                    Ok(expr) => Ok(Some(AsOf::At(expr))),
+                    Err(e) => {
+                        self.expected(e.pos, "a timestamp value after 'AS OF'", self.peek_token())
+                    }
                 }
             }
         } else {

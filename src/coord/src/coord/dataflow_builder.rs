@@ -55,6 +55,8 @@ pub enum ExprPrepStyle<'a> {
         logical_time: Option<u64>,
         session: &'a Session,
     },
+    /// The expression is being prepared for evaluation in an AS OF clause.
+    AsOf,
 }
 
 impl Coordinator {
@@ -310,7 +312,7 @@ pub fn prep_relation_expr(
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } => expr
+        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOf => expr
             .0
             .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
     }
@@ -348,7 +350,7 @@ pub fn prep_scalar_expr(
         }
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index => {
+        ExprPrepStyle::Index | ExprPrepStyle::AsOf => {
             let mut last_observed_unmaterializable_func = None;
             #[allow(deprecated)]
             expr.visit_mut_post_nolimit(&mut |e| {
@@ -357,7 +359,15 @@ pub fn prep_scalar_expr(
                 }
             });
             if let Some(f) = last_observed_unmaterializable_func {
-                return Err(CoordError::UnmaterializableFunction(f));
+                let err = match style {
+                    ExprPrepStyle::Index => CoordError::UnmaterializableFunction(f),
+                    ExprPrepStyle::AsOf => CoordError::UncallableFunction {
+                        func: f,
+                        context: "AS OF",
+                    },
+                    _ => unreachable!(),
+                };
+                return Err(err);
             }
             Ok(())
         }

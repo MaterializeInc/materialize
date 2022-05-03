@@ -154,14 +154,14 @@ impl_display_t!(Statement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectStatement<T: AstInfo> {
     pub query: Query<T>,
-    pub as_of: Option<Expr<T>>,
+    pub as_of: Option<AsOf<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for SelectStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.query);
         if let Some(as_of) = &self.as_of {
-            f.write_str(" AS OF ");
+            f.write_str(" ");
             f.write_node(as_of);
         }
     }
@@ -478,7 +478,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
-    pub as_of: Option<Expr<T>>,
+    pub as_of: Option<AsOf<T>>,
     pub if_not_exists: bool,
 }
 
@@ -517,7 +517,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         }
 
         if let Some(as_of) = &self.as_of {
-            f.write_str(" AS OF ");
+            f.write_str(" ");
             f.write_node(as_of);
         }
     }
@@ -1584,7 +1584,7 @@ impl_display!(RollbackStatement);
 pub struct TailStatement<T: AstInfo> {
     pub relation: TailRelation<T>,
     pub options: Vec<WithOption<T>>,
-    pub as_of: Option<Expr<T>>,
+    pub as_of: Option<AsOf<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for TailStatement<T> {
@@ -1597,7 +1597,7 @@ impl<T: AstInfo> AstDisplay for TailStatement<T> {
             f.write_str(")");
         }
         if let Some(as_of) = &self.as_of {
-            f.write_str(" AS OF ");
+            f.write_str(" ");
             f.write_node(as_of);
         }
     }
@@ -2076,3 +2076,23 @@ impl AstDisplay for NoticeSeverity {
     }
 }
 impl_display!(NoticeSeverity);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AsOf<T: AstInfo> {
+    At(Expr<T>),
+    AtLeast(Expr<T>),
+}
+
+impl<T: AstInfo> AstDisplay for AsOf<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("AS OF ");
+        match self {
+            AsOf::At(expr) => f.write_node(expr),
+            AsOf::AtLeast(expr) => {
+                f.write_str("AT LEAST ");
+                f.write_node(expr);
+            }
+        }
+    }
+}
+impl_display_t!(AsOf);
