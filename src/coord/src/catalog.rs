@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -20,6 +20,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -372,7 +373,7 @@ impl CatalogState {
         &self.database_by_id[database_id]
     }
 
-    fn insert_compute_instance(
+    async fn insert_compute_instance(
         &mut self,
         id: ComputeInstanceId,
         name: String,
@@ -1145,11 +1146,11 @@ impl Catalog {
             storage: Arc::new(Mutex::new(config.storage)),
         };
 
-        catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
+        catalog.create_temporary_schema(SYSTEM_CONN_ID).await?;
 
-        let databases = catalog.storage().load_databases()?;
+        let databases = catalog.storage().await.load_databases().await?;
         for (id, name) in databases {
-            let oid = catalog.allocate_oid()?;
+            let oid = catalog.allocate_oid().await?;
             catalog.state.database_by_id.insert(
                 id.clone(),
                 Database {
@@ -1166,9 +1167,9 @@ impl Catalog {
                 .insert(name.clone(), id.clone());
         }
 
-        let schemas = catalog.storage().load_schemas()?;
+        let schemas = catalog.storage().await.load_schemas().await?;
         for (schema_id, schema_name, database_id) in schemas {
-            let oid = catalog.allocate_oid()?;
+            let oid = catalog.allocate_oid().await?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
                     let db = catalog
@@ -1204,10 +1205,10 @@ impl Catalog {
             schemas_by_name.insert(schema_name.clone(), schema_id);
         }
 
-        let roles = catalog.storage().load_roles()?;
+        let roles = catalog.storage().await.load_roles().await?;
         let builtin_roles = BUILTIN_ROLES.iter().map(|b| (b.id, b.name.to_owned()));
         for (id, name) in roles.into_iter().chain(builtin_roles) {
-            let oid = catalog.allocate_oid()?;
+            let oid = catalog.allocate_oid().await?;
             catalog.state.roles.insert(
                 name.clone(),
                 Role {
@@ -1218,24 +1219,26 @@ impl Catalog {
             );
         }
 
-        catalog.load_builtin_types()?;
+        catalog.load_builtin_types().await?;
 
-        let persisted_builtin_ids = catalog.storage().load_system_gids()?;
+        let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
             migrated_builtins,
-        } = catalog.allocate_system_ids(
-            BUILTINS
-                .iter()
-                .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
-                .collect(),
-            |builtin| {
-                persisted_builtin_ids
-                    .get(&(builtin.schema().to_string(), builtin.name().to_string()))
-                    .cloned()
-            },
-        )?;
+        } = catalog
+            .allocate_system_ids(
+                BUILTINS
+                    .iter()
+                    .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
+                    .collect(),
+                |builtin| {
+                    persisted_builtin_ids
+                        .get(&(builtin.schema().to_string(), builtin.name().to_string()))
+                        .cloned()
+                },
+            )
+            .await?;
 
         for (builtin, id) in all_builtins {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
@@ -1248,7 +1251,7 @@ impl Catalog {
             };
             match builtin {
                 Builtin::Log(log) => {
-                    let oid = catalog.allocate_oid()?;
+                    let oid = catalog.allocate_oid().await?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1265,7 +1268,7 @@ impl Catalog {
                 }
 
                 Builtin::Table(table) => {
-                    let oid = catalog.allocate_oid()?;
+                    let oid = catalog.allocate_oid().await?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1297,14 +1300,14 @@ impl Catalog {
                                 view.name, e
                             )
                         });
-                    let oid = catalog.allocate_oid()?;
+                    let oid = catalog.allocate_oid().await?;
                     catalog.state.insert_item(id, oid, name, item);
                 }
 
                 Builtin::Type(_) => unreachable!("loaded separately"),
 
                 Builtin::Func(func) => {
-                    let oid = catalog.allocate_oid()?;
+                    let oid = catalog.allocate_oid().await?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1318,7 +1321,11 @@ impl Catalog {
             .iter()
             .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id, builtin.fingerprint()))
             .collect();
-        catalog.storage().set_system_gids(new_system_id_mappings)?;
+        catalog
+            .storage()
+            .await
+            .set_system_gids(new_system_id_mappings)
+            .await?;
 
         // TODO(jkosh44) actually migrate builtins
         let migrated_system_id_mappings = migrated_builtins
@@ -1327,32 +1334,43 @@ impl Catalog {
             .collect();
         catalog
             .storage()
-            .set_system_gids(migrated_system_id_mappings)?;
+            .await
+            .set_system_gids(migrated_system_id_mappings)
+            .await?;
 
-        let compute_instances = catalog.storage().load_compute_instances()?;
+        let compute_instances = catalog.storage().await.load_compute_instances().await?;
         for (id, name, conf) in compute_instances {
             let introspection_sources = if conf.introspection().is_some() {
-                let introspection_source_index_gids =
-                    catalog.storage().load_introspection_source_index_gids(id)?;
+                let introspection_source_index_gids = catalog
+                    .storage()
+                    .await
+                    .load_introspection_source_index_gids(id)
+                    .await?;
 
                 let AllocatedBuiltinSystemIds {
                     all_builtins: all_indexes,
                     new_builtins: new_indexes,
                     ..
-                } = catalog.allocate_system_ids(BUILTINS.logs().collect(), |log| {
-                    introspection_source_index_gids
-                        .get(log.name)
-                        .cloned()
-                        // We don't migrate indexes so we can hardcode the fingerprint as 0
-                        .map(|id| (id, 0))
-                })?;
+                } = catalog
+                    .allocate_system_ids(BUILTINS.logs().collect(), |log| {
+                        introspection_source_index_gids
+                            .get(log.name)
+                            .cloned()
+                            // We don't migrate indexes so we can hardcode the fingerprint as 0
+                            .map(|id| (id, 0))
+                    })
+                    .await?;
 
-                catalog.storage().set_introspection_source_index_gids(
-                    new_indexes
-                        .iter()
-                        .map(|(log, index_id)| (id, log.name, *index_id))
-                        .collect(),
-                )?;
+                catalog
+                    .storage()
+                    .await
+                    .set_introspection_source_index_gids(
+                        new_indexes
+                            .iter()
+                            .map(|(log, index_id)| (id, log.name, *index_id))
+                            .collect(),
+                    )
+                    .await?;
 
                 all_indexes
             } else {
@@ -1360,27 +1378,36 @@ impl Catalog {
             };
             catalog
                 .state
-                .insert_compute_instance(id, name, conf, introspection_sources);
+                .insert_compute_instance(id, name, conf, introspection_sources)
+                .await;
         }
 
         if !config.skip_migrations {
-            let last_seen_version = catalog.storage().get_catalog_content_version()?;
-            crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
-                Error::new(ErrorKind::FailedMigration {
-                    last_seen_version,
-                    this_version: catalog.config().build_info.version,
-                    cause: e.to_string(),
-                })
-            })?;
+            let last_seen_version = catalog
+                .storage()
+                .await
+                .get_catalog_content_version()
+                .await?;
+            crate::catalog::migrate::migrate(&mut catalog)
+                .await
+                .map_err(|e| {
+                    Error::new(ErrorKind::FailedMigration {
+                        last_seen_version,
+                        this_version: catalog.config().build_info.version,
+                        cause: e.to_string(),
+                    })
+                })?;
             catalog
                 .storage()
-                .set_catalog_content_version(catalog.config().build_info.version)?;
+                .await
+                .set_catalog_content_version(catalog.config().build_info.version)
+                .await?;
         }
 
-        let mut storage = catalog.storage();
-        let mut tx = storage.transaction()?;
-        let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
-        tx.commit()?;
+        let mut storage = catalog.storage().await;
+        let mut tx = storage.transaction().await?;
+        let catalog = Self::load_catalog_items(&mut tx, &catalog).await?;
+        tx.commit().await?;
 
         let mut builtin_table_updates = vec![];
         for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
@@ -1423,18 +1450,20 @@ impl Catalog {
     /// references are circular. This makes loading built-in types more complicated than other
     /// built-in objects, and requires us to make multiple passes over the types to correctly
     /// resolve all references.
-    fn load_builtin_types(&mut self) -> Result<(), Error> {
-        let persisted_builtin_ids = self.storage().load_system_gids()?;
+    async fn load_builtin_types(&mut self) -> Result<(), Error> {
+        let persisted_builtin_ids = self.storage().await.load_system_gids().await?;
 
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
             ..
-        } = self.allocate_system_ids(BUILTINS.types().collect(), |typ| {
-            persisted_builtin_ids
-                .get(&(typ.schema.to_string(), typ.name.to_string()))
-                .cloned()
-        })?;
+        } = self
+            .allocate_system_ids(BUILTINS.types().collect(), |typ| {
+                persisted_builtin_ids
+                    .get(&(typ.schema.to_string(), typ.name.to_string()))
+                    .cloned()
+            })
+            .await?;
         let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
             .into_iter()
             .map(|(typ, id)| (typ.name, id))
@@ -1488,7 +1517,10 @@ impl Catalog {
             .iter()
             .map(|(typ, id)| (typ.schema, typ.name, *id, typ.fingerprint()))
             .collect();
-        self.storage().set_system_gids(new_system_id_mappings)?;
+        self.storage()
+            .await
+            .set_system_gids(new_system_id_mappings)
+            .await?;
 
         Ok(())
     }
@@ -1573,8 +1605,8 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items<S: Append>(
-        tx: &mut storage::Transaction<S>,
+    pub async fn load_catalog_items<'a, S: Append>(
+        tx: &mut storage::Transaction<'a, S>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -1601,7 +1633,7 @@ impl Catalog {
                     }))
                 }
             };
-            let oid = c.allocate_oid()?;
+            let oid = c.allocate_oid().await?;
             c.state.insert_item(id, oid, name, item);
         }
         c.transient_revision = 1;
@@ -1621,7 +1653,7 @@ impl Catalog {
     pub async fn open_debug(data_dir_path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(data_dir_path, experimental_mode)?;
+        let storage = storage::Connection::open(data_dir_path, experimental_mode).await?;
         let (catalog, _) = Self::open(Config {
             storage,
             experimental_mode,
@@ -1684,13 +1716,13 @@ impl Catalog {
         self.for_sessionless_user(SYSTEM_USER.into())
     }
 
-    fn storage(&self) -> MutexGuard<storage::Connection> {
-        self.storage.lock().expect("lock poisoned")
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
+        self.storage.lock().await
     }
 
     /// Allocate new system ids for any new builtin objects and looks up existing system ids for
     /// existing builtin objects
-    fn allocate_system_ids<T, F>(
+    async fn allocate_system_ids<T, F>(
         &mut self,
         builtins: Vec<T>,
         builtin_lookup: F,
@@ -1706,11 +1738,13 @@ impl Catalog {
 
         let mut global_ids = self
             .storage()
+            .await
             .allocate_system_ids(
                 new_builtin_amount
                     .try_into()
                     .expect("builtins should fit into u64"),
-            )?
+            )
+            .await?
             .into_iter();
 
         let mut all_builtins = Vec::new();
@@ -1739,11 +1773,11 @@ impl Catalog {
         })
     }
 
-    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        self.storage().allocate_user_id()
+    pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        self.storage().await.allocate_user_id().await
     }
 
-    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
+    pub async fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }
 
@@ -1978,8 +2012,8 @@ impl Catalog {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
-        let oid = self.allocate_oid()?;
+    pub async fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+        let oid = self.allocate_oid().await?;
         self.state.temporary_schemas.insert(
             conn_id,
             Schema {
@@ -2119,7 +2153,7 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
-    pub fn transact<F, T>(
+    pub async fn transact<F, T>(
         &mut self,
         ops: Vec<Op>,
         f: F,
@@ -2205,8 +2239,8 @@ impl Catalog {
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut actions = Vec::with_capacity(ops.len());
-        let mut storage = self.storage();
-        let mut tx = storage.transaction()?;
+        let mut storage = self.storage().await;
+        let mut tx = storage.transaction().await?;
         for op in ops {
             actions.extend(match op {
                 Op::CreateDatabase {
@@ -2556,7 +2590,9 @@ impl Catalog {
                     introspection_sources,
                 } => {
                     info!("create cluster {}", name);
-                    state.insert_compute_instance(id, name.clone(), config, introspection_sources);
+                    state
+                        .insert_compute_instance(id, name.clone(), config, introspection_sources)
+                        .await;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                 }
 
@@ -2692,7 +2728,7 @@ impl Catalog {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        tx.commit()?;
+        tx.commit().await?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
@@ -2872,17 +2908,19 @@ impl Catalog {
         self.state.compute_instances_by_id.values()
     }
 
-    pub fn allocate_introspection_source_indexes(
+    pub async fn allocate_introspection_source_indexes(
         &mut self,
     ) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS.logs().count();
         let system_ids = self
             .storage()
+            .await
             .allocate_system_ids(
                 log_amount
                     .try_into()
                     .expect("builtin logs should fit into u64"),
             )
+            .await
             .expect("cannot fail to allocate system ids");
         BUILTINS.logs().zip(system_ids.into_iter()).collect()
     }
@@ -3512,6 +3550,7 @@ mod tests {
                 }],
                 |_catalog| Ok(()),
             )
+            .await
             .unwrap();
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);

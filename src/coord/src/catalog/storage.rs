@@ -13,6 +13,7 @@ use std::iter::once;
 use std::path::Path;
 
 use bytes::BufMut;
+use futures::future::BoxFuture;
 use prost::{self, Message};
 use uuid::Uuid;
 
@@ -35,92 +36,103 @@ use crate::catalog::error::{Error, ErrorKind};
 
 const USER_VERSION: &str = "user_version";
 
-fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
+async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
-    let migrations: &[fn(&mut S) -> Result<(), StashError>] = &[
+    let migrations: &[fn(&mut S) -> BoxFuture<Result<(), StashError>>] = &[
         |stash| {
-            // Bump uppers so peek works.
-            COLLECTION_SETTING.upsert(stash, vec![])?;
-            COLLECTION_SYSTEM_GID_MAPPING.upsert(stash, vec![])?;
-            COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX.upsert(stash, vec![])?;
-            COLLECTION_ITEM.upsert(stash, vec![])?;
+            Box::pin(async {
+                // Bump uppers so peek works.
+                COLLECTION_SETTING.upsert(stash, vec![]).await?;
+                COLLECTION_SYSTEM_GID_MAPPING.upsert(stash, vec![]).await?;
+                COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
+                    .upsert(stash, vec![])
+                    .await?;
+                COLLECTION_ITEM.upsert(stash, vec![]).await?;
 
-            COLLECTION_GID_ALLOC.upsert(
-                stash,
-                vec![
-                    (
-                        GidAllocKey {
-                            name: "user".into(),
-                        },
-                        GidAllocValue { next_gid: 1 },
-                    ),
-                    (
-                        GidAllocKey {
-                            name: "system".into(),
-                        },
-                        GidAllocValue { next_gid: 1 },
-                    ),
-                ],
-            )?;
-            COLLECTION_DATABASE.upsert(
-                stash,
-                vec![(
-                    DatabaseKey { id: 1 },
-                    DatabaseValue {
-                        name: "materialize".into(),
-                    },
-                )],
-            )?;
-            COLLECTION_SCHEMA.upsert(
-                stash,
-                vec![
-                    (
-                        SchemaKey { id: 1 },
-                        SchemaValue {
-                            database_id: None,
-                            name: "mz_catalog".into(),
-                        },
-                    ),
-                    (
-                        SchemaKey { id: 2 },
-                        SchemaValue {
-                            database_id: None,
-                            name: "pg_catalog".into(),
-                        },
-                    ),
-                    (
-                        SchemaKey { id: 3 },
-                        SchemaValue {
-                            database_id: Some(1),
-                            name: "public".into(),
-                        },
-                    ),
-                    (
-                        SchemaKey { id: 4 },
-                        SchemaValue {
-                            database_id: None,
-                            name: "mz_internal".into(),
-                        },
-                    ),
-                    (
-                        SchemaKey { id: 5 },
-                        SchemaValue {
-                            database_id: None,
-                            name: "information_schema".into(),
-                        },
-                    ),
-                ],
-            )?;
-            COLLECTION_ROLE.upsert(
-                stash,
-                vec![(
-                    RoleKey { id: 1 },
-                    RoleValue {
-                        name: "materialize".into(),
-                    },
-                )],
-            )?;
-            COLLECTION_COMPUTE_INSTANCES.upsert(
+                COLLECTION_GID_ALLOC
+                    .upsert(
+                        stash,
+                        vec![
+                            (
+                                GidAllocKey {
+                                    name: "user".into(),
+                                },
+                                GidAllocValue { next_gid: 1 },
+                            ),
+                            (
+                                GidAllocKey {
+                                    name: "system".into(),
+                                },
+                                GidAllocValue { next_gid: 1 },
+                            ),
+                        ],
+                    )
+                    .await?;
+                COLLECTION_DATABASE
+                    .upsert(
+                        stash,
+                        vec![(
+                            DatabaseKey { id: 1 },
+                            DatabaseValue {
+                                name: "materialize".into(),
+                            },
+                        )],
+                    )
+                    .await?;
+                COLLECTION_SCHEMA
+                    .upsert(
+                        stash,
+                        vec![
+                            (
+                                SchemaKey { id: 1 },
+                                SchemaValue {
+                                    database_id: None,
+                                    name: "mz_catalog".into(),
+                                },
+                            ),
+                            (
+                                SchemaKey { id: 2 },
+                                SchemaValue {
+                                    database_id: None,
+                                    name: "pg_catalog".into(),
+                                },
+                            ),
+                            (
+                                SchemaKey { id: 3 },
+                                SchemaValue {
+                                    database_id: Some(1),
+                                    name: "public".into(),
+                                },
+                            ),
+                            (
+                                SchemaKey { id: 4 },
+                                SchemaValue {
+                                    database_id: None,
+                                    name: "mz_internal".into(),
+                                },
+                            ),
+                            (
+                                SchemaKey { id: 5 },
+                                SchemaValue {
+                                    database_id: None,
+                                    name: "information_schema".into(),
+                                },
+                            ),
+                        ],
+                    )
+                    .await?;
+                COLLECTION_ROLE
+                    .upsert(
+                        stash,
+                        vec![(
+                            RoleKey { id: 1 },
+                            RoleValue {
+                                name: "materialize".into(),
+                            },
+                        )],
+                    )
+                    .await?;
+                COLLECTION_COMPUTE_INSTANCES.upsert(
                 stash,
                 vec![(
                     ComputeInstanceKey { id: 1 },
@@ -129,8 +141,9 @@ fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
                         config: Some("{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1},\"introspection\":{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}}}".into()),
                     },
                 )],
-            )?;
-            Ok(())
+                ).await?;
+                Ok(())
+            })
         },
         // Add new migrations here.
         //
@@ -155,14 +168,16 @@ fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(stash)?;
-        COLLECTION_CONFIG.upsert_key(
-            stash,
-            &USER_VERSION.to_string(),
-            &ConfigValue {
-                value: u64::cast_from(i),
-            },
-        )?;
+        (migration)(stash).await?;
+        COLLECTION_CONFIG
+            .upsert_key(
+                stash,
+                &USER_VERSION.to_string(),
+                &ConfigValue {
+                    value: u64::cast_from(i),
+                },
+            )
+            .await?;
     }
     Ok(())
 }
@@ -170,13 +185,12 @@ fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
 #[derive(Debug)]
 pub struct Connection<S = mz_stash::Sqlite> {
     stash: S,
-    //  inner: rusqlite::Connection,
     experimental_mode: bool,
     cluster_id: Uuid,
 }
 
 impl Connection {
-    pub fn open(
+    pub async fn open(
         data_dir_path: &Path,
         experimental_mode: Option<bool>,
     ) -> Result<Connection<mz_stash::Sqlite>, Error> {
@@ -185,23 +199,26 @@ impl Connection {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
-        let skip = if COLLECTION_CONFIG.upper(&mut stash)?.elements() == [mz_stash::Timestamp::MIN]
+        let skip = if COLLECTION_CONFIG.upper(&mut stash).await?.elements()
+            == [mz_stash::Timestamp::MIN]
         {
             0
         } else {
             // An advanced collection must have had its user version set, so the unwrap
             // must succeed.
             COLLECTION_CONFIG
-                .peek_key_one(&mut stash, &USER_VERSION.to_string())?
+                .peek_key_one(&mut stash, &USER_VERSION.to_string())
+                .await?
                 .expect("user_version must exist")
                 .value
                 + 1
         };
-        migrate(&mut stash, skip)?;
+        migrate(&mut stash, skip).await?;
 
         let conn = Connection {
-            experimental_mode: Self::set_or_get_experimental_mode(&mut stash, experimental_mode)?,
-            cluster_id: Self::set_or_get_cluster_id(&mut stash)?,
+            experimental_mode: Self::set_or_get_experimental_mode(&mut stash, experimental_mode)
+                .await?,
+            cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
             stash,
         };
 
@@ -228,17 +245,19 @@ impl<S: Append> Connection<S> {
     /// # Panics
     ///
     /// - If server has not been initialized and `experimental_mode.is_none()`.
-    fn set_or_get_experimental_mode(
+    async fn set_or_get_experimental_mode(
         stash: &mut impl Append,
         experimental_mode: Option<bool>,
     ) -> Result<bool, Error> {
-        let current_setting = Self::get_setting_stash(stash, "experimental_mode")?
+        let current_setting = Self::get_setting_stash(stash, "experimental_mode")
+            .await?
             .map(|cs| cs.parse::<bool>().unwrap());
 
         let res = match (current_setting, experimental_mode) {
             // Server init
             (None, Some(experimental_mode)) => {
-                Self::set_setting_stash(stash, "experimental_mode", experimental_mode.to_string())?;
+                Self::set_setting_stash(stash, "experimental_mode", experimental_mode.to_string())
+                    .await?;
                 Ok(experimental_mode)
             }
             // Server reboot
@@ -261,26 +280,28 @@ impl<S: Append> Connection<S> {
         res
     }
 
-    fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
-        Self::get_setting_stash(&mut self.stash, key)
+    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
+        Self::get_setting_stash(&mut self.stash, key).await
     }
 
-    fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
-        Self::set_setting_stash(&mut self.stash, key, value)
+    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
+        Self::set_setting_stash(&mut self.stash, key, value).await
     }
 
-    fn get_setting_stash(stash: &mut impl Stash, key: &str) -> Result<Option<String>, Error> {
-        let settings = COLLECTION_SETTING.get(stash)?;
-        let v = stash.peek_key_one(
-            settings,
-            &SettingKey {
-                name: key.to_string(),
-            },
-        )?;
+    async fn get_setting_stash(stash: &mut impl Stash, key: &str) -> Result<Option<String>, Error> {
+        let settings = COLLECTION_SETTING.get(stash).await?;
+        let v = stash
+            .peek_key_one(
+                settings,
+                &SettingKey {
+                    name: key.to_string(),
+                },
+            )
+            .await?;
         Ok(v.map(|v| v.value))
     }
 
-    fn set_setting_stash<V: Into<String> + std::fmt::Display>(
+    async fn set_setting_stash<V: Into<String> + std::fmt::Display>(
         stash: &mut impl Append,
         key: &str,
         value: V,
@@ -293,18 +314,19 @@ impl<S: Append> Connection<S> {
         };
         COLLECTION_SETTING
             .upsert(stash, once((key, value)))
+            .await
             .map_err(|e| e.into())
     }
 
     /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
-        let current_setting = Self::get_setting_stash(stash, "cluster_id")?;
+    async fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
+        let current_setting = Self::get_setting_stash(stash, "cluster_id").await?;
         match current_setting {
             // Server init
             None => {
                 // Generate a new version 4 UUID. These are generated from random input.
                 let cluster_id = Uuid::new_v4();
-                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string())?;
+                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string()).await?;
                 Ok(cluster_id)
             }
             // Server reboot
@@ -312,26 +334,32 @@ impl<S: Append> Connection<S> {
         }
     }
 
-    pub fn get_catalog_content_version(&mut self) -> Result<String, Error> {
+    pub async fn get_catalog_content_version(&mut self) -> Result<String, Error> {
         self.get_setting("catalog_content_version")
+            .await
             .map(|v| v.unwrap_or_else(|| "new".to_string()))
     }
 
-    pub fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
+    pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
         self.set_setting("catalog_content_version", new_version)
+            .await
     }
 
-    pub fn load_databases(&mut self) -> Result<Vec<(DatabaseId, String)>, Error> {
+    pub async fn load_databases(&mut self) -> Result<Vec<(DatabaseId, String)>, Error> {
         Ok(COLLECTION_DATABASE
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .map(|(k, v)| (DatabaseId::new(k.id), v.name))
             .collect())
     }
 
-    pub fn load_schemas(&mut self) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
+    pub async fn load_schemas(
+        &mut self,
+    ) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
         Ok(COLLECTION_SCHEMA
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -343,19 +371,21 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    pub fn load_roles(&mut self) -> Result<Vec<(i64, String)>, Error> {
+    pub async fn load_roles(&mut self) -> Result<Vec<(i64, String)>, Error> {
         Ok(COLLECTION_ROLE
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .map(|(k, v)| (k.id, v.name))
             .collect())
     }
 
-    pub fn load_compute_instances(
+    pub async fn load_compute_instances(
         &mut self,
     ) -> Result<Vec<(i64, String, ConcreteComputeInstanceConfig)>, Error> {
         COLLECTION_COMPUTE_INSTANCES
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .map(|(k, v)| {
                 let config = match v.config {
@@ -374,11 +404,12 @@ impl<S: Append> Connection<S> {
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
-    pub fn load_system_gids(
+    pub async fn load_system_gids(
         &mut self,
     ) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -389,12 +420,13 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    pub fn load_introspection_source_index_gids(
+    pub async fn load_introspection_source_index_gids(
         &mut self,
         compute_id: ComputeInstanceId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
         Ok(COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
-            .peek_one(&mut self.stash)?
+            .peek_one(&mut self.stash)
+            .await?
             .into_iter()
             .filter_map(|(k, v)| {
                 if k.compute_id == compute_id {
@@ -410,7 +442,7 @@ impl<S: Append> Connection<S> {
     /// (schema-name, object-name, global-id).
     ///
     /// Panics if provided id is not a system id
-    pub fn set_system_gids(
+    pub async fn set_system_gids(
         &mut self,
         mappings: Vec<(&str, &str, GlobalId, u64)>,
     ) -> Result<(), Error> {
@@ -436,11 +468,12 @@ impl<S: Append> Connection<S> {
             });
         COLLECTION_SYSTEM_GID_MAPPING
             .upsert(&mut self.stash, mappings)
+            .await
             .map_err(|e| e.into())
     }
 
     /// Panics if provided id is not a system id
-    pub fn set_introspection_source_index_gids(
+    pub async fn set_introspection_source_index_gids(
         &mut self,
         mappings: Vec<(ComputeInstanceId, &str, GlobalId)>,
     ) -> Result<(), Error> {
@@ -464,43 +497,51 @@ impl<S: Append> Connection<S> {
         });
         COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
             .upsert(&mut self.stash, mappings)
+            .await
             .map_err(|e| e.into())
     }
 
-    pub fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
-        let id = self.allocate_global_id("system", amount)?;
+    pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        let id = self.allocate_global_id("system", amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
-    pub fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        let id = self.allocate_global_id("user", 1)?;
+    pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.allocate_global_id("user", 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
-    fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+    async fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         let key = GidAllocKey {
             name: id_type.to_string(),
         };
-        let prev = COLLECTION_GID_ALLOC.peek_key_one(&mut self.stash, &key)?;
+        let prev = COLLECTION_GID_ALLOC
+            .peek_key_one(&mut self.stash, &key)
+            .await?;
         let id = prev.expect("must exist").next_gid;
         let next = match id.checked_add(amount) {
             Some(next_gid) => GidAllocValue { next_gid },
             None => return Err(Error::new(ErrorKind::IdExhaustion)),
         };
-        COLLECTION_GID_ALLOC.upsert_key(&mut self.stash, &key, &next)?;
+        COLLECTION_GID_ALLOC
+            .upsert_key(&mut self.stash, &key, &next)
+            .await?;
         Ok((id..next.next_gid).collect())
     }
 
-    pub fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
-        let databases = COLLECTION_DATABASE.peek_one(&mut self.stash)?;
-        let schemas = COLLECTION_SCHEMA.peek_one(&mut self.stash)?;
-        let roles = COLLECTION_ROLE.peek_one(&mut self.stash)?;
-        let items = COLLECTION_ITEM.peek_one(&mut self.stash)?;
-        let compute_instances = COLLECTION_COMPUTE_INSTANCES.peek_one(&mut self.stash)?;
-        let introspection_sources =
-            COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX.peek_one(&mut self.stash)?;
+    pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
+        let databases = COLLECTION_DATABASE.peek_one(&mut self.stash).await?;
+        let schemas = COLLECTION_SCHEMA.peek_one(&mut self.stash).await?;
+        let roles = COLLECTION_ROLE.peek_one(&mut self.stash).await?;
+        let items = COLLECTION_ITEM.peek_one(&mut self.stash).await?;
+        let compute_instances = COLLECTION_COMPUTE_INSTANCES
+            .peek_one(&mut self.stash)
+            .await?;
+        let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
+            .peek_one(&mut self.stash)
+            .await?;
 
         Ok(Transaction {
             stash: &mut self.stash,
@@ -789,17 +830,17 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn commit(self) -> Result<(), Error> {
+    pub async fn commit(self) -> Result<(), Error> {
         let mut batches = Vec::new();
-        fn add_batch<K, V, S, I>(
+        async fn add_batch<K, V, S, I>(
             stash: &mut S,
             batches: &mut Vec<AppendBatch>,
             collection: &TypedCollection<K, V>,
             changes: I,
         ) -> Result<(), Error>
         where
-            K: Codec + Ord,
-            V: Codec + Ord,
+            K: mz_stash::Data,
+            V: mz_stash::Data,
             S: Append,
             I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
         {
@@ -807,8 +848,8 @@ impl<'a, S: Append> Transaction<'a, S> {
             if changes.peek().is_none() {
                 return Ok(());
             }
-            let collection = collection.get(stash)?;
-            let mut batch = collection.make_batch(stash)?;
+            let collection = collection.get(stash).await?;
+            let mut batch = collection.make_batch(stash).await?;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, &k, &v, diff);
             }
@@ -820,41 +861,47 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_DATABASE,
             self.databases.pending(),
-        )?;
+        )
+        .await?;
         add_batch(
             self.stash,
             &mut batches,
             &COLLECTION_SCHEMA,
             self.schemas.pending(),
-        )?;
+        )
+        .await?;
         add_batch(
             self.stash,
             &mut batches,
             &COLLECTION_ITEM,
             self.items.pending(),
-        )?;
+        )
+        .await?;
         add_batch(
             self.stash,
             &mut batches,
             &COLLECTION_ROLE,
             self.roles.pending(),
-        )?;
+        )
+        .await?;
         add_batch(
             self.stash,
             &mut batches,
             &COLLECTION_COMPUTE_INSTANCES,
             self.compute_instances.pending(),
-        )?;
+        )
+        .await?;
         add_batch(
             self.stash,
             &mut batches,
             &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
             self.introspection_sources.pending(),
-        )?;
+        )
+        .await?;
         if batches.is_empty() {
             return Ok(());
         }
-        self.stash.append(batches).map_err(|e| e.into())
+        self.stash.append(batches).await.map_err(|e| e.into())
     }
 }
 

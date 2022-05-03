@@ -980,7 +980,11 @@ impl Coordinator {
                 cancel_tx,
                 tx,
             } => {
-                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                if let Err(e) = self
+                    .catalog
+                    .create_temporary_schema(session.conn_id())
+                    .await
+                {
                     let _ = tx.send(Response {
                         result: Err(e.into()),
                         session,
@@ -1878,8 +1882,8 @@ impl Coordinator {
         &mut self,
         plan: CreateConnectorPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let connector_oid = self.catalog.allocate_oid()?;
-        let connector_gid = self.catalog.allocate_user_id()?;
+        let connector_oid = self.catalog.allocate_oid().await?;
+        let connector_gid = self.catalog.allocate_user_id().await?;
         let ops = vec![catalog::Op::CreateItem {
             id: connector_gid,
             oid: connector_oid,
@@ -1903,8 +1907,8 @@ impl Coordinator {
         &mut self,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let db_oid = self.catalog.allocate_oid()?;
-        let schema_oid = self.catalog.allocate_oid()?;
+        let db_oid = self.catalog.allocate_oid().await?;
+        let schema_oid = self.catalog.allocate_oid().await?;
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
             oid: db_oid,
@@ -1924,7 +1928,7 @@ impl Coordinator {
         &mut self,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let oid = self.catalog.allocate_oid()?;
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name,
@@ -1944,7 +1948,7 @@ impl Coordinator {
         &mut self,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let oid = self.catalog.allocate_oid()?;
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
             oid,
@@ -1959,7 +1963,7 @@ impl Coordinator {
         plan: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let introspection_sources = if plan.config.introspection().is_some() {
-            self.catalog.allocate_introspection_source_indexes()
+            self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
@@ -2079,8 +2083,8 @@ impl Coordinator {
 
         let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
-        let id = self.catalog.allocate_user_id()?;
-        let oid = self.catalog.allocate_oid()?;
+        let id = self.catalog.allocate_user_id().await?;
+        let oid = self.catalog.allocate_oid().await?;
         let secret = catalog::Secret {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
@@ -2140,7 +2144,7 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog.allocate_user_id()?;
+        let table_id = self.catalog.allocate_user_id().await?;
         let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
         let table = catalog::Table {
@@ -2150,7 +2154,7 @@ impl Coordinator {
             conn_id,
             depends_on: table.depends_on,
         };
-        let table_oid = self.catalog.allocate_oid()?;
+        let table_oid = self.catalog.allocate_oid().await?;
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             oid: table_oid,
@@ -2197,8 +2201,8 @@ impl Coordinator {
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
-        let source_id = self.catalog.allocate_user_id()?;
-        let source_oid = self.catalog.allocate_oid()?;
+        let source_id = self.catalog.allocate_user_id().await?;
+        let source_oid = self.catalog.allocate_oid().await?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
             connector: plan.source.connector,
@@ -2222,7 +2226,7 @@ impl Coordinator {
                 .catalog
                 .for_session(session)
                 .find_available_name(index_name);
-            let index_id = self.catalog.allocate_user_id()?;
+            let index_id = self.catalog.allocate_user_id().await?;
             let full_name = self
                 .catalog
                 .resolve_full_name(&plan.name, Some(session.conn_id()));
@@ -2236,7 +2240,7 @@ impl Coordinator {
                 vec![source_id],
                 self.catalog.index_enabled_by_default(&index_id),
             );
-            let index_oid = self.catalog.allocate_oid()?;
+            let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 oid: index_oid,
@@ -2318,14 +2322,14 @@ impl Coordinator {
         let compute_instance = sink.compute_instance;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = match self.catalog.allocate_user_id() {
+        let id = match self.catalog.allocate_user_id().await {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
                 return;
             }
         };
-        let oid = match self.catalog.allocate_oid() {
+        let oid = match self.catalog.allocate_oid().await {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -2419,7 +2423,7 @@ impl Coordinator {
         );
     }
 
-    fn generate_view_ops(
+    async fn generate_view_ops(
         &mut self,
         session: &Session,
         name: QualifiedObjectName,
@@ -2434,8 +2438,8 @@ impl Coordinator {
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
-        let view_id = self.catalog.allocate_user_id()?;
-        let view_oid = self.catalog.allocate_oid()?;
+        let view_id = self.catalog.allocate_user_id().await?;
+        let view_oid = self.catalog.allocate_oid().await?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
@@ -2466,7 +2470,7 @@ impl Coordinator {
                 .catalog
                 .for_session(session)
                 .find_available_name(index_name);
-            let index_id = self.catalog.allocate_user_id()?;
+            let index_id = self.catalog.allocate_user_id().await?;
             let full_name = self
                 .catalog
                 .resolve_full_name(&name, Some(session.conn_id()));
@@ -2480,7 +2484,7 @@ impl Coordinator {
                 vec![view_id],
                 self.catalog.index_enabled_by_default(&index_id),
             );
-            let index_oid = self.catalog.allocate_oid()?;
+            let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 oid: index_oid,
@@ -2501,13 +2505,15 @@ impl Coordinator {
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index) = self.generate_view_ops(
-            session,
-            plan.name,
-            plan.view.clone(),
-            plan.replace,
-            plan.materialize,
-        )?;
+        let (ops, index) = self
+            .generate_view_ops(
+                session,
+                plan.name,
+                plan.view.clone(),
+                plan.replace,
+                plan.materialize,
+            )
+            .await?;
         match self
             .catalog_transact(ops, |txn| {
                 if let Some((index_id, compute_instance)) = index {
@@ -2544,8 +2550,9 @@ impl Coordinator {
         let mut indexes = vec![];
 
         for (name, view) in plan.views {
-            let (mut view_ops, index) =
-                self.generate_view_ops(session, name, view, None, plan.materialize)?;
+            let (mut view_ops, index) = self
+                .generate_view_ops(session, name, view, None, plan.materialize)
+                .await?;
             ops.append(&mut view_ops);
             indexes.extend(index);
         }
@@ -2591,7 +2598,7 @@ impl Coordinator {
         // An index must be created on a specific compute instance.
         let compute_instance = index.compute_instance;
 
-        let id = self.catalog.allocate_user_id()?;
+        let id = self.catalog.allocate_user_id().await?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
@@ -2601,7 +2608,7 @@ impl Coordinator {
             enabled: self.catalog.index_enabled_by_default(&id),
             compute_instance,
         };
-        let oid = self.catalog.allocate_oid()?;
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -2645,8 +2652,8 @@ impl Coordinator {
             },
             depends_on: plan.typ.depends_on,
         };
-        let id = self.catalog.allocate_user_id()?;
-        let oid = self.catalog.allocate_oid()?;
+        let id = self.catalog.allocate_user_id().await?;
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -3287,7 +3294,7 @@ impl Coordinator {
                     )
                     .unwrap()
                     .clone();
-                let sink_id = self.catalog.allocate_user_id()?;
+                let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("tail-{}", sink_id);
                 self.dataflow_builder(compute_instance)
@@ -4307,12 +4314,15 @@ impl Coordinator {
             }
         }
 
-        let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
-            f(CatalogTxn {
-                dataflow_client: &self.dataflow_client,
-                catalog,
+        let (builtin_table_updates, result) = self
+            .catalog
+            .transact(ops, |catalog| {
+                f(CatalogTxn {
+                    dataflow_client: &self.dataflow_client,
+                    catalog,
+                })
             })
-        })?;
+            .await?;
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.

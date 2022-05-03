@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO: Make this work with the async API.
+fn main() {}
+/*
 use std::iter::{repeat, repeat_with};
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -125,3 +128,4 @@ criterion_group!(
     bench_consolidation_large
 );
 criterion_main!(benches);
+*/

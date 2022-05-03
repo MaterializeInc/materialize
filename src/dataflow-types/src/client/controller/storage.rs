@@ -283,11 +283,12 @@ where
             let ts_binding_collection = self
                 .state
                 .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
+                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
+                .await?;
 
             let mut ts_bindings = Vec::new();
             let mut last_bindings: HashMap<_, MzOffset> = HashMap::new();
-            for ((pid, _), time, diff) in self.state.stash.iter(ts_binding_collection)? {
+            for ((pid, _), time, diff) in self.state.stash.iter(ts_binding_collection).await? {
                 let prev_offset = last_bindings.entry(pid.clone()).or_default();
                 ts_bindings.push((
                     pid,
@@ -399,9 +400,10 @@ where
             let ts_binding_collection = self
                 .state
                 .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
+                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
+                .await?;
 
-            let upper = self.state.stash.upper(ts_binding_collection)?;
+            let upper = self.state.stash.upper(ts_binding_collection).await?;
 
             let collection_state = self.collection_mut(*id).expect("missing source id");
 
@@ -447,7 +449,8 @@ where
             }
             self.state
                 .stash
-                .update_many(ts_binding_collection, updates)?;
+                .update_many(ts_binding_collection, updates)
+                .await?;
         }
 
         let mut durability_updates = vec![];
@@ -456,7 +459,8 @@ where
             let ts_binding_collection = self
                 .state
                 .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
+                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
+                .await?;
             let collection = self.collection_mut(*id).expect("missing source id");
             let write_frontier = collection.write_frontier.frontier().to_owned();
             let seal_frontier = Antichain::from_iter(
@@ -464,7 +468,7 @@ where
                     .as_option()
                     .map(|ts| ts.clone().try_into().expect("negative timestamp")),
             );
-            let upper = self.state.stash.upper(ts_binding_collection)?;
+            let upper = self.state.stash.upper(ts_binding_collection).await?;
             // TODO(petrosagg): This guard should go away by ensuring storage workers never re-send
             // the bindings and frontiers they were initialized with
             if PartialOrder::less_than(&upper, &seal_frontier) {
@@ -478,7 +482,7 @@ where
         // updates will be read in their entirety, and future updates past the old upper will
         // still be accepted. Later seals will never erroneously seal times for ts bindings
         // that were recorded, because we always record bindings before seal-ing here.
-        self.state.stash.seal_batch(&seals)?;
+        self.state.stash.seal_batch(&seals).await?;
 
         self.update_durability_frontiers(durability_updates).await?;
 
@@ -555,9 +559,10 @@ where
                 let ts_binding_collection = self
                     .state
                     .stash
-                    .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))?;
+                    .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
+                    .await?;
 
-                let mut since = self.state.stash.since(ts_binding_collection)?;
+                let mut since = self.state.stash.since(ts_binding_collection).await?;
                 since.extend(
                     frontier
                         .iter()
@@ -573,8 +578,11 @@ where
                 }
             }
         }
-        self.state.stash.compact_batch(&stash_compactions)?;
-        self.state.stash.consolidate_batch(&stash_consolidations)?;
+        self.state.stash.compact_batch(&stash_compactions).await?;
+        self.state
+            .stash
+            .consolidate_batch(&stash_consolidations)
+            .await?;
 
         if !compaction_commands.is_empty() {
             self.state

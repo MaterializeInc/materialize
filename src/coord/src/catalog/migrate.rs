@@ -44,16 +44,16 @@ where
     Ok(())
 }
 
-pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
-    let mut storage = catalog.storage();
-    let catalog_version = storage.get_catalog_content_version()?;
+pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
+    let mut storage = catalog.storage().await;
+    let catalog_version = storage.get_catalog_content_version().await?;
     let _catalog_version = match Version::parse(&catalog_version) {
         Ok(v) => v,
         // Catalog content versions changed to semver after 0.8.3, so all
         // non-semver versions are less than that.
         Err(_) => Version::new(0, 0, 0),
     };
-    let mut tx = storage.transaction()?;
+    let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
     rewrite_items(&mut tx, |_stmt| Ok(()))?;
 
@@ -62,10 +62,10 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     // migrations are *weird*: they're rewriting the catalog while looking at
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
-    let cat = Catalog::load_catalog_items(&mut tx, &catalog)?;
+    let cat = Catalog::load_catalog_items(&mut tx, &catalog).await?;
     let _conn_cat = cat.for_system_session();
     rewrite_items(&mut tx, |_item| Ok(()))?;
-    tx.commit().map_err(|e| e.into())
+    tx.commit().await.map_err(|e| e.into())
 }
 
 // Add new migrations below their appropriate heading, and precede them with a

@@ -255,7 +255,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let coord_storage = mz_coord::catalog::storage::Connection::open(
         &config.data_directory,
         Some(config.experimental_mode),
-    )?;
+    )
+    .await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {

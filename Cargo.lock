@@ -3354,6 +3354,7 @@ dependencies = [
  "mz-persist-types",
  "mz-pgrepr",
  "mz-repr",
+ "mz-stash",
  "num",
  "num_enum",
  "ordered-float",
@@ -4018,15 +4019,18 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "criterion",
  "differential-dataflow",
+ "futures",
  "mz-ore",
  "mz-persist-types",
  "num",
- "postgres",
  "rusqlite",
  "tempfile",
  "timely",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]
