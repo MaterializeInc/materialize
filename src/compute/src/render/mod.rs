@@ -163,17 +163,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                     SourceConnector::External {
                         connector: ExternalSourceConnector::Persist(persist_connector),
                         ..
-                    } => persist_connector.shard_id.clone(),
-                    _ => source.storage_metadata.persist_shard.clone(),
-                };
-                let source_instance_id = mz_expr::SourceInstanceId {
-                    source_id: source_id.clone(),
-                    dataflow_id: context.dataflow_id,
+                    } => persist_connector.shard_id,
+                    _ => source.storage_metadata.persist_shard,
                 };
 
                 let (ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
-                    source_instance_id,
                     compute_state.persist_client.clone(),
                     shard_id,
                     dataflow.as_of.clone().unwrap(),
