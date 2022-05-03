@@ -9,11 +9,12 @@
 
 //! Implementation of the persist state machine.
 
+use std::convert::Infallible;
 use std::fmt::Debug;
+use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -22,7 +23,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, info, trace};
 
-use crate::error::{InvalidUsage, NoOp};
+use crate::error::InvalidUsage;
 use crate::r#impl::state::{
     ReadCapability, Since, State, StateCollections, Upper, WriteCapability,
 };
@@ -57,9 +58,12 @@ where
     pub async fn new(
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
-    ) -> Result<Self, ExternalError> {
-        let state = Self::maybe_init_state(consensus.as_ref(), shard_id).await?;
-        Ok(Machine { consensus, state })
+    ) -> Result<Result<Self, InvalidUsage<T>>, ExternalError> {
+        let state = match Self::maybe_init_state(consensus.as_ref(), shard_id).await? {
+            Ok(x) => x,
+            Err(err) => return Ok(Err(err)),
+        };
+        Ok(Ok(Machine { consensus, state }))
     }
 
     pub fn shard_id(&self) -> ShardId {
@@ -77,13 +81,10 @@ where
         reader_id: &ReaderId,
     ) -> Result<(WriteCapability<T>, ReadCapability<T>), ExternalError> {
         let (seqno, (write_cap, read_cap)) = self
-            .apply_unbatched_cmd::<_, (), _>(|seqno, state| {
-                Ok(state.register(seqno, writer_id, reader_id))
+            .apply_unbatched_idempotent_cmd(|seqno, state| {
+                state.register(seqno, writer_id, reader_id)
             })
-            .await?
-            // TODO: Once the rust (!) Never type is stabilized, use it for
-            // apply_unbatched_cmd's Err type to avoid this expect.
-            .expect("register is infallible");
+            .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         Ok((write_cap, read_cap))
     }
@@ -93,13 +94,8 @@ where
         new_reader_id: &ReaderId,
     ) -> Result<ReadCapability<T>, ExternalError> {
         let (seqno, read_cap) = self
-            .apply_unbatched_cmd::<_, (), _>(|seqno, state| {
-                Ok(state.clone_reader(seqno, new_reader_id))
-            })
-            .await?
-            // TODO: Once the rust (!) Never type is stabilized, use it for
-            // apply_unbatched_cmd's Err type to avoid this expect.
-            .expect("clone_reader is infallible");
+            .apply_unbatched_idempotent_cmd(|seqno, state| state.clone_reader(seqno, new_reader_id))
+            .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         Ok(read_cap)
     }
@@ -109,19 +105,14 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
-        let res = self
+    ) -> Result<Result<SeqNo, Upper<T>>, ExternalError> {
+        let (seqno, res) = self
             .apply_unbatched_cmd(|_, state| state.append(writer_id, keys, desc))
             .await?;
-        let (seqno, res) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
         match res {
-            Ok(()) => (),
-            Err(current_upper) => return Ok(Ok(Err(current_upper))),
-        };
-        Ok(Ok(Ok(seqno)))
+            Ok(()) => Ok(Ok(seqno)),
+            Err(current_upper) => return Ok(Err(current_upper)),
+        }
     }
 
     pub async fn compare_and_append(
@@ -129,62 +120,44 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
-        let res = self
+    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, ExternalError> {
+        let (seqno, res) = self
             .apply_unbatched_cmd(|_, state| state.compare_and_append(writer_id, keys, desc))
             .await?;
-        let (seqno, res) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
         match res {
-            Ok(()) => (),
-            Err(current_upper) => return Ok(Ok(Err(current_upper))),
-        };
-        Ok(Ok(Ok(seqno)))
+            Ok(()) => Ok(Ok(Ok(seqno))),
+            Err(Ok(err)) => return Ok(Ok(Err(err))),
+            Err(Err(current_upper)) => return Ok(Err(current_upper)),
+        }
     }
 
     pub async fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
-    ) -> Result<Result<SeqNo, InvalidUsage>, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(|_, state| state.downgrade_since(reader_id, new_since))
-            .await?;
-        let (seqno, _) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(seqno))
+    ) -> (SeqNo, Since<T>) {
+        self.apply_unbatched_idempotent_cmd(|_, state| state.downgrade_since(reader_id, new_since))
+            .await
     }
 
-    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> Result<SeqNo, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(|seqno, state| state.expire_writer(seqno, writer_id))
-            .await?;
-        let seqno = match res {
-            Ok((seqno, ())) => seqno,
-            Err(NoOp { seqno }) => seqno,
-        };
-        Ok(seqno)
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(|_, state| state.expire_writer(writer_id))
+            .await;
+        seqno
     }
 
-    pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> Result<SeqNo, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(|seqno, state| state.expire_reader(seqno, reader_id))
-            .await?;
-        let seqno = match res {
-            Ok((seqno, ())) => seqno,
-            Err(NoOp { seqno }) => seqno,
-        };
-        Ok(seqno)
+    pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(|_, state| state.expire_reader(reader_id))
+            .await;
+        seqno
     }
 
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<(String, Description<T>)>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Vec<(String, Description<T>)>, Since<T>>, ExternalError> {
         let mut fetches = 0;
         loop {
             let upper = match self.state.snapshot(as_of) {
@@ -193,13 +166,7 @@ where
                     // The upper isn't ready yet, fall through and try again.
                     upper
                 }
-                Err(Since(since)) => {
-                    return Ok(Err(InvalidUsage(anyhow!(
-                        "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
-                        as_of,
-                        since
-                    ))))
-                }
+                Err(Since(since)) => return Ok(Err(Since(since))),
             };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
@@ -247,20 +214,42 @@ where
         }
     }
 
-    async fn apply_unbatched_cmd<
+    async fn apply_unbatched_idempotent_cmd<
         R,
-        E,
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
     >(
         &mut self,
         mut work_fn: WorkFn,
-    ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
+    ) -> (SeqNo, R) {
+        loop {
+            match self.apply_unbatched_cmd(&mut work_fn).await {
+                Ok((seqno, x)) => match x {
+                    Ok(x) => return (seqno, x),
+                    Err(infallible) => match infallible {},
+                },
+                Err(err @ ExternalError { .. }) => {
+                    debug!(
+                        "apply_unbatched_idempotent_cmd received an indeterminate error, retrying: {}", err);
+                    continue;
+                }
+            }
+        }
+    }
+
+    async fn apply_unbatched_cmd<
+        R,
+        E,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
+    >(
+        &mut self,
+        mut work_fn: WorkFn,
+    ) -> Result<(SeqNo, Result<R, E>), ExternalError> {
         let path = self.shard_id().to_string();
 
         loop {
             let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
-                Ok(x) => x,
-                Err(err) => return Ok(Err(err)),
+                Continue(x) => x,
+                Break(err) => return Ok((self.state.seqno(), Err(err))),
             };
             trace!(
                 "apply_unbatched_cmd attempting {}\n  new_state={:?}",
@@ -301,7 +290,7 @@ where
                         .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
                         .await?;
 
-                    return Ok(Ok((self.state.seqno(), work_ret)));
+                    return Ok((self.state.seqno(), Ok(work_ret)));
                 }
                 Err(current) => {
                     debug!(
@@ -309,7 +298,7 @@ where
                         self.state.seqno(),
                         current.as_ref().map(|x| x.seqno)
                     );
-                    self.update_state(current).await?;
+                    self.update_state(current).await;
 
                     // TODO: Some sort of exponential backoff here?
                     continue;
@@ -323,7 +312,7 @@ where
     async fn maybe_init_state(
         consensus: &(dyn Consensus + Send + Sync),
         shard_id: ShardId,
-    ) -> Result<State<K, V, T, D>, ExternalError> {
+    ) -> Result<Result<State<K, V, T, D>, InvalidUsage<T>>, ExternalError> {
         debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();
@@ -332,10 +321,12 @@ where
         loop {
             // First, check if the shard has already been initialized.
             if let Some(current) = current.as_ref() {
-                let (current_seqno, current_state) =
-                    <(SeqNo, State<K, V, T, D>)>::try_from(current)?;
-                debug_assert_eq!(current_seqno, current_state.seqno());
-                return Ok(current_state);
+                let current_state = match State::decode(&current.data) {
+                    Ok(x) => x,
+                    Err(err) => return Ok(Err(err)),
+                };
+                debug_assert_eq!(current.seqno, current_state.seqno());
+                return Ok(Ok(current_state));
             }
 
             // It hasn't been initialized, try initializing it.
@@ -356,7 +347,7 @@ where
                         state.seqno(),
                         state
                     );
-                    return Ok(state);
+                    return Ok(Ok(state));
                 }
                 Err(x) => {
                     // We lost a CaS race, use the value included in the CaS
@@ -379,24 +370,28 @@ where
             .consensus
             .head(Instant::now() + FOREVER, &shard_id.to_string())
             .await?;
-        self.update_state(current).await
+        self.update_state(current).await;
+        Ok(())
     }
 
-    async fn update_state(&mut self, current: Option<VersionedData>) -> Result<(), ExternalError> {
+    async fn update_state(&mut self, current: Option<VersionedData>) {
         let current = match current {
             Some(x) => x,
             None => {
-                // This seems a little wonky...
-                self.state =
-                    Self::maybe_init_state(self.consensus.as_ref(), self.shard_id()).await?;
-                return Ok(());
+                // Machine is only constructed once, we've successfully
+                // retrieved state from durable storage, but now it's gone? In
+                // the future, maybe this means the shard was deleted or
+                // something, but for now it's entirely unexpected.
+                panic!("internal error: missing state {}", self.state.shard_id());
             }
         };
-        let (current_seqno, current_state) = <(SeqNo, State<K, V, T, D>)>::try_from(&current)?;
-        debug_assert_eq!(current_seqno, current_state.seqno());
+        let current_state = State::decode(&current.data)
+            // We received a State with different declared codecs than a
+            // previous SeqNo of the same State. Fail loudly.
+            .expect("internal error: new durable state disagreed with old durable state");
+        debug_assert_eq!(current.seqno, current_state.seqno());
         debug_assert!(self.state.seqno() <= current.seqno);
         self.state = current_state;
-        Ok(())
     }
 }
 
@@ -424,13 +419,8 @@ mod tests {
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
             write
-                .compare_and_append(
-                    [((idx.to_string(), ()), idx, 1)],
-                    Antichain::from_elem(idx),
-                    Antichain::from_elem(idx + 1),
-                )
-                .await??
-                .expect("invalid current upper");
+                .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus

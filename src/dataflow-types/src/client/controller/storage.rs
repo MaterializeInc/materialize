@@ -751,12 +751,7 @@ struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
 #[async_trait]
 impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
     async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
-        self.read_handle
-            .downgrade_since(since)
-            .await
-            .map_err(|e| StorageError::ClientError(anyhow!("external persist error: {:?}", e)))?
-            .expect("invalid usage");
-
+        self.read_handle.downgrade_since(since).await;
         Ok(())
     }
 }

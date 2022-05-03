@@ -19,7 +19,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
@@ -30,7 +29,6 @@ use timely::progress::Timestamp;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
-use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
@@ -140,20 +138,14 @@ impl std::fmt::Debug for ShardId {
 }
 
 impl std::str::FromStr for ShardId {
-    type Err = InvalidUsage;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let u = match s.strip_prefix('s') {
             Some(x) => x,
-            None => {
-                return Err(InvalidUsage(anyhow!(
-                    "invalid ShardId {}: incorrect prefix",
-                    s
-                )))
-            }
+            None => return Err(format!("invalid ShardId {}: incorrect prefix", s)),
         };
-        let uuid = Uuid::parse_str(&u)
-            .map_err(|err| InvalidUsage(anyhow!("invalid ShardId {}: {}", s, err)))?;
+        let uuid = Uuid::parse_str(&u).map_err(|err| format!("invalid ShardId {}: {}", s, err))?;
         Ok(ShardId(*uuid.as_bytes()))
     }
 }
@@ -229,7 +221,9 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
+        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus))
+            .await?
+            .expect("codec mismatch");
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
         let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await?;
         let writer = WriteHandle {
@@ -263,6 +257,7 @@ mod tests {
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
+    use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
 
     use super::*;
@@ -312,24 +307,21 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        write
-            .append(&data[..2], Antichain::from_elem(3))
-            .await??
-            .expect("invalid current upper");
+        write.expect_append(&data[..2], 3).await;
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 2.
-        let mut snap = read.snapshot_one(1).await??;
-        let mut listen = read.listen(Antichain::from_elem(1)).await??;
+        let mut snap = read.expect_snapshot(1).await;
+        let mut listen = read
+            .listen(Antichain::from_elem(1))
+            .await?
+            .expect("cannot serve requested as_of");
 
         // Snapshot should only have part of what we wrote.
-        assert_eq!(snap.read_all().await?, all_ok(&data[..1], 1));
+        assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
-        write
-            .append(&data[2..], Antichain::from_elem(4))
-            .await??
-            .expect("invalid current upper");
+        write.expect_append(&data[2..], 4).await;
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
@@ -339,10 +331,10 @@ mod tests {
             ListenEvent::Updates(all_ok(&data[2..], 1)),
             ListenEvent::Progress(Antichain::from_elem(4)),
         ];
-        assert_eq!(listen.read_until(&4).await?, expected_events);
+        assert_eq!(listen.read_until(&4).await, expected_events);
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
-        read.downgrade_since(Antichain::from_elem(2)).await??;
+        read.downgrade_since(Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
 
         Ok(())
@@ -369,21 +361,19 @@ mod tests {
         // collections internally.
         let (mut write2, read2) = client.open::<String, (), u64, i64>(ShardId::new()).await?;
 
-        let res = write1
-            .compare_and_append(&data1[..], Antichain::from_elem(0), Antichain::from_elem(3))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write1
+            .expect_compare_and_append(&data1[..], u64::minimum(), 3)
+            .await;
 
-        let res = write2
-            .compare_and_append(&data2[..], Antichain::from_elem(0), Antichain::from_elem(3))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write2
+            .expect_compare_and_append(&data2[..], u64::minimum(), 3)
+            .await;
 
-        let mut snap = read1.snapshot_one(2).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data1[..], 1));
+        let mut snap = read1.expect_snapshot(2).await;
+        assert_eq!(snap.read_all().await, all_ok(&data1[..], 1));
 
-        let mut snap = read2.snapshot_one(2).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data2[..], 1));
+        let mut snap = read2.expect_snapshot(2).await;
+        assert_eq!(snap.read_all().await, all_ok(&data2[..], 1));
 
         Ok(())
     }
@@ -405,8 +395,7 @@ mod tests {
 
         let (mut write2, _read2) = client.open::<String, String, u64, i64>(shard_id).await?;
 
-        let res = write1.append(&data[..], Antichain::from_elem(3)).await?;
-        assert_eq!(res, Ok(Ok(())));
+        write1.expect_append(&data[..], 3).await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
         assert_eq!(write2.fetch_recent_upper().await?, Antichain::from_elem(3));
@@ -432,12 +421,11 @@ mod tests {
 
         let (mut write, _read) = client.open::<String, String, u64, i64>(shard_id).await?;
 
-        let res = write.append(&data[..], Antichain::from_elem(3)).await?;
-        assert_eq!(res, Ok(Ok(())));
+        write.expect_append(&data[..], 3).await;
 
         write.upper = Antichain::from_elem(0);
-        let res = write.append(&data[..], Antichain::from_elem(3)).await?;
-        assert_eq!(res, Ok(Err(Antichain::from_elem(3))));
+        let res = write.append(data.iter(), Antichain::from_elem(3)).await;
+        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -489,35 +477,35 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        let res = write1
-            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write1
+            .expect_compare_and_append(&data[..2], u64::minimum(), 3)
+            .await;
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
-        let mut snap = read.snapshot_one(2).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data[..2], 1));
+        let mut snap = read.expect_snapshot(2).await;
+        assert_eq!(snap.read_all().await, all_ok(&data[..2], 1));
 
         // Try and write with the expected upper.
         let res = write2
-            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
-            .await??;
-        assert_eq!(res, Err(Antichain::from_elem(3)));
+            .compare_and_append(
+                &data[..2],
+                Antichain::from_elem(u64::minimum()),
+                Antichain::from_elem(3),
+            )
+            .await;
+        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
         // TODO(aljoscha): Should a writer forward its upper to the global upper on a failed
         // compare_and_append?
         assert_eq!(write2.upper(), &Antichain::from_elem(0));
 
         // Try again with a good expected upper.
-        let res = write2
-            .compare_and_append(&data[2..], Antichain::from_elem(3), Antichain::from_elem(4))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write2.expect_compare_and_append(&data[2..], 3, 4).await;
 
         assert_eq!(write2.upper(), &Antichain::from_elem(4));
 
-        let mut snap = read.snapshot_one(3).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data, 1));
+        let mut snap = read.expect_snapshot(3).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 1));
 
         Ok(())
     }
@@ -542,27 +530,25 @@ mod tests {
         let (mut write2, _read) = client.open::<String, String, u64, i64>(id).await?;
 
         // Grab a listener before we do any writing
-        let mut listen = read.listen(Antichain::from_elem(0)).await??;
+        let mut listen = read
+            .listen(Antichain::from_elem(0))
+            .await?
+            .expect("cannot serve requested as_of");
 
         // Write a [0,3) batch.
-        let res = write1.append(&data[..2], Antichain::from_elem(3)).await??;
-        assert_eq!(res, Ok(()));
+        write1.expect_append(&data[..2], 3).await;
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         // Write a [0,5) batch with the second writer.
-        let res = write2.append(&data[..4], Antichain::from_elem(5)).await??;
-        assert_eq!(res, Ok(()));
+        write2.expect_append(&data[..4], 5).await;
         assert_eq!(write2.upper(), &Antichain::from_elem(5));
 
         // Write a [3,6) batch with the first writer.
-        let res = write1
-            .append(&data[2..5], Antichain::from_elem(6))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write1.expect_append(&data[2..5], 6).await;
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
-        let mut snap = read.snapshot_one(5).await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data, 1));
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 1));
 
         let expected_events = vec![
             ListenEvent::Updates(all_ok(&data[0..2], 1)),
@@ -572,7 +558,7 @@ mod tests {
             ListenEvent::Updates(all_ok(&data[4..5], 1)),
             ListenEvent::Progress(Antichain::from_elem(6)),
         ];
-        assert_eq!(listen.read_until(&6).await?, expected_events);
+        assert_eq!(listen.read_until(&6).await, expected_events);
 
         Ok(())
     }
@@ -611,21 +597,21 @@ mod tests {
         );
         assert_eq!(
             ShardId::from_str("x00000000-0000-0000-0000-000000000000"),
-            Err(InvalidUsage(anyhow!(
+            Err(format!(
                 "invalid ShardId x00000000-0000-0000-0000-000000000000: incorrect prefix"
-            )))
+            ))
         );
         assert_eq!(
             ShardId::from_str("s0"),
-            Err(InvalidUsage(anyhow!(
+            Err(format!(
                 "invalid ShardId s0: invalid length: expected one of [36, 32], found 1"
-            )))
+            ))
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err(InvalidUsage(anyhow!(
+            Err(format!(
                 "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid length: expected one of [36, 32], found 39"
-            )))
+            ))
         );
     }
 
@@ -645,7 +631,7 @@ mod tests {
                 let (mut write, _) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
-                        Some((_, max_ts, _)) => Antichain::from_elem(max_ts + 1),
+                        Some((_, max_ts, _)) => max_ts + 1,
                         None => continue,
                     };
                     // Because we (intentionally) call open inside the task,
@@ -662,17 +648,14 @@ mod tests {
                     // chunked along the same boundaries. This means we don't
                     // have to consider partial batches when generating the
                     // updates below.
-                    if PartialOrder::less_equal(&new_upper, write.upper()) {
+                    if PartialOrder::less_equal(&Antichain::from_elem(new_upper), write.upper()) {
                         continue;
                     }
                     let updates = batch
                         .iter()
                         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
                         .collect::<Vec<_>>();
-                    write
-                        .append(updates, new_upper)
-                        .await??
-                        .expect("invalid current upper");
+                    write.expect_append(&updates, new_upper).await;
                 }
                 Ok(())
             });
@@ -689,7 +672,7 @@ mod tests {
             .collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
         let (_, read) = client.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
-        let actual = read.snapshot_one(max_ts).await??.read_all().await?;
+        let actual = read.expect_snapshot(max_ts).await.read_all().await;
         assert_eq!(actual, expected);
 
         Ok(())
@@ -715,7 +698,10 @@ mod tests {
         let (mut write, read) = client.open::<String, String, u64, i64>(id).await?;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read.listen(Antichain::from_elem(1)).await??;
+        let mut listen = read
+            .listen(Antichain::from_elem(1))
+            .await?
+            .expect("cannot serve requested as_of");
         let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for
@@ -728,10 +714,9 @@ mod tests {
         }
 
         // Write a [0,3) batch.
-        let res = write
-            .compare_and_append(&data[..2], Antichain::from_elem(0), Antichain::from_elem(3))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write
+            .expect_compare_and_append(&data[..2], u64::minimum(), 3)
+            .await;
 
         // The initial listen_next call should now be able to return data at 2.
         // It doesn't get 1 because the as_of was 1 and listen is strictly gt.
@@ -756,7 +741,7 @@ mod tests {
         // to separate creating a snapshot immediately (which would fail if
         // as_of was >= upper) from a bit of logic that retries until that case
         // is ready.
-        let mut snap = Box::pin(read.snapshot_one(3));
+        let mut snap = Box::pin(read.expect_snapshot(3));
         for _ in 0..100 {
             assert!(
                 Pin::new(&mut snap).poll(&mut cx).is_pending(),
@@ -765,18 +750,15 @@ mod tests {
         }
 
         // Now add the data at 3 and also unblock the snapshot.
-        let res = write
-            .compare_and_append(&data[2..], Antichain::from_elem(3), Antichain::from_elem(4))
-            .await??;
-        assert_eq!(res, Ok(()));
+        write.expect_compare_and_append(&data[2..], 3, 4).await;
 
         // Read the snapshot and check that it got all the appropriate data.
         //
         // TODO: If we made the SeqNo of the snap and the writes available, we
         // could assert on the ordering of them to provide additional confidence
         // that the test hasn't rotted as things change.
-        let mut snap = snap.await??;
-        assert_eq!(snap.read_all().await?, all_ok(&data[..], 1));
+        let mut snap = snap.await;
+        assert_eq!(snap.read_all().await, all_ok(&data[..], 1));
 
         Ok(())
     }

@@ -26,12 +26,12 @@ use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{BlobMulti, ExternalError};
+use mz_persist::location::{BlobMulti, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, FOREVER};
-use crate::r#impl::state::DescriptionMeta;
+use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -182,17 +182,16 @@ where
     T: Timestamp + Lattice + Codec64 + Ord,
     D: Semigroup + Codec64 + Ord,
 {
-    /// Test helper to read all data in the snapshot.
+    /// Test helper to read all data in the snapshot and return it sorted.
     #[cfg(test)]
-    pub async fn read_all(
-        &mut self,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
+    #[track_caller]
+    pub async fn read_all(&mut self) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
         let mut ret = Vec::new();
-        while let Some(mut next) = self.next().await? {
+        while let Some(mut next) = self.next().await.expect("external durability failed") {
             ret.append(&mut next)
         }
         ret.sort();
-        Ok(ret)
+        ret
     }
 }
 
@@ -242,16 +241,14 @@ where
     /// Test helper to read from the listener until the given frontier is
     /// reached.
     #[cfg(test)]
-    pub async fn read_until(
-        &mut self,
-        ts: &T,
-    ) -> Result<Vec<ListenEvent<K, V, T, D>>, ExternalError> {
+    #[track_caller]
+    pub async fn read_until(&mut self, ts: &T) -> Vec<ListenEvent<K, V, T, D>> {
         let mut ret = Vec::new();
         while self.frontier.less_than(ts) {
-            let mut next = self.next().await?;
+            let mut next = self.next().await.expect("external durability failed");
             ret.append(&mut next);
         }
-        return Ok(ret);
+        ret
     }
 
     async fn fetch_batch(
@@ -372,20 +369,13 @@ where
     ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
-    pub async fn downgrade_since(
-        &mut self,
-        new_since: Antichain<T>,
-    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
+    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let res = self
+        let (_seqno, current_reader_since) = self
             .machine
             .downgrade_since(&self.reader_id, &new_since)
-            .await?;
-        if let Err(err) = res {
-            return Ok(Err(err));
-        }
-        self.since = new_since;
-        Ok(Ok(()))
+            .await;
+        self.since = current_reader_since.0;
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -397,6 +387,10 @@ where
     /// downgrade their read capability when they are certain they have all data
     /// through the frontier they would downgrade to.
     ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
     ///
@@ -406,14 +400,10 @@ where
     pub async fn listen(
         &self,
         as_of: Antichain<T>,
-    ) -> Result<Result<Listen<K, V, T, D>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Listen<K, V, T, D>, Since<T>>, ExternalError> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
         if PartialOrder::less_than(&as_of, &self.since) {
-            return Ok(Err(InvalidUsage(anyhow!(
-                "listen with as_of {:?} cannot be served by shard with since: {:?}",
-                as_of,
-                self.since
-            ))));
+            return Ok(Err(Since(self.since.clone())));
         }
         Ok(Ok(Listen {
             as_of: as_of.clone(),
@@ -431,6 +421,10 @@ where
     /// should only downgrade their read capability when they are certain they
     /// have all data through the frontier they would downgrade to.
     ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    ///
     /// This is a convenience method for constructing the snapshot and
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
@@ -445,7 +439,7 @@ where
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<SnapshotIter<K, V, T, D>, Since<T>>, ExternalError> {
         let splits = self
             .snapshot_splits(as_of, NonZeroUsize::new(1).unwrap())
             .await?;
@@ -455,7 +449,11 @@ where
         };
         assert_eq!(splits.len(), 1);
         let split = splits.pop().unwrap();
-        self.snapshot_iter(split).await
+        let iter = self
+            .snapshot_iter(split)
+            .await
+            .expect("internal error: snapshot shard didn't match machine shard");
+        Ok(Ok(iter))
     }
 
     /// Returns a snapshot of the contents of the shard TVC at `as_of`.
@@ -465,6 +463,10 @@ where
     /// greater or equal to the current `upper` of the shard. The recipient
     /// should only downgrade their read capability when they are certain they
     /// have all data through the frontier they would downgrade to.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
     ///
     /// This snapshot may be split into a number of splits, each of which may be
     /// exchanged (including over the network) to load balance the processing of
@@ -488,7 +490,7 @@ where
         &self,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Vec<SnapshotSplit>, Since<T>>, ExternalError> {
         trace!(
             "ReadHandle::snapshot as_of={:?} num_splits={:?}",
             as_of,
@@ -521,14 +523,13 @@ where
     pub async fn snapshot_iter(
         &self,
         split: SnapshotSplit,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
+    ) -> Result<SnapshotIter<K, V, T, D>, InvalidUsage<T>> {
         trace!("ReadHandle::snapshot split={:?}", split);
         if split.shard_id != self.machine.shard_id() {
-            return Ok(Err(InvalidUsage(anyhow!(
-                "snapshot shard id {} doesn't match handle id {}",
-                split.shard_id,
-                self.machine.shard_id()
-            ))));
+            return Err(InvalidUsage::SnapshotNotFromThisShard {
+                snapshot_shard: split.shard_id,
+                handle_shard: self.machine.shard_id(),
+            });
         }
 
         let batches = split
@@ -549,7 +550,7 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
-        Ok(Ok(iter))
+        Ok(iter)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
@@ -571,13 +572,14 @@ where
         Ok(new_reader)
     }
 
-    /// Test helper for creating a single part snapshot.
+    /// Test helper for an [Self::snapshot] call that is expected to succeed.
     #[cfg(test)]
-    pub async fn snapshot_one(
-        &self,
-        as_of: T,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
-        self.snapshot(Antichain::from_elem(as_of)).await
+    #[track_caller]
+    pub async fn expect_snapshot(&self, as_of: T) -> SnapshotIter<K, V, T, D> {
+        self.snapshot(Antichain::from_elem(as_of))
+            .await
+            .expect("external durability failed")
+            .expect("cannot serve requested as_of")
     }
 }
 
@@ -592,12 +594,6 @@ where
 {
     fn drop(&mut self) {
         // TODO: Use tokio instead of futures_executor.
-        let res = futures_executor::block_on(self.machine.expire_reader(&self.reader_id));
-        if let Err(err) = res {
-            info!(
-                "drop failed to expire reader {}, falling back to lease timeout: {:?}",
-                self.reader_id, err
-            );
-        }
+        let _: SeqNo = futures_executor::block_on(self.machine.expire_reader(&self.reader_id));
     }
 }

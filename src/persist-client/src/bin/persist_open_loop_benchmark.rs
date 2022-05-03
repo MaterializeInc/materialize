@@ -121,7 +121,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let data_generator =
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
     let shard_id = match args.shard_id {
-        Some(shard_id) => ShardId::from_str(&shard_id)?,
+        Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,
         None => ShardId::new(),
     };
     let (writers, readers) = match args.benchmark_type {
@@ -417,7 +417,10 @@ mod raw_persist_benchmark {
         let mut readers = vec![];
         for _ in 0..num_readers {
             let (_, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
-            let listen = reader.listen(Antichain::from_elem(0)).await??;
+            let listen = reader
+                .listen(Antichain::from_elem(0))
+                .await?
+                .expect("cannot serve requested as_of");
             readers.push(Box::new(listen) as Box<dyn BenchmarkReader + Send + Sync>);
         }
 

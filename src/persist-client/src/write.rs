@@ -14,21 +14,21 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{info, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, FOREVER};
+use crate::r#impl::state::Upper;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 ///
@@ -118,8 +118,8 @@ where
     /// `new_upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
-    /// If not, an `Err` containing the current writer upper is returned. If
-    /// that happens, we also update our local `upper` to match the current
+    /// If not, an `Upper` err containing the current writer upper is returned.
+    /// If that happens, we also update our local `upper` to match the current
     /// upper. This is useful in cases where a timeout happens in between a
     /// successful write and returning that to the client.
     ///
@@ -155,7 +155,7 @@ where
         &mut self,
         updates: I,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -194,14 +194,15 @@ where
 
         let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
         match res {
-            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
-            Ok(Err(current_upper)) => {
-                self.upper = current_upper.clone();
+            Ok(_seqno) => {
+                self.upper = desc.upper().clone();
+                Ok(Ok(Ok(())))
+            }
+            Err(current_upper) => {
+                self.upper = current_upper.0.clone();
                 return Ok(Ok(Err(current_upper)));
             }
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Ok(())))
+        }
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -209,7 +210,7 @@ where
     /// `expected_upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
-    /// If not, an `Err` containing the current global upper is returned.
+    /// If not, an `Upper` err containing the current global upper is returned.
     ///
     /// In contrast to [Self::append], this linearizes mutations from all
     /// writers. It's intended for use as an atomic primitive for timestamp
@@ -237,7 +238,7 @@ where
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -289,7 +290,7 @@ where
     fn encode_batch<SB, KB, VB, TB, DB, I>(
         desc: &Description<T>,
         updates: I,
-    ) -> Result<Option<Vec<u8>>, InvalidUsage>
+    ) -> Result<Option<Vec<u8>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -307,11 +308,11 @@ where
             let ((k, v), t, d) = tuple.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             if !desc.lower().less_equal(t) || desc.upper().less_equal(t) {
-                return Err(InvalidUsage(anyhow!(
-                    "entry timestamp {:?} doesn't fit in batch desc: {:?}",
-                    t,
-                    desc
-                )));
+                return Err(InvalidUsage::UpdateNotWithinBounds {
+                    ts: t.clone(),
+                    lower: desc.lower().clone(),
+                    upper: desc.upper().clone(),
+                });
             }
 
             trace!("writing update {:?}", ((k, v), t, d));
@@ -372,6 +373,41 @@ where
         batch.encode(&mut buf);
         Ok(Some(buf))
     }
+
+    /// Test helper for an [Self::append] call that is expected to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_append(&mut self, updates: &[((K, V), T, D)], new_upper: T) {
+        self.append(
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("external durability failed")
+        .expect("invalid usage")
+        .expect("unexpected writer-local upper");
+    }
+
+    /// Test helper for a [Self::compare_and_append] call this is expected to
+    /// succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_compare_and_append(
+        &mut self,
+        updates: &[((K, V), T, D)],
+        expected_upper: T,
+        new_upper: T,
+    ) {
+        self.compare_and_append(
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(expected_upper),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("external durability failed")
+        .expect("invalid usage")
+        .expect("unexpected upper")
+    }
 }
 
 impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
@@ -385,13 +421,7 @@ where
 {
     fn drop(&mut self) {
         // TODO: Use tokio instead of futures_executor.
-        let res = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
-        if let Err(err) = res {
-            info!(
-                "drop failed to expire writer {}, falling back to lease timeout: {:?}",
-                self.writer_id, err
-            );
-        }
+        let _: SeqNo = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
     }
 }
 
@@ -420,24 +450,13 @@ mod tests {
 
         // Write an initial batch.
         let mut upper = 3;
-        write
-            .append(&data[..2], Antichain::from_elem(upper))
-            .await??
-            .expect("invalid current upper");
+        write.expect_append(&data[..2], upper).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
         let blob_count_before = blob.list_keys(Instant::now() + FOREVER).await?.len();
         for _ in 0..5 {
             let new_upper = upper + 1;
-            const EMPTY: &[((String, String), u64, i64)] = &[];
-            write
-                .compare_and_append(
-                    EMPTY,
-                    Antichain::from_elem(upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await??
-                .expect("invalid current upper");
+            write.expect_compare_and_append(&[], upper, new_upper).await;
             upper = new_upper;
         }
         assert_eq!(
