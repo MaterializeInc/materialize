@@ -1,6 +1,6 @@
 ---
-title: "Configure AWS MSK"
-description: "How to configure AWS MSK to Materialize"
+title: "How to connect AWS MSK to Materialize"
+description: "Instructions for securely connecting an AWS Managed Streaming for Kafka (MSK) cluster to Materialize."
 menu:
   main:
     parent: "integration-guides"
