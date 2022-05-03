@@ -13,6 +13,7 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
+use mz_ore::retry::Retry;
 use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 use tempfile::NamedTempFile;
@@ -301,6 +302,66 @@ fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
     client
         .simple_query("SELECT 1")
         .expect("simple query succeeds after cancellation");
+
+    Ok(())
+}
+
+// Test that dataflow uninstalls cancelled peeks.
+#[test]
+fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client1 = server.connect(postgres::NoTls)?;
+    let mut client2 = server.connect(postgres::NoTls)?;
+    let cancel_token = client1.cancel_token();
+
+    client1.batch_execute("CREATE TABLE t (i INT)")?;
+    // No dataflows expected at startup.
+    assert_eq!(
+        client1
+            .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])?
+            .get::<_, i64>(0),
+        0
+    );
+
+    thread::spawn(move || {
+        // Wait until we see the expected dataflow.
+        Retry::default()
+            .retry(|_state| {
+                let count: i64 = client2
+                    .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])
+                    .map_err(|_| ())?
+                    .get(0);
+                if count == 0 {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        cancel_token.cancel_query(postgres::NoTls).unwrap();
+    });
+
+    match client1.simple_query("SELECT * FROM t AS OF 18446744073709551615") {
+        Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+    // Expect the dataflows to shut down.
+    Retry::default()
+        .retry(|_state| {
+            let count: i64 = client1
+                .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])
+                .map_err(|_| ())?
+                .get(0);
+            if count == 0 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .unwrap();
 
     Ok(())
 }

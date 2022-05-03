@@ -840,7 +840,8 @@ impl Coordinator {
                     if uuids.is_empty() {
                         self.client_pending_peeks.remove(&conn_id);
                     }
-                } else {
+                } else if response != PeekResponse::Canceled {
+                    // Cancel is handled by handle_cancel, so do not need to log them here.
                     warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
@@ -1477,13 +1478,26 @@ impl Coordinator {
             // The peek is present on some specific compute instance.
             let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
             // Allow dataflow to cancel any pending peeks.
-            if let Some(uuids) = self.client_pending_peeks.get(&conn_id) {
+            if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
                 self.dataflow_client
                     .compute_mut(compute_instance)
                     .unwrap()
-                    .cancel_peeks(uuids)
+                    .cancel_peeks(&uuids)
                     .await
                     .unwrap();
+                for uuid in uuids {
+                    if let Some(PendingPeek {
+                        sender: rows_tx,
+                        conn_id: _,
+                    }) = self.pending_peeks.remove(&uuid)
+                    {
+                        rows_tx
+                            .send(PeekResponse::Canceled)
+                            .expect("Peek endpoint terminated prematurely");
+                    } else {
+                        warn!("Received a cancel request without a pending peek: {uuid}");
+                    }
+                }
             }
         }
     }
