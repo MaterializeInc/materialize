@@ -1838,7 +1838,7 @@ lazy_static! {
             },
             "current_schema" => Scalar {
                 // TODO: this should be name
-                params!() => sql_impl_func("current_schemas(false)[1]") => String, 1402;
+                params!() => sql_impl_func("pg_catalog.current_schemas(false)[1]") => String, 1402;
             },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|_ecx, e| {
@@ -1912,7 +1912,7 @@ lazy_static! {
                 params!(Oid, Int32) => sql_impl_func(
                     "CASE
                         WHEN $1 IS NULL THEN NULL
-                        ELSE coalesce((SELECT concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
+                        ELSE coalesce((SELECT pg_catalog.concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
                 ) => String, 1081;
             },
@@ -2079,7 +2079,7 @@ lazy_static! {
             "pg_get_indexdef" => Scalar {
                 params!(Oid) => sql_impl_func(
                     "(SELECT 'CREATE INDEX ' || i.name || ' ON ' || r.name || ' USING arrangement (' || (
-                        SELECT string_agg(cols.col_exp, ',' ORDER BY cols.index_position)
+                        SELECT pg_catalog.string_agg(cols.col_exp, ',' ORDER BY cols.index_position)
                         FROM (
                             SELECT c.name AS col_exp, ic.index_position
                             FROM mz_catalog.mz_index_columns AS ic
@@ -2099,7 +2099,7 @@ lazy_static! {
                 // A position of 0 is treated as if no position was given.
                 // Third parameter, pretty, is ignored.
                 params!(Oid, Int32, Bool) => sql_impl_func(
-                    "(SELECT CASE WHEN $2 = 0 THEN pg_get_indexdef($1) ELSE
+                    "(SELECT CASE WHEN $2 = 0 THEN pg_catalog.pg_get_indexdef($1) ELSE
                         (SELECT c.name
                         FROM mz_catalog.mz_indexes AS i
                         JOIN mz_catalog.mz_index_columns AS ic ON i.id = ic.index_id
@@ -2151,14 +2151,14 @@ lazy_static! {
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_impl_func(
-                    "(SELECT s.name = ANY(current_schemas(true))
+                    "(SELECT s.name = ANY(pg_catalog.current_schemas(true))
                      FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
                 ) => Bool, 2079;
             },
             "pg_type_is_visible" => Scalar {
                 params!(Oid) => sql_impl_func(
-                    "(SELECT s.name = ANY(current_schemas(true))
+                    "(SELECT s.name = ANY(pg_catalog.current_schemas(true))
                      FROM mz_catalog.mz_types t JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
                      WHERE t.oid = $1)"
                 ) => Bool, 2080;
@@ -2956,7 +2956,7 @@ lazy_static! {
                 params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
             },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1 AND enabled)") => Bool,
+                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1 AND enabled)") => Bool,
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
             "mz_render_typmod" => Scalar {
