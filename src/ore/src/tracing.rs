@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Utilities for configuring [`tracing`]
+
 use std::fs;
 use std::io::{self, Write};
 use std::marker::PhantomData;
@@ -30,10 +32,8 @@ use tracing_subscriber::layer::{Context, Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
-
-use crate::Args;
+use crate::metric;
+use crate::metrics::MetricsRegistry;
 
 fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnector>> {
     // This accomplishes the same thing as the default
@@ -52,16 +52,16 @@ fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnect
     )))
 }
 
-// Setting up opentel in the background requires we are in a tokio-runtime
-// context, hence the `async`
+/// Setting up opentel in the background requires we are in a tokio-runtime
+/// context, hence the `async`
 #[allow(clippy::unused_async)]
 async fn configure_opentelemetry_and_init<
     L: Layer<S> + Send + Sync + 'static,
     S: Subscriber + Send + Sync + 'static,
 >(
     stack: Layered<L, S>,
-    opentelemetry_endpoint: &Option<String>,
-    opentelemetry_headers: &Option<String>,
+    opentelemetry_endpoint: Option<&str>,
+    opentelemetry_headers: Option<&str>,
 ) -> Result<(), anyhow::Error>
 where
     Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
@@ -71,7 +71,7 @@ where
         // Manually setup an openssl-backed, h2, proxied `Channel`,
         // and setup the timeout according to
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
-        let endpoint = Endpoint::from_shared(endpoint.clone())?.timeout(Duration::from_secs(
+        let endpoint = Endpoint::from_shared(endpoint.to_owned())?.timeout(Duration::from_secs(
             opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
         ));
 
@@ -119,11 +119,36 @@ where
         Ok(())
     }
 }
+
+/// Configuration for setting up [`tracing`]
+#[derive(Debug)]
+pub struct TracingConfig<'a> {
+    /// `Targets` filter string.
+    pub log_filter: &'a str,
+    /// Path of the file we log to. Defaults to
+    /// a standard location.
+    pub log_file: Option<&'a str>,
+    /// When `Some(_)`, the https endpoint to send
+    /// opentelemetry traces.
+    pub opentelemetry_endpoint: Option<&'a str>,
+    /// When `opentelemetry_endpoint` is `Some(_)`,
+    /// configure additional comma separated
+    /// headers.
+    pub opentelemetry_headers: Option<&'a str>,
+    /// The directory mz's data goes into. Used
+    /// to construct the `log_file` default.
+    pub data_directory: &'a PathBuf,
+    /// When enabled, optionally turn on the
+    /// tokio console.
+    #[cfg(feature = "tokio-console")]
+    pub tokio_console: bool,
+}
+
 /// Configures tracing according to the provided command-line arguments.
 /// Returns a `Write` stream that represents the main place `tracing` will
-/// log to
+/// log to.
 pub async fn configure(
-    args: &Args,
+    config: TracingConfig<'_>,
     metrics_registry: &MetricsRegistry,
 ) -> Result<Box<dyn Write>, anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
@@ -131,7 +156,7 @@ pub async fn configure(
     // tracing configured to execute), so a panic here will not direct the
     // user to file a bug report.
 
-    let filter = Targets::from_str(&args.log_filter)
+    let filter = Targets::from_str(config.log_filter)
         .context("parsing --log-filter option")?
         // Ensure panics are logged, even if the user has specified
         // otherwise.
@@ -143,7 +168,7 @@ pub async fn configure(
         var_labels: ["severity"],
     ));
 
-    let stream: Box<dyn Write> = match args.log_file.as_deref() {
+    let stream: Box<dyn Write> = match config.log_file.as_deref() {
         Some("stderr") => {
             // The user explicitly directed logs to stderr. Log only to
             // stderr with the user-specified `filter`.
@@ -157,12 +182,12 @@ pub async fn configure(
                 );
 
             #[cfg(feature = "tokio-console")]
-            let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
+            let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
 
             configure_opentelemetry_and_init(
                 stack,
-                &args.opentelemetry_endpoint,
-                &args.opentelemetry_headers,
+                config.opentelemetry_endpoint,
+                config.opentelemetry_headers,
             )
             .await?;
 
@@ -174,7 +199,7 @@ pub async fn configure(
 
             let path = match log_file {
                 Some(log_file) => PathBuf::from(log_file),
-                None => args.data_directory.join("materialized.log"),
+                None => config.data_directory.join("materialized.log"),
             };
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).with_context(|| {
@@ -210,12 +235,12 @@ pub async fn configure(
                 );
 
             #[cfg(feature = "tokio-console")]
-            let stack = stack.with(args.tokio_console.then(|| console_subscriber::spawn()));
+            let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
 
             configure_opentelemetry_and_init(
                 stack,
-                &args.opentelemetry_endpoint,
-                &args.opentelemetry_headers,
+                config.opentelemetry_endpoint,
+                config.opentelemetry_headers,
             )
             .await?;
 
@@ -229,6 +254,7 @@ pub async fn configure(
 /// A tracing [`Layer`] that allows hooking into the reporting/filtering chain
 /// for log messages, incrementing a counter for the severity of messages
 /// reported.
+#[derive(Debug)]
 pub struct MetricsRecorderLayer<S> {
     counter: IntCounterVec,
     _inner: PhantomData<S>,
@@ -261,9 +287,9 @@ mod test {
     use std::collections::HashMap;
 
     use super::MetricsRecorderLayer;
-    use mz_ore::metric;
-    use mz_ore::metrics::raw::IntCounterVec;
-    use mz_ore::metrics::MetricsRegistry;
+    use crate::metric;
+    use crate::metrics::raw::IntCounterVec;
+    use crate::metrics::MetricsRegistry;
     use tracing::{error, info, warn};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

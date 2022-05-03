@@ -59,7 +59,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
 mod sys;
-mod tracing;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -484,7 +483,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let mut tracing_stream = runtime.block_on(tracing::configure(&args, &metrics_registry))?;
+    let mut tracing_stream = runtime.block_on(mz_ore::tracing::configure(
+        mz_ore::tracing::TracingConfig {
+            log_filter: &args.log_filter,
+            log_file: args.log_file.as_deref(),
+            opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
+            opentelemetry_headers: args.opentelemetry_headers.as_deref(),
+            data_directory: &args.data_directory,
+            #[cfg(feature = "tokio-console")]
+            tokio_console: args.tokio_console,
+        },
+        &metrics_registry,
+    ))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
