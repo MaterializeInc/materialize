@@ -127,7 +127,7 @@ inhdetachpending    false   boolean
 contains:Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
 
 > SELECT current_schemas(true)
-{mz_catalog,pg_catalog,public,mz_temp}
+{mz_catalog,pg_catalog,public}
 
 > SELECT current_schemas(false)
 {public}
