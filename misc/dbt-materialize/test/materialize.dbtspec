@@ -80,10 +80,6 @@ sequences:
         attributes:
           passing.status: pass
           failing.status: fail
-      - type: relations_equal
-        relations: [non_null, expected_non_nul]
-      - type: relations_equal
-        relations: [unique, expected_unique]
   test_dbt_schema_test: schema_test
   test_dbt_ephemeral: ephemeral
   test_dbt_ephemeral_data_tests: data_test_ephemeral_models
