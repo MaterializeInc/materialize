@@ -14,7 +14,6 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use mz_dataflow_types::PeekResponseUnary;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
@@ -25,6 +24,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
 };
+use crate::coord::PeekResponseUnary;
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 

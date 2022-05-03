@@ -101,8 +101,7 @@ use mz_dataflow_types::sources::{
     AwsExternalId, ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, PeekResponseUnary,
-    Update,
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -253,6 +252,17 @@ pub struct Config {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
+}
+
+/// The response from a `Peek`, with row multiplicities represented in unary.
+///
+/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
+/// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekResponseUnary {
+    Rows(Vec<Row>),
+    Error(String),
+    Canceled,
 }
 
 /// State provided to a catalog transaction closure.
@@ -830,7 +840,8 @@ impl Coordinator {
                     if uuids.is_empty() {
                         self.client_pending_peeks.remove(&conn_id);
                     }
-                } else {
+                } else if response != PeekResponse::Canceled {
+                    // Cancel is handled by handle_cancel, so do not need to log them here.
                     warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
             }
@@ -1467,13 +1478,26 @@ impl Coordinator {
             // The peek is present on some specific compute instance.
             let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
             // Allow dataflow to cancel any pending peeks.
-            if let Some(uuids) = self.client_pending_peeks.get(&conn_id) {
+            if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
                 self.dataflow_client
                     .compute_mut(compute_instance)
                     .unwrap()
-                    .cancel_peeks(uuids)
+                    .cancel_peeks(&uuids)
                     .await
                     .unwrap();
+                for uuid in uuids {
+                    if let Some(PendingPeek {
+                        sender: rows_tx,
+                        conn_id: _,
+                    }) = self.pending_peeks.remove(&uuid)
+                    {
+                        rows_tx
+                            .send(PeekResponse::Canceled)
+                            .expect("Peek endpoint terminated prematurely");
+                    } else {
+                        warn!("Received a cancel request without a pending peek: {uuid}");
+                    }
+                }
             }
         }
     }
@@ -4953,12 +4977,11 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::ComputeInstanceId;
-    use mz_dataflow_types::PeekResponseUnary;
     use std::collections::BTreeSet;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
-    use crate::coord::PendingPeek;
+    use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::CoordError;
     use mz_expr::{EvalError, Id, MirScalarExpr};
     use mz_repr::{Diff, GlobalId, Row};
