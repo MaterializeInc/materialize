@@ -33,7 +33,7 @@ You can use `TAIL` to:
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | _object_name_          | The name of the source, table, or view that you want to tail.                                                                            |
 | _select_stmt_          | The [`SELECT` statement](../select) whose output you want to tail.                                                                       |
-| _timestamp_expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below. |
+| _timestamp_expression_ | The logical time at which the `TAIL` begins. See [`AS OF`](/sql/as-of). |
 
 ### `WITH` options
 
@@ -131,28 +131,11 @@ See the [examples](#examples) for details.
 
 {{< /warning >}}
 
-### `AS OF`
-
-The `AS OF` clause specifies the time at which a `TAIL` operation begins.
-See [`SNAPSHOT`](#snapshot) below for details on what this means.
-
-If you don't specify `AS OF` explicitly, Materialize will pick a timestamp
-automatically:
-
-  - If the tailed relation is [materialized](/overview/key-concepts/#indexes),
-    Materialize picks the latest time for which results are computed.
--   If the tailed relation is not materialized, Materialize picks time `0`.
-
-A given timestamp will be rejected if data it would report has already been
-compacted by Materialize. See the
-[`--logical-compaction-window`](/cli/#compaction-window) command-line option for
-details on Materialize's compaction policy.
-
 ### `SNAPSHOT`
 
 By default, a `TAIL` begins by emitting a snapshot of the tailed relation, which
 consists of a series of updates describing the contents of the relation at its
-[`AS OF`](#as-of) timestamp. After the snapshot, `TAIL` emits further updates as
+[`AS OF`](/sql/as-of) timestamp. After the snapshot, `TAIL` emits further updates as
 they occur.
 
 For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the
@@ -256,43 +239,6 @@ COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
 | [PHP](/integrations/php/#stream)|
 | [Python](/integrations/python/#stream)|
 | [Ruby](/integrations/ruby/#stream)|
-
-### Using AS OF
-
-[`AS OF`](#as-of) requires Materialize to start with a custom [compaction window](/cli/#compaction-window) otherwise it will default to `0`.
-
-```shell
-docker run -p 6875:6875 materialize/materialized:{{< version >}} --logical-compaction-window 10s
-```
-
-Create a non-materialized view:
-
-```sql
-CREATE VIEW most_scheduled_worker AS
-  SELECT
-    worker,
-    SUM(elapsed_ns) as time_working
-  FROM mz_scheduling_elapsed
-  GROUP BY worker
-  ORDER BY time_working DESC
-  LIMIT 1;
-```
-
-Create an index and set the compaction window:
-
-```sql
-CREATE INDEX most_scheduled_worker_idx
-  ON most_scheduled_worker (worker, time_working)
-  WITH (logical_compaction_window = '10 seconds');
-```
-
-Stream out all changes starting 10 seconds before the statement's execution time:
-
-```sql
-COPY (TAIL most_scheduled_worker AS OF NOW() - INTERVAL '10 seconds') TO STDOUT;
-```
-
-Take into account that, in this example, 10 logical seconds need to pass within Materialize to browse and recover changes from the last 10 seconds.
 
 ### Mapping rows to their updates
 
