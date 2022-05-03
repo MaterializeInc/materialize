@@ -3007,26 +3007,29 @@ pub fn plan_create_connector(
             broker: broker.parse()?,
             security: match security {
                 mz_sql_parser::ast::KafkaSecurityOptions::SSL {
-                    key_file,
-                    certificate_file,
-                    key_password,
-                } => KafkaSecurityOptions::SSL {
-                    key_file,
-                    certificate_file,
-                    key_password,
-                },
+                    key,
+                    certificate,
+                    passphrase,
+                } => {
+                    let key = key.map_or_else(|| None, |f| Some(f.to_string()));
+                    let certificate = certificate.map_or_else(|| None, |f| Some(f.to_string()));
+                    let passphrase = passphrase.map_or_else(|| None, |f| Some(f.to_string()));
+                    KafkaSecurityOptions::SSL {
+                        key,
+                        certificate,
+                        passphrase,
+                    }
+                }
                 mz_sql_parser::ast::KafkaSecurityOptions::SASL {
                     mechanism,
                     ssl,
-                    certificate,
                     username,
                     password,
                 } => KafkaSecurityOptions::SASL {
                     mechanism,
                     ssl,
-                    certificate,
                     username,
-                    password,
+                    password: password.to_string(),
                 },
             },
         },

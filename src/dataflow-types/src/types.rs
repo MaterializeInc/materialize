@@ -1419,20 +1419,32 @@ pub mod sources {
         !is_avro && !is_stateless_dbz
     }
 
+    /// The variants for KafkaSecurityOptions come from the Kafka protocol auth section
+    /// and are independent of any particular client implementation
     #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
     pub enum KafkaSecurityOptions {
+        /// PLAINTEXT is no auth and no transport layer security
         PLAINTEXT,
+        /// SSL without specifying any keys or certificates is no auth but with transport layer security
+        /// All fields contain UUID of kubernetes secret containing the corresponding payload
+        /// these need to be resolved to actual file paths before using to create a Kafka client
         SSL {
-            key_file: Option<String>,
-            certificate_file: Option<String>,
-            key_password: Option<String>,
+            /// Client private key for authentication
+            key: Option<String>,
+            /// Client public key for authentication
+            certificate: Option<String>,
+            /// Passphrase for client private key
+            passphrase: Option<String>,
         },
         SASL {
+            /// Must be one of: PLAIN, SCRAMSHA256, SCRAMSHA512
             mechanism: String,
+            /// Specify SaslSsl instead of Sasl to enable transport layer security
             ssl: bool,
-            certificate: Option<String>,
-            username: Option<String>,
-            password: Option<String>,
+            /// Username to use in authentication
+            username: String,
+            /// Password to use in authentication
+            password: String,
         },
     }
 
@@ -1465,6 +1477,7 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
                 ConnectorInner::CSR { with_options, .. } => with_options.clone(),
+                // Initially we are just going to convert the new struct back into the old map so downstream code can stay unchanged
                 ConnectorInner::KafkaNew { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
                         let mut with_options = BTreeMap::new();
@@ -1473,20 +1486,21 @@ pub mod sources {
                         with_options
                     }
                     KafkaSecurityOptions::SSL {
-                        key_file,
-                        certificate_file,
-                        key_password,
+                        key,
+                        certificate,
+                        passphrase,
                     } => {
                         let mut with_options = BTreeMap::new();
                         with_options.insert("security.protocol".to_string(), "ssl".to_string());
-                        if let Some(file) = key_file {
-                            with_options.insert("".to_string(), file.to_owned());
+                        if let Some(uuid) = key {
+                            with_options.insert("ssl.key.location".to_string(), uuid.to_owned());
                         }
-                        if let Some(file) = certificate_file {
-                            with_options.insert("client_certificate".to_string(), file.to_owned());
+                        if let Some(uuid) = certificate {
+                            with_options
+                                .insert("ssl.certificate.location".to_string(), uuid.to_owned());
                         }
-                        if let Some(password) = key_password {
-                            with_options.insert("key_password".to_string(), password.to_owned());
+                        if let Some(uuid) = passphrase {
+                            with_options.insert("key_password".to_string(), uuid.to_owned());
                         }
                         with_options
                     }
