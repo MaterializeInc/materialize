@@ -82,3 +82,12 @@ query I
 SELECT * FROM t AS OF AT LEAST 1
 ----
 1
+
+query error can't use null as a timestamp for AS OF
+SELECT 1 AS OF NULL::timestamp;
+
+query error can't use null as a timestamp for AS OF
+SELECT * FROM data AS OF NULL::numeric;
+
+query error can't use null as a timestamp for AS OF
+TAIL (SELECT 1) AS OF NULL::timestamptz;

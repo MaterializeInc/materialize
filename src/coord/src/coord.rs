@@ -3427,6 +3427,9 @@ impl Coordinator {
             let temp_storage = RowArena::new();
             prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
             let evaled = timestamp.eval(&[], &temp_storage)?;
+            if evaled.is_null() {
+                coord_bail!("can't use {} as a timestamp for AS OF", evaled);
+            }
             let ty = timestamp.typ(&RelationType::empty());
             let ts = match ty.scalar_type {
                 ScalarType::Numeric { .. } => {
