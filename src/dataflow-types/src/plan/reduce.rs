@@ -163,13 +163,25 @@ pub enum ReducePlan {
     Collation(CollationPlan),
 }
 
+proptest::prop_compose! {
+    /// `expected_group_size` is a usize, but instead of a uniform distribution,
+    /// we want a logarithmic distribution so that we have an even distribution
+    /// in the number of layers of buckets that a hierarchical plan would have.
+    fn any_group_size()
+        (bits in 0..usize::BITS)
+        (integer in (((1_usize) << bits) - 1)
+            ..(if bits == (usize::BITS - 1){ usize::MAX }
+                else { (1_usize) << (bits + 1) - 1 }))
+    -> usize {
+        integer
+    }
+}
+
 /// To avoid stack overflow, this limits the arbitrarily-generated test
 /// `ReducePlan`s to involve at most 8 aggregations.
 ///
 /// To have better coverage of realistic expected group sizes, the
-/// expected group size is not evenly distributed across all potential
-/// values of `usize`: Instead it goes from 0 to 4B and then jumps to
-/// [usize::MAX] approximately 5% of the time.
+/// `expected group size` has a logarithmic distribution.
 impl Arbitrary for ReducePlan {
     type Parameters = ();
 
@@ -180,21 +192,18 @@ impl Arbitrary for ReducePlan {
             proptest::collection::vec(any::<AggregateExpr>(), 0..8),
             any::<bool>(),
             any::<bool>(),
-            (0..u32::MAX),
+            any_group_size(),
         )
-            .prop_map(|(exprs, monotonic, any_expected_size, size)| {
-                let expected_group_size = if any_expected_size {
-                    if size > 4_000_000_000 {
-                        // Test a very large edge case approximately 5% of the time.
-                        Some(usize::MAX)
+            .prop_map(
+                |(exprs, monotonic, any_expected_size, expected_group_size)| {
+                    let expected_group_size = if any_expected_size {
+                        Some(expected_group_size)
                     } else {
-                        Some(size as usize)
-                    }
-                } else {
-                    None
-                };
-                ReducePlan::create_from(exprs, monotonic, expected_group_size)
-            })
+                        None
+                    };
+                    ReducePlan::create_from(exprs, monotonic, expected_group_size)
+                },
+            )
             .boxed()
     }
 }
