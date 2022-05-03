@@ -70,4 +70,7 @@ pub mod task;
 #[cfg(feature = "test")]
 pub mod test;
 pub mod thread;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
+pub mod tracing;
 pub mod vec;

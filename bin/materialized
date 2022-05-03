@@ -20,6 +20,7 @@ release=false
 channel=
 build_flags=()
 positional_args=()
+rustflags=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -36,6 +37,12 @@ while [[ $# -gt 0 ]]; do
             build_flags+=("$1")
             shift
             ;;
+        --tokio-console)
+            build_flags+=("--features=tokio-console")
+            positional_args+=("--tokio-console")
+            rustflags="--cfg=tokio_unstable"
+            shift
+            ;;
         *)
             positional_args+=("$1")
             shift
@@ -43,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
+RUSTFLAGS=$rustflags cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
 if $release; then
     target/release/"$bin" "${positional_args[@]}"
 else
