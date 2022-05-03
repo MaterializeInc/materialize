@@ -37,7 +37,6 @@ def workflow_default(c: Composition) -> None:
 
 def workflow_load_test(c: Composition) -> None:
     """Run the load generator with a hefty load in the background."""
-    c.up("prometheus-sql-exporter")
     run(c, args=[], detach=True)
 
 
