@@ -520,7 +520,24 @@ impl AstDisplay for KafkaSecurityOptions {
                 key_file,
                 certificate_file,
                 key_password,
-            } => f.write_str(""),
+            } => {
+                f.write_str(" SSL");
+                if let Some(key_file) = key_file {
+                    f.write_str(" KEY FILE '");
+                    f.write_node(&display::escape_single_quote_string(key_file));
+                    f.write_str("'");
+                }
+                if let Some(certificate_file) = certificate_file {
+                    f.write_str(" CERTIFICATE FILE '");
+                    f.write_node(&display::escape_single_quote_string(certificate_file));
+                    f.write_str("'");
+                }
+                if let Some(key_password) = key_password {
+                    f.write_str(" KEY PASSWORD '");
+                    f.write_node(&display::escape_single_quote_string(key_password));
+                    f.write_str("'");
+                }
+            }
             KafkaSecurityOptions::SASL {
                 mechanism,
                 ssl,
@@ -638,7 +655,6 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                     None => {}
                 }
             }
-            _ => unreachable!(),
         }
     }
 }

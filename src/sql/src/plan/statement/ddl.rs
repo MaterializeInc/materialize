@@ -39,9 +39,10 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
-    PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
-    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    IncludedColumnPos, KafkaSecurityOptions, KafkaSourceConnector, KeyEnvelope,
+    KinesisSourceConnector, PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector,
+    S3SourceConnector, SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope,
+    UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -3002,6 +3003,33 @@ pub fn plan_create_connector(
                 config_options: kafka_util::extract_config(&mut with_options)?,
             }
         }
+        CreateConnector::KafkaNew { broker, security } => ConnectorInner::KafkaNew {
+            broker: broker.parse()?,
+            security: match security {
+                mz_sql_parser::ast::KafkaSecurityOptions::SSL {
+                    key_file,
+                    certificate_file,
+                    key_password,
+                } => KafkaSecurityOptions::SSL {
+                    key_file,
+                    certificate_file,
+                    key_password,
+                },
+                mz_sql_parser::ast::KafkaSecurityOptions::SASL {
+                    mechanism,
+                    ssl,
+                    certificate,
+                    username,
+                    password,
+                } => KafkaSecurityOptions::SASL {
+                    mechanism,
+                    ssl,
+                    certificate,
+                    username,
+                    password,
+                },
+            },
+        },
         CreateConnector::CSR {
             registry,
             with_options,
@@ -3015,6 +3043,8 @@ pub fn plan_create_connector(
                     .collect::<BTreeMap<String, String>>(),
             }
         }
+
+        CreateConnector::CSRNew { .. } => todo!(),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let plan = CreateConnectorPlan {

@@ -1420,10 +1420,31 @@ pub mod sources {
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    pub enum KafkaSecurityOptions {
+        PLAINTEXT,
+        SSL {
+            key_file: Option<String>,
+            certificate_file: Option<String>,
+            key_password: Option<String>,
+        },
+        SASL {
+            mechanism: String,
+            ssl: bool,
+            certificate: Option<String>,
+            username: Option<String>,
+            password: Option<String>,
+        },
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
     pub enum ConnectorInner {
         Kafka {
             broker: KafkaAddrs,
             config_options: BTreeMap<String, String>,
+        },
+        KafkaNew {
+            broker: KafkaAddrs,
+            security: KafkaSecurityOptions,
         },
         CSR {
             registry: String,
@@ -1436,6 +1457,7 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { broker, .. } => broker.to_string(),
                 ConnectorInner::CSR { registry, .. } => registry.to_owned(),
+                ConnectorInner::KafkaNew { broker, .. } => broker.to_string(),
             }
         }
 
@@ -1443,6 +1465,34 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
                 ConnectorInner::CSR { with_options, .. } => with_options.clone(),
+                ConnectorInner::KafkaNew { security, .. } => match security {
+                    KafkaSecurityOptions::PLAINTEXT => {
+                        let mut with_options = BTreeMap::new();
+                        with_options
+                            .insert("security.protocol".to_string(), "plaintext".to_string());
+                        with_options
+                    }
+                    KafkaSecurityOptions::SSL {
+                        key_file,
+                        certificate_file,
+                        key_password,
+                    } => {
+                        let mut with_options = BTreeMap::new();
+                        with_options.insert("security.protocol".to_string(), "ssl".to_string());
+                        if let Some(file) = key_file {
+                            with_options.insert("".to_string(), file.to_owned());
+                        }
+                        if let Some(file) = certificate_file {
+                            with_options.insert("client_certificate".to_string(), file.to_owned());
+                        }
+                        if let Some(password) = key_password {
+                            with_options.insert("key_password".to_string(), password.to_owned());
+                        }
+                        with_options
+                    }
+                    // TODO FIXME fill in this arm accordingly
+                    KafkaSecurityOptions::SASL { .. } => BTreeMap::new(),
+                },
             }
         }
     }
