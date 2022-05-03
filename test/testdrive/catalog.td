@@ -297,13 +297,12 @@ contains:unacceptable schema name 'mz_foo'
 ! CREATE SCHEMA pg_bar
 contains:unacceptable schema name 'pg_bar'
 
-# The search path is currently hardcoded.
+# The search path is configurable.
 > SHOW search_path
-"mz_catalog, pg_catalog, public, mz_temp"
-! SET search_path = foo
-contains:parameter "search_path" cannot be changed
-! SET SCHEMA foo
-contains:parameter "search_path" cannot be changed
+"public"
+> SET search_path = foo
+> SET SCHEMA foo
+> SET search_path to public
 
 # Creating views in non-existent databases should fail.
 ! CREATE VIEW noexist.ignored AS SELECT 1
