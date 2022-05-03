@@ -786,15 +786,19 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(), Error> {
+    pub fn remove_compute_instance(&mut self, name: &str) -> Result<Vec<GlobalId>, Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         assert!(deleted.len() <= 1);
         if deleted.len() == 1 {
             // Cascade delete introsepction sources.
-            let id = deleted.into_element().id;
-            self.introspection_sources
+            let id = deleted.into_element().0.id;
+            let introspection_source_indexes = self
+                .introspection_sources
                 .delete(|k, _v| k.compute_id == id);
-            Ok(())
+            Ok(introspection_source_indexes
+                .into_iter()
+                .map(|(_, v)| GlobalId::System(v.index_id))
+                .collect())
         } else {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         }
