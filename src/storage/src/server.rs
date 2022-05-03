@@ -107,6 +107,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
+                source_tokens: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
                 decode_metrics,
@@ -117,6 +118,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 aws_external_id: aws_external_id.clone(),
                 timely_worker_index,
                 timely_worker_peers,
+                persist_client: config.persist_client.clone(),
             },
             storage_response_tx,
         }
