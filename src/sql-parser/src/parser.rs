@@ -1925,12 +1925,15 @@ impl<'a> Parser<'a> {
                 while let Ok(keyword) = self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD]) {
                     match keyword {
                         Keyword::Key => {
+                            let _ = self.consume_token(&Token::Eq);
                             key = Some(self.parse_object_name()?);
                         }
                         Keyword::Certificate => {
+                            let _ = self.consume_token(&Token::Eq);
                             certificate = Some(self.parse_object_name()?);
                         }
                         Keyword::Password => {
+                            let _ = self.consume_token(&Token::Eq);
                             passphrase = Some(self.parse_object_name()?);
                         }
                         _ => unreachable!(),

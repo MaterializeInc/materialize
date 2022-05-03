@@ -477,13 +477,41 @@ pub fn create_statement(
         }
         Statement::CreateConnector(CreateConnectorStatement {
             name,
-            connector: _,
+            connector,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
+            match connector {
+                mz_sql_parser::ast::CreateConnector::CSR { .. } => {}
+                mz_sql_parser::ast::CreateConnector::CSRNew { password, .. } => {
+                    if let Some(inner) = password {
+                        *password = Some(allocate_name(inner)?);
+                    };
+                }
+                mz_sql_parser::ast::CreateConnector::Kafka { .. } => {}
+                mz_sql_parser::ast::CreateConnector::KafkaNew { security, .. } => match security {
+                    mz_sql_parser::ast::KafkaSecurityOptions::SSL {
+                        key,
+                        certificate,
+                        passphrase,
+                    } => {
+                        if let Some(inner) = key {
+                            *key = Some(allocate_name(inner)?);
+                        };
+                        if let Some(inner) = certificate {
+                            *certificate = Some(allocate_name(inner)?);
+                        };
+                        if let Some(inner) = passphrase {
+                            *passphrase = Some(allocate_name(inner)?);
+                        };
+                    }
+                    mz_sql_parser::ast::KafkaSecurityOptions::SASL { password, .. } => {
+                        *password = allocate_name(password)?;
+                    }
+                },
+            }
         }
-
         _ => unreachable!(),
     }
 
