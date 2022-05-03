@@ -267,13 +267,13 @@ mod tests {
 
     use super::*;
 
-    async fn new_test_client() -> Result<PersistClient, ExternalError> {
+    pub async fn new_test_client() -> Result<PersistClient, ExternalError> {
         let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         PersistClient::new(NO_TIMEOUT, blob, consensus).await
     }
 
-    fn all_ok<'a, K, V, T, D, I>(
+    pub fn all_ok<'a, K, V, T, D, I>(
         iter: I,
         as_of: T,
     ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
