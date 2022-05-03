@@ -65,7 +65,25 @@ sequences:
         length: 1
       - type: relation_types
         expect: fact.expected_types_view
-  test_dbt_data_test: data_test
+  # custom test for our test macro
+  test_dbt_data_test:
+    project: data_test
+    sequence:
+      - type: dbt
+        cmd: run
+      - type: dbt
+        cmd: test
+        check: false
+      - type: run_results
+        length: fact.test.length
+        names: fact.test.names
+        attributes:
+          passing.status: pass
+          failing.status: fail
+      - type: relations_equal
+        relations: [non_null, expected_non_nul]
+      - type: relations_equal
+        relations: [unique, expected_unique]
   test_dbt_schema_test: schema_test
   test_dbt_ephemeral: ephemeral
   test_dbt_ephemeral_data_tests: data_test_ephemeral_models
@@ -181,3 +199,31 @@ projects:
             test_source_index,1,1,
             test_view_index,1,1,
             test_view_index,2,,pg_catalog.length(a)
+  - name: data_test
+    paths:
+        models/test_materialized_view.sql: |
+            {{ config(materialized='materializedview') }}
+
+            SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+
+        tests/non_null.sql: |
+            {{ config(materialized='materializedtest', store_failures=true) }}
+            SELECT *
+            FROM {{ ref('test_materialized_view') }}
+            WHERE a IS NULL
+
+        tests/non_null_schema.sql: |
+            {{ config(materialized='materializedtest',schema='test', store_failures=true) }}
+            SELECT *
+            FROM {{ ref('test_materialized_view') }}
+            WHERE a IS NULL
+
+        tests/unique.sql: |
+            {{ config(materialized='materializedtest', store_failures=true) }}
+            SELECT
+                a AS unique_field,
+                count(*) as num_records
+            FROM {{ ref('test_materialized_view') }}
+            WHERE a IS NOT NULL
+            GROUP BY a
+            HAVING count(*) > 1
