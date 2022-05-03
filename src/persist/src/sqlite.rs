@@ -62,6 +62,7 @@ impl FromSql for SeqNo {
 /// Implementation of [Consensus] over a sqlite database.
 #[derive(Debug)]
 pub struct SqliteConsensus {
+    // N.B. tokio::sync::mutex seems to cause deadlocks.  See #12231.
     conn: Arc<Mutex<Connection>>,
 }
 
