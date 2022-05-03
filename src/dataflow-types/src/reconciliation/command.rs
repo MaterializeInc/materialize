@@ -27,11 +27,8 @@
 //!
 //! [StorageCommandReconcile] is designed to live in a STORAGE instance. TODO(jkosh44) expand and consolidate with above
 
-use anyhow::Error;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt;
-use std::fmt::Debug;
 
 use async_trait::async_trait;
 use timely::progress::frontier::MutableAntichain;
@@ -46,38 +43,6 @@ use crate::client::{
 };
 use crate::sources::SourceConnector;
 use crate::{DataflowDescription, Plan};
-
-/// Generic trait to reconcile commands targeted at a COMPUTE or STORAGE instance.
-#[async_trait]
-pub trait CommandReconcile<C, R>: fmt::Debug + Send
-where
-    C: Send,
-    R: Send,
-{
-    async fn absorb_command(&mut self, command: C) -> Result<(), anyhow::Error>;
-    fn absorb_response(&mut self, message: R);
-    fn pop_response(&mut self) -> Option<R>;
-    async fn recv_response(&mut self) -> Result<Option<R>, anyhow::Error>;
-
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>
-    where
-        C: 'async_trait,
-    {
-        self.absorb_command(cmd).await
-    }
-
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        if let Some(response) = self.pop_response() {
-            Ok(Some(response))
-        } else {
-            let response = self.recv_response().await;
-            if let Ok(Some(response)) = response {
-                self.absorb_response(response)
-            }
-            Ok(self.pop_response())
-        }
-    }
-}
 
 /// Reconcile commands targeted at a COMPUTE instance.
 ///
@@ -100,11 +65,107 @@ pub struct ComputeCommandReconcile<T, C> {
 }
 
 #[async_trait]
-impl<T, C> CommandReconcile<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
+impl<T, C> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
 where
     C: ComputeClient<T>,
     T: timely::progress::Timestamp + Copy,
 {
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        self.absorb_command(cmd).await
+    }
+
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        if let Some(response) = self.responses.pop_front() {
+            Ok(Some(response))
+        } else {
+            let response = self.client.recv().await;
+            if let Ok(Some(response)) = response {
+                self.absorb_response(response)
+            }
+            Ok(self.responses.pop_front())
+        }
+    }
+}
+
+impl<T, C> ComputeCommandReconcile<T, C>
+where
+    C: ComputeClient<T>,
+    T: timely::progress::Timestamp + Copy,
+{
+    /// Construct a new [ComputeCommandReconcile].
+    ///
+    /// * `client`: The client wrapped by this struct.
+    pub fn new(client: C) -> Self {
+        Self {
+            client,
+            created: Default::default(),
+            dataflows: Default::default(),
+            peeks: Default::default(),
+            responses: Default::default(),
+            uppers: Default::default(),
+        }
+    }
+
+    /// Start tracking of a id within an instance.
+    ///
+    /// If we're already tracking this ID, it means that the controller lost connection and
+    /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
+    fn start_tracking(&mut self, id: GlobalId) {
+        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
+        match self.uppers.entry(id) {
+            Entry::Occupied(entry) => {
+                // We're about to start tracking an already-bound ID. This means that the controller
+                // needs to be informed about the `upper`.
+                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
+                change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
+                self.responses
+                    .push_back(ComputeResponse::FrontierUppers(vec![(id, change_batch)]));
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(frontier);
+            }
+        }
+    }
+
+    /// Stop tracking the id within an instance.
+    fn stop_tracking(&mut self, id: GlobalId) {
+        let previous = self.uppers.remove(&id);
+        if previous.is_none() {
+            warn!("Protocol error: ceasing frontier tracking for absent identifier {id:?}");
+        }
+        // Remove dataflow export information.
+        self.dataflows.remove(&id);
+    }
+
+    /// Absorbs a response, and produces response that should be emitted.
+    pub fn absorb_response(&mut self, message: ComputeResponse<T>) {
+        match message {
+            ComputeResponse::FrontierUppers(mut list) => {
+                for (id, changes) in list.iter_mut() {
+                    if let Some(frontier) = self.uppers.get_mut(id) {
+                        let iter = frontier.update_iter(changes.drain());
+                        changes.extend(iter);
+                    } else {
+                        changes.clear();
+                    }
+                }
+
+                self.responses
+                    .push_back(ComputeResponse::FrontierUppers(list));
+            }
+            ComputeResponse::PeekResponse(uuid, response) => {
+                if self.peeks.remove(&uuid) {
+                    self.responses
+                        .push_back(ComputeResponse::PeekResponse(uuid, response));
+                }
+            }
+            ComputeResponse::TailResponse(id, response) => {
+                self.responses
+                    .push_back(ComputeResponse::TailResponse(id, response));
+            }
+        }
+    }
+
     async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
         match command {
@@ -178,109 +239,6 @@ where
             }
         }
     }
-
-    /// Absorbs a response, and produces response that should be emitted.
-    fn absorb_response(&mut self, message: ComputeResponse<T>) {
-        match message {
-            ComputeResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
-                    }
-                }
-
-                self.responses
-                    .push_back(ComputeResponse::FrontierUppers(list));
-            }
-            ComputeResponse::PeekResponse(uuid, response) => {
-                if self.peeks.remove(&uuid) {
-                    self.responses
-                        .push_back(ComputeResponse::PeekResponse(uuid, response));
-                }
-            }
-            ComputeResponse::TailResponse(id, response) => {
-                self.responses
-                    .push_back(ComputeResponse::TailResponse(id, response));
-            }
-        }
-    }
-
-    fn pop_response(&mut self) -> Option<ComputeResponse<T>> {
-        self.responses.pop_front()
-    }
-
-    async fn recv_response(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        self.client.recv().await
-    }
-}
-
-#[async_trait]
-impl<T, C> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
-where
-    C: ComputeClient<T>,
-    T: timely::progress::Timestamp + Copy,
-{
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        CommandReconcile::send(self, cmd).await
-    }
-
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        CommandReconcile::recv(self).await
-    }
-}
-
-impl<T, C> ComputeCommandReconcile<T, C>
-where
-    C: ComputeClient<T>,
-    T: timely::progress::Timestamp + Copy,
-{
-    /// Construct a new [ComputeCommandReconcile].
-    ///
-    /// * `client`: The client wrapped by this struct.
-    pub fn new(client: C) -> Self {
-        Self {
-            client,
-            created: Default::default(),
-            dataflows: Default::default(),
-            peeks: Default::default(),
-            responses: Default::default(),
-            uppers: Default::default(),
-        }
-    }
-
-    /// Start tracking of a id within an instance.
-    ///
-    /// If we're already tracking this ID, it means that the controller lost connection and
-    /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
-    fn start_tracking(&mut self, id: GlobalId) {
-        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
-        match self.uppers.entry(id) {
-            Entry::Occupied(entry) => {
-                // We're about to start tracking an already-bound ID. This means that the controller
-                // needs to be informed about the `upper`.
-                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
-                change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
-                self.responses
-                    .push_back(ComputeResponse::FrontierUppers(vec![(id, change_batch)]));
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(frontier);
-            }
-        }
-    }
-
-    /// Stop tracking the id within an instance.
-    fn stop_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id);
-        if previous.is_none() {
-            warn!("Protocol error: ceasing frontier tracking for absent identifier {id:?}");
-        }
-        // Remove dataflow export information.
-        self.dataflows.remove(&id);
-    }
 }
 
 /// Reconcile commands targeted at a STORAGE instance.
@@ -303,11 +261,107 @@ pub struct StorageCommandReconcile<T, C> {
 }
 
 #[async_trait]
-impl<T, C> CommandReconcile<StorageCommand<T>, StorageResponse<T>> for StorageCommandReconcile<T, C>
+impl<T, C> GenericClient<StorageCommand<T>, StorageResponse<T>> for StorageCommandReconcile<T, C>
 where
     C: StorageClient<T>,
     T: timely::progress::Timestamp + Copy,
 {
+    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
+        self.absorb_command(cmd).await
+    }
+
+    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+        // TODO: This is implementation matches the one for ComputeCommandReconcile
+        if let Some(response) = self.responses.pop_front() {
+            Ok(Some(response))
+        } else {
+            let response = self.client.recv().await;
+            if let Ok(Some(response)) = response {
+                self.absorb_response(response)
+            }
+            Ok(self.responses.pop_front())
+        }
+    }
+}
+
+impl<T, C> StorageCommandReconcile<T, C>
+where
+    C: StorageClient<T>,
+    T: timely::progress::Timestamp + Copy,
+{
+    /// Construct a new [StorageCommandReconcile].
+    ///
+    /// * `client`: The client wrapped by this struct.
+    pub fn new(client: C) -> Self {
+        warn!("StorageCommandReconcile is not yet fully implemented, use with caution.");
+        Self {
+            client,
+            created: Default::default(),
+            responses: Default::default(),
+            tables: Default::default(),
+            uppers: Default::default(),
+        }
+    }
+
+    /// Start tracking of a id within an instance.
+    ///
+    /// If we're already tracking this ID, it means that the controller lost connection and
+    /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
+    fn start_tracking(&mut self, id: GlobalId) {
+        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
+        match self.uppers.entry(id) {
+            Entry::Occupied(entry) => {
+                // We're about to start tracking an already-bound ID. This means that the controller
+                // needs to be informed about the `upper`.
+                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
+                change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
+                // TODO: This is a gross hack to make things work. In practise, we should
+                // keep note of all timestamp bindings and release them to the controller
+                // once it (re-)connects.
+                let feedback = TimestampBindingFeedback {
+                    changes: vec![(id, change_batch)],
+                    bindings: vec![],
+                };
+                self.responses
+                    .push_back(StorageResponse::TimestampBindings(feedback));
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(frontier);
+            }
+        }
+    }
+
+    /// Stop tracking the id within the instance.
+    fn stop_tracking(&mut self, id: GlobalId) {
+        let previous = self.uppers.remove(&id);
+        if previous.is_none() {
+            warn!("Protocol error: ceasing frontier tracking for absent identifier {id:?}");
+        }
+        self.tables.remove(&id);
+    }
+
+    /// Absorbs a response, and produces response that should be emitted.
+    pub fn absorb_response(&mut self, message: StorageResponse<T>) {
+        match message {
+            StorageResponse::TimestampBindings(mut feedback) => {
+                for (id, changes) in feedback.changes.iter_mut() {
+                    if let Some(frontier) = self.uppers.get_mut(id) {
+                        let iter = frontier.update_iter(changes.drain());
+                        changes.extend(iter);
+                    } else {
+                        changes.clear();
+                    }
+                }
+
+                self.responses
+                    .push_back(StorageResponse::TimestampBindings(feedback));
+            }
+            StorageResponse::LinearizedTimestamps(feedback) => self
+                .responses
+                .push_back(StorageResponse::LinearizedTimestamps(feedback)),
+        }
+    }
+
     async fn absorb_command(&mut self, command: StorageCommand<T>) -> Result<(), anyhow::Error> {
         use StorageCommand::*;
         match command {
@@ -378,107 +432,5 @@ where
                 self.client.send(DurabilityFrontierUpdates(frontiers)).await
             }
         }
-    }
-
-    /// Absorbs a response, and produces response that should be emitted.
-    fn absorb_response(&mut self, message: StorageResponse<T>) {
-        match message {
-            StorageResponse::TimestampBindings(mut feedback) => {
-                for (id, changes) in feedback.changes.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
-                    }
-                }
-
-                self.responses
-                    .push_back(StorageResponse::TimestampBindings(feedback));
-            }
-            StorageResponse::LinearizedTimestamps(feedback) => self
-                .responses
-                .push_back(StorageResponse::LinearizedTimestamps(feedback)),
-        }
-    }
-
-    fn pop_response(&mut self) -> Option<StorageResponse<T>> {
-        self.responses.pop_front()
-    }
-
-    async fn recv_response(&mut self) -> Result<Option<StorageResponse<T>>, Error> {
-        self.client.recv().await
-    }
-}
-
-#[async_trait]
-impl<T, C> GenericClient<StorageCommand<T>, StorageResponse<T>> for StorageCommandReconcile<T, C>
-where
-    C: StorageClient<T>,
-    T: timely::progress::Timestamp + Copy,
-{
-    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
-        CommandReconcile::send(self, cmd).await
-    }
-
-    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
-        CommandReconcile::recv(self).await
-    }
-}
-
-impl<T, C> StorageCommandReconcile<T, C>
-where
-    C: StorageClient<T>,
-    T: timely::progress::Timestamp + Copy,
-{
-    /// Construct a new [StorageCommandReconcile].
-    ///
-    /// * `client`: The client wrapped by this struct.
-    pub fn new(client: C) -> Self {
-        warn!("StorageCommandReconcile is not yet fully implemented, use with caution.");
-        Self {
-            client,
-            created: Default::default(),
-            responses: Default::default(),
-            tables: Default::default(),
-            uppers: Default::default(),
-        }
-    }
-
-    /// Start tracking of a id within an instance.
-    ///
-    /// If we're already tracking this ID, it means that the controller lost connection and
-    /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
-    fn start_tracking(&mut self, id: GlobalId) {
-        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
-        match self.uppers.entry(id) {
-            Entry::Occupied(entry) => {
-                // We're about to start tracking an already-bound ID. This means that the controller
-                // needs to be informed about the `upper`.
-                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
-                change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
-                // TODO: This is a gross hack to make things work. In practise, we should
-                // keep note of all timestamp bindings and release them to the controller
-                // once it (re-)connects.
-                let feedback = TimestampBindingFeedback {
-                    changes: vec![(id, change_batch)],
-                    bindings: vec![],
-                };
-                self.responses
-                    .push_back(StorageResponse::TimestampBindings(feedback));
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(frontier);
-            }
-        }
-    }
-
-    /// Stop tracking the id within the instance.
-    fn stop_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id);
-        if previous.is_none() {
-            warn!("Protocol error: ceasing frontier tracking for absent identifier {id:?}");
-        }
-        self.tables.remove(&id);
     }
 }
