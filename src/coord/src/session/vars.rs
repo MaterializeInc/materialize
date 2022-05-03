@@ -11,9 +11,9 @@ use std::borrow::Borrow;
 use std::fmt;
 
 use const_format::concatcp;
+use lazy_static::lazy_static;
 use uncased::UncasedStr;
 
-use crate::catalog::builtin::{MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
 
@@ -101,6 +101,7 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
+    // IntervalStyle has nonstandard capitalization for historical reasons.
     name: static_uncased_str!("IntervalStyle"),
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
@@ -112,17 +113,15 @@ const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
 };
 
-const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
-    name: static_uncased_str!("search_path"),
-    value: &[
-        MZ_CATALOG_SCHEMA,
-        PG_CATALOG_SCHEMA,
-        DEFAULT_SCHEMA,
-        MZ_TEMP_SCHEMA,
-    ],
-    description:
-        "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
-};
+lazy_static! {
+    static ref DEFAULT_SEARCH_PATH: [String; 1] = [DEFAULT_SCHEMA.to_owned(),];
+    static ref SEARCH_PATH: ServerVar<[String]> = ServerVar {
+        name: static_uncased_str!("search_path"),
+        value: &*DEFAULT_SEARCH_PATH,
+        description:
+            "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
+    };
+}
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: static_uncased_str!("server_version"),
@@ -206,7 +205,7 @@ pub struct Vars {
     integer_datetimes: ServerVar<bool>,
     interval_style: ServerVar<str>,
     qgm_optimizations: SessionVar<bool>,
-    search_path: ServerVar<[&'static str]>,
+    search_path: SessionVar<[String]>,
     server_version: ServerVar<str>,
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
@@ -229,7 +228,7 @@ impl Default for Vars {
             integer_datetimes: INTEGER_DATETIMES,
             interval_style: INTERVAL_STYLE,
             qgm_optimizations: SessionVar::new(&QGM_OPTIMIZATIONS),
-            search_path: SEARCH_PATH,
+            search_path: SessionVar::new(&SEARCH_PATH),
             server_version: SERVER_VERSION,
             server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
@@ -421,7 +420,7 @@ impl Vars {
         } else if name == QGM_OPTIMIZATIONS.name {
             self.qgm_optimizations.set(value, local)
         } else if name == SEARCH_PATH.name {
-            Err(CoordError::ReadOnlyParameter(&SEARCH_PATH))
+            self.search_path.set(value, local)
         } else if name == SERVER_VERSION.name {
             Err(CoordError::ReadOnlyParameter(&SERVER_VERSION))
         } else if name == SERVER_VERSION_NUM.name {
@@ -472,7 +471,7 @@ impl Vars {
             integer_datetimes: _,
             interval_style: _,
             qgm_optimizations,
-            search_path: _,
+            search_path,
             server_version: _,
             server_version_num: _,
             sql_safe_updates,
@@ -484,6 +483,7 @@ impl Vars {
         client_min_messages.end_transaction(action);
         database.end_transaction(action);
         qgm_optimizations.end_transaction(action);
+        search_path.end_transaction(action);
         extra_float_digits.end_transaction(action);
         sql_safe_updates.end_transaction(action);
     }
@@ -539,8 +539,12 @@ impl Vars {
     }
 
     /// Returns the value of the `search_path` configuration parameter.
-    pub fn search_path(&self) -> &'static [&'static str] {
-        self.search_path.value
+    pub fn search_path(&self) -> Vec<&str> {
+        self.search_path
+            .value()
+            .iter()
+            .map(String::as_str)
+            .collect()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
@@ -769,12 +773,13 @@ impl Value for str {
     }
 }
 
-impl Value for [&str] {
+impl Value for [String] {
     const TYPE_NAME: &'static str = "string list";
 
-    fn parse(_: &str) -> Result<Self::Owned, ()> {
-        // Don't know how to parse string lists yet.
-        Err(())
+    fn parse(s: &str) -> Result<Vec<String>, ()> {
+        // Only supporting a single value for now, setting multiple values
+        // requires a change in the parser.
+        Ok(vec![s.to_owned()])
     }
 
     fn format(&self) -> String {

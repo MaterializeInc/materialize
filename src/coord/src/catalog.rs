@@ -644,6 +644,38 @@ impl ConnCatalog<'_> {
     pub fn conn_id(&self) -> u32 {
         self.conn_id
     }
+
+    fn effective_search_path(
+        &self,
+        include_temp_schema: bool,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        let mut v = Vec::with_capacity(self.search_path.len() + 3);
+        // Temp schema is only included for relations and data types, not for functions and operators
+        let temp_schema = (
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Temporary,
+        );
+        if include_temp_schema && !self.search_path.contains(&temp_schema) {
+            v.push(temp_schema);
+        }
+        let default_schemas = [
+            (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(self.catalog.state().get_mz_catalog_schema_id().clone()),
+            ),
+            (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(self.catalog.state().get_pg_catalog_schema_id().clone()),
+            ),
+        ];
+        for schema in default_schemas.into_iter() {
+            if !self.search_path.contains(&schema) {
+                v.push(schema);
+            }
+        }
+        v.extend_from_slice(&self.search_path);
+        v
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -3127,7 +3159,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone());
 
                 let res = if self
-                    .search_path
+                    .effective_search_path(true)
                     .iter()
                     .any(|(_, schema)| schema == &pg_catalog_schema)
                 {
@@ -3249,7 +3281,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self.catalog.resolve_entry(
             self.database.as_ref(),
-            &self.search_path,
+            &self.effective_search_path(true),
             name,
             self.conn_id,
         )?)
@@ -3261,7 +3293,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self.catalog.resolve_function(
             self.database.as_ref(),
-            &self.search_path,
+            &self.effective_search_path(false),
             name,
             self.conn_id,
         )?)
@@ -3454,7 +3486,7 @@ mod tests {
         SchemaSpecifier,
     };
 
-    use crate::catalog::{Catalog, Op, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
+    use crate::catalog::{Catalog, Op};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -3487,7 +3519,7 @@ mod tests {
                 },
                 system_output: PartialObjectName {
                     database: None,
-                    schema: Some(PG_CATALOG_SCHEMA.to_string()),
+                    schema: None,
                     item: "numeric".to_string(),
                 },
                 normal_output: PartialObjectName {
@@ -3508,7 +3540,7 @@ mod tests {
                 },
                 system_output: PartialObjectName {
                     database: None,
-                    schema: Some(MZ_CATALOG_SCHEMA.to_string()),
+                    schema: None,
                     item: "mz_array_types".to_string(),
                 },
                 normal_output: PartialObjectName {
@@ -3557,6 +3589,128 @@ mod tests {
 
         let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_effective_search_path() -> Result<(), anyhow::Error> {
+        let data_dir = TempDir::new()?;
+        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let mz_catalog_schema = (
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+        );
+        let pg_catalog_schema = (
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+        );
+        let mz_temp_schema = (
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Temporary,
+        );
+
+        // Behavior with the default search_schema (public)
+        let session = Session::dummy();
+        let conn_catalog = catalog.for_session(&session);
+        assert_ne!(
+            conn_catalog.effective_search_path(false),
+            conn_catalog.search_path
+        );
+        assert_ne!(
+            conn_catalog.effective_search_path(true),
+            conn_catalog.search_path
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(false),
+            vec![
+                mz_catalog_schema.clone(),
+                pg_catalog_schema.clone(),
+                conn_catalog.search_path[0].clone()
+            ]
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(true),
+            vec![
+                mz_temp_schema.clone(),
+                mz_catalog_schema.clone(),
+                pg_catalog_schema.clone(),
+                conn_catalog.search_path[0].clone()
+            ]
+        );
+
+        // missing schemas are added when missing
+        let mut session = Session::dummy();
+        session.vars_mut().set("search_path", "pg_catalog", false)?;
+        let conn_catalog = catalog.for_session(&session);
+        assert_ne!(
+            conn_catalog.effective_search_path(false),
+            conn_catalog.search_path
+        );
+        assert_ne!(
+            conn_catalog.effective_search_path(true),
+            conn_catalog.search_path
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(false),
+            vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(true),
+            vec![
+                mz_temp_schema.clone(),
+                mz_catalog_schema.clone(),
+                pg_catalog_schema.clone()
+            ]
+        );
+
+        let mut session = Session::dummy();
+        session.vars_mut().set("search_path", "mz_catalog", false)?;
+        let conn_catalog = catalog.for_session(&session);
+        assert_ne!(
+            conn_catalog.effective_search_path(false),
+            conn_catalog.search_path
+        );
+        assert_ne!(
+            conn_catalog.effective_search_path(true),
+            conn_catalog.search_path
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(false),
+            vec![pg_catalog_schema.clone(), mz_catalog_schema.clone()]
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(true),
+            vec![
+                mz_temp_schema.clone(),
+                pg_catalog_schema.clone(),
+                mz_catalog_schema.clone()
+            ]
+        );
+
+        let mut session = Session::dummy();
+        session.vars_mut().set("search_path", "mz_temp", false)?;
+        let conn_catalog = catalog.for_session(&session);
+        assert_ne!(
+            conn_catalog.effective_search_path(false),
+            conn_catalog.search_path
+        );
+        assert_ne!(
+            conn_catalog.effective_search_path(true),
+            conn_catalog.search_path
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(false),
+            vec![
+                mz_catalog_schema.clone(),
+                pg_catalog_schema.clone(),
+                mz_temp_schema.clone()
+            ]
+        );
+        assert_eq!(
+            conn_catalog.effective_search_path(true),
+            vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+        );
 
         Ok(())
     }

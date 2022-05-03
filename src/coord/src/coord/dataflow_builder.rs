@@ -402,14 +402,20 @@ fn eval_unmaterializable_func(
 
     match f {
         UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
-        UnmaterializableFunc::CurrentSchemasWithSystem => pack_1d_array(
-            session
-                .vars()
-                .search_path()
-                .iter()
-                .map(|s| Datum::String(s))
-                .collect(),
-        ),
+        UnmaterializableFunc::CurrentSchemasWithSystem => {
+            let search_path = session.vars().search_path();
+            let mut v = Vec::with_capacity(search_path.len() + 2);
+            let default_schemas = ["mz_catalog", "pg_catalog"];
+            for schema in default_schemas {
+                if !search_path.contains(&schema) {
+                    v.push(Datum::String(schema))
+                }
+            }
+            for schema in search_path {
+                v.push(Datum::String(schema))
+            }
+            pack_1d_array(v)
+        }
         UnmaterializableFunc::CurrentSchemasWithoutSystem => {
             use crate::catalog::builtin::{
                 INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
