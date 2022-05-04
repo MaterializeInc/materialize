@@ -39,7 +39,8 @@ use mz_persist_types::Codec64;
 use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse, RemoteClient, StorageResponse,
+    ConcreteComputeInstanceReplicaConfig, ControllerResponse, RemoteClient, ReplicaId,
+    StorageResponse,
 };
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
@@ -135,9 +136,8 @@ impl Default for ClusterReplicaSizeMap {
 ///
 /// This function needs to be publicly accessible so other layers can ensure we
 /// do not attempt to create multiple replicas with the same name.
-pub fn generate_replica_service_name(cluster_name: &str, replica_name: &str) -> String {
-    let raw = format!("cluster-{cluster_name}-{replica_name}");
-    mz_orchestrator_kubernetes::sanitize_str_for_service_hostname(&raw)
+fn generate_replica_service_name(instance_id: ComputeInstanceId, replica_id: ReplicaId) -> String {
+    format!("cluster-{instance_id}-replica-{replica_id}")
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -176,22 +176,21 @@ where
     ///   [`Self::create_instance`].
     pub async fn add_replica_to_instance(
         &mut self,
-        instance: ComputeInstanceId,
-        cluster_name: &str,
-        replica_name: &str,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         assert!(
-            self.compute.contains_key(&instance),
+            self.compute.contains_key(&instance_id),
             "call Controller::create_instance before calling add_replica_to_instance"
         );
 
-        let replica_name = generate_replica_service_name(cluster_name, replica_name);
+        let replica_name = generate_replica_service_name(instance_id, replica_id);
 
         // Add replicas backing that instance.
         match config {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
-                let mut compute_instance = self.compute_mut(instance).unwrap();
+                let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_name, client).await;
@@ -248,7 +247,7 @@ where
                                 memory_limit: size_config.memory_limit,
                                 scale: size_config.scale,
                                 labels: hashmap! {
-                                    "cluster-id".into() => instance.to_string(),
+                                    "cluster-id".into() => instance_id.to_string(),
                                     "type".into() => "cluster".into(),
                                 },
                                 availability_zone: None,
@@ -257,7 +256,7 @@ where
                         .await?;
                 let client = RemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                self.compute_mut(instance)
+                self.compute_mut(instance_id)
                     .unwrap()
                     .add_replica(replica_name, client)
                     .await;
@@ -271,12 +270,11 @@ where
     /// orchestrator.
     pub async fn drop_replica(
         &mut self,
-        instance: ComputeInstanceId,
-        cluster_name: &str,
-        replica_name: &str,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        let replica_name = generate_replica_service_name(cluster_name, replica_name);
+        let replica_name = generate_replica_service_name(instance_id, replica_id);
         if let ConcreteComputeInstanceReplicaConfig::Managed {
             size_config: _size_config,
         } = config
@@ -287,7 +285,7 @@ where
                 .drop_service(&replica_name)
                 .await?;
         }
-        let mut compute = self.compute_mut(instance).unwrap();
+        let mut compute = self.compute_mut(instance_id).unwrap();
         compute.remove_replica(&replica_name);
         Ok(())
     }

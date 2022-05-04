@@ -39,7 +39,7 @@ use crate::{
 };
 
 pub mod controller;
-pub use controller::{generate_replica_service_name, Controller};
+pub use controller::Controller;
 
 use self::controller::storage::CollectionMetadata;
 use self::controller::ClusterReplicaSizeConfig;
@@ -49,12 +49,15 @@ pub mod replicated;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 
-/// An abstraction allowing us to name difference compute instances.
+/// An abstraction allowing us to name different compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
 // support natively storing `u64`. Revisit this before shipping Platform, as we
 // might not like to bake in this decision based on a SQLite limitation.
 // See #11123.
 pub type ComputeInstanceId = i64;
+
+/// An abstraction allowing us to name different replicas.
+pub type ReplicaId = i64;
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]

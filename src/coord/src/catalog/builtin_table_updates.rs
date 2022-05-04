@@ -112,9 +112,11 @@ impl CatalogState {
         name: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let config = &self.compute_instances_by_id[&compute_instance_id].replicas[name];
+        let instance = &self.compute_instances_by_id[&compute_instance_id];
+        let id = instance.replica_id_by_name[name];
+        let config = &instance.replicas_by_id[&id];
 
-        let size = match &config {
+        let size = match config {
             ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
                 Some(format!("{}-{}", size_config.scale, size_config.workers))
             }
@@ -125,6 +127,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::Int64(compute_instance_id),
+                Datum::Int64(id),
                 Datum::String(&name),
                 Datum::from(size.as_deref()),
             ]),

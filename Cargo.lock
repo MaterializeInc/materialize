@@ -3568,7 +3568,6 @@ dependencies = [
  "clap",
  "k8s-openapi",
  "kube",
- "lazy_static",
  "mz-orchestrator",
  "mz-secrets-kubernetes",
  "punycode",

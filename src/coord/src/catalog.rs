@@ -24,7 +24,9 @@ use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_dataflow_types::client::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
+};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
@@ -452,7 +454,8 @@ impl CatalogState {
                 id,
                 indexes: HashSet::new(),
                 logging,
-                replicas: HashMap::new(),
+                replica_id_by_name: HashMap::new(),
+                replicas_by_id: HashMap::new(),
             },
         );
         assert!(self.compute_instances_by_name.insert(name, id).is_none());
@@ -461,11 +464,19 @@ impl CatalogState {
     fn insert_compute_instance_replica(
         &mut self,
         on_instance: ComputeInstanceId,
-        name: String,
+        replica_name: String,
+        replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
-        assert!(compute_instance.replicas.insert(name, config).is_none());
+        assert!(compute_instance
+            .replica_id_by_name
+            .insert(replica_name, replica_id)
+            .is_none());
+        assert!(compute_instance
+            .replicas_by_id
+            .insert(replica_id, config)
+            .is_none());
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -714,7 +725,8 @@ pub struct ComputeInstance {
     pub logging: Option<DataflowLoggingConfig>,
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
-    pub replicas: HashMap<String, ConcreteComputeInstanceReplicaConfig>,
+    pub replica_id_by_name: HashMap<String, ReplicaId>,
+    pub replicas_by_id: HashMap<ReplicaId, ConcreteComputeInstanceReplicaConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -1483,7 +1495,8 @@ impl Catalog {
         }
         for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
-            for replica_name in catalog.state.compute_instances_by_id[id].replicas.keys() {
+            let instance = &catalog.state.compute_instances_by_id[id];
+            for (replica_name, _replica_id) in &instance.replica_id_by_name {
                 builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
                     *id,
                     &replica_name,
@@ -2239,6 +2252,7 @@ impl Catalog {
                 introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateComputeInstanceReplica {
+                id: ReplicaId,
                 name: String,
                 on_cluster_name: String,
                 config: ConcreteComputeInstanceReplicaConfig,
@@ -2377,20 +2391,14 @@ impl Catalog {
                     name,
                     on_cluster_name,
                     config,
-                    service_name,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    tx.insert_compute_instance_replica(
-                        &on_cluster_name,
-                        &name,
-                        &config,
-                        service_name,
-                    )?;
                     vec![Action::CreateComputeInstanceReplica {
+                        id: tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?,
                         name,
                         on_cluster_name,
                         config,
@@ -2678,6 +2686,7 @@ impl Catalog {
                 }
 
                 Action::CreateComputeInstanceReplica {
+                    id,
                     name,
                     on_cluster_name,
                     config,
@@ -2687,6 +2696,7 @@ impl Catalog {
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
+                        id,
                         config,
                     );
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
@@ -2740,7 +2750,7 @@ impl Catalog {
                         .expect("can only drop known instances");
 
                     assert!(
-                        instance.indexes.is_empty() && instance.replicas.is_empty(),
+                        instance.indexes.is_empty() && instance.replicas_by_id.is_empty(),
                         "not all items dropped before compute instance"
                     );
                 }
@@ -2750,7 +2760,9 @@ impl Catalog {
                         .compute_instances_by_id
                         .get_mut(&compute_id)
                         .expect("can only drop replicas from known instances");
-                    assert!(instance.replicas.remove(&name).is_some());
+                    let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
+                    assert!(instance.replicas_by_id.remove(&replica_id).is_some());
+                    assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
                 }
 
                 Action::DropItem(id) => {
@@ -3059,7 +3071,6 @@ pub enum Op {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
-        service_name: String,
     },
     CreateItem {
         id: GlobalId,
@@ -3464,7 +3475,7 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
     }
 
     fn replica_names(&self) -> HashSet<&String> {
-        self.replicas.keys().collect::<HashSet<_>>()
+        self.replica_id_by_name.keys().collect::<HashSet<_>>()
     }
 }
 

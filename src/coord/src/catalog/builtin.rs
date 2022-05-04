@@ -1138,6 +1138,7 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("cluster_id", ScalarType::Int64.nullable(false))
+            .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("size", ScalarType::String.nullable(true)),
     };

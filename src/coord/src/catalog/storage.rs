@@ -17,7 +17,9 @@ use futures::future::BoxFuture;
 use prost::{self, Message};
 use uuid::Uuid;
 
-use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_dataflow_types::client::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
@@ -150,10 +152,11 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     stash,
                     vec![
                         (
-                            ComputeInstanceReplicaKey{ compute_instance_id: 1, name: "default_replica".into() },
-                            ComputeInstanceReplicaValue{
+                            ComputeInstanceReplicaKey { id: 1},
+                            ComputeInstanceReplicaValue {
+                                compute_instance_id: 1,
+                                name: "default_replica".into(),
                                 config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
-                                service_name: "cluster-default-default-replica".into()
                             }
                         )
                     ]
@@ -426,6 +429,7 @@ impl<S: Append> Connection<S> {
     ) -> Result<
         Vec<(
             ComputeInstanceId,
+            ReplicaId,
             String,
             ConcreteComputeInstanceReplicaConfig,
         )>,
@@ -438,7 +442,7 @@ impl<S: Append> Connection<S> {
             .map(|(k, v)| {
                 let config = serde_json::from_str(&v.config)
                     .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-                Ok((k.compute_instance_id, k.name, config))
+                Ok((v.compute_instance_id, k.id, v.name, config))
             })
             .collect()
     }
@@ -601,8 +605,8 @@ impl<S: Append> Connection<S> {
             }),
             compute_instance_replicas: TableTransaction::new(
                 compute_instance_replicas,
-                None,
-                |a, b| a.service_name == b.service_name,
+                Some(|k| k.id),
+                |a, b| a.compute_instance_id == b.compute_instance_id && a.name == b.name,
             ),
             introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
                 false
@@ -765,8 +769,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         compute_name: &str,
         replica_name: &str,
         config: &ConcreteComputeInstanceReplicaConfig,
-        service_name: String,
-    ) -> Result<(), Error> {
+    ) -> Result<ReplicaId, Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
         let mut compute_instance_id = None;
@@ -783,25 +786,23 @@ impl<'a, S: Append> Transaction<'a, S> {
                 break;
             }
         }
-        self.compute_instance_replicas
-            .insert(
-                |_| ComputeInstanceReplicaKey {
-                    compute_instance_id: compute_instance_id.unwrap(),
-                    name: replica_name.into(),
-                },
-                ComputeInstanceReplicaValue {
-                    config,
-                    service_name: service_name.clone(),
-                },
-            )
-            .map_err(|_| {
-                ErrorKind::DuplicateReplica(
-                    replica_name.to_owned(),
-                    service_name,
-                    compute_name.to_owned(),
-                )
-            })?;
-        Ok(())
+        let id = match self.compute_instance_replicas.insert(
+            |id| ComputeInstanceReplicaKey { id: id.unwrap() },
+            ComputeInstanceReplicaValue {
+                compute_instance_id: compute_instance_id.unwrap(),
+                name: replica_name.into(),
+                config,
+            },
+        ) {
+            Ok(id) => id.unwrap(),
+            Err(_) => {
+                return Err(Error::new(ErrorKind::DuplicateReplica(
+                    replica_name.to_string(),
+                    compute_name.to_string(),
+                )))
+            }
+        };
+        Ok(id)
     }
 
     pub fn insert_item(
@@ -869,7 +870,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             // Cascade delete introsepction sources and cluster replicas.
             let id = deleted.into_element().0.id;
             self.compute_instance_replicas
-                .delete(|k, _v| k.compute_instance_id == id);
+                .delete(|_k, v| v.compute_instance_id == id);
             let introspection_source_indexes = self
                 .introspection_sources
                 .delete(|k, _v| k.compute_id == id);
@@ -887,7 +888,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<(), Error> {
         let deleted = self
             .compute_instance_replicas
-            .delete(|k, _v| k.compute_instance_id == compute_id && k.name == name);
+            .delete(|_k, v| v.compute_instance_id == compute_id && v.name == name);
         if deleted.len() == 1 {
             Ok(())
         } else {
@@ -1114,18 +1115,18 @@ impl_codec!(DatabaseKey);
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceReplicaKey {
     #[prost(int64)]
-    compute_instance_id: i64,
-    #[prost(string)]
-    name: String,
+    id: ReplicaId,
 }
 impl_codec!(ComputeInstanceReplicaKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceReplicaValue {
+    #[prost(int64)]
+    compute_instance_id: ComputeInstanceId,
+    #[prost(string)]
+    name: String,
     #[prost(string)]
     config: String,
-    #[prost(string)]
-    service_name: String,
 }
 impl_codec!(ComputeInstanceReplicaValue);
 

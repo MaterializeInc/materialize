@@ -26,7 +26,6 @@ use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
 use kube::ResourceExt;
-use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
@@ -146,25 +145,6 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("config", &self.config)
             .finish()
     }
-}
-
-lazy_static! {
-    static ref INCOMPATIBLE_DNS: regex::Regex = regex::Regex::new("[^A-Za-z1-9-]").unwrap();
-    static ref SUCCESSIVE_HYPHENS: regex::Regex = regex::Regex::new("--+").unwrap();
-}
-
-/// Convert arbitrary strings to strings valid to use as service hostnames.
-pub fn sanitize_str_for_service_hostname(i: &str) -> String {
-    // Punycode makes best effort to transform to letter–digit–hyphen (LDH) subset of ASCII.
-    let punycode_ident = punycode::encode(i).unwrap();
-    // Replace all DNS-incompatible ASCII characters with a hyphen. This is
-    // necessary because punycode encoding isn't aggressive enough, e.g. with
-    // underscores.
-    let hostname_str = INCOMPATIBLE_DNS.replace_all(&punycode_ident, "-");
-    // Replace all successive hyphens with a single hyphen.
-    let hostname_str = SUCCESSIVE_HYPHENS.replace_all(&hostname_str, "-");
-    // Trim all leading and trailing hyphens.
-    hostname_str.trim_matches('-').to_string()
 }
 
 #[async_trait]
