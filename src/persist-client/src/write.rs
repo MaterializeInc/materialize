@@ -9,6 +9,7 @@
 
 //! Write capabilities and handles
 
+use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -142,12 +143,20 @@ where
     /// given that the AsyncIterator version would be strictly more general,
     /// alter this one if it turns out that the compiler can optimize out the
     /// overhead.
-    pub async fn append<'a, I: IntoIterator<Item = ((&'a K, &'a V), &'a T, &'a D)>>(
+    pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         timeout: Duration,
         updates: I,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    where
+        SB: Borrow<((KB, VB), TB, DB)>,
+        KB: Borrow<K>,
+        VB: Borrow<V>,
+        TB: Borrow<T>,
+        DB: Borrow<D>,
+        I: IntoIterator<Item = SB>,
+    {
         trace!(
             "WriteHandle::append timeout={:?} new_upper={:?}",
             timeout,
@@ -219,13 +228,21 @@ where
     ///
     /// The clunky two-level Result is to enable more obvious error handling in
     /// the caller. See <http://sled.rs/errors.html> for details.
-    pub async fn compare_and_append<'a, I: IntoIterator<Item = ((&'a K, &'a V), &'a T, &'a D)>>(
+    pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         timeout: Duration,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    where
+        SB: Borrow<((KB, VB), TB, DB)>,
+        KB: Borrow<K>,
+        VB: Borrow<V>,
+        TB: Borrow<T>,
+        DB: Borrow<D>,
+        I: IntoIterator<Item = SB>,
+    {
         trace!(
             "WriteHandle::write_batch timeout={:?} new_upper={:?}",
             timeout,
@@ -266,20 +283,27 @@ where
         Ok(Ok(Ok(())))
     }
 
-    fn encode_batch<'a, I>(
+    fn encode_batch<SB, KB, VB, TB, DB, I>(
         desc: &Description<T>,
         updates: I,
     ) -> Result<Option<Vec<u8>>, InvalidUsage>
     where
-        I: IntoIterator<Item = ((&'a K, &'a V), &'a T, &'a D)>,
+        SB: Borrow<((KB, VB), TB, DB)>,
+        KB: Borrow<K>,
+        VB: Borrow<V>,
+        TB: Borrow<T>,
+        DB: Borrow<D>,
+        I: IntoIterator<Item = SB>,
     {
         let iter = updates.into_iter();
         let size_hint = iter.size_hint();
 
         let (mut key_buf, mut val_buf) = (Vec::new(), Vec::new());
         let mut builder = ColumnarRecordsVecBuilder::default();
-        for ((k, v), t, d) in iter {
-            if !desc.lower().less_equal(&t) || desc.upper().less_equal(&t) {
+        for tuple in iter {
+            let ((k, v), t, d) = tuple.borrow();
+            let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
+            if !desc.lower().less_equal(t) || desc.upper().less_equal(t) {
                 return Err(InvalidUsage(anyhow!(
                     "entry timestamp {:?} doesn't fit in batch desc: {:?}",
                     t,
@@ -345,42 +369,6 @@ where
         batch.encode(&mut buf);
         Ok(Some(buf))
     }
-
-    /// Test helper for [Self::append]-ing a slice of owned updates.
-    #[cfg(test)]
-    pub async fn append_slice(
-        &mut self,
-        updates: &[((K, V), T, D)],
-        new_upper: T,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
-        use crate::NO_TIMEOUT;
-
-        self.append(
-            NO_TIMEOUT,
-            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            Antichain::from_elem(new_upper),
-        )
-        .await
-    }
-
-    /// Test helper for [Self::compare_and_append]-ing a slice of owned updates.
-    #[cfg(test)]
-    pub async fn compare_and_append_slice(
-        &mut self,
-        updates: &[((K, V), T, D)],
-        expected_upper: T,
-        new_upper: T,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError> {
-        use crate::NO_TIMEOUT;
-
-        self.compare_and_append(
-            NO_TIMEOUT,
-            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            Antichain::from_elem(expected_upper),
-            Antichain::from_elem(new_upper),
-        )
-        .await
-    }
 }
 
 impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
@@ -431,7 +419,7 @@ mod tests {
         // Write an initial batch.
         let mut upper = 3;
         write
-            .append_slice(&data[..2], upper)
+            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(upper))
             .await??
             .expect("invalid current upper");
 
@@ -439,8 +427,14 @@ mod tests {
         let blob_count_before = blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len();
         for _ in 0..5 {
             let new_upper = upper + 1;
+            const EMPTY: &[((String, String), u64, i64)] = &[];
             write
-                .compare_and_append_slice(&[], upper, new_upper)
+                .compare_and_append(
+                    NO_TIMEOUT,
+                    EMPTY,
+                    Antichain::from_elem(upper),
+                    Antichain::from_elem(new_upper),
+                )
                 .await??
                 .expect("invalid current upper");
             upper = new_upper;

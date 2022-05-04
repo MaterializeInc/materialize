@@ -442,17 +442,12 @@ mod raw_persist_benchmark {
             let new_upper = Antichain::from_elem(max_ts + 1);
 
             // TODO: figure out the right way to do this without the extra allocations.
-            let batch: Vec<_> = batch
+            let batch = batch
                 .iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-                .collect();
-            self.append(
-                NO_TIMEOUT,
-                batch.iter().map(|((k, v), t, d)| ((&*k, &*v), &*t, &*d)),
-                new_upper,
-            )
-            .await??
-            .expect("invalid current upper");
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
+            self.append(NO_TIMEOUT, batch, new_upper)
+                .await??
+                .expect("invalid current upper");
 
             Ok(())
         }

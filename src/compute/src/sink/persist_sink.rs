@@ -93,9 +93,10 @@ where
             futures_executor::block_on(PersistClient::new(timeout, blob, consensus))
                 .expect("cannot open client");
 
-        let (write, _read) =
-            futures_executor::block_on(persist_client.open(timeout, self.shard_id))
-                .expect("could not open persist shard");
+        let (write, _read) = futures_executor::block_on(
+            persist_client.open::<Row, Row, Timestamp, Diff>(timeout, self.shard_id),
+        )
+        .expect("could not open persist shard");
 
         let write = Rc::new(RefCell::new(Some(write)));
         let write_weak = Rc::downgrade(&write);
