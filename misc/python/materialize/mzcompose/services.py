@@ -127,7 +127,7 @@ class Computed(Service):
 
         if environment is None:
             environment = [
-                "STORAGED_LOG_FILTER",
+                "COMPUTED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
             ]
 
