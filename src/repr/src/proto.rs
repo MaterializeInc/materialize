@@ -157,17 +157,14 @@ impl ProtoRepr for u128 {
 }
 
 impl ProtoRepr for Uuid {
-    type Repr = ProtoUuid;
+    type Repr = ProtoU128;
 
     fn into_proto(self: Self) -> Self::Repr {
-        let val = self.as_u128();
-        let lo = (val & (u64::MAX as u128)) as u64;
-        let hi = (val >> 64) as u64;
-        ProtoUuid { hi, lo }
+        self.as_u128().into_proto()
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Ok(Uuid::from_u128((repr.hi as u128) << 64 | (repr.lo as u128)))
+        Ok(Uuid::from_u128(u128::from_proto(repr)?))
     }
 }
 

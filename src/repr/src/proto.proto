@@ -15,8 +15,3 @@ message ProtoU128{
     uint64 hi = 1;
     uint64 lo = 2;
 }
-
-message ProtoUuid {
-    uint64 hi = 1;
-    uint64 lo = 2;
-}
