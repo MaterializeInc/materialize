@@ -1898,15 +1898,29 @@ impl<'a> Parser<'a> {
                 let broker = self.parse_literal_string()?;
                 self.expect_keyword(SECURITY)?;
                 let security = self.parse_kafka_security()?;
-                CreateConnector::KafkaNew { broker, security }
+                CreateConnector::Kafka { broker, security }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
+                let (mut username, mut password) = (None, None);
+                while let Ok(keyword) = self.expect_one_of_keywords(&[USERNAME, PASSWORD]) {
+                    match keyword {
+                        Keyword::Username => {
+                            let _ = self.consume_token(&Token::Eq);
+                            username = Some(self.parse_literal_string()?);
+                        }
+                        Keyword::Password => {
+                            let _ = self.consume_token(&Token::Eq);
+                            password = Some(self.parse_object_name()?);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 CreateConnector::CSR {
                     registry,
-                    with_options,
+                    username,
+                    password,
                 }
             }
             _ => unreachable!(),

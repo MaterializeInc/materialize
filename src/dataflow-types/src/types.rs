@@ -2075,15 +2075,12 @@ pub mod sources {
     pub enum ConnectorInner {
         Kafka {
             broker: KafkaAddrs,
-            config_options: BTreeMap<String, String>,
-        },
-        KafkaNew {
-            broker: KafkaAddrs,
             security: KafkaSecurityOptions,
         },
         CSR {
             registry: String,
-            with_options: BTreeMap<String, String>,
+            username: Option<String>,
+            password: Option<String>,
         },
     }
 
@@ -2092,16 +2089,25 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { broker, .. } => broker.to_string(),
                 ConnectorInner::CSR { registry, .. } => registry.to_owned(),
-                ConnectorInner::KafkaNew { broker, .. } => broker.to_string(),
             }
         }
 
         pub fn options(&self) -> BTreeMap<String, String> {
             match self {
-                ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
-                ConnectorInner::CSR { with_options, .. } => with_options.clone(),
+                ConnectorInner::CSR {
+                    username, password, ..
+                } => {
+                    let mut with_options = BTreeMap::new();
+                    if let Some(username) = username {
+                        with_options.insert("username".to_string(), username.to_owned());
+                    }
+                    if let Some(password) = password {
+                        with_options.insert("password".to_string(), password.to_owned());
+                    }
+                    with_options
+                }
                 // Initially we are just going to convert the new struct back into the old map so downstream code can stay unchanged
-                ConnectorInner::KafkaNew { security, .. } => match security {
+                ConnectorInner::Kafka { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
                         let mut with_options = BTreeMap::new();
                         with_options
