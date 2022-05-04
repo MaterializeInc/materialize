@@ -325,7 +325,7 @@ pub struct Upper<T>(pub Antichain<T>);
 struct AntichainMeta(Vec<[u8; 8]>);
 
 #[derive(Debug, Serialize, Deserialize)]
-struct DescriptionMeta {
+pub struct DescriptionMeta {
     lower: AntichainMeta,
     upper: AntichainMeta,
     since: AntichainMeta,

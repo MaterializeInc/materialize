@@ -31,6 +31,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
+use crate::r#impl::state::DescriptionMeta;
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -64,10 +65,10 @@ impl ReaderId {
 ///
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SnapshotSplit<T> {
+pub struct SnapshotSplit {
     shard_id: ShardId,
     as_of: Vec<[u8; 8]>,
-    batches: Vec<(String, Description<T>)>,
+    batches: Vec<(String, DescriptionMeta)>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -245,7 +246,7 @@ where
             .machine
             .next_listen_batch(deadline, &self.frontier)
             .await?;
-        let updates = self.fetch_batch(deadline, &batch_keys).await?;
+        let updates = self.fetch_batch(deadline, &batch_keys, &desc).await?;
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
@@ -276,6 +277,7 @@ where
         &self,
         deadline: Instant,
         keys: &[String],
+        desc: &Description<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
         let mut ret = Vec::new();
         for key in keys {
@@ -314,6 +316,12 @@ where
                         // This happens to be in the batch, but it
                         // would get covered by a snapshot started
                         // at the same as_of.
+                        continue;
+                    }
+                    if !desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if desc.upper().less_equal(&t) {
                         continue;
                     }
                     let k = K::decode(k);
@@ -498,7 +506,7 @@ where
         timeout: Duration,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Result<Vec<SnapshotSplit<T>>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} as_of={:?} num_splits={:?}",
             timeout,
@@ -520,8 +528,10 @@ where
                 batches: Vec::new(),
             })
             .collect::<Vec<_>>();
-        for (idx, batch_key) in batches.into_iter().enumerate() {
-            splits[idx % num_splits.get()].batches.push(batch_key);
+        for (idx, (batch_key, desc)) in batches.into_iter().enumerate() {
+            splits[idx % num_splits.get()]
+                .batches
+                .push((batch_key, (&desc).into()));
         }
         return Ok(Ok(splits));
     }
@@ -531,7 +541,7 @@ where
     pub async fn snapshot_iter(
         &self,
         timeout: Duration,
-        split: SnapshotSplit<T>,
+        split: SnapshotSplit,
     ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} split={:?}",
@@ -545,6 +555,13 @@ where
                 self.machine.shard_id()
             ))));
         }
+
+        let batches = split
+            .batches
+            .into_iter()
+            .map(|(key, desc)| (key, (&desc).into()))
+            .collect();
+
         let iter = SnapshotIter {
             as_of: Antichain::from(
                 split
@@ -553,7 +570,7 @@ where
                     .map(|x| T::decode(*x))
                     .collect::<Vec<_>>(),
             ),
-            batches: split.batches,
+            batches,
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
