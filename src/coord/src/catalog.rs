@@ -307,10 +307,6 @@ impl CatalogState {
             })
     }
 
-    pub fn get_compute_instance(&self, id: ComputeInstanceId) -> &ComputeInstance {
-        &self.compute_instances_by_id[&id]
-    }
-
     #[tracing::instrument(level = "trace", skip(self))]
     fn insert_item(
         &mut self,

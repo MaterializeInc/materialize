@@ -116,21 +116,21 @@ impl Action for SqlAction {
             }
             Statement::CreateClusterReplica(CreateClusterReplicaStatement {
                 definition: ReplicaDefinition { name, .. },
-                for_cluster,
+                of_cluster,
                 ..
             }) => {
                 // Modifying the default cluster causes an enormous headache in
                 // isolating tests from one another, so testdrive won't let you.
                 assert_ne!(
-                    for_cluster,
-                    &mz_sql::ast::Ident::from("default"),
+                    of_cluster.to_string(),
+                    "default",
                     "testdrive cannot create default cluster replicas"
                 );
                 self.try_drop(
                     &mut state.pgclient,
                     &format!(
                         "DROP CLUSTER REPLICA IF EXISTS {} FROM {}",
-                        name, for_cluster
+                        name, of_cluster
                     ),
                 )
                 .await

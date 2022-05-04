@@ -948,18 +948,18 @@ pub struct ReplicaDefinition<T: AstInfo> {
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateClusterReplicaStatement<T: AstInfo> {
+    /// Name of the replica's cluster.
+    pub of_cluster: Ident,
     /// The replica's definition.
     pub definition: ReplicaDefinition<T>,
-    /// Name of the replica's cluster.
-    pub for_cluster: Ident,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER REPLICA ");
+        f.write_node(&self.of_cluster);
+        f.write_str(".");
         f.write_node(&self.definition.name);
-        f.write_str(" FOR ");
-        f.write_node(&self.for_cluster);
         if !self.definition.options.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.definition.options));
@@ -1255,13 +1255,26 @@ impl AstDisplay for DropClustersStatement {
 impl_display!(DropClustersStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QualifiedReplica {
+    pub cluster: Ident,
+    pub replica: Ident,
+}
+
+impl AstDisplay for QualifiedReplica {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.cluster);
+        f.write_str(".");
+        f.write_node(&self.replica);
+    }
+}
+impl_display!(QualifiedReplica);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropClusterReplicasStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
-    /// The cluster from which to drop the replicas.
-    pub cluster: UnresolvedObjectName,
+    pub names: Vec<QualifiedReplica>,
 }
 
 impl AstDisplay for DropClusterReplicasStatement {
@@ -1271,8 +1284,6 @@ impl AstDisplay for DropClusterReplicasStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
-        f.write_str(" FROM ");
-        f.write_node(&self.cluster);
     }
 }
 impl_display!(DropClusterReplicasStatement);

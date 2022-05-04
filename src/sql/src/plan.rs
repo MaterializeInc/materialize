@@ -157,7 +157,7 @@ pub struct CreateComputeInstancePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstanceReplicaPlan {
     pub name: String,
-    pub for_cluster: String,
+    pub of_cluster: String,
     pub config: ReplicaConfig,
 }
 
@@ -268,8 +268,7 @@ pub struct DropComputeInstancesPlan {
 
 #[derive(Debug)]
 pub struct DropComputeInstanceReplicaPlan {
-    pub names: Vec<String>,
-    pub cluster: Option<String>,
+    pub names: Vec<(String, String)>,
 }
 
 #[derive(Debug)]

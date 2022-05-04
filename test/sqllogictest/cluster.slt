@@ -25,11 +25,11 @@ CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234'))
 statement error cluster 'foo' already exists
 CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234'))
 
-statement error cannot create multiple replicas with the same name 'r1' or same service name 'cluster-bar-r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1234'), REPLICA r1 REMOTE ('localhost:1234'))
+statement error cannot create multiple replicas named 'r1' on cluster 'bar'
+CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1234')), REPLICA r1 (REMOTE ('localhost:1234'))
 
 statement ok
-CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1235'), REPLICA r2 REMOTE ('localhost:1236'))
+CREATE CLUSTER bar REPLICA r1 (REMOTE ('localhost:1235')), REPLICA r2 (REMOTE ('localhost:1236'))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -53,9 +53,9 @@ default
 # Test invalid option combinations.
 
 statement error Expected INTROSPECTION, found SIZE
-CREATE CLUSTER baz SIZE 'small', SIZE 'medium'
+CREATE CLUSTER baz SIZE 'small'
 
-statement error Expected REPLICA, found SIZE
+statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICA r1 (REMOTE ('localhost:1234'), SIZE 'small')
 
 # Test `cluster` session variable.
@@ -189,36 +189,30 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')) INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')) INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
-
-statement ok
-CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234') INTROSPECTION GRANULARITY '1s')
 
 # Test that bad cluster sizes don't cause a crash
 
-statement ok
-DROP CLUSTER foo
-
 statement error unknown cluster size
-CREATE CLUSTER foo REPLICA a SIZE 'lol'
+CREATE CLUSTER foo REPLICA a (SIZE 'lol')
 
 statement ok
-CREATE CLUSTER foo REPLICA a SIZE '1'
+CREATE CLUSTER foo REPLICA a (SIZE '1')
 
 statement ok
-CREATE CLUSTER foo2 REPLICA a SIZE '32'
+CREATE CLUSTER foo2 REPLICA a (SIZE '32')
 
 statement ok
-CREATE CLUSTER foo3 REPLICA a SIZE '2-2'
+CREATE CLUSTER foo3 REPLICA a (SIZE '2-2')
 
 statement ok
 DROP CLUSTER foo, foo2, foo3 CASCADE
@@ -237,7 +231,7 @@ SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 1;
 0
 
 statement ok
-CREATE CLUSTER test size '1';
+CREATE CLUSTER test REPLICA foo (SIZE '1');
 
 query I
 SELECT COUNT(name) FROM mz_indexes;
@@ -253,7 +247,7 @@ SELECT COUNT(name) FROM mz_indexes;
 17
 
 statement ok
-CREATE CLUSTER REPLICA size_1 FOR default SIZE '1';
+CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 
 query TT
 SHOW CLUSTER REPLICAS
@@ -262,7 +256,7 @@ default default_replica
 default size_1
 
 statement ok
-CREATE CLUSTER foo REPLICA size_1 SIZE '1', REPLICA size_2 SIZE '2'
+CREATE CLUSTER foo REPLICA size_1 (SIZE '1'), REPLICA size_2 (SIZE '2')
 
 query TT
 SHOW CLUSTER REPLICAS
@@ -273,22 +267,22 @@ foo size_1
 foo size_2
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS bar FROM default
+DROP CLUSTER REPLICA IF EXISTS default.bar
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS foo FROM bar
+DROP CLUSTER REPLICA IF EXISTS bar.foo
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS foo FROM default
+DROP CLUSTER REPLICA IF EXISTS default.foo
 
 query error CLUSTER foo has no CLUSTER REPLICA named foo
-DROP CLUSTER REPLICA size_1, foo FROM foo
+DROP CLUSTER REPLICA default.size_1, foo.foo
 
 statement ok
-DROP CLUSTER REPLICA size_1 FROM default
+DROP CLUSTER REPLICA default.size_1
 
 statement ok
-DROP CLUSTER REPLICA size_1, size_2 FROM foo
+DROP CLUSTER REPLICA foo.size_1, foo.size_2
 
 query TT
 SHOW CLUSTER REPLICAS
@@ -296,22 +290,19 @@ SHOW CLUSTER REPLICAS
 default default_replica
 
 statement ok
-CREATE CLUSTER REPLICA foo_bar FOR default SIZE '1'
-
-statement error cannot create multiple replicas with the same name 'foo-bar' or same service name 'cluster-default-foo-bar' on cluster 'default'
-CREATE CLUSTER REPLICA "foo-bar" FOR default SIZE '1'
+CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA foo_bar FROM default
+CREATE CLUSTER REPLICA default."foo-bar" SIZE '1'
 
 statement ok
-CREATE CLUSTER REPLICA "foo-bar" FOR default SIZE '1'
+DROP CLUSTER REPLICA default.foo_bar
 
 statement ok
-CREATE CLUSTER REPLICA "好-好" FOR default SIZE '1'
+CREATE CLUSTER REPLICA default."好-好" SIZE '1'
 
-statement error cannot create multiple replicas with the same name '好_好' or same service name 'cluster-default-o-84aba' on cluster 'default'
-CREATE CLUSTER REPLICA "好_好" FOR default SIZE '1'
+statement ok
+CREATE CLUSTER REPLICA default."好_好" SIZE '1'
 
 # clusters wo replicas cannot service selects
 
@@ -323,3 +314,50 @@ SET cluster = empty
 
 query error CLUSTER "empty" has no replicas available to service request
 SELECT 1;
+
+
+# Phillip's tests
+
+statement error zero-length delimited identifier
+CREATE CLUSTER REPLICA default."" SIZE '1';
+
+statement error unknown cluster
+CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE '1';
+
+statement error expected String or bare identifier
+CREATE CLUSTER foo REPLICA size_2 (SIZE NULL);
+
+statement error unknown cluster size
+CREATE CLUSTER foo REPLICA size_2 (SIZE '');
+
+statement error unknown cluster size
+CREATE CLUSTER foo REPLICA size_2 (SIZE 'no_such_size');
+
+statement error expected String or bare identifier
+CREATE CLUSTER foo REPLICA size_2 (SIZE 1);
+
+statement error unknown cluster size
+CREATE CLUSTER foo REPLICA size_2 (SIZE a);
+
+statement ok
+DROP CLUSTER foo CASCADE;
+
+statement ok
+CREATE CLUSTER foo REPLICA size_2 (SIZE '1');
+
+statement ok
+SET cluster=foo
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+query I
+SELECT * FROM t1;
+----
+1
+
+statement error unknown cluster
+DROP CLUSTER REPLICA no_such_cluster.bar

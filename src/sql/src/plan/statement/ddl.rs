@@ -54,7 +54,7 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
     CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement, CsrConnector,
-    ReplicaDefinition, ReplicaOption, WithOptionValue,
+    QualifiedReplica, ReplicaDefinition, ReplicaOption, WithOptionValue,
 };
 
 use crate::ast::display::AstDisplay;
@@ -2923,16 +2923,19 @@ pub fn describe_create_cluster_replica(
 }
 
 pub fn plan_create_cluster_replica(
-    _: &StatementContext,
+    scx: &StatementContext,
     CreateClusterReplicaStatement {
         definition: ReplicaDefinition { name, options },
-        for_cluster,
+        of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
+    let _ = scx
+        .catalog
+        .resolve_compute_instance(Some(&of_cluster.to_string()))?;
     Ok(Plan::CreateComputeInstanceReplica(
         CreateComputeInstanceReplicaPlan {
             name: normalize::ident(name),
-            for_cluster: normalize::ident(for_cluster),
+            of_cluster: of_cluster.to_string(),
             config: plan_replica_config(options)?,
         },
     ))
@@ -3267,56 +3270,36 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement {
-        if_exists,
-        names,
-        cluster,
-    }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let cluster = if cluster.0.len() == 1 {
-        cluster.0.into_element().to_string()
-    } else {
-        bail!("invalid cluster name {}", cluster.to_string().quoted())
-    };
-
-    let (names, cluster) = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
-        Ok(instance) => {
-            let mut names_out = Vec::with_capacity(names.len());
-            for name in names {
-                // Check name validity.
-                let name = if name.0.len() == 1 {
-                    name.0.into_element().to_string()
-                } else {
-                    bail!("invalid replica name {}", name.to_string().quoted())
-                };
-
-                // Check to see if name exists
-                if instance.replica_names().contains(&name) {
-                    names_out.push(name)
-                } else {
-                    // If "IF EXISTS" supplied, names allowed to be missing,
-                    // otherwise error.
-                    if !if_exists {
-                        // TODO(benesch): generate a notice indicating that the
-                        // replica does not exist.
-                        bail!("CLUSTER {} has no CLUSTER REPLICA named {}", cluster, name)
-                    }
-                }
+    let mut names_out = Vec::with_capacity(names.len());
+    for QualifiedReplica { cluster, replica } in names {
+        let instance = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
+            Ok(instance) => instance,
+            Err(_) if if_exists => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let replica_name = replica.to_string();
+        // Check to see if name exists
+        if instance.replica_names().contains(&replica_name) {
+            names_out.push((instance.name().to_string(), replica_name))
+        } else {
+            // If "IF EXISTS" supplied, names allowed to be missing,
+            // otherwise error.
+            if !if_exists {
+                // TODO(benesch): generate a notice indicating that the
+                // replica does not exist.
+                bail!(
+                    "CLUSTER {} has no CLUSTER REPLICA named {}",
+                    instance.name(),
+                    replica.to_string()
+                )
             }
-
-            (names_out, Some(cluster))
         }
-        // Apply "IF EXISTS" to cluster name.
-        Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating that the
-            // cluster does not exist.
-            (vec![], None)
-        }
-        Err(e) => return Err(e.into()),
-    };
+    }
 
     Ok(Plan::DropComputeInstanceReplica(
-        DropComputeInstanceReplicaPlan { names, cluster },
+        DropComputeInstanceReplicaPlan { names: names_out },
     ))
 }
 

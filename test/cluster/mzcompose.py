@@ -93,9 +93,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("computed_3")
     c.up("computed_4")
     c.sql(
-        """
-        CREATE CLUSTER REPLICA replica2 FOR cluster1 (REMOTE ('computed_3:2100', 'computed_4:2100'))
-        """
+        "CREATE CLUSTER REPLICA cluster1.replica2 REMOTE ('computed_3:2100', 'computed_4:2100')"
     )
     c.run("testdrive", *glob)
 
@@ -105,5 +103,5 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.run("testdrive", *glob)
 
     # Leave only replica 2 up and verify that tests still pass.
-    c.sql("DROP CLUSTER REPLICA replica1 FROM cluster1")
+    c.sql("DROP CLUSTER REPLICA cluster1.replica1")
     c.run("testdrive", *glob)

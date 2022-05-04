@@ -2000,7 +2000,7 @@ impl Coordinator {
         &mut self,
         CreateComputeInstanceReplicaPlan {
             name,
-            for_cluster,
+            of_cluster,
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2008,15 +2008,15 @@ impl Coordinator {
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
-            on_cluster_name: for_cluster.clone(),
+            on_cluster_name: of_cluster.clone(),
         };
 
         self.catalog_transact(vec![op], |_| Ok(())).await?;
 
-        let instance = self.catalog.resolve_compute_instance(&for_cluster)?;
-        let instance_id = instance.replica_id_by_name[&name];
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let replica_id = instance.replica_id_by_name[&name];
         self.dataflow_client
-            .add_replica_to_instance(instance_id, instance_id, config)
+            .add_replica_to_instance(instance.id, replica_id, config)
             .await
             .unwrap();
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
@@ -2689,25 +2689,23 @@ impl Coordinator {
 
     async fn sequence_drop_compute_instance_replica(
         &mut self,
-        DropComputeInstanceReplicaPlan { names, cluster }: DropComputeInstanceReplicaPlan,
+        DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         if names.is_empty() {
             return Ok(ExecuteResponse::DroppedComputeInstanceReplicas);
         }
-        let cluster_name = cluster.unwrap();
-        let instance = self.catalog.resolve_compute_instance(&cluster_name)?;
-        let compute_id = instance.id;
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
-        for name in names {
+        for (instance_name, replica_name) in names {
+            let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
-                name: name.clone(),
-                compute_id,
+                name: replica_name.clone(),
+                compute_id: instance.id,
             });
-            let replica_id = instance.replica_id_by_name[&name];
+            let replica_id = instance.replica_id_by_name[&replica_name];
 
             replicas_to_drop.push((
-                compute_id,
+                instance.id,
                 replica_id,
                 instance.replicas_by_id[&replica_id].clone(),
             ));
@@ -3044,7 +3042,7 @@ impl Coordinator {
             .catalog
             .resolve_compute_instance(session.vars().cluster())?;
 
-        if compute_instance.replicas.is_empty() {
+        if compute_instance.replicas_by_id.is_empty() {
             return Err(CoordError::NoReplicasAvailable(
                 compute_instance.name.clone(),
             ));

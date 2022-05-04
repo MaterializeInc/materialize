@@ -279,10 +279,9 @@ impl CoordError {
             CoordError::InvalidReplicaSize { expected, size: _ } => {
                 Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
             }
-            CoordError::NoReplicasAvailable(cluster) => Some(format!(
-                "You can create cluster replicas using CREATE CLUSTER REPLICA ... FOR {} ...",
-                cluster.quoted()
-            )),
+            CoordError::NoReplicasAvailable(_) => {
+                Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
+            }
             _ => None,
         }
     }

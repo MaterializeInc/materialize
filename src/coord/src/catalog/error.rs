@@ -37,7 +37,7 @@ pub enum ErrorKind {
     RoleAlreadyExists(String),
     #[error("cluster '{0}' already exists")]
     ClusterAlreadyExists(String),
-    #[error("replica '{0}' already exists on cluster '{1}'")]
+    #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
     DuplicateReplica(String, String),
     #[error("catalog item '{0}' already exists")]
     ItemAlreadyExists(String),

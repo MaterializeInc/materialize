@@ -2640,17 +2640,15 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
+        let of_cluster = self.parse_identifier()?;
+        self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
-
-        self.expect_keyword(FOR)?;
-
-        let for_cluster = self.parse_identifier()?;
 
         let options = self.parse_comma_separated(Parser::parse_replica_option)?;
         Ok(Statement::CreateClusterReplica(
             CreateClusterReplicaStatement {
+                of_cluster,
                 definition: ReplicaDefinition { name, options },
-                for_cluster,
             },
         ))
     }
@@ -2807,15 +2805,14 @@ impl<'a> Parser<'a> {
     fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(REPLICA).unwrap();
         let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        self.expect_keyword(FROM)?;
-        let cluster = self.parse_object_name()?;
+        let names = self.parse_comma_separated(|p| {
+            let cluster = p.parse_identifier()?;
+            p.expect_token(&Token::Dot)?;
+            let replica = p.parse_identifier()?;
+            Ok(QualifiedReplica { cluster, replica })
+        })?;
         Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement {
-                if_exists,
-                names,
-                cluster,
-            },
+            DropClusterReplicasStatement { if_exists, names },
         ))
     }
 
