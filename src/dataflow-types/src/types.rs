@@ -20,10 +20,14 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
+use crate::client::controller::storage::CollectionMetadata;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
+
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
 
 /// The response from a `Peek`.
 ///
@@ -85,6 +89,26 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
+impl From<&BuildDesc<crate::plan::Plan>> for ProtoBuildDesc {
+    fn from(x: &BuildDesc<crate::plan::Plan>) -> Self {
+        ProtoBuildDesc {
+            id: Some((&x.id).into()),
+            plan: Some((&x.plan).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoBuildDesc) -> Result<Self, Self::Error> {
+        Ok(BuildDesc {
+            id: x.id.try_into_if_some("ProtoBuildDesc::id")?,
+            plan: x.plan.try_into_if_some("ProtoBuildDesc::plan")?,
+        })
+    }
+}
+
 /// A description of an instantiation of a source.
 ///
 /// This includes a description of the source, but additionally any
@@ -101,11 +125,55 @@ pub struct SourceInstanceDesc<M> {
     pub storage_metadata: M,
 }
 
+impl From<&SourceInstanceDesc<CollectionMetadata>> for ProtoSourceInstanceDesc {
+    fn from(x: &SourceInstanceDesc<CollectionMetadata>) -> Self {
+        ProtoSourceInstanceDesc {
+            description: serde_json::to_string(&x.description).unwrap(),
+            arguments: Some((&x.arguments).into()),
+            storage_metadata: Some((&x.storage_metadata).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoSourceInstanceDesc) -> Result<Self, Self::Error> {
+        Ok(SourceInstanceDesc {
+            description: serde_json::from_str(&x.description).map_err(TryFromProtoError::from)?,
+            arguments: x
+                .arguments
+                .try_into_if_some("ProtoSourceInstanceDesc::arguments")?,
+            storage_metadata: x
+                .storage_metadata
+                .try_into_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
+        })
+    }
+}
+
 /// Per-source construction arguments.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::LinearOperator>,
+}
+
+impl From<&SourceInstanceArguments> for ProtoSourceInstanceArguments {
+    fn from(x: &SourceInstanceArguments) -> Self {
+        ProtoSourceInstanceArguments {
+            operators: x.operators.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceInstanceArguments> for SourceInstanceArguments {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoSourceInstanceArguments) -> Result<Self, Self::Error> {
+        Ok(SourceInstanceArguments {
+            operators: x.operators.map(TryInto::try_into).transpose()?,
+        })
+    }
 }
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
@@ -389,6 +457,125 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
             false
         };
         equality && partial
+    }
+}
+
+impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
+    for ProtoDataflowDescription
+{
+    fn from(x: &DataflowDescription<crate::plan::Plan, CollectionMetadata>) -> Self {
+        use proto_dataflow_description::*;
+        ProtoDataflowDescription {
+            source_imports: x
+                .source_imports
+                .iter()
+                .map(|(id, source_instance_desc)| ProtoSourceImport {
+                    id: Some(id.into()),
+                    source_instance_desc: Some(source_instance_desc.into()),
+                })
+                .collect(),
+            index_imports: x
+                .index_imports
+                .iter()
+                .map(|(id, (index_desc, typ))| ProtoIndex {
+                    id: Some(id.into()),
+                    index_desc: Some(index_desc.into()),
+                    typ: Some(typ.into()),
+                })
+                .collect(),
+            objects_to_build: x.objects_to_build.iter().map(Into::into).collect(),
+            index_exports: x
+                .index_exports
+                .iter()
+                .map(|(id, (index_desc, typ))| ProtoIndex {
+                    id: Some(id.into()),
+                    index_desc: Some(index_desc.into()),
+                    typ: Some(typ.into()),
+                })
+                .collect(),
+            sink_exports: x
+                .sink_exports
+                .iter()
+                .map(|(id, sink_desc)| ProtoSinkExport {
+                    id: Some(id.into()),
+                    sink_desc: serde_json::to_string(sink_desc).unwrap(),
+                })
+                .collect(),
+            as_of: x.as_of.as_ref().map(Into::into),
+            debug_name: x.debug_name.clone(),
+            id: Some(x.id.into_proto()),
+        }
+    }
+}
+
+impl TryFrom<ProtoDataflowDescription>
+    for DataflowDescription<crate::plan::Plan, CollectionMetadata>
+{
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoDataflowDescription) -> Result<Self, Self::Error> {
+        Ok(DataflowDescription {
+            source_imports: x
+                .source_imports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoSourceImport::id")?,
+                        inner
+                            .source_instance_desc
+                            .try_into_if_some("ProtoSourceImport::source_instance_desc")?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            index_imports: x
+                .index_imports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        (
+                            inner
+                                .index_desc
+                                .try_into_if_some("ProtoIndex::index_desc")?,
+                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                        ),
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            objects_to_build: x
+                .objects_to_build
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            index_exports: x
+                .index_exports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        (
+                            inner
+                                .index_desc
+                                .try_into_if_some("ProtoIndex::index_desc")?,
+                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                        ),
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            sink_exports: x
+                .sink_exports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoSinkExport::id")?,
+                        serde_json::from_str(&inner.sink_desc).map_err(TryFromProtoError::from)?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            as_of: x.as_of.map(Into::into),
+            debug_name: x.debug_name,
+            id: x.id.from_proto_if_some("ProtoDataflowDescription::id")?,
+        })
     }
 }
 
@@ -1968,6 +2155,30 @@ pub struct IndexDesc {
     pub key: Vec<MirScalarExpr>,
 }
 
+impl From<&IndexDesc> for ProtoIndexDesc {
+    fn from(x: &IndexDesc) -> Self {
+        ProtoIndexDesc {
+            on_id: Some((&x.on_id).into()),
+            key: x.key.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoIndexDesc> for IndexDesc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoIndexDesc) -> Result<Self, Self::Error> {
+        Ok(IndexDesc {
+            on_id: x.on_id.try_into_if_some("ProtoIndexDesc::on_id")?,
+            key: x
+                .key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
 // TODO: change contract to ensure that the operator is always applied to
 // streams of rows
 /// In-place restrictions that can be made to rows.
@@ -1988,6 +2199,34 @@ pub struct LinearOperator {
     /// Columns not present in `projection` may be replaced with
     /// default values.
     pub projection: Vec<usize>,
+}
+
+impl From<&LinearOperator> for ProtoLinearOperator {
+    fn from(x: &LinearOperator) -> Self {
+        ProtoLinearOperator {
+            predicates: x.predicates.iter().map(Into::into).collect(),
+            projection: x.projection.iter().map(|x| x.into_proto()).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoLinearOperator> for LinearOperator {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoLinearOperator) -> Result<Self, Self::Error> {
+        Ok(LinearOperator {
+            predicates: x
+                .predicates
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            projection: x
+                .projection
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 impl LinearOperator {
