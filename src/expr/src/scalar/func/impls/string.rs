@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use fail::fail_point;
 use lazy_static::lazy_static;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
+use crate::scalar::ParseError;
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -713,7 +715,39 @@ impl fmt::Display for RegexpMatch {
 sqlfunc!(
     #[sqlname = "mz_panic"]
     fn panic<'a>(a: &'a str) -> String {
-        print!("{}", a);
         panic!("{}", a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_set_failpoints"]
+    fn set_failpoints<'a>(a: &'a str) -> Result<String, EvalError> {
+        for mut cfg in a.trim().split(';') {
+            cfg = cfg.trim();
+            if cfg.is_empty() {
+                continue;
+            }
+            let mut splits = cfg.splitn(2, '=');
+            let failpoint = splits.next().ok_or_else(|| {
+                EvalError::Parse(ParseError::invalid_input_syntax("failpoints string", a))
+            })?;
+            let action = splits.next().ok_or_else(|| {
+                EvalError::Parse(ParseError::invalid_input_syntax("failpoints string", a))
+            })?;
+            fail::cfg(failpoint, action).map_err(|e| {
+                EvalError::Parse(
+                    ParseError::invalid_input_syntax("failpoints string", a).with_details(e),
+                )
+            })?;
+        }
+        Ok(a.to_string())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_failpoint"]
+    fn failpoint<'a>(a: &'a str) -> Result<String, EvalError> {
+        fail_point!(a, |_| { Err(EvalError::FailpointReturned(a.to_string())) });
+        Ok(a.to_string())
     }
 );

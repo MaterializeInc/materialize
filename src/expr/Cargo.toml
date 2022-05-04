@@ -20,6 +20,7 @@ dec = "0.4.8"
 derivative = "2.2.0"
 encoding = "0.2.0"
 enum-iterator = "0.7.0"
+fail = { version = "0.5.0", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
 hex = "0.4.3"
 hmac = "0.12.1"

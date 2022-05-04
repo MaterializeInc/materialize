@@ -1462,14 +1462,14 @@ impl ParseError {
         ParseError::new(ParseErrorKind::OutOfRange, type_name, input)
     }
 
-    fn invalid_input_syntax<S>(type_name: &'static str, input: S) -> ParseError
+    pub fn invalid_input_syntax<S>(type_name: &'static str, input: S) -> ParseError
     where
         S: Into<String>,
     {
         ParseError::new(ParseErrorKind::InvalidInputSyntax, type_name, input)
     }
 
-    fn with_details<D>(mut self, details: D) -> ParseError
+    pub fn with_details<D>(mut self, details: D) -> ParseError
     where
         D: fmt::Display,
     {

@@ -3359,6 +3359,7 @@ dependencies = [
  "derivative",
  "encoding",
  "enum-iterator",
+ "fail",
  "fallible-iterator",
  "hex",
  "hmac",

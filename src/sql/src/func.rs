@@ -2974,6 +2974,12 @@ lazy_static! {
             "mz_panic" => Scalar {
                 params!(String) => UnaryFunc::Panic(func::Panic), oid::FUNC_MZ_PANIC_OID;
             },
+            "mz_set_failpoints" => Scalar {
+                params!(String) => UnaryFunc::SetFailpoints(func::SetFailpoints), oid::FUNC_MZ_SET_FAILPOINTS_OID;
+            },
+            "mz_failpoint" => Scalar {
+                params!(String) => UnaryFunc::Failpoint(func::Failpoint), oid::FUNC_MZ_FAILPOINT_OID;
+            },
             "mz_type_name" => Scalar {
                 params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName), oid::FUNC_MZ_TYPE_NAME;
             }

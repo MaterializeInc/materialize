@@ -329,10 +329,12 @@ message ProtoUnaryFunc {
         google.protobuf.Empty exp_numeric = 209;
         google.protobuf.Empty sleep = 210;
         google.protobuf.Empty panic = 211;
-        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
-        google.protobuf.Empty pg_column_size = 213;
-        google.protobuf.Empty mz_row_size = 214;
-        google.protobuf.Empty mz_type_name = 215;
+        google.protobuf.Empty set_failpoints = 212;
+        google.protobuf.Empty failpoint = 213;
+        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 214;
+        google.protobuf.Empty pg_column_size = 215;
+        google.protobuf.Empty mz_row_size = 216;
+        google.protobuf.Empty mz_type_name = 217;
     }
 }
 
@@ -611,5 +613,6 @@ message ProtoEvalError {
         google.protobuf.Empty multidimensional_array_removal_not_supported = 51;
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
+        string failpoint_returned = 54;
     }
 }

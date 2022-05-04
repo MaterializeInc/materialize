@@ -1440,6 +1440,7 @@ pub enum EvalError {
         dims: Option<(usize, usize)>,
     },
     TypeFromOid(String),
+    FailpointReturned(String),
 }
 
 impl fmt::Display for EvalError {
@@ -1579,6 +1580,7 @@ impl fmt::Display for EvalError {
                 write!(f, "cannot concatenate incompatible arrays")
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
+            EvalError::FailpointReturned(failpoint) => write!(f, "failpoint {failpoint} returned"),
         }
     }
 }
@@ -1741,6 +1743,7 @@ impl From<&EvalError> for ProtoEvalError {
                 })
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
+            EvalError::FailpointReturned(v) => FailpointReturned(v.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -1836,6 +1839,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                         .transpose()?,
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
+                FailpointReturned(v) => Ok(EvalError::FailpointReturned(v)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
