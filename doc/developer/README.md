@@ -59,11 +59,5 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [reading.md](reading.md) contains a reading list.
 
-* [setup-mysql-debezium.md](setup-mysql-debezium.md) describes how to use
-  Materialize as a fast read replica for a MySQL database.
-
-* [setup-postgres-debezium.md](setup-postgres-debezium.md) describes how to use
-  Materialize as a fast read replica for a PostgreSQL database.
-
 * [sqllogictest.md](sqllogictest.md) contains detailed information about
   our SQL logic testing framework.
