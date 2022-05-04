@@ -569,6 +569,69 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn overlapping_append() -> Result<(), Box<dyn std::error::Error>> {
+        mz_ore::test::init_logging_default("info");
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await?;
+
+        let (mut write1, read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+
+        let (mut write2, _read) = client
+            .open::<String, String, u64, i64>(NO_TIMEOUT, id)
+            .await?;
+
+        // Grab a listener before we do any writing
+        let mut listen = read.listen(NO_TIMEOUT, Antichain::from_elem(0)).await??;
+
+        // Write a [0,3) batch.
+        let res = write1
+            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(3))
+            .await??;
+        assert_eq!(res, Ok(()));
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        // Write a [0,5) batch with the second writer.
+        let res = write2
+            .append(NO_TIMEOUT, &data[..4], Antichain::from_elem(5))
+            .await??;
+        assert_eq!(res, Ok(()));
+        assert_eq!(write2.upper(), &Antichain::from_elem(5));
+
+        // Write a [3,6) batch with the first writer.
+        let res = write1
+            .append(NO_TIMEOUT, &data[2..5], Antichain::from_elem(6))
+            .await??;
+        assert_eq!(res, Ok(()));
+        assert_eq!(write1.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.snapshot_one(5).await??;
+        assert_eq!(snap.read_all().await?, all_ok(&data, 1));
+
+        let expected_events = vec![
+            ListenEvent::Updates(all_ok(&data[0..2], 1)),
+            ListenEvent::Progress(Antichain::from_elem(3)),
+            ListenEvent::Updates(all_ok(&data[2..4], 1)),
+            ListenEvent::Progress(Antichain::from_elem(5)),
+            ListenEvent::Updates(all_ok(&data[4..5], 1)),
+            ListenEvent::Progress(Antichain::from_elem(6)),
+        ];
+        assert_eq!(listen.read_until(&6).await?, expected_events);
+
+        Ok(())
+    }
+
     #[test]
     fn fmt_ids() {
         assert_eq!(

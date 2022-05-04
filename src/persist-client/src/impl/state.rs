@@ -273,10 +273,13 @@ where
         Ok((work_ret, new_state))
     }
 
+    /// Returns the batches that contain updates up to (and including) the given `as_of`. The
+    /// result `Vec` contains blob keys, along with a [`Description`] of what updates in the
+    /// referenced parts are valid to read.
     pub fn snapshot(
         &self,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<String>, Upper<T>>, Since<T>> {
+    ) -> Result<Result<Vec<(String, Description<T>)>, Upper<T>>, Since<T>> {
         if PartialOrder::less_than(as_of, &self.collections.since) {
             return Err(Since(self.collections.since.clone()));
         }
@@ -288,14 +291,10 @@ where
             .collections
             .trace
             .iter()
-            .flat_map(|(keys, desc)| {
-                if !PartialOrder::less_than(as_of, desc.lower()) {
-                    keys.clone()
-                } else {
-                    vec![]
-                }
-            })
+            .filter(|(_keys, desc)| !PartialOrder::less_than(as_of, desc.lower()))
+            .flat_map(|(keys, desc)| keys.iter().map(|key| (key.clone(), desc.clone())))
             .collect();
+
         Ok(Ok(batches))
     }
 
@@ -326,7 +325,7 @@ pub struct Upper<T>(pub Antichain<T>);
 struct AntichainMeta(Vec<[u8; 8]>);
 
 #[derive(Debug, Serialize, Deserialize)]
-struct DescriptionMeta {
+pub struct DescriptionMeta {
     lower: AntichainMeta,
     upper: AntichainMeta,
     since: AntichainMeta,

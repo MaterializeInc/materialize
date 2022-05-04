@@ -18,17 +18,20 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{BlobMulti, ExternalError};
-use mz_persist_types::{Codec, Codec64};
+use differential_dataflow::trace::Description;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{info, trace};
 use uuid::Uuid;
 
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{BlobMulti, ExternalError};
+use mz_persist_types::{Codec, Codec64};
+
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
+use crate::r#impl::state::DescriptionMeta;
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -65,7 +68,7 @@ impl ReaderId {
 pub struct SnapshotSplit {
     shard_id: ShardId,
     as_of: Vec<[u8; 8]>,
-    batches: Vec<String>,
+    batches: Vec<(String, DescriptionMeta)>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -75,7 +78,7 @@ pub struct SnapshotSplit {
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
     as_of: Antichain<T>,
-    batches: Vec<String>,
+    batches: Vec<(String, Description<T>)>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     _phantom: PhantomData<(K, V, T, D)>,
 }
@@ -102,7 +105,7 @@ where
         trace!("SnapshotIter::next timeout={:?}", timeout);
         let deadline = Instant::now() + timeout;
         loop {
-            let key = match self.batches.last() {
+            let (key, desc) = match self.batches.last() {
                 Some(x) => x.clone(),
                 // All done!
                 None => return Ok(vec![]),
@@ -138,19 +141,27 @@ where
             // for retries.
             //
             // TODO: Restructure this loop so this is more obviously correct.
-            assert_eq!(self.batches.pop().as_ref(), Some(&key));
+            let (key1, desc1) = self.batches.pop().expect("known to exist");
+            assert_eq!(key1, key);
+            assert_eq!(desc1, desc);
 
-            let batch = BlobTraceBatchPart::decode(&value).map_err(|err| {
+            let batch_part = BlobTraceBatchPart::decode(&value).map_err(|err| {
                 ExternalError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
             })?;
             let mut ret = Vec::new();
-            for chunk in batch.updates {
+            for chunk in batch_part.updates {
                 for ((k, v), t, d) in chunk.iter() {
                     // TODO: Get rid of the to_le_bytes.
                     let t = T::decode(t.to_le_bytes());
                     if self.as_of.less_than(&t) {
                         // This happens to be in the batch, but it would get
                         // covered by a listen started at the same as_of.
+                        continue;
+                    }
+                    if !desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if desc.upper().less_equal(&t) {
                         continue;
                     }
                     let k = K::decode(k);
@@ -235,7 +246,7 @@ where
             .machine
             .next_listen_batch(deadline, &self.frontier)
             .await?;
-        let updates = self.fetch_batch(deadline, &batch_keys).await?;
+        let updates = self.fetch_batch(deadline, &batch_keys, &desc).await?;
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
@@ -266,6 +277,7 @@ where
         &self,
         deadline: Instant,
         keys: &[String],
+        desc: &Description<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
         let mut ret = Vec::new();
         for key in keys {
@@ -304,6 +316,12 @@ where
                         // This happens to be in the batch, but it
                         // would get covered by a snapshot started
                         // at the same as_of.
+                        continue;
+                    }
+                    if !desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if desc.upper().less_equal(&t) {
                         continue;
                     }
                     let k = K::decode(k);
@@ -510,8 +528,10 @@ where
                 batches: Vec::new(),
             })
             .collect::<Vec<_>>();
-        for (idx, batch_key) in batches.into_iter().enumerate() {
-            splits[idx % num_splits.get()].batches.push(batch_key);
+        for (idx, (batch_key, desc)) in batches.into_iter().enumerate() {
+            splits[idx % num_splits.get()]
+                .batches
+                .push((batch_key, (&desc).into()));
         }
         return Ok(Ok(splits));
     }
@@ -535,6 +555,13 @@ where
                 self.machine.shard_id()
             ))));
         }
+
+        let batches = split
+            .batches
+            .into_iter()
+            .map(|(key, desc)| (key, (&desc).into()))
+            .collect();
+
         let iter = SnapshotIter {
             as_of: Antichain::from(
                 split
@@ -543,7 +570,7 @@ where
                     .map(|x| T::decode(*x))
                     .collect::<Vec<_>>(),
             ),
-            batches: split.batches,
+            batches,
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
