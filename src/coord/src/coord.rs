@@ -94,7 +94,6 @@ use mz_dataflow_types::client::controller::{
 };
 use mz_dataflow_types::client::{
     ComputeInstanceId, ControllerResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
-    DEFAULT_COMPUTE_INSTANCE_ID,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -374,7 +373,7 @@ pub struct Coordinator {
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
-    client_pending_peeks: HashMap<u32, BTreeSet<Uuid>>,
+    client_pending_peeks: HashMap<u32, BTreeMap<Uuid, ComputeInstanceId>>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -1480,16 +1479,21 @@ impl Coordinator {
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // The peek is present on some specific compute instance.
-            let compute_instance = DEFAULT_COMPUTE_INSTANCE_ID;
             // Allow dataflow to cancel any pending peeks.
             if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                self.dataflow_client
-                    .compute_mut(compute_instance)
-                    .unwrap()
-                    .cancel_peeks(&uuids)
-                    .await
-                    .unwrap();
-                for uuid in uuids {
+                let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
+                for (uuid, compute_instance) in &uuids {
+                    inverse.entry(*compute_instance).or_default().insert(*uuid);
+                }
+                for (compute_instance, uuids) in inverse {
+                    self.dataflow_client
+                        .compute_mut(compute_instance)
+                        .unwrap()
+                        .cancel_peeks(&uuids)
+                        .await
+                        .unwrap();
+                }
+                for (uuid, _) in uuids {
                     if let Some(PendingPeek {
                         sender: rows_tx,
                         conn_id: _,
@@ -4963,7 +4967,6 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::ComputeInstanceId;
-    use std::collections::BTreeSet;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
@@ -5224,8 +5227,8 @@ pub mod fast_path_peek {
             );
             self.client_pending_peeks
                 .entry(conn_id)
-                .or_insert_with(BTreeSet::new)
-                .insert(uuid);
+                .or_default()
+                .insert(uuid, compute_instance);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
             self.dataflow_client
                 .compute_mut(compute_instance)
@@ -5432,15 +5435,17 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors
         // (which has happened twice and is the motivation for this test).
 
+        // An arbitrary compute instance ID to satisfy the function calls below. Note that
+        // this only works because this function will never run.
+        let compute_instance: ComputeInstanceId = 1;
+
         let df = DataflowDesc::new("".into());
+        let _: () = self.ship_dataflow(df.clone(), compute_instance).await;
         let _: () = self
-            .ship_dataflow(df.clone(), DEFAULT_COMPUTE_INSTANCE_ID)
-            .await;
-        let _: () = self
-            .ship_dataflows(vec![df.clone()], DEFAULT_COMPUTE_INSTANCE_ID)
+            .ship_dataflows(vec![df.clone()], compute_instance)
             .await;
         let _: DataflowDescription<mz_dataflow_types::plan::Plan> =
-            self.finalize_dataflow(df, DEFAULT_COMPUTE_INSTANCE_ID);
+            self.finalize_dataflow(df, compute_instance);
     }
 }
 
