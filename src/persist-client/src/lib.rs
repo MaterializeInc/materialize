@@ -384,10 +384,10 @@ mod tests {
             .await;
 
         let mut snap = read1.expect_snapshot(2).await;
-        assert_eq!(snap.read_all().await, all_ok(&data1[..], 1));
+        assert_eq!(snap.read_all().await, all_ok(&data1[..], 2));
 
         let mut snap = read2.expect_snapshot(2).await;
-        assert_eq!(snap.read_all().await, all_ok(&data2[..], 1));
+        assert_eq!(snap.read_all().await, all_ok(&data2[..], 2));
     }
 
     #[tokio::test]
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         let mut snap = read.expect_snapshot(2).await;
-        assert_eq!(snap.read_all().await, all_ok(&data[..2], 1));
+        assert_eq!(snap.read_all().await, all_ok(&data[..2], 2));
 
         // Try and write with the expected upper.
         let res = write2
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(4));
 
         let mut snap = read.expect_snapshot(3).await;
-        assert_eq!(snap.read_all().await, all_ok(&data, 1));
+        assert_eq!(snap.read_all().await, all_ok(&data, 3));
     }
 
     #[tokio::test]
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         let mut snap = read.expect_snapshot(5).await;
-        assert_eq!(snap.read_all().await, all_ok(&data, 1));
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
 
         let expected_events = vec![
             ListenEvent::Updates(all_ok(&data[0..2], 1)),
@@ -670,14 +670,11 @@ mod tests {
             let () = handle.await.expect("task failed");
         }
 
-        let expected = data
-            .records()
-            .map(|((k, v), t, d)| ((Ok(k), Ok(v)), t, d))
-            .collect::<Vec<_>>();
+        let expected = data.records().collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
         let (_, read) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
         let actual = read.expect_snapshot(max_ts).await.read_all().await;
-        assert_eq!(actual, expected);
+        assert_eq!(actual, all_ok(expected.iter(), max_ts));
     }
 
     // Regression test for #12131. Snapshot with as_of >= upper would
@@ -757,6 +754,6 @@ mod tests {
         // could assert on the ordering of them to provide additional confidence
         // that the test hasn't rotted as things change.
         let mut snap = snap.await;
-        assert_eq!(snap.read_all().await, all_ok(&data[..], 1));
+        assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
     }
 }
