@@ -2973,18 +2973,19 @@ pub fn plan_create_secret(
     }))
 }
 
-pub fn describe_create_connector<T: mz_sql_parser::ast::AstInfo>(
+pub fn describe_create_connector(
     _: &StatementContext,
-    _: &CreateConnectorStatement<T>,
+    _: &CreateConnectorStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_connector(
     scx: &StatementContext,
-    stmt: CreateConnectorStatement<Aug>,
+    stmt: CreateConnectorStatement,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CONNECTOR")?;
+    let mut depends_on = vec![];
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
@@ -2993,31 +2994,44 @@ pub fn plan_create_connector(
         if_not_exists,
     } = stmt;
     let connector_inner = match connector {
-        CreateConnector::Kafka {
-            broker,
-            with_options,
-        } => {
-            let mut with_options = normalize::options(&with_options);
-            ConnectorInner::Kafka {
-                broker: broker.parse()?,
-                config_options: kafka_util::extract_config(&mut with_options)?,
-            }
-        }
-        CreateConnector::KafkaNew { broker, security } => ConnectorInner::KafkaNew {
+        CreateConnector::Kafka { broker, security } => ConnectorInner::Kafka {
             broker: broker.parse()?,
+            // TODO resolve secrets from names to values
             security: match security {
                 mz_sql_parser::ast::KafkaSecurityOptions::SSL {
                     key,
                     certificate,
                     passphrase,
                 } => {
-                    let key = key.map_or_else(|| None, |f| Some(f.to_string()));
-                    let certificate = certificate.map_or_else(|| None, |f| Some(f.to_string()));
-                    let passphrase = passphrase.map_or_else(|| None, |f| Some(f.to_string()));
+                    if let Some(key) = key.as_ref() {
+                        depends_on.push(
+                            scx.catalog
+                                .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
+                                .id(),
+                        );
+                    }
+                    if let Some(certificate) = certificate.as_ref() {
+                        depends_on.push(
+                            scx.catalog
+                                .resolve_item(&normalize::unresolved_object_name(
+                                    certificate.clone(),
+                                )?)?
+                                .id(),
+                        );
+                    }
+                    if let Some(passphrase) = passphrase.as_ref() {
+                        depends_on.push(
+                            scx.catalog
+                                .resolve_item(&normalize::unresolved_object_name(
+                                    passphrase.clone(),
+                                )?)?
+                                .id(),
+                        );
+                    }
                     KafkaSecurityOptions::SSL {
-                        key,
-                        certificate,
-                        passphrase,
+                        key: key.map_or_else(|| None, |f| Some(f.to_string())),
+                        certificate: certificate.map_or_else(|| None, |f| Some(f.to_string())),
+                        passphrase: passphrase.map_or_else(|| None, |f| Some(f.to_string())),
                     }
                 }
                 mz_sql_parser::ast::KafkaSecurityOptions::SASL {
@@ -3025,29 +3039,39 @@ pub fn plan_create_connector(
                     ssl,
                     username,
                     password,
-                } => KafkaSecurityOptions::SASL {
-                    mechanism,
-                    ssl,
-                    username,
-                    password: password.to_string(),
-                },
+                } => {
+                    depends_on.push(
+                        scx.catalog
+                            .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
+                            .id(),
+                    );
+                    KafkaSecurityOptions::SASL {
+                        mechanism,
+                        ssl,
+                        username,
+                        password: password.to_string(),
+                    }
+                }
             },
         },
         CreateConnector::CSR {
             registry,
-            with_options,
+            username,
+            password,
         } => {
-            let with_options = normalize::options(&with_options);
+            if let Some(password) = password.as_ref() {
+                depends_on.push(
+                    scx.catalog
+                        .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
+                        .id(),
+                );
+            }
             ConnectorInner::CSR {
                 registry,
-                with_options: with_options
-                    .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_string()))
-                    .collect::<BTreeMap<String, String>>(),
+                username,
+                password: password.map_or_else(|| None, |p| Some(p.to_string())),
             }
         }
-
-        CreateConnector::CSRNew { .. } => todo!(),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let plan = CreateConnectorPlan {
@@ -3056,6 +3080,7 @@ pub fn plan_create_connector(
         connector: Connector {
             create_sql,
             connector: connector_inner,
+            depends_on,
         },
     };
     Ok(Plan::CreateConnector(plan))

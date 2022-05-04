@@ -37,7 +37,7 @@ pub enum Statement<T: AstInfo> {
     Copy(CopyStatement<T>),
     Update(UpdateStatement<T>),
     Delete(DeleteStatement<T>),
-    CreateConnector(CreateConnectorStatement<T>),
+    CreateConnector(CreateConnectorStatement),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
@@ -385,13 +385,13 @@ impl_display!(CreateSchemaStatement);
 
 /// `CREATE CONNECTOR`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateConnectorStatement<T: AstInfo> {
+pub struct CreateConnectorStatement {
     pub name: UnresolvedObjectName,
-    pub connector: CreateConnector<T>,
+    pub connector: CreateConnector,
     pub if_not_exists: bool,
 }
 
-impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
+impl AstDisplay for CreateConnectorStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CONNECTOR ");
         if self.if_not_exists {
@@ -402,7 +402,7 @@ impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
         self.connector.fmt(f)
     }
 }
-impl_display_t!(CreateConnectorStatement);
+impl_display!(CreateConnectorStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

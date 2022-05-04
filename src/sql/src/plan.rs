@@ -456,6 +456,7 @@ pub struct Source {
 pub struct Connector {
     pub create_sql: String,
     pub connector: ConnectorInner,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
