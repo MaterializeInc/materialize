@@ -13,30 +13,39 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{%- materialization materializedtest, adapter='materialize' -%}
+{%- materialization test, adapter='materialize' -%}
 
   {% set relations = [] %}
-  {% set identifier = model['alias'] %}
-  {% set old_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) %}
-  {% set target_relation = api.Relation.create(
-      identifier=identifier, schema=schema, database=database, type='materializedview') -%} %}
 
-  {% if old_relation %}
-    {% do adapter.drop_relation(old_relation) %}
+  {% if should_store_failures() %}
+
+    {% set identifier = model['alias'] %}
+    {% set old_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) %}
+    {% set target_relation = api.Relation.create(
+        identifier=identifier, schema=schema, database=database, type='materializedview') -%} %}
+
+    {% if old_relation %}
+        {% do adapter.drop_relation(old_relation) %}
+    {% endif %}
+
+    {% call statement(auto_begin=True) %}
+        {{ materialize__create_materialized_view_as(target_relation, sql) }}
+    {% endcall %}
+
+    {% do relations.append(target_relation) %}
+
+    {% set main_sql %}
+        select *
+        from {{ target_relation }}
+    {% endset %}
+
+    {{ adapter.commit() }}
+
+  {% else %}
+
+      {% set main_sql = sql %}
+
   {% endif %}
-
-  {% call statement(auto_begin=True) %}
-      {{ materialize__create_materialized_view_as(target_relation, sql) }}
-  {% endcall %}
-
-  {% do relations.append(target_relation) %}
-
-  {% set main_sql %}
-     select *
-     from {{ target_relation }}
-  {% endset %}
-
-  {{ adapter.commit() }}
 
   {% set limit = config.get('limit') %}
   {% set fail_calc = config.get('fail_calc') %}

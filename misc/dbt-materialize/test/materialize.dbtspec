@@ -75,10 +75,7 @@ sequences:
         cmd: test
         check: false
       - type: run_results
-        # These assertions fail. Is that OK?
-        # length: fact.test.length
-        # names: fact.test.names
-        length: 3
+        length: 2
         attributes:
           failing.status: fail
           passing.status: pass
@@ -205,19 +202,13 @@ projects:
             SELECT * FROM (VALUES ('chicken', 'pig'), ('chicken', 'horse'), (NULL, NULL)) _ (a, b)
 
         tests/non_null.sql: |
-            {{ config(materialized='materializedtest', store_failures=true) }}
-            SELECT *
-            FROM {{ ref('test_materialized_view') }}
-            WHERE a IS NULL
-
-        tests/non_null_schema.sql: |
-            {{ config(materialized='materializedtest',schema='test', store_failures=true) }}
+            {{ config(store_failures=true, schema='test', alias='testnull') }}
             SELECT *
             FROM {{ ref('test_materialized_view') }}
             WHERE a IS NULL
 
         tests/unique.sql: |
-            {{ config(materialized='materializedtest', store_failures=true) }}
+            {{ config(store_failures=true, schema='test', alias='testunique') }}
             SELECT
                 a AS unique_field,
                 count(*) as num_records
