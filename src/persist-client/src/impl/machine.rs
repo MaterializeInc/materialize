@@ -461,9 +461,13 @@ mod tests {
         // live entries in consensus.
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
-            let updates = vec![((idx.to_string(), ()), idx, 1)];
             write
-                .compare_and_append_slice(&updates, idx, idx + 1)
+                .compare_and_append(
+                    NO_TIMEOUT,
+                    [((idx.to_string(), ()), idx, 1)],
+                    Antichain::from_elem(idx),
+                    Antichain::from_elem(idx + 1),
+                )
                 .await??
                 .expect("invalid current upper");
         }

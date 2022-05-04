@@ -313,7 +313,7 @@ mod tests {
 
         // Write a [0,3) batch.
         write
-            .append_slice(&data[..2], 3)
+            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(3))
             .await??
             .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -327,7 +327,7 @@ mod tests {
 
         // Write a [3,4) batch.
         write
-            .append_slice(&data[2..], 4)
+            .append(NO_TIMEOUT, &data[2..], Antichain::from_elem(4))
             .await??
             .expect("invalid current upper");
         assert_eq!(write.upper(), &Antichain::from_elem(4));
@@ -373,12 +373,22 @@ mod tests {
             .await?;
 
         let res = write1
-            .compare_and_append_slice(&data1[..], u64::minimum(), 3)
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data1[..],
+                Antichain::from_elem(0),
+                Antichain::from_elem(3),
+            )
             .await??;
         assert_eq!(res, Ok(()));
 
         let res = write2
-            .compare_and_append_slice(&data2[..], u64::minimum(), 3)
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data2[..],
+                Antichain::from_elem(0),
+                Antichain::from_elem(3),
+            )
             .await??;
         assert_eq!(res, Ok(()));
 
@@ -412,7 +422,9 @@ mod tests {
             .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
             .await?;
 
-        let res = write1.append_slice(&data[..], 3).await?;
+        let res = write1
+            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
+            .await?;
         assert_eq!(res, Ok(Ok(())));
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
@@ -444,11 +456,15 @@ mod tests {
             .open::<String, String, u64, i64>(NO_TIMEOUT, shard_id)
             .await?;
 
-        let res = write.append_slice(&data[..], 3).await?;
+        let res = write
+            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
+            .await?;
         assert_eq!(res, Ok(Ok(())));
 
         write.upper = Antichain::from_elem(0);
-        let res = write.append_slice(&data[..], 3).await?;
+        let res = write
+            .append(NO_TIMEOUT, &data[..], Antichain::from_elem(3))
+            .await?;
         assert_eq!(res, Ok(Err(Antichain::from_elem(3))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
@@ -506,7 +522,12 @@ mod tests {
 
         // Write a [0,3) batch.
         let res = write1
-            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data[..2],
+                Antichain::from_elem(0),
+                Antichain::from_elem(3),
+            )
             .await??;
         assert_eq!(res, Ok(()));
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
@@ -516,7 +537,12 @@ mod tests {
 
         // Try and write with the expected upper.
         let res = write2
-            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data[..2],
+                Antichain::from_elem(0),
+                Antichain::from_elem(3),
+            )
             .await??;
         assert_eq!(res, Err(Antichain::from_elem(3)));
 
@@ -525,7 +551,14 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(0));
 
         // Try again with a good expected upper.
-        let res = write2.compare_and_append_slice(&data[2..], 3, 4).await??;
+        let res = write2
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data[2..],
+                Antichain::from_elem(3),
+                Antichain::from_elem(4),
+            )
+            .await??;
         assert_eq!(res, Ok(()));
 
         assert_eq!(write2.upper(), &Antichain::from_elem(4));
@@ -630,7 +663,6 @@ mod tests {
                         .iter()
                         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
                         .collect::<Vec<_>>();
-                    let updates = updates.iter().map(|((k, v), t, d)| ((k, v), t, d));
                     write
                         .append(NO_TIMEOUT, updates, new_upper)
                         .await??
@@ -695,7 +727,12 @@ mod tests {
 
         // Write a [0,3) batch.
         let res = write
-            .compare_and_append_slice(&data[..2], u64::minimum(), 3)
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data[..2],
+                Antichain::from_elem(0),
+                Antichain::from_elem(3),
+            )
             .await??;
         assert_eq!(res, Ok(()));
 
@@ -731,7 +768,14 @@ mod tests {
         }
 
         // Now add the data at 3 and also unblock the snapshot.
-        let res = write.compare_and_append_slice(&data[2..], 3, 4).await??;
+        let res = write
+            .compare_and_append(
+                NO_TIMEOUT,
+                &data[2..],
+                Antichain::from_elem(3),
+                Antichain::from_elem(4),
+            )
+            .await??;
         assert_eq!(res, Ok(()));
 
         // Read the snapshot and check that it got all the appropriate data.
