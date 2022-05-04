@@ -664,6 +664,26 @@ class Composition:
         """
         self.invoke("kill", f"-s{signal}", *services)
 
+    def pause(self, *services: str) -> None:
+        """Pause service containers.
+
+        Delegates to `docker-compose pause`. See that command's help for details.
+
+        Args:
+            services: The names of services in the composition.
+        """
+        self.invoke("pause", *services)
+
+    def unpause(self, *services: str) -> None:
+        """Unpause service containers
+
+        Delegates to `docker-compose unpause`. See that command's help for details.
+
+        Args:
+            services: The names of services in the composition.
+        """
+        self.invoke("unpause", *services)
+
     def rm(
         self, *services: str, stop: bool = True, destroy_volumes: bool = True
     ) -> None:
