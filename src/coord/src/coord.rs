@@ -807,9 +807,21 @@ impl Coordinator {
                 appends.push((id, vec![], advance_to));
             }
         }
+
+        // Scratch vector holding all updates that happen at `t < advance_to`
+        let mut scratch = vec![];
         // Then drain all pending writes and prepare append commands
-        for (id, updates) in self.volatile_updates.drain() {
-            appends.push((id, updates, advance_to));
+        for (id, updates) in self.volatile_updates.iter_mut() {
+            // TODO(petrosagg): replace with `drain_filter` once it stabilizes
+            let mut cursor = 0;
+            while let Some(update) = updates.get(cursor) {
+                if update.timestamp < advance_to {
+                    scratch.push(updates.swap_remove(cursor));
+                } else {
+                    cursor += 1;
+                }
+            }
+            appends.push((*id, scratch.split_off(0), advance_to));
         }
         self.dataflow_client
             .storage_mut()
