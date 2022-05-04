@@ -53,8 +53,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 // might not like to bake in this decision based on a SQLite limitation.
 // See #11123.
 pub type ComputeInstanceId = i64;
-/// A default value whose use we can track down and remove later.
-pub const DEFAULT_COMPUTE_INSTANCE_ID: ComputeInstanceId = 1;
 
 /// Instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
