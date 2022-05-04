@@ -170,6 +170,8 @@ pub enum StorageError {
     SourceIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// The update contained in the appended batch was at a timestamp beyond the batche's upper
+    UpdateBeyondUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -181,6 +183,7 @@ impl Error for StorageError {
         match self {
             Self::SourceIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
+            Self::UpdateBeyondUpper(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
         }
@@ -196,6 +199,9 @@ impl fmt::Display for StorageError {
                 "source identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "source identifier is not present: {id}"),
+            Self::UpdateBeyondUpper(id) => {
+                write!(f, "append batch for {id} contained update beyond its upper")
+            }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
         }
@@ -363,6 +369,13 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
+        for (id, updates, upper) in commands.iter() {
+            for update in updates {
+                if !update.timestamp.less_than(upper) {
+                    return Err(StorageError::UpdateBeyondUpper(*id));
+                }
+            }
+        }
         self.state
             .client
             .send(StorageCommand::Append(commands))
