@@ -27,6 +27,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 
 [dev-dependencies]
 anyhow = "1.0.57"
-criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = [ "html_reports" ] }
+# benchmark is currently unused
+# criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = [ "html_reports" ] }
 tempfile = "3.3.0"
 tokio = { version = "1.17.0", features = ["macros"] }

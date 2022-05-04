@@ -31,7 +31,6 @@ mz-ore = { path = "../ore" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-persist-types = { path = "../persist-types" }
-mz-stash = { path = "../stash" }
 num = "0.4.0"
 num_enum = "0.5.7"
 ordered-float = { version = "2.10.0", features = ["serde"] }
