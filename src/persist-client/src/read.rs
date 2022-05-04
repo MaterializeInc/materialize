@@ -18,14 +18,16 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{BlobMulti, ExternalError};
-use mz_persist_types::{Codec, Codec64};
+use differential_dataflow::trace::Description;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{info, trace};
 use uuid::Uuid;
+
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{BlobMulti, ExternalError};
+use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
@@ -62,10 +64,10 @@ impl ReaderId {
 ///
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SnapshotSplit {
+pub struct SnapshotSplit<T> {
     shard_id: ShardId,
     as_of: Vec<[u8; 8]>,
-    batches: Vec<String>,
+    batches: Vec<(String, Description<T>)>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -75,7 +77,7 @@ pub struct SnapshotSplit {
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
     as_of: Antichain<T>,
-    batches: Vec<String>,
+    batches: Vec<(String, Description<T>)>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     _phantom: PhantomData<(K, V, T, D)>,
 }
@@ -102,7 +104,7 @@ where
         trace!("SnapshotIter::next timeout={:?}", timeout);
         let deadline = Instant::now() + timeout;
         loop {
-            let key = match self.batches.last() {
+            let (key, desc) = match self.batches.last() {
                 Some(x) => x.clone(),
                 // All done!
                 None => return Ok(vec![]),
@@ -138,19 +140,27 @@ where
             // for retries.
             //
             // TODO: Restructure this loop so this is more obviously correct.
-            assert_eq!(self.batches.pop().as_ref(), Some(&key));
+            let (key1, desc1) = self.batches.pop().expect("known to exist");
+            assert_eq!(key1, key);
+            assert_eq!(desc1, desc);
 
-            let batch = BlobTraceBatchPart::decode(&value).map_err(|err| {
+            let batch_part = BlobTraceBatchPart::decode(&value).map_err(|err| {
                 ExternalError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
             })?;
             let mut ret = Vec::new();
-            for chunk in batch.updates {
+            for chunk in batch_part.updates {
                 for ((k, v), t, d) in chunk.iter() {
                     // TODO: Get rid of the to_le_bytes.
                     let t = T::decode(t.to_le_bytes());
                     if self.as_of.less_than(&t) {
                         // This happens to be in the batch, but it would get
                         // covered by a listen started at the same as_of.
+                        continue;
+                    }
+                    if !desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if desc.upper().less_equal(&t) {
                         continue;
                     }
                     let k = K::decode(k);
@@ -488,7 +498,7 @@ where
         timeout: Duration,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Vec<SnapshotSplit<T>>, InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} as_of={:?} num_splits={:?}",
             timeout,
@@ -521,7 +531,7 @@ where
     pub async fn snapshot_iter(
         &self,
         timeout: Duration,
-        split: SnapshotSplit,
+        split: SnapshotSplit<T>,
     ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
         trace!(
             "ReadHandle::snapshot timeout={:?} split={:?}",

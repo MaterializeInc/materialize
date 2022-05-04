@@ -207,7 +207,7 @@ where
         &mut self,
         deadline: Instant,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<String>, InvalidUsage>, ExternalError> {
+    ) -> Result<Result<Vec<(String, Description<T>)>, InvalidUsage>, ExternalError> {
         let mut fetches = 0;
         loop {
             let upper = match self.state.snapshot(as_of) {
