@@ -636,9 +636,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f523b4e98ba6897ae90994bc18423d9877c54f9047b06a00ddc8122a957b1c70"
+checksum = "f4af7447fc1214c1f3a1ace861d0216a6c8bb13965b64bbad9650f375b67689a"
 dependencies = [
  "async-trait",
  "axum-core",
@@ -661,16 +661,16 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tower",
- "tower-http",
+ "tower-http 0.3.2",
  "tower-layer",
  "tower-service",
 ]
 
 [[package]]
 name = "axum-core"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3ddbd16eabff8b45f21b98671fddcc93daaa7ac4c84f8473693437226040de5"
+checksum = "da31c0ed7b4690e2c78fe4b880d21cd7db04a346ebc658b4270251b695437f17"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2582,7 +2582,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util 0.7.1",
  "tower",
- "tower-http",
+ "tower-http 0.2.5",
  "tracing",
 ]
 
@@ -2894,7 +2894,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-postgres",
  "tokio-stream",
- "tower-http",
+ "tower-http 0.2.5",
  "tracing",
  "url",
  "uuid",
@@ -4014,7 +4014,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
- "tower-http",
+ "tower-http 0.2.5",
  "uuid",
  "walkdir",
 ]
@@ -6455,10 +6455,28 @@ dependencies = [
  "http-body",
  "http-range-header",
  "pin-project-lite",
- "tower",
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e980386f06883cf4d0578d6c9178c81f68b45d77d00f2c2c1bc034b3439c2c56"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-range-header",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
