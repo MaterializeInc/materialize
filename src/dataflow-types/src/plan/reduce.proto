@@ -36,7 +36,7 @@ message ProtoAccumulablePlan {
         mz_expr.relation.ProtoAggregateExpr expr = 3;
     }
 
-    repeated mz_expr.relation.ProtoAggregateExpr full_agrs = 1;
+    repeated mz_expr.relation.ProtoAggregateExpr full_aggrs = 1;
     repeated ProtoAggr simple_aggrs = 2;
     repeated ProtoAggr distinct_aggrs = 3;
 }

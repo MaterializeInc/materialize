@@ -98,12 +98,7 @@ pub struct JoinClosure {
 impl From<&JoinClosure> for ProtoJoinClosure {
     fn from(x: &JoinClosure) -> Self {
         Self {
-            ready_equivalences: x
-                .ready_equivalences
-                .clone()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            ready_equivalences: x.ready_equivalences.iter().map(Into::into).collect(),
             // TODO(lluki): Implement me once #11970 is fixed
             before: None,
         }
