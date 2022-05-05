@@ -511,7 +511,7 @@ pub enum KafkaSecurityOptions {
     /// SASL denotes one of a set of authentication options and may include transport security
     SASL {
         /// SASL Mechanism to use, one of: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
-        mechanism: &'static str,
+        mechanism: String,
         /// Require transport security, indicated with a security protocol of SASL_SSL
         ssl: bool,
         /// Mandatory username
