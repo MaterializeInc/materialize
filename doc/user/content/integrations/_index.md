@@ -178,6 +178,7 @@ Client libraries and ORM frameworks tend to run complex introspection queries th
 | PHP | {{< supportLevel production >}} | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php) | See the [PHP cheatsheet](/integrations/php/). |
 | Python | {{< supportLevel production >}} |[`psycopg2`](https://pypi.org/project/psycopg2/) | See the [Python cheatsheet](/integrations/python/). |
 | Ruby | {{< supportLevel production >}} | [`pg` gem](https://rubygems.org/gems/pg/) | See the [Ruby cheatsheet](/integrations/ruby/). |
+| Deno | {{< supportLevel production >}} | [`deno-postgres`](https://deno.land/x/postgres) | See the [Deno cheatsheet](/integrations/deno/). |
 
 ### ORM frameworks
 
