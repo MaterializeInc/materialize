@@ -96,6 +96,8 @@ where
                     self.seen_errors += 1;
                     if (self.seen_errors % parts) == 0 {
                         return Err(e);
+                    } else {
+                        return Ok(None);
                     }
                 }
                 Ok(response) => {
