@@ -30,6 +30,7 @@ pub mod visit;
 pub use relation::canonicalize;
 
 pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
+pub use id::{ProtoId, ProtoLocalId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, SafeMfpPlan},
@@ -44,7 +45,7 @@ pub use relation::{
     MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame, WindowFrameBound,
     WindowFrameUnits, RECURSION_LIMIT,
 };
-pub use relation::{ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing};
+pub use relation::{ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc};
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 pub use scalar::{ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};

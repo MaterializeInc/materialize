@@ -18,7 +18,6 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use mz_ore::soft_panic_or_log;
-use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use proptest::arbitrary::Arbitrary;
@@ -117,51 +116,6 @@ pub(crate) fn any_arranged_thin(
         HashMap::<usize, usize>::arbitrary(),
         Vec::<usize>::arbitrary(),
     )
-}
-
-impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> for ProtoArrangement {
-    fn from(x: &(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)) -> Self {
-        use proto_arrangement::ProtoArrangementPermutation;
-        Self {
-            all_columns: x.0.iter().map(Into::into).collect(),
-            permutation: x
-                .1
-                .iter()
-                .map(|x| ProtoArrangementPermutation {
-                    key: x.0.into_proto(),
-                    val: x.1.into_proto(),
-                })
-                .collect(),
-            thinning: x.2.iter().map(|x| x.into_proto()).collect(),
-        }
-    }
-}
-
-impl TryFrom<ProtoArrangement> for (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoArrangement) -> Result<Self, Self::Error> {
-        let perm: Result<HashMap<usize, usize>, TryFromProtoError> = x
-            .permutation
-            .iter()
-            .map(|x| {
-                let key = usize::from_proto(x.key);
-                let val = usize::from_proto(x.val);
-                Ok((key?, val?))
-            })
-            .collect();
-        Ok((
-            x.all_columns
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
-            perm?,
-            x.thinning
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<_, _>>()?,
-        ))
-    }
 }
 
 impl From<&AvailableCollections> for ProtoAvailableCollections {
