@@ -122,8 +122,7 @@ impl From<&JoinClosure> for ProtoJoinClosure {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            // TODO(lluki): Implement me once #11970 is fixed
-            before: None,
+            before: Some((&x.before).into()),
         }
     }
 }
@@ -429,7 +428,6 @@ impl JoinBuildState {
 mod tests {
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     proptest! {
         #[test]
