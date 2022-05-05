@@ -52,31 +52,3 @@ pub use scalar::{AsColumnType, Datum, DatumType, ProtoScalarType, ScalarBaseType
 pub type Timestamp = u64;
 /// System-wide record count difference type.
 pub type Diff = i64;
-
-use serde::{Deserialize, Serialize};
-// This probably logically belongs in `dataflow`, but source caching looks at it,
-// so put it in `repr` instead.
-/// The payload delivered by a source connector; either bytes or an EOF marker.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Ord, PartialOrd)]
-pub enum MessagePayload {
-    /// Data from the source connector.
-    // TODO(guswynn): Determine if `Vec` needs to be non-empty.
-    Data(Vec<u8>),
-    /// Forces the decoder to consider this a delimiter.
-    ///
-    /// For example, CSV records are normally terminated by a newline,
-    /// but files might not be newline-terminated; thus we need
-    /// the decoder to emit a CSV record when the end of a file is seen.
-    ///
-    // Note that the ordering here matters for the PartialOrd impl
-    EOF,
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    fn test_message_payload_ordering() {
-        assert!(MessagePayload::Data(vec![]) < MessagePayload::EOF);
-    }
-}
