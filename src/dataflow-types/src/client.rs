@@ -81,7 +81,7 @@ pub enum InstanceConfig {
 /// Subsequent commands may arbitrarily compact the arrangements;
 /// the dataflow runners are responsible for ensuring that they can
 /// correctly answer the `Peek`.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
@@ -98,17 +98,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
-}
-
-impl<T: PartialEq> PartialEq for Peek<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.key == other.key
-            && self.uuid == other.uuid
-            && self.timestamp == other.timestamp
-            && self.finishing == other.finishing
-            && self.map_filter_project == other.map_filter_project
-    }
 }
 
 fn any_uuid() -> impl Strategy<Value = Uuid> {

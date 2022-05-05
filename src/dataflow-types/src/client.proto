@@ -20,7 +20,7 @@ package mz_dataflow_types.client;
 message ProtoPeek {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_repr.row.ProtoRow key = 2;
-    mz_repr.proto.ProtoUuid uuid = 3;
+    mz_repr.proto.ProtoU128 uuid = 3;
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
