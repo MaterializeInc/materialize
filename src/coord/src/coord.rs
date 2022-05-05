@@ -224,12 +224,6 @@ pub struct SinkConnectorReady {
     pub compute_instance: ComputeInstanceId,
 }
 
-#[derive(Debug)]
-pub struct TimestampedUpdate {
-    pub updates: Vec<BuiltinTableUpdate>,
-    pub timestamp_offset: u64,
-}
-
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_dataflow_types::client::Controller,
@@ -4401,33 +4395,15 @@ impl Coordinator {
         Ok(result)
     }
 
-    async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
-        // NB: This makes sure to send all records for the same id in the same
-        // message.
-        let timestamp_base = self.get_local_write_ts();
-        let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
-        for tu in updates.into_iter() {
-            let timestamp = timestamp_base + tu.timestamp_offset;
-            for u in tu.updates {
-                updates_by_id.entry(u.id).or_default().push(Update {
-                    row: u.row,
-                    diff: u.diff,
-                    timestamp,
-                });
-            }
-        }
-        for (id, updates) in updates_by_id {
-            self.volatile_updates.entry(id).or_default().extend(updates);
-        }
-    }
-
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let timestamped = TimestampedUpdate {
-            updates,
-            timestamp_offset: 0,
-        };
-        self.send_builtin_table_updates_at_offset(vec![timestamped])
-            .await
+        let timestamp = self.get_local_write_ts();
+        for u in updates {
+            self.volatile_updates.entry(u.id).or_default().push(Update {
+                row: u.row,
+                diff: u.diff,
+                timestamp,
+            });
+        }
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
