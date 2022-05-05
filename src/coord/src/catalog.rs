@@ -18,7 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mz_stash::{Append, Sqlite};
+use mz_stash::{Append, Postgres, Sqlite};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
@@ -515,7 +515,7 @@ impl CatalogState {
         schema.ok_or_else(|| SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
-    fn get_schema(
+    pub fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
@@ -822,6 +822,10 @@ pub struct ConnCatalog<'a> {
 impl ConnCatalog<'_> {
     pub fn conn_id(&self) -> u32 {
         self.conn_id
+    }
+
+    pub fn state(&self) -> &CatalogState {
+        self.state
     }
 
     fn effective_search_path(
@@ -1317,36 +1321,32 @@ struct AllocatedBuiltinSystemIds<T> {
 }
 
 impl Catalog<Sqlite> {
-    /// Opens the catalog at `path` with parameters set appropriately for debug
-    /// contexts, like in tests.
+    /// Opens a debug sqlite catalog at `data_dir_path`.
     ///
-    /// WARNING! This function can arbitrarily fail because it does not make any
-    /// effort to adjust the catalog's contents' structure or semantics to the
-    /// currently running version, i.e. it does not apply any migrations.
-    ///
-    /// This function should not be called in production contexts. Use
-    /// [`Catalog::open`] with appropriately set configuration parameters
-    /// instead.
-    pub async fn open_debug(
+    /// See [`Catalog::open_debug`].
+    pub async fn open_debug_sqlite(
         data_dir_path: &Path,
         now: NowFn,
     ) -> Result<Catalog<Sqlite>, anyhow::Error> {
-        let experimental_mode = None;
-        let metrics_registry = &MetricsRegistry::new();
         let stash = mz_stash::Sqlite::open(&data_dir_path.join("stash"))?;
-        let storage = storage::Connection::open(stash, experimental_mode).await?;
-        let (catalog, _) = Self::open(Config {
-            storage,
-            experimental_mode,
-            build_info: &DUMMY_BUILD_INFO,
-            aws_external_id: AwsExternalId::NotProvided,
-            timestamp_frequency: Duration::from_secs(1),
-            now,
-            skip_migrations: true,
-            metrics_registry,
-        })
-        .await?;
-        Ok(catalog)
+        Catalog::open_debug(stash, now).await
+    }
+}
+
+impl Catalog<Postgres> {
+    /// Opens a debug postgres catalog at `url`.
+    ///
+    /// If specified, `schema` will set the connection's `search_path` to `schema`.
+    ///
+    /// See [`Catalog::open_debug`].
+    pub async fn open_debug_postgres(
+        url: String,
+        schema: Option<String>,
+        now: NowFn,
+    ) -> Result<Catalog<Postgres>, anyhow::Error> {
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let stash = mz_stash::Postgres::new(url, schema, tls).await?;
+        Catalog::open_debug(stash, now).await
     }
 }
 
@@ -1897,6 +1897,34 @@ impl<S: Append> Catalog<S> {
         }
         c.transient_revision = 1;
         Ok(c)
+    }
+
+    /// Opens the catalog from `stash` with parameters set appropriately for debug
+    /// contexts, like in tests.
+    ///
+    /// WARNING! This function can arbitrarily fail because it does not make any
+    /// effort to adjust the catalog's contents' structure or semantics to the
+    /// currently running version, i.e. it does not apply any migrations.
+    ///
+    /// This function should not be called in production contexts. Use
+    /// [`Catalog::open`] with appropriately set configuration parameters
+    /// instead.
+    pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
+        let experimental_mode = None;
+        let metrics_registry = &MetricsRegistry::new();
+        let storage = storage::Connection::open(stash, experimental_mode).await?;
+        let (catalog, _) = Catalog::open(Config {
+            storage,
+            experimental_mode,
+            build_info: &DUMMY_BUILD_INFO,
+            aws_external_id: AwsExternalId::NotProvided,
+            timestamp_frequency: Duration::from_secs(1),
+            now,
+            skip_migrations: true,
+            metrics_registry,
+        })
+        .await?;
+        Ok(catalog)
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
@@ -3637,7 +3665,7 @@ mod tests {
         }
 
         let data_dir = TempDir::new()?;
-        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -3704,7 +3732,7 @@ mod tests {
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
         let data_dir = TempDir::new()?;
-        let mut catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let mut catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -3720,7 +3748,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())
@@ -3729,7 +3757,7 @@ mod tests {
     #[tokio::test]
     async fn test_effective_search_path() -> Result<(), anyhow::Error> {
         let data_dir = TempDir::new()?;
-        let catalog = Catalog::open_debug(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
         let mz_catalog_schema = (
             ResolvedDatabaseSpecifier::Ambient,
             SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
