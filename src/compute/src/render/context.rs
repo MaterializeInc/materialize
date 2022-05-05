@@ -28,6 +28,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::{DataflowDescription, DataflowError};
 use mz_dataflow_types::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -84,7 +85,10 @@ where
     S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
+    pub fn for_dataflow<Plan>(
+        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
+        dataflow_id: usize,
+    ) -> Self {
         let as_of_frontier = dataflow
             .as_of
             .clone()

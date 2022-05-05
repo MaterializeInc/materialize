@@ -25,6 +25,7 @@ use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Map, OkErr, Operator, UnorderedInput};
 use timely::dataflow::Scope;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
 use mz_expr::{PartitionId, SourceInstanceId};
@@ -145,10 +146,11 @@ pub fn render_source<G>(
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     SourceInstanceDesc {
         description: src,
+        storage_metadata,
         arguments: SourceInstanceArguments {
             operators: mut linear_operators,
         },
-    }: SourceInstanceDesc,
+    }: SourceInstanceDesc<CollectionMetadata>,
     storage_state: &mut crate::storage_state::StorageState,
     scope: &mut G,
     src_id: GlobalId,
@@ -451,6 +453,7 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
+                                                    storage_metadata,
                                                     arguments: SourceInstanceArguments {
                                                         operators: None,
                                                     },

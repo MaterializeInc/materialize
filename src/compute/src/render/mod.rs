@@ -113,6 +113,7 @@ use timely::dataflow::Scope;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::*;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
@@ -140,7 +141,7 @@ mod top_k;
 pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan>,
+    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan, CollectionMetadata>,
     boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");

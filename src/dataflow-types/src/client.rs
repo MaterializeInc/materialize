@@ -29,17 +29,19 @@ use timely::progress::ChangeBatch;
 use tracing::trace;
 use uuid::Uuid;
 
+use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::{GlobalId, Row};
+
 use crate::logging::LoggingConfig;
 use crate::{
     sources::{MzOffset, SourceDesc},
     DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
 };
-use mz_expr::{PartitionId, RowSetFinishing};
-use mz_repr::{GlobalId, Row};
 
 pub mod controller;
 pub use controller::Controller;
 
+use self::controller::storage::CollectionMetadata;
 use self::controller::ClusterReplicaSizeConfig;
 
 pub mod partitioned;
@@ -155,7 +157,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Subsequent commands may arbitrarily compact the arrangements;
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, T>>),
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -183,6 +185,8 @@ pub struct CreateSourceCommand<T> {
     pub since: Antichain<T>,
     /// Any previously stored timestamp bindings
     pub ts_bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
+    /// Additional storage controller metadata needed to ingest this source
+    pub storage_metadata: CollectionMetadata,
 }
 
 /// A command to render a single source
@@ -195,7 +199,7 @@ pub struct RenderSourcesCommand<T> {
     /// An optional frontier to which the input should be advanced.
     pub as_of: Option<Antichain<T>>,
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<CollectionMetadata>>,
 }
 
 /// Commands related to the ingress and egress of collections.

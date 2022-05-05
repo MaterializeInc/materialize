@@ -285,11 +285,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
-                        format!("--persist-blob-url={}", config.persist_location.blob_uri),
-                        format!(
-                            "--persist-consensus-url={}",
-                            config.persist_location.consensus_uri
-                        ),
                     ];
                     if config.orchestrator.linger {
                         storage_opts.push(format!("--linger"))
@@ -350,6 +345,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
         storage_client,
         config.data_directory,
+        config.persist_location,
     );
     let dataflow_controller =
         mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);

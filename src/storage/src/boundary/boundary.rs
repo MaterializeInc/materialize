@@ -119,6 +119,7 @@ mod boundary_hook {
 
     use async_trait::async_trait;
 
+    use mz_dataflow_types::client::controller::storage::CollectionMetadata;
     use mz_dataflow_types::client::{
         GenericClient, RenderSourcesCommand, StorageCommand, StorageResponse,
     };
@@ -138,7 +139,7 @@ mod boundary_hook {
         /// The number of storage workers, of whom requests will be made.
         workers: u64,
         /// Created sources so that we can form render requests.
-        sources: BTreeMap<GlobalId, SourceDesc>,
+        sources: BTreeMap<GlobalId, (SourceDesc, CollectionMetadata)>,
         /// Pending render requests, awaiting source creation.
         pending: BTreeMap<GlobalId, Vec<SourceInstanceRequest<T>>>,
     }
@@ -184,6 +185,7 @@ mod boundary_hook {
                                     request.source_id,
                                     SourceInstanceDesc {
                                         description: source.desc.clone(),
+                                        storage_metadata: source.storage_metadata.clone(),
                                         arguments: request.arguments,
                                     },
                                 ))
@@ -191,7 +193,10 @@ mod boundary_hook {
                             }
                         }));
                     }
-                    self.sources.insert(source.id, source.desc.clone());
+                    self.sources.insert(
+                        source.id,
+                        (source.desc.clone(), source.storage_metadata.clone()),
+                    );
                 }
             }
 
@@ -213,13 +218,14 @@ mod boundary_hook {
                         Some(request) => {
                             let unique_id = request.unique_id();
                             if !self.suppress.contains_key(&unique_id) {
-                                if let Some(source) = self.sources.get(&request.source_id) {
+                                if let Some((source, storage_metadata)) = self.sources.get(&request.source_id) {
                                     let command = StorageCommand::RenderSources(vec![RenderSourcesCommand {
                                         debug_name: format!("SourceDataflow({:?}, {:?})", request.dataflow_id, request.source_id),
                                         dataflow_id: request.dataflow_id,
                                         as_of: Some(request.as_of.clone()),
                                         source_imports: once((request.source_id, SourceInstanceDesc {
                                             description: source.clone(),
+                                            storage_metadata: storage_metadata.clone(),
                                             arguments: request.arguments,
                                         })).collect(),
                                     }]);

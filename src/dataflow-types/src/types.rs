@@ -76,7 +76,7 @@ pub struct Update<T = mz_repr::Timestamp> {
 }
 
 /// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
+pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// An association of a global identifier to an expression.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -91,11 +91,14 @@ pub struct BuildDesc<P> {
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceDesc {
+pub struct SourceInstanceDesc<M> {
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
+    /// Additional metadata used by storage instances to render this source instance and by the
+    /// storage client of a compute instance to read it.
+    pub storage_metadata: M,
 }
 
 /// Per-source construction arguments.
@@ -130,9 +133,9 @@ impl<T> SourceInstanceRequest<T> {
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<S>>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -157,7 +160,7 @@ pub struct DataflowDescription<P, T = mz_repr::Timestamp> {
     pub id: uuid::Uuid,
 }
 
-impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
+impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -192,6 +195,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
             id,
             SourceInstanceDesc {
                 description,
+                storage_metadata: (),
                 arguments: SourceInstanceArguments { operators: None },
             },
         );
@@ -281,7 +285,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, T> {
     }
 }
 
-impl<P, T> DataflowDescription<P, T>
+impl<P, S, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
 {
@@ -366,7 +370,7 @@ where
     }
 }
 
-impl<P: PartialEq, T: timely::PartialOrder> DataflowDescription<P, T> {
+impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
     /// Compatible dataflows have equal exports, imports, and objects to build. The `as_of` of
