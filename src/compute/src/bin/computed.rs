@@ -11,6 +11,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::bail;
 use futures::sink::SinkExt;
@@ -23,11 +24,13 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 use mz_dataflow_types::client::{ComputeClient, GenericClient};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::{PersistClient, PersistLocation};
 
 use mz_compute::server::Server;
 use mz_pid_file::PidFile;
@@ -101,6 +104,14 @@ struct Args {
     /// Enable command reconciliation.
     #[clap(long, requires = "linger")]
     reconcile: bool,
+
+    /// Where the persist library should store its blob data.
+    #[clap(long, env = "COMPUTED_PERSIST_BLOB_URL")]
+    persist_blob_url: Url,
+    /// Where the persist library should perform consensus.
+    #[clap(long, env = "COMPUTED_PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Url,
+
     /// The address of the HTTP profiling UI.
     #[clap(long, value_name = "HOST:PORT")]
     http_console_addr: Option<String>,
@@ -227,6 +238,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
+    info!("starting persist client...");
+    let persist_client = {
+        let location = PersistLocation {
+            blob_uri: args.persist_blob_url.to_string(),
+            consensus_uri: args.persist_consensus_url.to_string(),
+        };
+        let (blob, consensus) = location.open(Duration::from_secs(30)).await?;
+        PersistClient::new(Duration::from_secs(30), blob, consensus).await?
+    };
+
     let config = mz_compute::server::Config {
         workers: args.workers,
         timely_config,
@@ -237,6 +258,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
+        persist_client,
     };
 
     let serve_config = ServeConfig {

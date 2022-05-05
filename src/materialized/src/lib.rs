@@ -319,6 +319,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         orchestrator,
         computed_image: config.orchestrator.computed_image,
         storage_addr: storage_service.addresses("compute").into_element(),
+        persist_location: config.persist_location,
         linger: config.orchestrator.linger,
     };
 

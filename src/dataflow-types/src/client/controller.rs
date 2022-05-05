@@ -34,6 +34,7 @@ use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 
 use crate::client::GenericClient;
@@ -57,6 +58,8 @@ pub struct OrchestratorConfig {
     pub computed_image: String,
     /// The storage address that compute instances should connect to.
     pub storage_addr: String,
+    /// The persist location that compute instances should connect to.
+    pub persist_location: PersistLocation,
     /// Whether or not process should die when connection with ADAPTER is lost.
     pub linger: bool,
 }
@@ -173,6 +176,7 @@ where
                     orchestrator,
                     computed_image,
                     storage_addr,
+                    persist_location,
                     linger,
                 } = &self.orchestrator;
 
@@ -194,6 +198,11 @@ where
                                         ),
                                         format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
+                                        format!("--persist-blob-url={}", persist_location.blob_uri),
+                                        format!(
+                                            "--persist-consensus-url={}",
+                                            persist_location.consensus_uri
+                                        ),
                                     ];
                                     compute_opts.extend(hosts_ports.iter().map(|(host, ports)| {
                                         format!("{host}:{}", ports["compute"])

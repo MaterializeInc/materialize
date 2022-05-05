@@ -23,6 +23,7 @@ use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, Lo
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_persist_client::PersistClient;
 use mz_storage::boundary::ComputeReplay;
 
 use crate::compute_state::ActiveComputeState;
@@ -44,6 +45,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// A client to the persist library.
+    pub persist_client: PersistClient,
 }
 
 /// A handle to a running dataflow server.

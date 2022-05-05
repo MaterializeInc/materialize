@@ -3213,6 +3213,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -3241,6 +3242,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-persist",
+ "mz-persist-client",
  "mz-persist-types",
  "mz-pgrepr",
  "mz-postgres-util",

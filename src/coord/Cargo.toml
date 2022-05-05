@@ -28,6 +28,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
+mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
