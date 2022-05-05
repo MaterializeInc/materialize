@@ -136,7 +136,7 @@ impl TryFrom<ProtoColumnType> for ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
@@ -238,7 +238,7 @@ impl TryFrom<ProtoRelationType> for RelationType {
                     key_set
                         .keys
                         .into_iter()
-                        .map(|k| usize::from_proto(k))
+                        .map(usize::from_proto)
                         .collect::<Result<Vec<_>, _>>()
                 })
                 .collect::<Result<Vec<_>, _>>()?,
