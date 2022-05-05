@@ -65,7 +65,20 @@ sequences:
         length: 1
       - type: relation_types
         expect: fact.expected_types_view
-  test_dbt_data_test: data_test
+  # custom test for our test macro
+  test_dbt_data_test:
+    project: data_test
+    sequence:
+      - type: dbt
+        cmd: run
+      - type: dbt
+        cmd: test
+        check: false
+      - type: run_results
+        length: 2
+        attributes:
+          failing.status: fail
+          passing.status: pass
   test_dbt_schema_test: schema_test
   test_dbt_ephemeral: ephemeral
   test_dbt_ephemeral_data_tests: data_test_ephemeral_models
@@ -181,3 +194,25 @@ projects:
             test_source_index,1,1,
             test_view_index,1,1,
             test_view_index,2,,pg_catalog.length(a)
+  - name: data_test
+    paths:
+        models/test_materialized_view.sql: |
+            {{ config(materialized='materializedview') }}
+
+            SELECT * FROM (VALUES ('chicken', 'pig'), ('chicken', 'horse'), (NULL, NULL)) _ (a, b)
+
+        tests/non_null.sql: |
+            {{ config(store_failures=true, schema='test', alias='testnull') }}
+            SELECT *
+            FROM {{ ref('test_materialized_view') }}
+            WHERE a IS NULL
+
+        tests/unique.sql: |
+            {{ config(store_failures=true, schema='test', alias='testunique') }}
+            SELECT
+                a AS unique_field,
+                count(*) as num_records
+            FROM {{ ref('test_materialized_view') }}
+            WHERE a IS NOT NULL
+            GROUP BY a
+            HAVING count(*) > 1

@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## 1.1.1 - 2022-05-04
+
+* Provide support for storing the results of a test query in a `materializedview` using the [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures).
+
 ## 1.1.0 - 2022-05-02
 
 * Upgrade to `dbt-postgres` v1.1.0.

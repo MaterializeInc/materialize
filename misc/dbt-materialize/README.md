@@ -84,10 +84,14 @@ Not tested.
 
 Not tested.
 
-### Testing and Documentation
+### Documentation
+[`dbt docs`](https://docs.getdbt.com/reference/commands/cmd-docs) is supported.
 
-[`dbt docs`](https://docs.getdbt.com/reference/commands/cmd-docs) and [`dbt
-test`](https://docs.getdbt.com/reference/commands/test) commands are supported.
+### Testing
+[`dbt test`](https://docs.getdbt.com/reference/commands/test) is supported.
+
+If you set the optional `--store-failures` flag or [`store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will save the results of a test query to a `materializedview`.
+These will be created in a schema suffixed or named `dbt_test__audit` by default. Change this value by setting a `schema` config.
 
 ### Snapshots
 
