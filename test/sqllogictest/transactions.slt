@@ -450,3 +450,23 @@ INSERT INTO t (a) VALUES (1)
 
 statement ok
 ROLLBACK
+
+# Test that multi-table write transactions aren't supported
+
+statement ok
+CREATE TABLE foo(a int)
+
+statement ok
+CREATE TABLE bar(a int)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO foo VALUES (42)
+
+statement error write transactions only support writes to a single table
+INSERT INTO bar VALUES (42)
+
+statement ok
+ROLLBACK
