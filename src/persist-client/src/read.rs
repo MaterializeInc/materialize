@@ -152,7 +152,7 @@ where
             for chunk in batch_part.updates {
                 for ((k, v), t, d) in chunk.iter() {
                     // TODO: Get rid of the to_le_bytes.
-                    let t = T::decode(t.to_le_bytes());
+                    let mut t = T::decode(t.to_le_bytes());
                     if self.as_of.less_than(&t) {
                         // This happens to be in the batch, but it would get
                         // covered by a listen started at the same as_of.
@@ -164,6 +164,7 @@ where
                     if desc.upper().less_equal(&t) {
                         continue;
                     }
+                    t.advance_by(self.as_of.borrow());
                     let k = K::decode(k);
                     let v = V::decode(v);
                     // TODO: Get rid of the to_le_bytes.
