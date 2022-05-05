@@ -46,19 +46,22 @@ With the connectors proposed in this document, the `CREATE SOURCE` can instead
 share all the relevant configuration:
 
 ```sql
+CREATE SECRET kafka_pass AS 'some_password';
+
 CREATE CONNECTOR kafka FOR
-KAFKA BROKER 'kafka:9092' WITH (
-    security_protocol = 'SASL_SSL',
-    sasl_mechanisms = 'PLAIN',
-    sasl_username = 'username',
-    sasl_password = 'password'
-);
+KAFKA BROKER 'kafka:9092'
+SECURITY SaslSsl
+MECHANISM PLAIN
+USERNAME 'username'
+PASSWORD kafka_pass;
+
+CREATE SECRET csr_pass AS 'registry_password';
 
 CREATE CONNECTOR schema_registry FOR
-CONFLUENT SCHEMA REGISTRY 'https://schema-registry' WITH (
-    username = 'username',
-    password = 'password'
-);
+CONFLUENT SCHEMA REGISTRY 'https://schema-registry'
+SECURITY
+USERNAME 'username'
+PASSWORD csr_pass;
 
 CREATE SOURCE kafka1
 FROM KAFKA CONNECTOR kafka TOPIC 'top1'
@@ -107,7 +110,11 @@ security_options ::=
 | SASL (
     MECHANISMS (PLAIN | SCRAMSHA256 | SCRAMSHA512)
     USERNAME [[=] <value> ]
-    PASSWORD [[=] <secret name> ]
+    PASSWORD [[=] <secret name> ])
+| SASLSSL (
+    MECHANISMS (PLAIN | SCRAMSHA256 | SCRAMSHA512)
+    USERNAME [[=] <value> ]
+    PASSWORD [[=] <secret name> ])
 ```
 
 ### Confluent Schema Registry connector
@@ -123,7 +130,7 @@ security_options ::=
   SSL (
     CERTIFICATE [[=] <secret name> ]
     KEY [[=] <secret name> ]
-    CA FILE [[=] <secret name> ] )
+    CA [[=] <secret name> ] )
 ```
 
 ### PostgreSQL connector
