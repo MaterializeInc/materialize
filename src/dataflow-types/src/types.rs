@@ -116,6 +116,7 @@ impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceDesc<M> {
+    // TODO: have the proptest strategy be `any_source_desc_stub()`
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
@@ -595,6 +596,7 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use proptest::strategy::{Just, Strategy};
     use prost::Message;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
@@ -1381,6 +1383,18 @@ pub mod sources {
     pub struct SourceDesc {
         pub connector: SourceConnector,
         pub desc: RelationDesc,
+    }
+
+    /// A stub for generating arbitrary [SourceDesc].
+    /// Produces the simplest possible instance of it.
+    #[allow(dead_code)]
+    fn any_source_desc_stub() -> impl Strategy<Value = SourceDesc> {
+        Just(SourceDesc {
+            connector: SourceConnector::Local {
+                timeline: Timeline::EpochMilliseconds,
+            },
+            desc: RelationDesc::empty(),
+        })
     }
 
     /// A `SourceConnector` describes how data is produced for a source, be
