@@ -1966,9 +1966,9 @@ impl<'a> Parser<'a> {
     fn parse_kafka_sasl(&mut self, ssl: bool) -> Result<KafkaSecurityOptions, ParserError> {
         self.expect_keyword(MECHANISM)?;
         let mechanism = match self.expect_one_of_keywords(&[PLAIN, SCRAMSHA256, SCRAMSHA512])? {
-            Keyword::Plain => "PLAIN",
-            Keyword::ScramSha256 => "SCRAM-SHA-256",
-            Keyword::ScramSha512 => "SCRAM-SHA-512",
+            Keyword::Plain => "PLAIN".to_string(),
+            Keyword::ScramSha256 => "SCRAM-SHA-256".to_string(),
+            Keyword::ScramSha512 => "SCRAM-SHA-512".to_string(),
             _ => unreachable!(),
         };
         let (mut username, mut password) = ("".to_string(), UnresolvedObjectName::unqualified(""));
