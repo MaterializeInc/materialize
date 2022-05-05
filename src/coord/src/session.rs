@@ -202,7 +202,6 @@ impl<T: CoordTimestamp> Session<T> {
                             // We should have already checked the access above, but make sure we don't miss
                             // it anyway.
                             assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
-
                             txn_writes.append(&mut add_writes);
 
                             if txn_writes
