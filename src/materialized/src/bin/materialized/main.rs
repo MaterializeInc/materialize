@@ -379,6 +379,14 @@ pub struct Args {
         hide = true
     )]
     frontegg_api_token_url: Option<String>,
+    /// A common string prefix that is expected to be present at the beginning of passwords.
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_PASSWORD_PREFIX",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
+    frontegg_password_prefix: Option<String>,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", hide = true)]
@@ -628,6 +636,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
+                password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
             })
         })
         .transpose()?;
