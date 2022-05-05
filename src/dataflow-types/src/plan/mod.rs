@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use mz_ore::soft_panic_or_log;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::TryIntoIfSome;
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -401,14 +402,65 @@ pub enum Plan<T = mz_repr::Timestamp> {
 }
 
 /// How a `Get` stage will be rendered.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
+    Arrangement(
+        #[proptest(strategy = "prop::collection::vec(MirScalarExpr::arbitrary(), 0..3)")]
+        Vec<MirScalarExpr>,
+        Option<Row>,
+        MapFilterProject,
+    ),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MapFilterProject),
+}
+
+impl From<&GetPlan> for ProtoGetPlan {
+    fn from(x: &GetPlan) -> Self {
+        use proto_get_plan::Kind::*;
+
+        ProtoGetPlan {
+            kind: Some(match x {
+                GetPlan::PassArrangements => PassArrangements(()),
+                GetPlan::Arrangement(k, s, m) => {
+                    Arrangement(proto_get_plan::ProtoGetPlanArrangement {
+                        key: k.iter().map(Into::into).collect(),
+                        seek: s.as_ref().map(Into::into),
+                        mfp: Some(m.into()),
+                    })
+                }
+                GetPlan::Collection(mfp) => Collection(mfp.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoGetPlan> for GetPlan {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoGetPlan) -> Result<Self, Self::Error> {
+        use proto_get_plan::Kind::*;
+
+        let kind = x
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoGetPlan::kind"))?;
+
+        Ok(match kind {
+            PassArrangements(()) => GetPlan::PassArrangements,
+            Arrangement(proto_get_plan::ProtoGetPlanArrangement { key, seek, mfp }) => {
+                GetPlan::Arrangement(
+                    key.into_iter()
+                        .map(TryFrom::try_from)
+                        .collect::<Result<_, _>>()?,
+                    seek.map(TryFrom::try_from).transpose()?,
+                    mfp.try_into_if_some("ProtoGetPlanArrangement::mfp")?,
+                )
+            }
+            Collection(mfp) => GetPlan::Collection(mfp.try_into()?),
+        })
+    }
 }
 
 /// Various bits of state to print along with error messages during LIR planning,
@@ -1366,5 +1418,16 @@ mod tests {
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
+    }
+
+    proptest! {
+       #![proptest_config(ProptestConfig::with_cases(100))]
+       #[test]
+       fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
     }
 }

@@ -12,6 +12,8 @@
 syntax = "proto3";
 
 import "expr/src/scalar.proto";
+import "expr/src/linear.proto";
+import "repr/src/row.proto";
 import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.plan;
@@ -31,4 +33,18 @@ message ProtoArrangement {
 message ProtoAvailableCollections {
     bool raw = 1;
     repeated ProtoArrangement arranged = 2;
+}
+
+message ProtoGetPlan {
+    message ProtoGetPlanArrangement {
+        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+        mz_repr.row.ProtoRow seek = 2;
+        mz_expr.linear.ProtoMapFilterProject mfp = 3;
+    };
+
+    oneof kind {
+        google.protobuf.Empty pass_arrangements = 1;
+        ProtoGetPlanArrangement arrangement = 2;
+        mz_expr.linear.ProtoMapFilterProject collection = 3;
+    }
 }
