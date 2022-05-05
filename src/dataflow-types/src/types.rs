@@ -2093,6 +2093,7 @@ pub mod sources {
         }
 
         pub fn options(&self) -> BTreeMap<String, String> {
+            const SECURITY_PROTOCOL: &str = "security_protocol";
             match self {
                 ConnectorInner::CSR {
                     username, password, ..
@@ -2110,8 +2111,7 @@ pub mod sources {
                 ConnectorInner::Kafka { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
                         let mut with_options = BTreeMap::new();
-                        with_options
-                            .insert("security.protocol".to_string(), "plaintext".to_string());
+                        with_options.insert(SECURITY_PROTOCOL.to_string(), "PLAINTEXT".to_string());
                         with_options
                     }
                     KafkaSecurityOptions::SSL {
@@ -2120,7 +2120,7 @@ pub mod sources {
                         passphrase,
                     } => {
                         let mut with_options = BTreeMap::new();
-                        with_options.insert("security.protocol".to_string(), "ssl".to_string());
+                        with_options.insert(SECURITY_PROTOCOL.to_string(), "ssl".to_string());
                         if let Some(uuid) = key {
                             with_options.insert("ssl.key.location".to_string(), uuid.to_owned());
                         }

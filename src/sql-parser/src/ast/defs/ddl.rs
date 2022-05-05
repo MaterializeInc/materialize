@@ -499,15 +499,24 @@ impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaSecurityOptions {
+    /// SSL denotes mandatory transport security and optional certificate based authentication
     SSL {
-        key: Option<UnresolvedObjectName>,
+        /// Optional Client public certificate supplied as a catalog Secret
         certificate: Option<UnresolvedObjectName>,
+        /// Optional Client private key supplied as a catalog Secret
+        key: Option<UnresolvedObjectName>,
+        /// Optional Private key passphrase supplied as a catalog Secret
         passphrase: Option<UnresolvedObjectName>,
     },
+    /// SASL denotes one of a set of authentication options and may include transport security
     SASL {
-        mechanism: String,
+        /// SASL Mechanism to use, one of: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+        mechanism: &'static str,
+        /// Require transport security, indicated with a security protocol of SASL_SSL
         ssl: bool,
+        /// Mandatory username
         username: String,
+        /// Mandatory password supplied as a catalog Secret
         password: UnresolvedObjectName,
     },
 }
@@ -562,12 +571,16 @@ impl_display!(KafkaSecurityOptions);
 #[enum_kind(ConnectorType)]
 pub enum CreateConnector {
     Kafka {
+        /// Kafka broker(s) as hostname:post[,host2:port2]
         broker: String,
         security: KafkaSecurityOptions,
     },
     CSR {
+        /// Full URI of the schema registry
         registry: String,
+        /// Optional username for HTTP BASIC Auth
         username: Option<String>,
+        /// Optional password for auth supplied through a Secret in the catalog
         password: Option<UnresolvedObjectName>,
     },
 }
@@ -590,20 +603,14 @@ impl AstDisplay for CreateConnector {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");
                 f.write_node(&display::escape_single_quote_string(registry));
                 f.write_str("'");
-                match username {
-                    Some(username) => {
-                        f.write_str(" USERNAME '");
-                        f.write_node(&display::escape_single_quote_string(username));
-                        f.write_str("'");
-                    }
-                    None => {}
+                if let Some(username) = username {
+                    f.write_str(" USERNAME '");
+                    f.write_node(&display::escape_single_quote_string(username));
+                    f.write_str("'");
                 }
-                match password {
-                    Some(password) => {
-                        f.write_str(" PASSWORD ");
-                        f.write_node(password);
-                    }
-                    None => {}
+                if let Some(password) = password {
+                    f.write_str(" PASSWORD ");
+                    f.write_node(password);
                 }
             }
         }

@@ -1903,20 +1903,18 @@ impl<'a> Parser<'a> {
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let (mut username, mut password) = (None, None);
-                while let Ok(keyword) = self.expect_one_of_keywords(&[USERNAME, PASSWORD]) {
-                    match keyword {
-                        Keyword::Username => {
-                            let _ = self.consume_token(&Token::Eq);
-                            username = Some(self.parse_literal_string()?);
-                        }
-                        Keyword::Password => {
-                            let _ = self.consume_token(&Token::Eq);
-                            password = Some(self.parse_object_name()?);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
+                let username = if self.peek_keyword(USERNAME) {
+                    self.expect_keyword(USERNAME)?;
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                let password = if self.peek_keyword(PASSWORD) {
+                    self.expect_keyword(PASSWORD)?;
+                    Some(self.parse_object_name()?)
+                } else {
+                    None
+                };
                 CreateConnector::CSR {
                     registry,
                     username,
@@ -1968,9 +1966,9 @@ impl<'a> Parser<'a> {
     fn parse_kafka_sasl(&mut self, ssl: bool) -> Result<KafkaSecurityOptions, ParserError> {
         self.expect_keyword(MECHANISM)?;
         let mechanism = match self.expect_one_of_keywords(&[PLAIN, SCRAMSHA256, SCRAMSHA512])? {
-            Keyword::Plain => "PLAIN".to_string(),
-            Keyword::ScramSha256 => "SCRAM-SHA-256".to_string(),
-            Keyword::ScramSha512 => "SCRAM-SHA-512".to_string(),
+            Keyword::Plain => "PLAIN",
+            Keyword::ScramSha256 => "SCRAM-SHA-256",
+            Keyword::ScramSha512 => "SCRAM-SHA-512",
             _ => unreachable!(),
         };
         let (mut username, mut password) = ("".to_string(), UnresolvedObjectName::unqualified(""));
