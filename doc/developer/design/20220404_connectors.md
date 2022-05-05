@@ -77,6 +77,8 @@ The eventual goal is for connector create syntax to come in type specific varian
 
 All Sources in the catalog will have a reference to their connector which will also indicate if the connector is implicit or explicit. Implicit connectors are created when a traditional `CREATE SOURCE` command is executed and are invisible unless the catalog is directly inspected, i.e. `SHOW CREATE SOURCE` for a source with an implicit connector will return the same output as if connectors did not exist. Explicit connectors are created with `CREATE CONNECTOR` commands and used by specifying the connector in the `CREATE SOURCE` statement.
 
+In a platform implementation of Materialize some existing options no longer make sense, specifically environment variables and everything related to Kerberos/GSSAPI. Values which historically have been file locations will also now instead be Secrets in the catalog referenced by name just like connectors are.
+
 ## Implementation Phases
 
 1. Connectors marked `experimental` with support for implicit and explicit connectors using otherwise identical syntax to now (`WITH` options, etc) in `CREATE SOURCE` statements when enabled and when reading from the catalog in all cases
@@ -99,20 +101,13 @@ FOR KAFKA
 
 security_options ::=
   SSL (
-    KEY FILE [[=] <value>]
-    CERTIFICATE FILE [[=] <value>]
-    KEY PASSWORD [[=] <value>] )
+    KEY [[=] <secret name>]
+    CERTIFICATE [[=] <secret name>]
+    PASSPHRASE [[=] <secret name>] )
 | SASL (
-    MECHANISMS <value>
+    MECHANISMS (PLAIN | SCRAMSHA256 | SCRAMSHA512)
     USERNAME [[=] <value> ]
-    PASSWORD [[=] <value> ]
-    PASSWORD ENV [[=] <value> ] )
-| GSSAPI (
-    KEYTAB [=] <value>
-    KINIT CMD [=] <value>
-    RELOGIN TIME [=] <value>
-    PRINCIPAL [=] <value>
-    SERVICE [=] <value> )
+    PASSWORD [[=] <secret name> ]
 ```
 
 ### Confluent Schema Registry connector
@@ -124,11 +119,11 @@ FOR CONFLUENT SCHEMA REGISTRY
 
 security_options ::=
   USERNAME [=] <value>
-  PASSWORD [=] <value>
+  PASSWORD [=] <secret name>
   SSL (
-    CERTIFICATE FILE [[=] <value> ]
-    KEY FILE [[=] <value> ]
-    CA FILE [[=] <value> ] )
+    CERTIFICATE [[=] <secret name> ]
+    KEY [[=] <secret name> ]
+    CA FILE [[=] <secret name> ] )
 ```
 
 ### PostgreSQL connector
@@ -141,10 +136,11 @@ FOR POSTGRES
   | HOST ADDR [[=] <value> ] )
   DB  [[=] <value> ]
   USER  [=] <value>
+  PASSWORD [[=] <secret name>]
   SSL (
     MODE [[=] <value>]
-    CERTIFICATE FILE [[=] <value>]
-    KEY FILE [[=] <value>]
+    CERTIFICATE [[=] <secret name>]
+    KEY [[=] <secret name>]
     SNI [[=] <value>] )
 
 ```
@@ -153,10 +149,15 @@ FOR POSTGRES
 ```
 CREATE CONNECTOR <connector_name>
 FOR AWS
-  ACCESS KEY ID [[=] <value>]
-  SECRET ACCESS KEY [[=] <value>]
+  ACCESS KEY [[=] <secret name>]
+  SECRET KEY [[=] <secret name>]
   TOKEN [[=] <value>]
   PROFILE [[=] <value>]
   ROLE ARN [[=] <value>]
   REGION [[=] <value>]
 ```
+
+
+## revision history
+4/4/22 - initial version
+5/5/22 - updates to syntax proposal to reflect platform realities
