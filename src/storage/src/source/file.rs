@@ -17,7 +17,6 @@ use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
 use mz_dataflow_types::sources::AwsExternalId;
-use mz_repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 use tracing::{debug, error, trace};
 
@@ -37,7 +36,7 @@ pub struct FileSourceReader {
     /// Unique source ID
     id: SourceInstanceId,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<Result<MessagePayload, Error>>,
+    receiver_stream: Receiver<Result<Option<Vec<u8>>, Error>>,
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
@@ -60,7 +59,7 @@ impl From<FileOffset> for MzOffset {
 
 impl SourceReader for FileSourceReader {
     type Key = ();
-    type Value = MessagePayload;
+    type Value = Option<Vec<u8>>;
 
     fn new(
         _name: String,
@@ -86,12 +85,12 @@ impl SourceReader for FileSourceReader {
                         };
                         br.consume(chunk.len());
                         if chunk.len() > 0 {
-                            Some(Ok(MessagePayload::Data(chunk)))
+                            Some(Ok(Some(chunk)))
                         } else {
                             None
                         }
                     })
-                    .chain(std::iter::once(Ok(MessagePayload::EOF))))
+                    .chain(std::iter::once(Ok(None))))
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -152,13 +151,13 @@ impl SourceReader for FileSourceReader {
 /// Blocking logic to read from a file, intended for its own thread.
 pub fn read_file_task<Ctor, I, Err>(
     path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Result<MessagePayload, anyhow::Error>>,
+    tx: std::sync::mpsc::SyncSender<Result<Option<Vec<u8>>, anyhow::Error>>,
     activator: Option<SyncActivator>,
     read_style: FileReadStyle,
     compression: Compression,
     iter_ctor: Ctor,
 ) where
-    I: IntoIterator<Item = Result<MessagePayload, Err>> + Send + 'static,
+    I: IntoIterator<Item = Result<Option<Vec<u8>>, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {

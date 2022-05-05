@@ -30,7 +30,6 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use mz_expr::PartitionId;
-use mz_repr::MessagePayload;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -453,7 +452,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), MessagePayload>>,
+    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
@@ -495,8 +494,8 @@ where
                 } in data.iter()
                 {
                     let value = match value {
-                        MessagePayload::Data(data) => data,
-                        MessagePayload::EOF => {
+                        Some(data) => data,
+                        None => {
                             let data = &mut &value_buf[..];
                             let mut result = value_decoder.eof(data);
                             if result.is_ok() && !data.is_empty() {

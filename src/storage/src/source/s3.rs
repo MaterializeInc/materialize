@@ -53,7 +53,6 @@ use mz_dataflow_types::sources::{
 use mz_expr::{PartitionId, SourceInstanceId};
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
-use mz_repr::MessagePayload;
 use tracing::{debug, error, trace, warn};
 
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
@@ -66,9 +65,8 @@ use super::metrics::SourceBaseMetrics;
 mod metrics;
 mod notifications;
 
-type Out = MessagePayload;
 struct InternalMessage {
-    record: Out,
+    record: Option<Vec<u8>>,
 }
 /// Size of data chunks we send to dataflow
 const CHUNK_SIZE: usize = 4096;
@@ -713,9 +711,7 @@ async fn download_object(
     );
 
     if download_result.is_ok() {
-        let sent = tx.send(Ok(InternalMessage {
-            record: MessagePayload::EOF,
-        }));
+        let sent = tx.send(Ok(InternalMessage { record: None }));
         if sent.await.is_err() {
             download_result = Err(DownloadError::SendFailed);
         }
@@ -746,7 +742,7 @@ where
                         // ReaderStream return's `None` if the underlying `AsyncRead`
                         // gives out 0 bytes, so the chunk is always !empty.
                         // See https://github.com/tokio-rs/tokio/blob/e8f19e771f501408427f7f9ee6ba4f54b2d4094c/tokio-util/src/io/reader_stream.rs#L102-L108
-                        record: MessagePayload::Data(chunk.to_vec()),
+                        record: Some(chunk.to_vec()),
                     }))
                     .await
                     .is_err()
@@ -772,7 +768,7 @@ where
 
 impl SourceReader for S3SourceReader {
     type Key = ();
-    type Value = MessagePayload;
+    type Value = Option<Vec<u8>>;
 
     fn new(
         source_name: String,

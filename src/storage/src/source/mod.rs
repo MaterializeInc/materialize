@@ -60,7 +60,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_repr::MessagePayload;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
@@ -355,19 +354,6 @@ impl MaybeLength for Value {
     }
 }
 
-impl MaybeLength for MessagePayload {
-    fn len(&self) -> Option<usize> {
-        match self {
-            MessagePayload::Data(data) => Some(data.len()),
-            MessagePayload::EOF => None,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        false
-    }
-}
-
 impl<T: MaybeLength> MaybeLength for Option<T> {
     fn len(&self) -> Option<usize> {
         self.as_ref().and_then(|v| v.len())
@@ -510,7 +496,7 @@ pub struct SourceMessage<Key, Value> {
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
 }
 
-impl fmt::Debug for SourceMessage<(), MessagePayload> {
+impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
