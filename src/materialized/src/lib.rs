@@ -285,11 +285,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
-                        format!("--persist-blob-url={}", config.persist_location.blob_uri),
-                        format!(
-                            "--persist-consensus-url={}",
-                            config.persist_location.consensus_uri
-                        ),
                     ];
                     if config.orchestrator.linger {
                         storage_opts.push(format!("--linger"))

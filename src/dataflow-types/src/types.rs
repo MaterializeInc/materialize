@@ -96,7 +96,8 @@ pub struct SourceInstanceDesc<M> {
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
-    /// Additional metadata required by a storage instance to read this source
+    /// Additional metadata used by storage instances to render this source instance and by the
+    /// storage client of a compute instance to read it.
     pub storage_metadata: M,
 }
 

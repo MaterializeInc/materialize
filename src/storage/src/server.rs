@@ -15,7 +15,6 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
-use mz_persist_client::PersistClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
@@ -47,8 +46,6 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
-    /// A client to the persist library.
-    pub persist_client: PersistClient,
 }
 
 /// A handle to a running dataflow server.
