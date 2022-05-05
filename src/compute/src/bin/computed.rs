@@ -22,7 +22,6 @@ use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 use mz_dataflow_types::client::{ComputeClient, GenericClient};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
@@ -108,6 +107,19 @@ struct Args {
     /// Where to write a pid lock file. Should only be used for local process orchestrators.
     #[clap(long, value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
+
+    // === Logging options. ===
+    /// Which log messages to emit. See `materialized`'s help for more
+    /// info.
+    ///
+    /// The default value for this option is "info".
+    #[clap(
+        long,
+        env = "COMPUTED_LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "info"
+    )]
+    log_filter: String,
 }
 
 #[tokio::main]
@@ -198,12 +210,18 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("COMPUTED_LOG_FILTER")
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
+    let mut _tracing_stream = mz_ore::tracing::configure(
+        mz_ore::tracing::TracingConfig {
+            log_filter: &args.log_filter,
+            opentelemetry_endpoint: None,
+            opentelemetry_headers: None,
+            #[cfg(feature = "tokio-console")]
+            tokio_console: false,
+        },
+        &metrics_registry,
+    )
+    .await?;
 
     if args.workers == 0 {
         bail!("--workers must be greater than 0");

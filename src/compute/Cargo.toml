@@ -26,7 +26,7 @@ mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
@@ -59,6 +59,7 @@ prost-build = { version = "0.10.3", features = ["vendored"] }
 [features]
 default = ["jemalloc"]
 jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
