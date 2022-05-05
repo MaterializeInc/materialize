@@ -1254,10 +1254,7 @@ pub mod sources {
         /// shard. Returns `None` if this type of connector doesn't write to persist.
         pub async fn get_read_handle<T: Timestamp + Lattice + Codec64>(
             &self,
-        ) -> Result<
-            Option<ReadHandle<Row, Row, T, mz_repr::Diff>>,
-            mz_persist::location::ExternalError,
-        > {
+        ) -> Result<Option<ReadHandle<Row, Row, T, mz_repr::Diff>>, anyhow::Error> {
             let result = match self {
                 SourceConnector::External {
                     connector: ExternalSourceConnector::Persist(persist_connector),
@@ -1268,14 +1265,12 @@ pub mod sources {
                         consensus_uri: persist_connector.consensus_uri.clone(),
                     };
 
-                    let timeout = Duration::from_secs(60);
+                    let (blob, consensus) = location.open().await?;
 
-                    let (blob, consensus) = location.open(timeout).await?;
-
-                    let persist_client = PersistClient::new(timeout, blob, consensus).await?;
+                    let persist_client = PersistClient::new(blob, consensus).await?;
 
                     let (_write, read) = persist_client
-                        .open::<Row, Row, T, mz_repr::Diff>(timeout, persist_connector.shard_id)
+                        .open::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
                         .await?;
 
                     Some(read)

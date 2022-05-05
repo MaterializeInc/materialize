@@ -13,7 +13,7 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::operators::{Concat, Map, OkErr};
@@ -23,7 +23,6 @@ use tracing::trace;
 
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
-use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, Row, Timestamp};
@@ -73,42 +72,40 @@ where
             return;
         }
 
-        let timeout = Duration::from_secs(60);
-
         let persist_location = PersistLocation {
             consensus_uri: consensus_uri,
             blob_uri: blob_uri,
         };
 
-        let (blob, consensus) = persist_location.open(timeout).await?;
+        let (blob, consensus) = persist_location.open().await?;
 
         let persist_client =
-            PersistClient::new(timeout, blob, consensus).await?;
+            PersistClient::new(blob, consensus).await?;
 
 
         let (_write, read) =
-            persist_client.open::<Row, Row, Timestamp, Diff>(timeout, shard_id).await?;
+            persist_client.open::<Row, Row, Timestamp, Diff>(shard_id).await?;
 
             let mut snapshot_iter = read
-                .snapshot(timeout, as_of.clone())
-                .await?
-                .expect("invalid usage");
+                .snapshot(as_of.clone())
+                .await
+                .expect("cannot serve requested as_of");
 
 
             // First, yield all the updates from the snapshot.
-            while let Some(next) = snapshot_iter.next(timeout).await? {
+            while let Some(next) = snapshot_iter.next().await {
                 yield ListenEvent::Updates(next);
             }
 
             // Then, listen continously and yield any new updates. This loop is expected to never
             // finish.
             let mut listen = read
-                .listen(timeout, as_of)
-                .await?
-                .expect("invalid usage");
+                .listen(as_of)
+                .await
+                .expect("cannot serve requested as_of");
 
             loop {
-                let next = listen.next(timeout).await?;
+                let next = listen.next().await;
                 for event in next {
                     yield event;
                 }
@@ -161,7 +158,7 @@ where
                                 }
                             }
                         },
-                        Some(Err::<_, ExternalError>(e)) => {
+                        Some(Err::<_, anyhow::Error>(e)) => {
                             let cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give(Err((format!("{}", e), current_ts, 1)));

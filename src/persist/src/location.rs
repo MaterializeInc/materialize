@@ -146,7 +146,7 @@ impl std::fmt::Display for ExternalError {
 impl std::error::Error for ExternalError {}
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()

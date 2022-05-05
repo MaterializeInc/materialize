@@ -12,23 +12,23 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{info, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::Machine;
+use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::state::Upper;
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 ///
@@ -59,6 +59,19 @@ impl WriterId {
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
+///
+/// All async methods on ReadHandle retry for as long as they are able, but the
+/// returned [std::future::Future]s implement "cancel on drop" semantics. This
+/// means that callers can add a timeout using [tokio::time::timeout] or
+/// [tokio::time::timeout_at].
+///
+/// ```rust,no_run
+/// # let mut write: mz_persist_client::write::WriteHandle<String, String, u64, i64> = unimplemented!();
+/// # let timeout: std::time::Duration = unimplemented!();
+/// # async {
+/// tokio::time::timeout(timeout, write.fetch_recent_upper()).await
+/// # };
+/// ```
 #[derive(Debug)]
 pub struct WriteHandle<K, V, T, D>
 where
@@ -95,23 +108,17 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
-    pub async fn fetch_recent_upper(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Antichain<T>, ExternalError> {
-        trace!("WriteHandle::fetch_recent_upper timeout={:?}", timeout,);
-        let deadline = Instant::now() + timeout;
-        let upper = self.machine.upper(deadline).await?;
-
-        Ok(upper)
+    pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
+        trace!("WriteHandle::fetch_recent_upper");
+        self.machine.fetch_upper().await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
     /// `new_upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
-    /// If not, an `Err` containing the current writer upper is returned. If
-    /// that happens, we also update our local `upper` to match the current
+    /// If not, an `Upper` err containing the current writer upper is returned.
+    /// If that happens, we also update our local `upper` to match the current
     /// upper. This is useful in cases where a timeout happens in between a
     /// successful write and returning that to the client.
     ///
@@ -136,8 +143,8 @@ where
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
     /// us.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
     /// TODO: Introduce an AsyncIterator (futures::Stream) variant of this. Or,
     /// given that the AsyncIterator version would be strictly more general,
@@ -145,10 +152,9 @@ where
     /// overhead.
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
-        timeout: Duration,
         updates: I,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -157,12 +163,7 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!(
-            "WriteHandle::append timeout={:?} new_upper={:?}",
-            timeout,
-            new_upper
-        );
-        let deadline = Instant::now() + timeout;
+        trace!("WriteHandle::append new_upper={:?}", new_upper);
 
         let lower = self.upper.clone();
         let upper = new_upper;
@@ -177,27 +178,35 @@ where
         };
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
-            self.blob
-                .set(deadline, &key, value, Atomicity::RequireAtomic)
-                .await?;
+            let () = retry_external("append::set", || async {
+                // If MultiBlob::set took value as a ref, then we wouldn't have
+                // to clone here.
+                self.blob
+                    .set(
+                        Instant::now() + FOREVER,
+                        &key,
+                        value.clone(),
+                        Atomicity::RequireAtomic,
+                    )
+                    .await
+            })
+            .await;
             vec![key]
         } else {
             vec![]
         };
 
-        let res = self
-            .machine
-            .append(deadline, &self.writer_id, &keys, &desc)
-            .await?;
+        let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
         match res {
-            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
-            Ok(Err(current_upper)) => {
-                self.upper = current_upper.clone();
+            Ok(_seqno) => {
+                self.upper = desc.upper().clone();
+                Ok(Ok(Ok(())))
+            }
+            Err(current_upper) => {
+                self.upper = current_upper.0.clone();
                 return Ok(Ok(Err(current_upper)));
             }
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Ok(())))
+        }
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -205,7 +214,7 @@ where
     /// `expected_upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
-    /// If not, an `Err` containing the current global upper is returned.
+    /// If not, an `Upper` err containing the current global upper is returned.
     ///
     /// In contrast to [Self::append], this linearizes mutations from all
     /// writers. It's intended for use as an atomic primitive for timestamp
@@ -226,15 +235,21 @@ where
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
     /// us.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// SUBTLE! Unlike the other methods on WriteHandle, it is not always safe
+    /// to retry [ExternalError]s in compare_and_append (depends on the usage
+    /// pattern). We should be able to structure timestamp binding, source, and
+    /// sink code so it is always safe to retry [ExternalError]s, but SQL txns
+    /// will have to pass the error back to the user (or risk double committing
+    /// the txn).
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
-        timeout: Duration,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Antichain<T>>, InvalidUsage>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -243,12 +258,7 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!(
-            "WriteHandle::write_batch timeout={:?} new_upper={:?}",
-            timeout,
-            new_upper
-        );
-        let deadline = Instant::now() + timeout;
+        trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
 
         let lower = expected_upper;
         let upper = new_upper;
@@ -263,9 +273,19 @@ where
         };
         let keys = if let Some(value) = value {
             let key = Uuid::new_v4().to_string();
-            self.blob
-                .set(deadline, &key, value, Atomicity::RequireAtomic)
-                .await?;
+            let () = retry_external("compare_and_append::set", || async {
+                // If MultiBlob::set took value as a ref, then we wouldn't have
+                // to clone here.
+                self.blob
+                    .set(
+                        Instant::now() + FOREVER,
+                        &key,
+                        value.clone(),
+                        Atomicity::RequireAtomic,
+                    )
+                    .await
+            })
+            .await;
             vec![key]
         } else {
             vec![]
@@ -273,7 +293,7 @@ where
 
         let res = self
             .machine
-            .compare_and_append(deadline, &self.writer_id, &keys, &desc)
+            .compare_and_append(&self.writer_id, &keys, &desc)
             .await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
@@ -286,7 +306,7 @@ where
     fn encode_batch<SB, KB, VB, TB, DB, I>(
         desc: &Description<T>,
         updates: I,
-    ) -> Result<Option<Vec<u8>>, InvalidUsage>
+    ) -> Result<Option<Vec<u8>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -304,18 +324,18 @@ where
             let ((k, v), t, d) = tuple.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             if !desc.lower().less_equal(t) || desc.upper().less_equal(t) {
-                return Err(InvalidUsage(anyhow!(
-                    "entry timestamp {:?} doesn't fit in batch desc: {:?}",
-                    t,
-                    desc
-                )));
+                return Err(InvalidUsage::UpdateNotWithinBounds {
+                    ts: t.clone(),
+                    lower: desc.lower().clone(),
+                    upper: desc.upper().clone(),
+                });
             }
 
             trace!("writing update {:?}", ((k, v), t, d));
             key_buf.clear();
             val_buf.clear();
-            k.encode(&mut key_buf);
-            v.encode(&mut val_buf);
+            K::encode(k, &mut key_buf);
+            V::encode(v, &mut val_buf);
             // TODO: Get rid of the from_le_bytes.
             let t = u64::from_le_bytes(T::encode(t));
             let d = i64::from_le_bytes(D::encode(d));
@@ -369,6 +389,41 @@ where
         batch.encode(&mut buf);
         Ok(Some(buf))
     }
+
+    /// Test helper for an [Self::append] call that is expected to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_append(&mut self, updates: &[((K, V), T, D)], new_upper: T) {
+        self.append(
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("external durability failed")
+        .expect("invalid usage")
+        .expect("unexpected writer-local upper");
+    }
+
+    /// Test helper for a [Self::compare_and_append] call that is expected to
+    /// succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_compare_and_append(
+        &mut self,
+        updates: &[((K, V), T, D)],
+        expected_upper: T,
+        new_upper: T,
+    ) {
+        self.compare_and_append(
+            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
+            Antichain::from_elem(expected_upper),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("external durability failed")
+        .expect("invalid usage")
+        .expect("unexpected upper")
+    }
 }
 
 impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
@@ -381,27 +436,20 @@ where
     D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
         // TODO: Use tokio instead of futures_executor.
-        let res = futures_executor::block_on(self.machine.expire_writer(deadline, &self.writer_id));
-        if let Err(err) = res {
-            info!(
-                "drop failed to expire writer {}, falling back to lease timeout: {:?}",
-                self.writer_id, err
-            );
-        }
+        let _: SeqNo = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
-    use crate::{ShardId, NO_TIMEOUT};
+    use crate::ShardId;
 
     use super::*;
 
     #[tokio::test]
-    async fn empty_batches() -> Result<(), Box<dyn std::error::Error>> {
+    async fn empty_batches() {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -411,39 +459,32 @@ mod tests {
         ];
 
         let (mut write, _) = new_test_client()
-            .await?
-            .open::<String, String, u64, i64>(NO_TIMEOUT, ShardId::new())
-            .await?;
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
         let blob = Arc::clone(&write.blob);
 
         // Write an initial batch.
         let mut upper = 3;
-        write
-            .append(NO_TIMEOUT, &data[..2], Antichain::from_elem(upper))
-            .await??
-            .expect("invalid current upper");
+        write.expect_append(&data[..2], upper).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
-        let blob_count_before = blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len();
+        let blob_count_before = blob
+            .list_keys(Instant::now() + FOREVER)
+            .await
+            .expect("list_keys failed")
+            .len();
         for _ in 0..5 {
             let new_upper = upper + 1;
-            const EMPTY: &[((String, String), u64, i64)] = &[];
-            write
-                .compare_and_append(
-                    NO_TIMEOUT,
-                    EMPTY,
-                    Antichain::from_elem(upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await??
-                .expect("invalid current upper");
+            write.expect_compare_and_append(&[], upper, new_upper).await;
             upper = new_upper;
         }
         assert_eq!(
-            blob.list_keys(Instant::now() + NO_TIMEOUT).await?.len(),
+            blob.list_keys(Instant::now() + FOREVER)
+                .await
+                .expect("list_keys failed")
+                .len(),
             blob_count_before
         );
-
-        Ok(())
     }
 }

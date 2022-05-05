@@ -26,12 +26,12 @@ use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{BlobMulti, ExternalError};
+use mz_persist::location::{BlobMulti, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::Machine;
-use crate::r#impl::state::DescriptionMeta;
+use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -98,21 +98,20 @@ where
     /// Attempt to pull out the next values of this iterator.
     ///
     /// An None value is returned if this iterator is exhausted.
-    pub async fn next(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<Vec<((Result<K, String>, Result<V, String>), T, D)>>, ExternalError> {
-        trace!("SnapshotIter::next timeout={:?}", timeout);
-        let deadline = Instant::now() + timeout;
+    pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
+        trace!("SnapshotIter::next");
         loop {
             let (key, desc) = match self.batches.last() {
                 Some(x) => x.clone(),
                 // All done!
-                None => return Ok(None),
+                None => return None,
             };
             let value = loop {
                 // TODO: Deduplicate this with the logic in Listen.
-                let value = self.blob.get(deadline, &key).await?;
+                let value = retry_external("snap_next::get", || async {
+                    self.blob.get(Instant::now() + FOREVER, &key).await
+                })
+                .await;
                 match value {
                     Some(x) => break x,
                     // If the underlying impl of blob isn't linearizable, then we
@@ -123,9 +122,6 @@ where
                     // TODO: This should increment a counter.
                     None => {
                         let sleep = Duration::from_secs(1);
-                        if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::new_timeout(deadline));
-                        }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
                             sleep, key
@@ -145,9 +141,13 @@ where
             assert_eq!(key1, key);
             assert_eq!(desc1, desc);
 
-            let batch_part = BlobTraceBatchPart::decode(&value).map_err(|err| {
-                ExternalError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
-            })?;
+            let batch_part = BlobTraceBatchPart::decode(&value)
+                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+                // We received a State that we couldn't decode. This could
+                // happen if persist messes up backward/forward compatibility,
+                // if the durable data was corrupted, or if operations messes up
+                // deployment. In any case, fail loudly.
+                .expect("internal error: invalid encoded state");
             let mut ret = Vec::new();
             for chunk in batch_part.updates {
                 for ((k, v), t, d) in chunk.iter() {
@@ -175,7 +175,7 @@ where
                 // We might have filtered everything.
                 continue;
             }
-            return Ok(Some(ret));
+            return Some(ret);
         }
     }
 }
@@ -187,19 +187,16 @@ where
     T: Timestamp + Lattice + Codec64 + Ord,
     D: Semigroup + Codec64 + Ord,
 {
-    /// Test helper to read all data in the snapshot.
+    /// Test helper to read all data in the snapshot and return it sorted.
     #[cfg(test)]
-    pub async fn read_all(
-        &mut self,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
-        use crate::NO_TIMEOUT;
-
+    #[track_caller]
+    pub async fn read_all(&mut self) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
         let mut ret = Vec::new();
-        while let Some(mut next) = self.next(NO_TIMEOUT).await? {
+        while let Some(mut next) = self.next().await {
             ret.append(&mut next)
         }
         ret.sort();
-        Ok(ret)
+        ret
     }
 }
 
@@ -232,55 +229,46 @@ where
     D: Semigroup + Codec64,
 {
     /// Attempt to pull out the next values of this subscription.
-    pub async fn next(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Vec<ListenEvent<K, V, T, D>>, ExternalError> {
-        trace!("Listen::next timeout={:?}", timeout);
-        let deadline = Instant::now() + timeout;
+    pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        trace!("Listen::next");
 
-        let (batch_keys, desc) = self
-            .machine
-            .next_listen_batch(deadline, &self.frontier)
-            .await?;
-        let updates = self.fetch_batch(deadline, &batch_keys, &desc).await?;
+        let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
+        let updates = self.fetch_batch(&batch_keys, &desc).await;
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
         }
         ret.push(ListenEvent::Progress(desc.upper().clone()));
         self.frontier = desc.upper().clone();
-        return Ok(ret);
+        ret
     }
 
     /// Test helper to read from the listener until the given frontier is
     /// reached.
     #[cfg(test)]
-    pub async fn read_until(
-        &mut self,
-        ts: &T,
-    ) -> Result<Vec<ListenEvent<K, V, T, D>>, ExternalError> {
-        use crate::NO_TIMEOUT;
-
+    #[track_caller]
+    pub async fn read_until(&mut self, ts: &T) -> Vec<ListenEvent<K, V, T, D>> {
         let mut ret = Vec::new();
         while self.frontier.less_than(ts) {
-            let mut next = self.next(NO_TIMEOUT).await?;
+            let mut next = self.next().await;
             ret.append(&mut next);
         }
-        return Ok(ret);
+        ret
     }
 
     async fn fetch_batch(
         &self,
-        deadline: Instant,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
+    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
         let mut ret = Vec::new();
         for key in keys {
             // TODO: Deduplicate this with the logic in SnapshotIter.
             let value = loop {
-                let value = self.blob.get(deadline, &key).await?;
+                let value = retry_external("listen_fetch::get", || async {
+                    self.blob.get(Instant::now() + FOREVER, &key).await
+                })
+                .await;
                 match value {
                     Some(x) => break x,
                     // If the underlying impl of blob isn't linearizable, then we
@@ -291,9 +279,6 @@ where
                     // TODO: This should increment a counter.
                     None => {
                         let sleep = Duration::from_secs(1);
-                        if Instant::now() + sleep > deadline {
-                            return Err(ExternalError::new_timeout(deadline));
-                        }
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
                             sleep, key
@@ -302,9 +287,13 @@ where
                     }
                 };
             };
-            let batch = BlobTraceBatchPart::decode(&value).map_err(|err| {
-                ExternalError::from(anyhow!("couldn't decode batch at key {}: {}", key, err))
-            })?;
+            let batch = BlobTraceBatchPart::decode(&value)
+                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+                // We received a State that we couldn't decode. This could
+                // happen if persist messes up backward/forward compatibility,
+                // if the durable data was corrupted, or if operations messes up
+                // deployment. In any case, fail loudly.
+                .expect("internal error: invalid encoded state");
             for chunk in batch.updates {
                 for ((k, v), t, d) in chunk.iter() {
                     // TODO: Get rid of the to_le_bytes.
@@ -329,12 +318,26 @@ where
                 }
             }
         }
-        return Ok(ret);
+        ret
     }
 }
 
 /// A "capability" granting the ability to read the state of some shard at times
 /// greater or equal to `self.since()`.
+///
+/// All async methods on ReadHandle retry for as long as they are able, but the
+/// returned [std::future::Future]s implement "cancel on drop" semantics. This
+/// means that callers can add a timeout using [tokio::time::timeout] or
+/// [tokio::time::timeout_at].
+///
+/// ```rust,no_run
+/// # let mut read: mz_persist_client::read::ReadHandle<String, String, u64, i64> = unimplemented!();
+/// # let timeout: std::time::Duration = unimplemented!();
+/// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
+/// # async {
+/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// # };
+/// ```
 #[derive(Debug)]
 pub struct ReadHandle<K, V, T, D>
 where
@@ -375,29 +378,13 @@ where
     ///
     /// It is possible to heartbeat a reader lease by calling this with
     /// `new_since` equal to `self.since()` (making the call a no-op).
-    ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
-    pub async fn downgrade_since(
-        &mut self,
-        timeout: Duration,
-        new_since: Antichain<T>,
-    ) -> Result<Result<(), InvalidUsage>, ExternalError> {
-        trace!(
-            "ReadHandle::downgrade_since timeout={:?} new_since={:?}",
-            timeout,
-            new_since
-        );
-        let deadline = Instant::now() + timeout;
-        let res = self
+    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
+        trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
+        let (_seqno, current_reader_since) = self
             .machine
-            .downgrade_since(deadline, &self.reader_id, &new_since)
-            .await?;
-        if let Err(err) = res {
-            return Ok(Err(err));
-        }
-        self.since = new_since;
-        Ok(Ok(()))
+            .downgrade_since(&self.reader_id, &new_since)
+            .await;
+        self.since = current_reader_since.0;
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -409,31 +396,24 @@ where
     /// downgrade their read capability when they are certain they have all data
     /// through the frontier they would downgrade to.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
     ///
     /// TODO: If/when persist learns about the structure of the keys and values
     /// being stored, this is an opportunity to push down projection and key
     /// filter information.
-    pub async fn listen(
-        &self,
-        timeout: Duration,
-        as_of: Antichain<T>,
-    ) -> Result<Result<Listen<K, V, T, D>, InvalidUsage>, ExternalError> {
-        trace!("ReadHandle::listen timeout={:?} as_of={:?}", timeout, as_of);
+    pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
+        trace!("ReadHandle::listen as_of={:?}", as_of);
         if PartialOrder::less_than(&as_of, &self.since) {
-            return Ok(Err(InvalidUsage(anyhow!(
-                "listen with as_of {:?} cannot be served by shard with since: {:?}",
-                as_of,
-                self.since
-            ))));
+            return Err(Since(self.since.clone()));
         }
-        Ok(Ok(Listen {
+        Ok(Listen {
             as_of: as_of.clone(),
             frontier: as_of,
             machine: self.machine.clone(),
             blob: Arc::clone(&self.blob),
-        }))
+        })
     }
 
     /// Returns a snapshot of the contents of the shard TVC at `as_of`.
@@ -443,33 +423,33 @@ where
     /// greater or equal to the current `upper` of the shard. The recipient
     /// should only downgrade their read capability when they are certain they
     /// have all data through the frontier they would downgrade to.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
     ///
     /// This is a convenience method for constructing the snapshot and
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
     /// [Self::snapshot_splits] and [Self::snapshot_iter].
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
-    ///
     /// TODO: If/when persist learns about the structure of the keys and values
     /// being stored, this is an opportunity to push down projection and key
     /// filter information.
     pub async fn snapshot(
         &self,
-        timeout: Duration,
         as_of: Antichain<T>,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
-        let splits = self
-            .snapshot_splits(timeout, as_of, NonZeroUsize::new(1).unwrap())
+    ) -> Result<SnapshotIter<K, V, T, D>, Since<T>> {
+        let mut splits = self
+            .snapshot_splits(as_of, NonZeroUsize::new(1).unwrap())
             .await?;
-        let mut splits = match splits {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
         assert_eq!(splits.len(), 1);
         let split = splits.pop().unwrap();
-        self.snapshot_iter(timeout, split).await
+        let iter = self
+            .snapshot_iter(split)
+            .await
+            .expect("internal error: snapshot shard didn't match machine shard");
+        Ok(iter)
     }
 
     /// Returns a snapshot of the contents of the shard TVC at `as_of`.
@@ -479,6 +459,10 @@ where
     /// greater or equal to the current `upper` of the shard. The recipient
     /// should only downgrade their read capability when they are certain they
     /// have all data through the frontier they would downgrade to.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
     ///
     /// This snapshot may be split into a number of splits, each of which may be
     /// exchanged (including over the network) to load balance the processing of
@@ -492,32 +476,23 @@ where
     /// you want to immediately consume the snapshot from a single place, you
     /// likely want the [Self::snapshot] helper.
     ///
-    /// The clunky two-level Result is to enable more obvious error handling in
-    /// the caller. See <http://sled.rs/errors.html> for details.
-    ///
     /// TODO: If/when persist learns about the structure of the keys and values
     /// being stored, this is an opportunity to push down projection and key
     /// filter information.
     pub async fn snapshot_splits(
         &self,
-        timeout: Duration,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Result<Vec<SnapshotSplit>, InvalidUsage>, ExternalError> {
+    ) -> Result<Vec<SnapshotSplit>, Since<T>> {
         trace!(
-            "ReadHandle::snapshot timeout={:?} as_of={:?} num_splits={:?}",
-            timeout,
+            "ReadHandle::snapshot as_of={:?} num_splits={:?}",
             as_of,
             num_splits
         );
-        let deadline = Instant::now() + timeout;
         // Hack: Keep this method `&self` instead of `&mut self` by cloning the
         // cached copy of the state, updating it, and throwing it away
         // afterward.
-        let batches = match self.machine.clone().snapshot(deadline, &as_of).await? {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
+        let batches = self.machine.clone().snapshot(&as_of).await?;
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
                 shard_id: self.machine.shard_id(),
@@ -530,27 +505,21 @@ where
                 .batches
                 .push((batch_key, (&desc).into()));
         }
-        return Ok(Ok(splits));
+        return Ok(splits);
     }
 
     /// Trade in an exchange-able [SnapshotSplit] for an iterator over the data
     /// it represents.
     pub async fn snapshot_iter(
         &self,
-        timeout: Duration,
         split: SnapshotSplit,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
-        trace!(
-            "ReadHandle::snapshot timeout={:?} split={:?}",
-            timeout,
-            split
-        );
+    ) -> Result<SnapshotIter<K, V, T, D>, InvalidUsage<T>> {
+        trace!("ReadHandle::snapshot split={:?}", split);
         if split.shard_id != self.machine.shard_id() {
-            return Ok(Err(InvalidUsage(anyhow!(
-                "snapshot shard id {} doesn't match handle id {}",
-                split.shard_id,
-                self.machine.shard_id()
-            ))));
+            return Err(InvalidUsage::SnapshotNotFromThisShard {
+                snapshot_shard: split.shard_id,
+                handle_shard: self.machine.shard_id(),
+            });
         }
 
         let batches = split
@@ -571,37 +540,41 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
-        Ok(Ok(iter))
+        Ok(iter)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
-    pub async fn clone(&self, timeout: Duration) -> Result<Self, ExternalError> {
-        trace!("ReadHandle::clone timeout={:?}", timeout);
-        let deadline = Instant::now() + timeout;
+    pub async fn clone(&self) -> Self {
+        trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
-        let read_cap = machine
-            .clone_reader(deadline, &self.reader_id)
-            .await
-            .expect("TODO: return a lease expired error instead");
+        let read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
             reader_id: new_reader_id,
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
         };
-        Ok(new_reader)
+        new_reader
     }
 
-    /// Test helper for creating a single part snapshot.
+    /// Test helper for an [Self::snapshot] call that is expected to succeed.
     #[cfg(test)]
-    pub async fn snapshot_one(
-        &self,
-        as_of: T,
-    ) -> Result<Result<SnapshotIter<K, V, T, D>, InvalidUsage>, ExternalError> {
-        use crate::NO_TIMEOUT;
-        self.snapshot(NO_TIMEOUT, Antichain::from_elem(as_of)).await
+    #[track_caller]
+    pub async fn expect_snapshot(&self, as_of: T) -> SnapshotIter<K, V, T, D> {
+        self.snapshot(Antichain::from_elem(as_of))
+            .await
+            .expect("cannot serve requested as_of")
+    }
+
+    /// Test helper for a [Self::listen] call that is expected to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_listen(&self, as_of: T) -> Listen<K, V, T, D> {
+        self.listen(Antichain::from_elem(as_of))
+            .await
+            .expect("cannot serve requested as_of")
     }
 }
 
@@ -615,14 +588,7 @@ where
     D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
         // TODO: Use tokio instead of futures_executor.
-        let res = futures_executor::block_on(self.machine.expire_reader(deadline, &self.reader_id));
-        if let Err(err) = res {
-            info!(
-                "drop failed to expire reader {}, falling back to lease timeout: {:?}",
-                self.reader_id, err
-            );
-        }
+        let _: SeqNo = futures_executor::block_on(self.machine.expire_reader(&self.reader_id));
     }
 }

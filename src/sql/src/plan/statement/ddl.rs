@@ -685,7 +685,7 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::Persist(PersistSourceConnector {
                 consensus_uri: consensus_uri.clone(),
                 blob_uri: blob_uri.clone(),
-                shard_id: collection_id.parse()?,
+                shard_id: collection_id.parse().map_err(anyhow::Error::msg)?,
             });
 
             (
@@ -2222,7 +2222,7 @@ fn persist_sink_builder(
     Ok(SinkConnectorBuilder::Persist(PersistSinkConnectorBuilder {
         consensus_uri,
         blob_uri,
-        shard_id: shard_id.parse()?,
+        shard_id: shard_id.parse().map_err(anyhow::Error::msg)?,
         value_desc,
     }))
 }
