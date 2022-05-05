@@ -13,6 +13,7 @@ use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_repr::GlobalId;
+use mz_stash::Append;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
@@ -27,7 +28,7 @@ pub struct ComputeInstanceIndexOracle<'a, T> {
     compute: ComputeController<'a, T>,
 }
 
-impl Coordinator {
+impl<S: Append> Coordinator<S> {
     /// Creates a new index oracle for the specified compute instance.
     pub fn index_oracle(
         &self,

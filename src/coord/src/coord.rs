@@ -77,6 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_stash::Append;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
@@ -225,9 +226,9 @@ pub struct SinkConnectorReady {
 }
 
 /// Configures a coordinator.
-pub struct Config {
+pub struct Config<S> {
     pub dataflow_client: mz_dataflow_types::client::Controller,
-    pub storage: storage::Connection,
+    pub storage: storage::Connection<S>,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
@@ -325,12 +326,12 @@ impl ConcreteComputeInstanceConfig {
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator {
+pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
     dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
-    catalog: Catalog,
+    catalog: Catalog<S>,
     /// An in-memory WAL that stages writes before publishing them to Storage
     // TODO: this must be backed by some durable medium, e.g a STORAGE collection
     volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
@@ -436,7 +437,7 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl Coordinator {
+impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
@@ -2988,8 +2989,8 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         // TODO: remove this function when sources are linearizable.
         // See: #11048.
-        fn check_no_unmaterialized_sources(
-            catalog: &Catalog,
+        fn check_no_unmaterialized_sources<S: Append>(
+            catalog: &Catalog<S>,
             id_bundle: &CollectionIdBundle,
             session: &Session,
         ) -> Result<(), CoordError> {
@@ -3271,7 +3272,7 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
+        let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
@@ -4723,7 +4724,7 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve(
+pub async fn serve<S: Append + 'static>(
     Config {
         dataflow_client,
         storage,
@@ -4739,7 +4740,7 @@ pub async fn serve(
         secrets_controller,
         replica_sizes,
         availability_zones: _,
-    }: Config,
+    }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -4899,8 +4900,8 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// This function is identical to sql::plan::describe except this is also
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
-pub fn describe(
-    catalog: &Catalog,
+pub fn describe<S: Append>(
+    catalog: &Catalog<S>,
     stmt: Statement<Raw>,
     param_types: &[Option<ScalarType>],
     session: &Session,
@@ -4955,6 +4956,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::ComputeInstanceId;
+    use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
@@ -5081,7 +5083,7 @@ pub mod fast_path_peek {
         }));
     }
 
-    impl crate::coord::Coordinator {
+    impl<S: Append + 'static> crate::coord::Coordinator<S> {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
             &mut self,
@@ -5290,7 +5292,7 @@ pub mod read_holds {
         pub(super) compute_instance: ComputeInstanceId,
     }
 
-    impl crate::coord::Coordinator {
+    impl<S> crate::coord::Coordinator<S> {
         /// Acquire read holds on the indicated collections at the indicated time.
         ///
         /// This method will panic if the holds cannot be acquired. In the future,
@@ -5414,7 +5416,7 @@ impl<T: timely::progress::Timestamp> ReadCapability<T> {
 }
 
 #[cfg(test)]
-impl Coordinator {
+impl<S: Append + 'static> Coordinator<S> {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
         // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed

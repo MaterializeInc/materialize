@@ -44,7 +44,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
+pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;
     let catalog_version = storage.get_catalog_content_version().await?;
     let _catalog_version = match Version::parse(&catalog_version) {

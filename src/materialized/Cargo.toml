@@ -70,6 +70,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-secrets-filesystem = { path = "../secrets-filesystem" }
 mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
+mz-stash = { path = "../stash" }
 native-tls = { version = "0.2.10", features = ["alpn"] }
 nix = "0.23.1"
 num_cpus = "1.13.1"
@@ -89,6 +90,7 @@ tempfile = "3.2.0"
 thiserror = "1.0.31"
 tokio = { version = "1.17.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tower-http = { version = "0.2.5", features = ["cors"] }
 tracing = "0.1.34"
