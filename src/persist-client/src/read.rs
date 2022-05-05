@@ -94,18 +94,18 @@ where
 
     /// Attempt to pull out the next values of this iterator.
     ///
-    /// An empty vector is returned if this iterator is exhausted.
+    /// An None value is returned if this iterator is exhausted.
     pub async fn next(
         &mut self,
         timeout: Duration,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, ExternalError> {
+    ) -> Result<Option<Vec<((Result<K, String>, Result<V, String>), T, D)>>, ExternalError> {
         trace!("SnapshotIter::next timeout={:?}", timeout);
         let deadline = Instant::now() + timeout;
         loop {
             let key = match self.batches.last() {
                 Some(x) => x.clone(),
                 // All done!
-                None => return Ok(vec![]),
+                None => return Ok(None),
             };
             let value = loop {
                 // TODO: Deduplicate this with the logic in Listen.
@@ -164,7 +164,7 @@ where
                 // We might have filtered everything.
                 continue;
             }
-            return Ok(ret);
+            return Ok(Some(ret));
         }
     }
 }
@@ -184,14 +184,11 @@ where
         use crate::NO_TIMEOUT;
 
         let mut ret = Vec::new();
-        loop {
-            let mut next = self.next(NO_TIMEOUT).await?;
-            if next.is_empty() {
-                ret.sort();
-                return Ok(ret);
-            }
+        while let Some(mut next) = self.next(NO_TIMEOUT).await? {
             ret.append(&mut next)
         }
+        ret.sort();
+        Ok(ret)
     }
 }
 
