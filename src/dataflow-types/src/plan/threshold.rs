@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 
+use crate::plan::any_arranged_thin;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::proto::TryFromProtoError;
 use proptest_derive::Arbitrary;
@@ -100,6 +101,7 @@ impl ThresholdPlan {
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
+    #[proptest(strategy = "any_arranged_thin()")]
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
 }
 
@@ -108,6 +110,7 @@ pub struct BasicThresholdPlan {
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
+    #[proptest(strategy = "any_arranged_thin()")]
     pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
 }
 

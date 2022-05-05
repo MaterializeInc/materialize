@@ -20,6 +20,9 @@ use std::collections::HashMap;
 use mz_ore::soft_panic_or_log;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
+use proptest::arbitrary::Arbitrary;
+use proptest::prelude::*;
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -100,7 +103,19 @@ pub struct AvailableCollections {
     /// The set of arrangements of the collection, along with a
     /// column permutation mapping
     #[serde(serialize_with = "serialize_arranged")]
+    #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
     pub arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+}
+
+/// A strategy that produces arrangements that are thinner than the default. That is
+/// the number of direct children is limited to a maximum of 3.
+pub(crate) fn any_arranged_thin(
+) -> impl Strategy<Value = (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> {
+    (
+        prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
+        HashMap::<usize, usize>::arbitrary(),
+        Vec::<usize>::arbitrary(),
+    )
 }
 
 impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> for ProtoArrangement {
@@ -1343,7 +1358,6 @@ pub fn linear_to_mfp(
 mod tests {
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     proptest! {
        #[test]
