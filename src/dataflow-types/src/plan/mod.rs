@@ -1358,7 +1358,6 @@ pub fn linear_to_mfp(
 mod tests {
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     proptest! {
        #[test]
