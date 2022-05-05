@@ -21,11 +21,13 @@ the PR description instead. They will be migrated here during the release
 process by the release notes team.
 {{< /comment >}}
 
-{{% version-header v0.26.1 %}}
-
-v0.26.1 is a **long-term support (LTS)** release of Materialize. We will support
-the v0.26 series through at least August 31, 2022, issuing patch releases as
+{{< note >}}
+v0.26 is a **long-term support (LTS)** release of Materialize. We will support
+the v0.26.x series through at least August 31 2022, issuing **patch releases** as
 necessary to address severe bugs and security vulnerabilities.
+{{</ note >}}
+
+{{% version-header v0.26.1 %}}
 
 - Support configuring the
   [`search_path`](https://www.postgresql.org/docs/14/runtime-config-client.html#GUC-SEARCH-PATH)
