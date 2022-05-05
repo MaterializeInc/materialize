@@ -96,11 +96,7 @@ where
 
 
             // First, yield all the updates from the snapshot.
-            loop {
-                let next = snapshot_iter.next(timeout).await?;
-                if next.is_empty() {
-                    break;
-                }
+            while let Some(next) = snapshot_iter.next(timeout).await? {
                 yield ListenEvent::Updates(next);
             }
 
