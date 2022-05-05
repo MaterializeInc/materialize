@@ -924,9 +924,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-        // TODO: This will only work once we have implemented MfpPlan #11970
         #[test]
-        #[ignore]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
             assert!(actual.is_ok());

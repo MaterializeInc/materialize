@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 use std::collections::{HashMap, HashSet};
 
-use proptest_derive::Arbitrary;
+use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
@@ -33,7 +33,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -58,6 +58,31 @@ pub struct MapFilterProject {
     /// This is needed to enure correct identification of newly formed
     /// columns in the output.
     pub input_arity: usize,
+}
+
+/// Use a custom [`Arbitrary`] implementation to cap the number of internal
+/// [`MirScalarExpr`] referenced by the generated [`MapFilterProject`]  instances.
+impl Arbitrary for MapFilterProject {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            prop::collection::vec(any::<MirScalarExpr>(), 0..10),
+            prop::collection::vec((any::<usize>(), any::<MirScalarExpr>()), 0..10),
+            prop::collection::vec(any::<usize>(), 0..10),
+            usize::arbitrary(),
+        )
+            .prop_map(
+                |(expressions, predicates, projection, input_arity)| MapFilterProject {
+                    expressions,
+                    predicates,
+                    projection,
+                    input_arity,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl TryFrom<ProtoMapFilterProject> for MapFilterProject {
@@ -1774,7 +1799,6 @@ mod tests {
     use super::plan::*;
     use super::*;
     use mz_repr::proto::protobuf_roundtrip;
-    use proptest::prelude::*;
 
     proptest! {
         #[test]
