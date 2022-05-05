@@ -92,7 +92,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     ConfigCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
     DescribeCommand().register(parser, subparsers)
-    DownCommand.register(parser, subparsers)
+    DownCommand().register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
     GenShortcutsCommand().register(parser, subparsers)
@@ -611,7 +611,19 @@ To see the available workflows, run:
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
 ConfigCommand = DockerComposeCommand("config", "validate and view the Compose file")
 CreateCommand = DockerComposeCommand("create", "create services", runs_containers=True)
-DownCommand = DockerComposeCommand("down", "stop and remove resources")
+
+
+class DownCommand(DockerComposeCommand):
+    def __init__(self) -> None:
+        super().__init__("down", "Stop and remove containers, networks")
+
+    def run(self, args: argparse.Namespace) -> Any:
+        # --remove-orphans needs to be in effect at all times otherwise
+        # services added to a composition after the fact will not be cleaned up
+        args.unknown_subargs.append("--remove-orphans")
+        super().run(args)
+
+
 EventsCommand = DockerComposeCommand(
     "events", "receive real time events from containers"
 )
