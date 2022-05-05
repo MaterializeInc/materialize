@@ -1877,6 +1877,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Connector(Connector {
                 create_sql: plan.connector.create_sql,
                 connector: plan.connector.connector,
+                depends_on: plan.connector.depends_on,
             }),
         }];
         match self.catalog_transact(ops, |_| Ok(())).await {

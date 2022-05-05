@@ -854,6 +854,7 @@ pub struct Secret {
 pub struct Connector {
     pub create_sql: String,
     pub connector: ConnectorInner,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -938,7 +939,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
             CatalogItem::Secret(_) => &[],
-            CatalogItem::Connector(_) => &[],
+            CatalogItem::Connector(connector) => &connector.depends_on,
         }
     }
 
@@ -2985,6 +2986,7 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::Connector(Connector {
                     create_sql: connector.create_sql,
                     connector: connector.connector,
+                    depends_on: connector.depends_on,
                 })
             }
             _ => bail!("catalog entry generated inappropriate plan"),
