@@ -82,41 +82,47 @@ impl Arbitrary for MirScalarExpr {
     type Strategy = BoxedStrategy<MirScalarExpr>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let leaf = prop_oneof![
-            (0..10).prop_map(|i| MirScalarExpr::Column(i as usize)),
+        let leaf = prop::strategy::Union::new(vec![
+            (0..10)
+                .prop_map(|i| MirScalarExpr::Column(i as usize))
+                .boxed(),
             // TODO (#12125): add a leaf variant for MirScalarExpr::literal_ok
             (any::<EvalError>(), any::<ScalarType>())
-                .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ)),
-            any::<UnmaterializableFunc>().prop_map(MirScalarExpr::CallUnmaterializable)
-        ];
+                .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ))
+                .boxed(),
+            any::<UnmaterializableFunc>()
+                .prop_map(MirScalarExpr::CallUnmaterializable)
+                .boxed(),
+        ]);
         leaf.prop_recursive(3, 6, 7, |inner| {
-            prop_oneof![
+            prop::strategy::Union::new(vec![
                 (
                     any::<VariadicFunc>(),
-                    prop::collection::vec(inner.clone(), 1..5)
+                    prop::collection::vec(inner.clone(), 1..5),
                 )
-                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs }),
-                (any::<BinaryFunc>(), inner.clone(), inner.clone()).prop_map(
-                    |(func, expr1, expr2)| MirScalarExpr::CallBinary {
+                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs })
+                    .boxed(),
+                (any::<BinaryFunc>(), inner.clone(), inner.clone())
+                    .prop_map(|(func, expr1, expr2)| MirScalarExpr::CallBinary {
                         func,
                         expr1: Box::new(expr1),
-                        expr2: Box::new(expr2)
-                    }
-                ),
-                (inner.clone(), inner.clone(), inner.clone()).prop_map(|(cond, then, els)| {
-                    MirScalarExpr::If {
+                        expr2: Box::new(expr2),
+                    })
+                    .boxed(),
+                (inner.clone(), inner.clone(), inner.clone())
+                    .prop_map(|(cond, then, els)| MirScalarExpr::If {
                         cond: Box::new(cond),
                         then: Box::new(then),
                         els: Box::new(els),
-                    }
-                }),
-                (any::<UnaryFunc>(), inner).prop_map(|(func, expr)| {
-                    MirScalarExpr::CallUnary {
+                    })
+                    .boxed(),
+                (any::<UnaryFunc>(), inner)
+                    .prop_map(|(func, expr)| MirScalarExpr::CallUnary {
                         func,
                         expr: Box::new(expr),
-                    }
-                })
-            ]
+                    })
+                    .boxed(),
+            ])
         })
         .boxed()
     }

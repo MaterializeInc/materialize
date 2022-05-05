@@ -30,7 +30,7 @@ use mz_expr::MirScalarExpr;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
-use proptest_derive::Arbitrary;
+use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::ProtoDeltaJoinPlan;
@@ -43,13 +43,24 @@ use super::ProtoDeltaStagePlan;
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
     /// Each path identifies its source relation, so the order is only
     /// important for determinism of dataflow construction.
     pub path_plans: Vec<DeltaPathPlan>,
+}
+
+impl Arbitrary for DeltaJoinPlan {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop::collection::vec(any::<DeltaPathPlan>(), 0..3)
+            .prop_map(|path_plans| DeltaJoinPlan { path_plans })
+            .boxed()
+    }
 }
 
 impl From<&DeltaJoinPlan> for ProtoDeltaJoinPlan {
@@ -80,7 +91,7 @@ impl TryFrom<ProtoDeltaJoinPlan> for DeltaJoinPlan {
 }
 
 /// A delta query path is implemented by a sequences of stages,
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
@@ -94,6 +105,33 @@ pub struct DeltaPathPlan {
     ///
     /// Values of `None` indicate the identity closure.
     pub final_closure: Option<JoinClosure>,
+}
+
+impl Arbitrary for DeltaPathPlan {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<usize>(),
+            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
+            any::<JoinClosure>(),
+            prop::collection::vec(any::<DeltaStagePlan>(), 0..1),
+            any::<Option<JoinClosure>>(),
+        )
+            .prop_map(
+                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
+                    DeltaPathPlan {
+                        source_relation,
+                        source_key,
+                        initial_closure,
+                        stage_plans,
+                        final_closure,
+                    }
+                },
+            )
+            .boxed()
+    }
 }
 
 impl From<&DeltaPathPlan> for ProtoDeltaPathPlan {
@@ -143,7 +181,7 @@ impl TryFrom<ProtoDeltaPathPlan> for DeltaPathPlan {
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     pub lookup_relation: usize,
@@ -160,6 +198,33 @@ pub struct DeltaStagePlan {
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
+}
+
+impl Arbitrary for DeltaStagePlan {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<usize>(),
+            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
+            prop::collection::vec(any::<usize>(), 0..3),
+            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
+            any::<JoinClosure>(),
+        )
+            .prop_map(
+                |(lookup_relation, stream_key, stream_thinning, lookup_key, closure)| {
+                    DeltaStagePlan {
+                        lookup_relation,
+                        stream_key,
+                        stream_thinning,
+                        lookup_key,
+                        closure,
+                    }
+                },
+            )
+            .boxed()
+    }
 }
 
 impl From<&DeltaStagePlan> for ProtoDeltaStagePlan {
