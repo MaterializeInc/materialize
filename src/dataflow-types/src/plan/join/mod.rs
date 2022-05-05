@@ -430,6 +430,8 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2))]
+
         #[test]
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);

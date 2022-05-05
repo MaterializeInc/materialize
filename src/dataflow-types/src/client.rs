@@ -928,6 +928,8 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4))]
+
         #[test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
