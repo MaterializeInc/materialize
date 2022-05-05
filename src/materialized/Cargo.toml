@@ -141,8 +141,8 @@ default = ["jemalloc"]
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = []
-tokio-console = ["mz-ore/tokio-console"]
 jemalloc = ["mz-prof/jemalloc", "tikv-jemallocator"]
+tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.
