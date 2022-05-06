@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 
 use chrono::{DateTime, Utc};
@@ -203,6 +203,16 @@ impl<T: CoordTimestamp> Session<T> {
                             // it anyway.
                             assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
                             txn_writes.append(&mut add_writes);
+
+                            if txn_writes
+                                .iter()
+                                .map(|op| op.id)
+                                .collect::<HashSet<_>>()
+                                .len()
+                                > 1
+                            {
+                                return Err(CoordError::MultiTableWriteTransaction);
+                            }
                         }
                         _ => {
                             return Err(CoordError::WriteOnlyTransaction);

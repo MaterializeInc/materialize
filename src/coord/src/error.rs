@@ -129,6 +129,8 @@ pub enum CoordError {
     UnmaterializableFunction(UnmaterializableFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
+    /// The transaction only supports single table writes
+    MultiTableWriteTransaction,
 }
 
 impl CoordError {
@@ -396,6 +398,9 @@ impl fmt::Display for CoordError {
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
             CoordError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
+            }
+            CoordError::MultiTableWriteTransaction => {
+                f.write_str("write transactions only support writes to a single table")
             }
         }
     }
