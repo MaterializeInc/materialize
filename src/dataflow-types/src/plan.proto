@@ -93,7 +93,7 @@ message ProtoPlan {
         mz_expr.relation.ProtoTableFunc func = 2;
         repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
         mz_expr.linear.ProtoMapFilterProject mfp = 4;
-        ProtoPlanInputKey key = 5;
+        ProtoPlanInputKey input_key = 5;
    }
 
    message ProtoPlanJoin {
@@ -102,15 +102,15 @@ message ProtoPlan {
    }
 
    message ProtoPlanReduce {
-        ProtoPlan reduce = 1;
+        ProtoPlan input = 1;
         mz_dataflow_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
         mz_dataflow_types.plan.reduce.ProtoReducePlan plan = 3;
-        ProtoPlanInputKey key = 4;
+        ProtoPlanInputKey input_key = 4;
    }
 
    message ProtoPlanTopK {
         ProtoPlan input = 1;
-        mz_dataflow_types.plan.top_k.ProtoTopKPlan plan = 2;
+        mz_dataflow_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
    }
 
    message ProtoPlanThreshold {
@@ -141,6 +141,6 @@ message ProtoPlan {
         ProtoPlan negate = 9;
         ProtoPlanThreshold threshold = 10;
         ProtoPlanUnion union = 11;
-        ProtoPlanArrangeBy arrany_by = 12;
+        ProtoPlanArrangeBy arrange_by = 12;
    }
 }
